@@ -3,7 +3,15 @@ import { expect, test } from "bun:test";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
-import { buildMobileBoard, launchedAt, mobileRowState, nowFragment, RECENT_CAP } from "./mobileBoardModel";
+import {
+  buildMobileBoard,
+  catalogContinuation,
+  launchedAt,
+  mobileRowState,
+  needsDecisionPipelineRows,
+  nowFragment,
+  RECENT_CAP,
+} from "./mobileBoardModel";
 
 /*
  * The phone board's projection (issue #1439, lane 2; README §4.1, §4.2).
@@ -316,6 +324,48 @@ test("a pipeline waiting on a decision is a queue row beside the conversations, 
   });
   const undecided = buildMobileBoard({ files: [], pipelines: [asking], project: PROJECT, now: NOW });
   expect(undecided.needsYou[0]).toMatchObject({ kind: "pipeline", stageFailed: false, findings: 0 });
+});
+
+test("Recent past the cap continues in the same order, and a hidden or closing lane leaves the queue and the badge's count (#1671)", () => {
+  const files = Array.from({ length: 6 }, (_, i) => entry({ path: `/p/recent-${i}.jsonl`, mtime: NOW - 100 - i }));
+  const needs = (id: string, over: Partial<Pipeline> = {}) => pipeline({ id, state: "needs_decision", ...over });
+  const pipelines = [needs("p-hidden", { dismissedAt: new Date(NOW * 1_000).toISOString() }), needs("p-closing"), needs("p-open")];
+  const model = buildMobileBoard({ files, pipelines, project: PROJECT, archiving: "p-closing", now: NOW });
+
+  expect(model.recent.map((row) => row.path)).toEqual(files.slice(0, RECENT_CAP).map((file) => file.path));
+  expect(model.recentRest.map((row) => row.path)).toEqual(files.slice(RECENT_CAP).map((file) => file.path));
+  expect(model.recentTotal).toBe(6);
+
+  expect(model.needsYou.map((item) => (item.kind === "pipeline" ? item.id : item.path))).toEqual(["p-open"]);
+  expect(model.attentionCount).toBe(1);
+  /* The bar's badge reads the same answer, with the same held close. */
+  expect(needsDecisionPipelineRows(pipelines, PROJECT, NOW, "p-closing").map((row) => row.id)).toEqual(["p-open"]);
+  expect(needsDecisionPipelineRows(pipelines, PROJECT, NOW).map((row) => row.id)).toEqual(["p-closing", "p-open"]);
+  /* A hidden lane is still one of the project's pipelines; a closing one is gone. */
+  expect(model.pipelines).toEqual({ total: 2, active: 0, needsDecision: 1, completed: 0 });
+});
+
+test("the catalog continues the list without repeating it: listed rows, the seat, closed cards, predecessors and repeats drop (#1671)", () => {
+  const seat = entry({ path: "/p/seat.jsonl" });
+  const asking = question({ path: "/p/ask.jsonl" });
+  const busy = working({ path: "/p/run.jsonl" });
+  const recent = Array.from({ length: 4 }, (_, i) => entry({ path: `/p/recent-${i}.jsonl`, mtime: NOW - 100 - i }));
+  const predecessor = entry({ path: "/p/old.jsonl", migratedTo: "/p/recent-0.jsonl" } as unknown as Partial<FileEntry> & { path: string });
+  const files = [seat, asking, busy, ...recent, predecessor];
+  const input = { files, seatPath: seat.path, hidden: new Set(["/p/closed.jsonl"]), now: NOW };
+  const model = buildMobileBoard({ ...input, pipelines: [], project: PROJECT });
+  const stored = (path: string) => entry({ path, mtime: NOW - 5_000 });
+
+  const rows = catalogContinuation(model, [
+    stored(seat.path), stored(asking.path), stored(busy.path), stored(recent[0]!.path), stored(recent[3]!.path),
+    stored("/p/closed.jsonl"), stored(predecessor.path),
+    stored("/p/history-1.jsonl"), stored("/p/history-2.jsonl"), stored("/p/history-1.jsonl"),
+  ], input);
+
+  expect(rows.map((row) => row.path)).toEqual(["/p/history-1.jsonl", "/p/history-2.jsonl"]);
+  /* A stored row is a row like the others: its state, its title, its launch. */
+  expect(rows[0]).toMatchObject({ title: "A conversation", crowned: false });
+  expect(rows[0]!.state.key).toBe("done");
 });
 
 test("the pipelines summary rises above Working while a pipeline is active, and sinks below it when none is", () => {

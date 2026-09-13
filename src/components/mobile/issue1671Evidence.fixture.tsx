@@ -1,0 +1,132 @@
+/*
+ * The page `issue1671Evidence.browser.test.tsx` drives: the real Viewer over an
+ * invented phone board — ten lanes waiting on a decision, one running
+ * conversation, thirty finished ones and a 45-entry stored catalog — answered
+ * by an in-page fetch double. Board writes go through the product's own
+ * reducer, and every write is recorded on `window.evidence`, so the driver
+ * reads what a gesture really sent. All data is invented.
+ */
+import { createRoot } from "react-dom/client";
+
+import { Viewer } from "@/components/Viewer";
+import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import type { Pipeline } from "@/lib/pipelines/types";
+import type { FileEntry } from "@/lib/types";
+import type { BoardProjectStateV1 } from "@/lib/view/types";
+
+const PROJECT = "atlas";
+const now = Math.floor(Date.now() / 1000);
+const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
+
+function conversation(path: string, title: string, over: Record<string, unknown> = {}): FileEntry {
+  return {
+    path, root: "claude-projects", name: path.split("/").pop(), project: PROJECT, title, engine: "claude", kind: "session",
+    fmt: "claude", parent: null, mtime: now - 900, size: 2_048, activity: "idle", proc: null, pid: null, model: "opus",
+    pendingQuestion: null, waitingInput: null, conversationId: `conversation_${(path.split("/").pop() ?? "").replace(".jsonl", "")}`,
+    ...over,
+  } as unknown as FileEntry;
+}
+
+const TASKS = [
+  "Fast conversation switching", "Stage verdict recovery after a host restart", "Seat rotation keeps the mandate",
+  "Queue drain on reconnect", "Archive TTL for closed lanes", "Deploy gate reads the pinned runtime",
+  "Catalog pages stay in snapshot order", "Voice utterances render once", "Held deliveries heal themselves",
+  "Board zoom keeps the focused card",
+];
+
+const pipelines = TASKS.map((task, i) => ({
+  id: `lane-${i}`, task, taskIds: [], project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-lane-${i}`, branch: `lane/${i}`,
+  baseBranch: "main", baseRef: "main", lastPassedCommit: "",
+  stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
+  runs: [{
+    stageId: "review",
+    attempts: [{
+      n: 1 + (i % 3), state: "failed", completedAt: iso(3_600 * (i + 1)),
+      verdict: { status: "fail", findings: Array.from({ length: 1 + (i % 4) }, (_, n) => `finding ${n + 1}`) },
+    }],
+  }],
+  cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
+  state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+  createdAt: iso(7_200 * (i + 1)), closedAt: null,
+})) as unknown as Pipeline[];
+
+const files: FileEntry[] = [
+  conversation("/repo/running.jsonl", "Rebuild the board status projection", {
+    activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
+    lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+  }),
+  ...Array.from({ length: 30 }, (_, i) => conversation(
+    `/repo/done-${i}.jsonl`,
+    i === 0 ? "A long finished conversation title that has to stay inside the phone row while its tray opens" : `Finished conversation ${i + 1}`,
+    { mtime: now - 900 - i * 600, activity: i < 2 ? "recent" : "idle", engine: i % 3 === 1 ? "codex" : "claude", model: i % 3 === 1 ? "gpt-5.6" : "opus" },
+  )),
+];
+const catalog = Array.from({ length: 45 }, (_, i) => conversation(`/repo/history-${i}.jsonl`, `Stored conversation ${i + 1}`, { mtime: now - 90_000 - i * 3_600 }));
+
+let board = {
+  schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
+  prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
+} as unknown as BoardProjectStateV1;
+
+const evidence = {
+  catalogRequests: [] as string[],
+  pipelinePatches: [] as Array<{ id: string; action: string }>,
+  boardMutations: [] as BoardMutationV1[],
+  refuseNextPipelinePatch: false,
+};
+Object.assign(window, { evidence });
+
+/* No runtime stream in the fixture: the phone runs on the file poll. */
+class QuietEventSource { addEventListener() {} removeEventListener() {} close() {} }
+Object.assign(window, { EventSource: QuietEventSource });
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = new URL(String(input), location.origin);
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/api/files") {
+    return json({
+      files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows: [], pipelines,
+      workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
+    });
+  }
+  if (url.pathname === "/api/board") {
+    if (method === "PATCH") {
+      const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
+      evidence.boardMutations.push(...(body.mutations ?? []));
+      const reduced = applyBoardMutations(board, body.mutations ?? []);
+      board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
+      return json({ ok: true, applied: true, board });
+    }
+    return json({ ok: true, board });
+  }
+  if (url.pathname === "/api/conversations") {
+    evidence.catalogRequests.push(url.search);
+    const offset = Number(url.searchParams.get("cursor") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 20);
+    return json({ items: catalog.slice(offset, offset + limit), total: 4_595, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
+  }
+  if (url.pathname === "/api/orchestrator/seat") return json({ seat: null, pending: null, exists: true });
+  if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
+    const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+    const body = JSON.parse(String(init?.body)) as { action: string };
+    evidence.pipelinePatches.push({ id, action: body.action });
+    if (evidence.refuseNextPipelinePatch) {
+      evidence.refuseNextPipelinePatch = false;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return json({ error: "refused by the evidence fixture" }, 409);
+    }
+    const lane = pipelines.find((pipeline) => pipeline.id === id);
+    if (!lane) return json({ error: "pipeline not found" }, 404);
+    if (body.action === "dismiss") lane.dismissedAt = new Date().toISOString();
+    if (body.action === "undismiss") lane.dismissedAt = null;
+    if (body.action === "close") Object.assign(lane, { state: "closed", closedAt: new Date().toISOString(), hiddenAt: new Date().toISOString() });
+    return json({ ok: true, pipeline: lane });
+  }
+  return json({}, 404);
+}) as typeof fetch;
+
+localStorage.setItem("llvProject", PROJECT);
+if (!location.hash) location.hash = `#p=${PROJECT}`;
+createRoot(document.getElementById("root")!).render(<Viewer />);

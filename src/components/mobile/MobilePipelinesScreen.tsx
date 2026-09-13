@@ -1,5 +1,6 @@
 "use client";
 
+import { EyeOff } from "lucide-react";
 import { useState } from "react";
 
 import { ChevronDown, ChevronRight } from "@/components/icons";
@@ -65,9 +66,21 @@ export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpe
      operator has been told it happened: the row goes now, not in four seconds. */
   const archiving = pending?.action === "close" ? pending.pipelineId : null;
   const model = mobilePipelinesModel(pipelines, archiving);
-  const row = (pipeline: Pipeline, quiet?: boolean) => (
-    <MobilePipelineRow key={pipeline.id} pipeline={pipeline} now={now} quiet={quiet} onOpen={onOpenPipeline} />
-  );
+  const row = (pipeline: Pipeline, quiet?: boolean) => {
+    const card = <MobilePipelineRow key={pipeline.id} pipeline={pipeline} now={now} quiet={quiet} onOpen={onOpenPipeline} />;
+    if (!pipeline.dismissedAt) return card;
+    /* A lane hidden from the board (#1671) stays here, where it is found
+       again, and says so; its screen offers «Show on board». */
+    return (
+      <div key={pipeline.id} data-mobile2-pipeline-hidden={pipeline.id} className="flex flex-col gap-1">
+        {card}
+        <span className="flex items-center gap-1 px-3 text-caption text-muted">
+          <EyeOff className="h-3 w-3 shrink-0" aria-hidden />
+          {t("mobile2.pipelines.hiddenTag")}
+        </span>
+      </div>
+    );
+  };
   return (
     <MobileShell
       screen="pipelines"

@@ -37,6 +37,7 @@ import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
+import { usePendingPipelineAct } from "./mobile/MobilePipelineScreen";
 import { getMobileNav } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import type { MobileShellHost } from "./mobile/MobileShell";
@@ -769,9 +770,14 @@ export function Viewer() {
      (`needsDecisionPipelineRows`), so the count, the sheet and the rows under
      it cannot disagree. */
   const shellQueue = project === OVERVIEW ? queue : projectQueue;
+  /* A lane closed from the board is gone from its queue while the receipt
+     still holds the close (#1671), so the badge stops counting it on the same
+     tap that took the row away. */
+  const heldPipelineAct = usePendingPipelineAct();
+  const archivingPipeline = heldPipelineAct?.action === "close" ? heldPipelineAct.pipelineId : null;
   const shellPipelineRows = useMemo(
-    () => (project === OVERVIEW || !isMobile ? [] : needsDecisionPipelineRows(pipelines, project, clock)),
-    [pipelines, project, clock, isMobile],
+    () => (project === OVERVIEW || !isMobile ? [] : needsDecisionPipelineRows(pipelines, project, clock, archivingPipeline)),
+    [pipelines, project, clock, isMobile, archivingPipeline],
   );
   /* Joined into the ONE list the badge counts, the sheet lists and its
      «Next ›» walks (lane 8, `attentionQueue.ts`). */

@@ -281,6 +281,25 @@ test("archive reaches the desktop's close, and its receipt carries Restore as a 
   expect(fromPhone.body).toEqual({ action: "close" });
 });
 
+test("a lane hidden from the board offers Show on board, which sends undismiss and nothing else (#1671)", async () => {
+  const hidden = { ...pipeline("needs_decision"), dismissedAt: at(60) } as Pipeline;
+  const host = mount(
+    <MobilePipelineScreen pipeline={hidden} files={[REVIEW_FILE]} now={NOW} onOpenConversation={() => {}} acts={createPendingPipelineActs({ set: () => 1, clear: () => {} })} />,
+  );
+  const show = q(host, '[data-mobile2-pipeline-action="showOnBoard"]')!;
+  expect(show).not.toBeNull();
+  expect(show.textContent).toContain(translate("en", "mobile2.pipeline.showOnBoard"));
+  expect(show.className).toContain("min-h-11");
+  click(show);
+  await settle();
+  expect(patches.map((patch) => patch.body)).toEqual([{ action: "undismiss" }]);
+  expect(q(body(), "[data-mobile2-receipt]")!.textContent).toContain(translate("en", "mobile2.pipeline.shownOnBoard"));
+
+  /* A lane still on the board has nothing to bring back. */
+  const onBoard = mount(<MobilePipelineScreen pipeline={pipeline("needs_decision")} files={[REVIEW_FILE]} now={NOW} onOpenConversation={() => {}} />);
+  expect(q(onBoard, '[data-mobile2-pipeline-action="showOnBoard"]')).toBeNull();
+});
+
 test("a second held act sends the first rather than dropping it", () => {
   /* The screen disables its own row while an act is held, so the second act
      comes from somewhere else — another pipeline's screen, the same tab. */

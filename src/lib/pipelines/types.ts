@@ -301,6 +301,11 @@ export type Pipeline = {
   createdAt: string;
   closedAt: string | null;
   hiddenAt?: string | null;
+  /** When the operator took this lane off the phone board's queue (#1671).
+      Presentation only and reversible: the lane's state, hosts, worktree and
+      transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
+      carry this, because every reader takes it to mean closed or discarded. */
+  dismissedAt?: string | null;
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
@@ -350,6 +355,8 @@ export const PIPELINE_ACTIONS = [
   "set-src",
   "delete",
   "close",
+  "dismiss",
+  "undismiss",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];

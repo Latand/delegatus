@@ -4663,6 +4663,16 @@ export async function patchPipeline(
           target.account = requested;
         }
       }
+    } else if (req.action === "dismiss" || req.action === "undismiss") {
+      /* #1671: the phone board's Hide. It only says whether the lane stands in
+         the board's queue; nothing about the lane itself moves, so no host is
+         touched and the controller is not woken. A draft is never on the board
+         and a closed lane is gone from it already, so neither has a row to
+         hide or bring back. */
+      if (pipeline.state === "draft" || pipeline.state === "closed") {
+        return { error: `a ${pipeline.state} pipeline has no board row to ${req.action === "dismiss" ? "hide" : "show"}`, status: 409 };
+      }
+      pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
     } else if (req.action === "delete") {
       if (pipeline.state !== "draft") return { error: "only draft pipelines can be deleted", status: 409 };
       discardDraft(pipeline, ports);

@@ -1,0 +1,558 @@
+[
+  {
+    "key": "390-light",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "scheme": "light",
+    "queued": 10,
+    "vertical": {
+      "startedOn": "pipeline:lane-7",
+      "scrollTop": 394,
+      "openRows": 0
+    },
+    "tray": {
+      "open": "true",
+      "touchAction": "pan-y",
+      "cardLeft": -132,
+      "cardRight": 234,
+      "opacity": "1",
+      "buttons": [
+        {
+          "key": "hide",
+          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
+          "x": 234,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
+          "x": 306,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        }
+      ]
+    },
+    "hide": {
+      "rowGone": true,
+      "badge": 9,
+      "receipt": "Hid «Fast conversation switching»Restore",
+      "receiptBox": {
+        "x": 12,
+        "y": 737,
+        "width": 366,
+        "height": 44
+      },
+      "dockBox": {
+        "x": 12,
+        "y": 794,
+        "width": 366,
+        "height": 44
+      },
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        }
+      ]
+    },
+    "restored": {
+      "badge": 10,
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        },
+        {
+          "id": "lane-0",
+          "action": "undismiss"
+        }
+      ]
+    },
+    "refused": {
+      "rowGone": true,
+      "badge": 9,
+      "badgeAfter": 10,
+      "receipt": "refused by the evidence fixture"
+    },
+    "closeLane": {
+      "rowGone": true,
+      "badge": 10,
+      "receipt": "Lane closedRestore",
+      "sent": 0
+    },
+    "longPress": {
+      "sheet": true,
+      "rows": [
+        {
+          "key": "hide",
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "height": 56
+        }
+      ],
+      "pipelineScreen": false
+    },
+    "conversationClose": {
+      "tray": [
+        "Close card. Hides it from the board. The agent keeps running."
+      ],
+      "rowGone": true,
+      "reopened": true,
+      "boardScreen": 1,
+      "mutations": [
+        "reconcile-roots",
+        "reconcile-roots",
+        "mark-seen",
+        "close",
+        "restore"
+      ],
+      "pipelineWrites": 0
+    },
+    "expanded": {
+      "rows": 30,
+      "requests": 0,
+      "toggle": "Show fewerStored entries load as you scroll"
+    },
+    "appended": {
+      "rows": 50,
+      "unique": 50,
+      "stored": 20,
+      "rowStyles": 1,
+      "heights": [
+        56
+      ],
+      "requests": [
+        "?limit=20&project=atlas"
+      ],
+      "searchFields": 0,
+      "pageOverflow": false,
+      "boardOverflow": false
+    },
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "key": "390-dark",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "scheme": "dark",
+    "queued": 10,
+    "vertical": {
+      "startedOn": "pipeline:lane-7",
+      "scrollTop": 397,
+      "openRows": 0
+    },
+    "tray": {
+      "open": "true",
+      "touchAction": "pan-y",
+      "cardLeft": -132,
+      "cardRight": 234,
+      "opacity": "1",
+      "buttons": [
+        {
+          "key": "hide",
+          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
+          "x": 234,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
+          "x": 306,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        }
+      ]
+    },
+    "hide": {
+      "rowGone": true,
+      "badge": 9,
+      "receipt": "Hid «Fast conversation switching»Restore",
+      "receiptBox": {
+        "x": 12,
+        "y": 737,
+        "width": 366,
+        "height": 44
+      },
+      "dockBox": {
+        "x": 12,
+        "y": 794,
+        "width": 366,
+        "height": 44
+      },
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        }
+      ]
+    },
+    "restored": {
+      "badge": 10,
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        },
+        {
+          "id": "lane-0",
+          "action": "undismiss"
+        }
+      ]
+    },
+    "refused": {
+      "rowGone": true,
+      "badge": 9,
+      "badgeAfter": 10,
+      "receipt": "refused by the evidence fixture"
+    },
+    "closeLane": {
+      "rowGone": true,
+      "badge": 10,
+      "receipt": "Lane closedRestore",
+      "sent": 0
+    },
+    "longPress": {
+      "sheet": true,
+      "rows": [
+        {
+          "key": "hide",
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "height": 56
+        }
+      ],
+      "pipelineScreen": false
+    },
+    "conversationClose": {
+      "tray": [
+        "Close card. Hides it from the board. The agent keeps running."
+      ],
+      "rowGone": true,
+      "reopened": true,
+      "boardScreen": 1,
+      "mutations": [
+        "reconcile-roots",
+        "reconcile-roots",
+        "mark-seen",
+        "close",
+        "restore"
+      ],
+      "pipelineWrites": 0
+    },
+    "expanded": {
+      "rows": 30,
+      "requests": 0,
+      "toggle": "Show fewerStored entries load as you scroll"
+    },
+    "appended": {
+      "rows": 50,
+      "unique": 50,
+      "stored": 20,
+      "rowStyles": 1,
+      "heights": [
+        56
+      ],
+      "requests": [
+        "?limit=20&project=atlas"
+      ],
+      "searchFields": 0,
+      "pageOverflow": false,
+      "boardOverflow": false
+    },
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "key": "430-light",
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "scheme": "light",
+    "queued": 10,
+    "vertical": {
+      "startedOn": "pipeline:lane-8",
+      "scrollTop": 383,
+      "openRows": 0
+    },
+    "tray": {
+      "open": "true",
+      "touchAction": "pan-y",
+      "cardLeft": -132,
+      "cardRight": 274,
+      "opacity": "1",
+      "buttons": [
+        {
+          "key": "hide",
+          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
+          "x": 274,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
+          "x": 346,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        }
+      ]
+    },
+    "hide": {
+      "rowGone": true,
+      "badge": 9,
+      "receipt": "Hid «Fast conversation switching»Restore",
+      "receiptBox": {
+        "x": 12,
+        "y": 825,
+        "width": 406,
+        "height": 44
+      },
+      "dockBox": {
+        "x": 12,
+        "y": 882,
+        "width": 406,
+        "height": 44
+      },
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        }
+      ]
+    },
+    "restored": {
+      "badge": 10,
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        },
+        {
+          "id": "lane-0",
+          "action": "undismiss"
+        }
+      ]
+    },
+    "refused": {
+      "rowGone": true,
+      "badge": 9,
+      "badgeAfter": 10,
+      "receipt": "refused by the evidence fixture"
+    },
+    "closeLane": {
+      "rowGone": true,
+      "badge": 10,
+      "receipt": "Lane closedRestore",
+      "sent": 0
+    },
+    "longPress": {
+      "sheet": true,
+      "rows": [
+        {
+          "key": "hide",
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "height": 56
+        }
+      ],
+      "pipelineScreen": false
+    },
+    "conversationClose": {
+      "tray": [
+        "Close card. Hides it from the board. The agent keeps running."
+      ],
+      "rowGone": true,
+      "reopened": true,
+      "boardScreen": 1,
+      "mutations": [
+        "reconcile-roots",
+        "reconcile-roots",
+        "mark-seen",
+        "close",
+        "restore"
+      ],
+      "pipelineWrites": 0
+    },
+    "expanded": {
+      "rows": 30,
+      "requests": 0,
+      "toggle": "Show fewerStored entries load as you scroll"
+    },
+    "appended": {
+      "rows": 50,
+      "unique": 50,
+      "stored": 20,
+      "rowStyles": 1,
+      "heights": [
+        56
+      ],
+      "requests": [
+        "?limit=20&project=atlas"
+      ],
+      "searchFields": 0,
+      "pageOverflow": false,
+      "boardOverflow": false
+    },
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "key": "430-dark",
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "scheme": "dark",
+    "queued": 10,
+    "vertical": {
+      "startedOn": "pipeline:lane-8",
+      "scrollTop": 383,
+      "openRows": 0
+    },
+    "tray": {
+      "open": "true",
+      "touchAction": "pan-y",
+      "cardLeft": -132,
+      "cardRight": 274,
+      "opacity": "1",
+      "buttons": [
+        {
+          "key": "hide",
+          "label": "Hide from board. Takes it off the board's queue. The lane stays as it is.",
+          "x": 274,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "label": "Close lane. Stops its agents. The worktree and transcripts stay.",
+          "x": 346,
+          "y": 176,
+          "width": 72,
+          "height": 56
+        }
+      ]
+    },
+    "hide": {
+      "rowGone": true,
+      "badge": 9,
+      "receipt": "Hid «Fast conversation switching»Restore",
+      "receiptBox": {
+        "x": 12,
+        "y": 825,
+        "width": 406,
+        "height": 44
+      },
+      "dockBox": {
+        "x": 12,
+        "y": 882,
+        "width": 406,
+        "height": 44
+      },
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        }
+      ]
+    },
+    "restored": {
+      "badge": 10,
+      "patches": [
+        {
+          "id": "lane-0",
+          "action": "dismiss"
+        },
+        {
+          "id": "lane-0",
+          "action": "undismiss"
+        }
+      ]
+    },
+    "refused": {
+      "rowGone": true,
+      "badge": 9,
+      "badgeAfter": 10,
+      "receipt": "refused by the evidence fixture"
+    },
+    "closeLane": {
+      "rowGone": true,
+      "badge": 10,
+      "receipt": "Lane closedRestore",
+      "sent": 0
+    },
+    "longPress": {
+      "sheet": true,
+      "rows": [
+        {
+          "key": "hide",
+          "height": 56
+        },
+        {
+          "key": "closeLane",
+          "height": 56
+        }
+      ],
+      "pipelineScreen": false
+    },
+    "conversationClose": {
+      "tray": [
+        "Close card. Hides it from the board. The agent keeps running."
+      ],
+      "rowGone": true,
+      "reopened": true,
+      "boardScreen": 1,
+      "mutations": [
+        "reconcile-roots",
+        "reconcile-roots",
+        "mark-seen",
+        "close",
+        "restore"
+      ],
+      "pipelineWrites": 0
+    },
+    "expanded": {
+      "rows": 30,
+      "requests": 0,
+      "toggle": "Show fewerStored entries load as you scroll"
+    },
+    "appended": {
+      "rows": 50,
+      "unique": 50,
+      "stored": 20,
+      "rowStyles": 1,
+      "heights": [
+        56
+      ],
+      "requests": [
+        "?limit=20&project=atlas"
+      ],
+      "searchFields": 0,
+      "pageOverflow": false,
+      "boardOverflow": false
+    },
+    "pageErrors": [],
+    "failures": []
+  }
+]

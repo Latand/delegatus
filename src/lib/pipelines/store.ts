@@ -373,6 +373,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.createdAt === "string" &&
     isNullableString(pipeline.closedAt) &&
     (pipeline.hiddenAt === undefined || isNullableString(pipeline.hiddenAt)) &&
+    (pipeline.dismissedAt === undefined || isNullableString(pipeline.dismissedAt)) &&
     (pipeline.unconfirmedHosts === undefined
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&

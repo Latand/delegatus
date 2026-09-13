@@ -1,8 +1,9 @@
 "use client";
 
 import { ChevronRight, Command, Crown, MessageCircle, Mic, Sparkle } from "@/components/icons";
-import { useLayoutEffect, useRef } from "react";
-import { captureCatalogPosition, restoreCatalogPosition, type CatalogPosition } from "./MobileInlineCatalog";
+import { Fragment, useLayoutEffect, useRef } from "react";
+import type { ConversationCatalogData } from "@/hooks/useConversationCatalog";
+import { captureCatalogPosition, MobileCatalogTail, restoreCatalogPosition, type CatalogPosition } from "./MobileInlineCatalog";
 import { Bot } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -13,17 +14,22 @@ import { clockDuration, humanizeDuration } from "../turnDuration";
 
 import {
   buildMobileBoard,
+  catalogContinuation,
   type MobileBoardConversation,
   type MobileBoardModel,
   type MobileBoardPipelineRow,
+  type MobileBoardRowRef,
   type MobileRowState,
 } from "./mobileBoardModel";
+import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
 
 /*
  * The phone's board (issue #1439, lane 2; docs/design/mobile-v2/README.md
  * §4.1). One primary surface: the orchestrator seat first, then the queue, the
- * pipelines summary, what is running, and three recent rows with the catalog
- * behind them.
+ * pipelines summary, what is running, and three recent rows that «All
+ * conversations» continues in place, in the same rows (#1671). Every
+ * conversation and queued pipeline row slides left to show what can be done
+ * to it (`MobileSwipeRow`).
  *
  * A row is dot · title · one meta line · one trailing element. On a row that
  * needs the operator the 3 px edge and the badge are the two coloured elements
@@ -144,7 +150,14 @@ const BADGE_LABEL = {
   limit: "mobile2.board.badgeLimit",
 } as const;
 
-function ConversationRow({ row, quiet, now, onOpen }: { row: MobileBoardConversation; quiet?: boolean; now: number; onOpen: (file: FileEntry) => void }) {
+function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
+  row: MobileBoardConversation;
+  quiet?: boolean;
+  now: number;
+  onOpen: (file: FileEntry) => void;
+  /** The scroll anchor «All conversations» returns to. */
+  catalogPath?: string;
+}) {
   const { t } = useLocale();
   const { state } = row;
   const edge = state.edge ? EDGE[state.edge] : "";
@@ -155,6 +168,7 @@ function ConversationRow({ row, quiet, now, onOpen }: { row: MobileBoardConversa
       data-mobile2-go="chat"
       data-mobile2-state={state.key}
       data-mobile2-path={row.path}
+      data-catalog-path={catalogPath}
       aria-label={t("mobile2.board.openConversation", { title: row.title })}
       className={`${CARD} min-h-14 ${quiet ? "bg-quiet shadow-none ring-1 ring-inset ring-border" : ""} ${edge}`}
       onClick={() => onOpen(row.file)}
@@ -319,23 +333,37 @@ export interface MobileBoardData {
   hidden?: ReadonlySet<string>;
   archived?: ReadonlySet<string>;
   crowned?: ReadonlySet<string>;
+  /** A lane whose close is still held by its receipt; its row is already gone. */
+  archiving?: string | null;
   /** Epoch seconds; the dashboard's ticking clock keeps the ages honest. */
   now?: number;
+}
+
+/** «All conversations» (#1671): the Recent list going further down. */
+export interface MobileBoardCatalog {
+  /** The project's stored catalog, read once the feed's own rows ran out. */
+  data: ConversationCatalogData;
+  expanded: boolean;
+  paging: boolean;
+  position: CatalogPosition;
+  onToggle: () => void;
+  /** The end of the list came into view. */
+  onReach: () => void;
 }
 
 export interface MobileBoardProps extends MobileBoardData {
   /** The seat card (lane 6 replaces the pinned row with it). */
   seat?: React.ReactNode;
-  /** Conversations in the catalog behind «All conversations · n ›». */
-  catalogCount?: number;
-  catalogState?: "loading" | "error";
-  catalogExpanded?: boolean;
-  catalog?: React.ReactNode;
-  catalogPosition?: CatalogPosition;
+  catalog?: MobileBoardCatalog;
+  /** What a row reveals under a left swipe and lists on a long-press (#1671). */
+  rowActions?: (row: MobileBoardRowRef) => readonly MobileRowAction[];
+  onRowActions?: (row: MobileBoardRowRef) => void;
   onOpenConversation: (file: FileEntry) => void;
+  /** A catalog row past the scan opens through the resolver that pins it into
+      the scan; a row the scan carries opens as a board row. */
+  onOpenCatalogConversation?: (file: FileEntry) => void;
   onOpenPipeline?: (pipeline: Pipeline) => void;
   onOpenPipelines?: () => void;
-  onOpenCatalog?: () => void;
 }
 
 /** The model the board renders, for the surfaces that must agree with it (the
@@ -349,6 +377,7 @@ export function mobileBoardOf(props: MobileBoardData): MobileBoardModel {
     hidden: props.hidden,
     archived: props.archived,
     crowned: props.crowned,
+    archiving: props.archiving,
     now: props.now,
   });
 }
@@ -393,17 +422,52 @@ export function MobileBoardDock({ onTell, create = false, unresolved = false }: 
 
 export function MobileBoard(props: MobileBoardProps) {
   const { t } = useLocale();
-  const { seat, onOpenConversation, onOpenPipeline, onOpenPipelines, onOpenCatalog, catalogCount } = props;
+  const { seat, catalog, rowActions, onRowActions, onOpenConversation, onOpenPipeline, onOpenPipelines } = props;
   const scroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (scroll.current && props.catalogPosition && props.catalogExpanded) restoreCatalogPosition(scroll.current, props.catalogPosition);
-  }, [props.project, props.catalogPosition, props.catalogExpanded]);
+    if (scroll.current && catalog?.expanded) restoreCatalogPosition(scroll.current, catalog.position);
+  }, [props.project, catalog?.position, catalog?.expanded]);
   const model = mobileBoardOf(props);
   const now = props.now ?? Date.now() / 1000;
   const pipelinesRow = model.pipelines ? <PipelinesRow model={model} onOpen={onOpenPipelines} /> : null;
   const stack = (children: React.ReactNode) => <div className="flex flex-col gap-1.5 px-3">{children}</div>;
+  /* Every conversation and queued pipeline row slides left to reveal its
+     actions; a row with none to offer renders bare. */
+  const swipeable = (ref: MobileBoardRowRef, title: string, card: React.ReactNode) => {
+    const id = ref.kind === "conversation" ? `conversation:${ref.row.path}` : `pipeline:${ref.row.id}`;
+    const actions = rowActions?.(ref) ?? [];
+    if (!actions.length) return <Fragment key={id}>{card}</Fragment>;
+    return (
+      <MobileSwipeRow key={id} id={id} title={title} actions={actions} onLongPress={onRowActions ? () => onRowActions(ref) : undefined}>
+        {card}
+      </MobileSwipeRow>
+    );
+  };
+  const conversation = (row: MobileBoardConversation, options: { quiet?: boolean; anchor?: boolean; onOpen?: (file: FileEntry) => void } = {}) =>
+    swipeable({ kind: "conversation", row }, row.title, (
+      <ConversationRow
+        row={row}
+        quiet={options.quiet}
+        now={now}
+        onOpen={options.onOpen ?? onOpenConversation}
+        catalogPath={options.anchor ? row.path : undefined}
+      />
+    ));
+  const continuation = catalog?.expanded
+    ? catalogContinuation(model, catalog.data.items, {
+      files: props.files,
+      seatPath: props.seatPath,
+      hidden: props.hidden,
+      archived: props.archived,
+      crowned: props.crowned,
+      now,
+    })
+    : [];
+  const captureAnchor = () => {
+    if (scroll.current && catalog?.expanded) captureCatalogPosition(scroll.current, catalog.position);
+  };
   return (
-    <div ref={scroll} onScroll={() => { if (scroll.current && props.catalogPosition && props.catalogExpanded) captureCatalogPosition(scroll.current, props.catalogPosition); }} data-mobile2-board className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-3">
+    <div ref={scroll} onScroll={captureAnchor} data-mobile2-board className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pb-3">
       {seat ? (
         <>
           <Section label={t("mobile2.board.orchestrator")} id="orchestrator" />
@@ -415,12 +479,12 @@ export function MobileBoard(props: MobileBoardProps) {
         <>
           <Section label={t("mobile2.board.needsYou")} count={model.needsYou.length} id="needs" />
           {stack(model.needsYou.map((item) => (item.kind === "conversation" ? (
-            <ConversationRow key={item.path} row={item} now={now} onOpen={onOpenConversation} />
+            conversation(item)
           ) : (
             /* `onOpenPipeline` passes THROUGH: undefined means no pipeline
                screen exists yet, and the row renders as a statement rather
                than as a button that swallows the tap. */
-            <MobilePipelineQueueRow key={item.id} row={item} onOpen={onOpenPipeline} />
+            swipeable({ kind: "pipeline", row: item }, item.task, <MobilePipelineQueueRow row={item} onOpen={onOpenPipeline} />)
           ))))}
         </>
       ) : null}
@@ -434,7 +498,7 @@ export function MobileBoard(props: MobileBoardProps) {
 
       <Section label={t("mobile2.board.working")} count={model.working.length} id="working" />
       {stack(model.working.length
-        ? model.working.map((row) => <ConversationRow key={row.path} row={row} now={now} onOpen={onOpenConversation} />)
+        ? model.working.map((row) => conversation(row))
         : <div className="p-4 text-center text-ui text-muted">{t("mobile2.board.nothingRunning")}</div>)}
 
       {!model.pipelinesFirst && pipelinesRow ? (
@@ -447,28 +511,46 @@ export function MobileBoard(props: MobileBoardProps) {
       <Section label={t("mobile2.board.recent")} count={model.recentTotal} id="recent" />
       {stack(
         <>
-          {model.recent.map((row) => <ConversationRow key={row.path} row={row} quiet now={now} onOpen={onOpenConversation} />)}
-          {onOpenCatalog ? (
+          {model.recent.map((row) => conversation(row, { quiet: true, anchor: true }))}
+          {catalog ? (
             <button
               type="button"
               data-mobile2-row="catalog"
               className={`${CARD} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-              aria-expanded={props.catalogExpanded}
-              onClick={onOpenCatalog}
+              aria-expanded={catalog.expanded}
+              onClick={() => {
+                /* Taken before the list grows or shrinks, so the row under the
+                   thumb stays where it is. */
+                if (scroll.current) captureCatalogPosition(scroll.current, catalog.position);
+                catalog.onToggle();
+              }}
             >
               <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-strong" />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-body font-semibold leading-[1.25] text-secondary">{t("mobile2.board.allConversations")}</span>
+                <span className="truncate text-body font-semibold leading-[1.25] text-secondary">
+                  {t(catalog.expanded ? "mobile2.board.showFewer" : "mobile2.board.allConversations")}
+                </span>
                 <span className="truncate text-label tabular-nums text-muted">
-                  {catalogCount === undefined
-                    ? t(props.catalogState === "error" ? "list.failed" : props.catalogState === "loading" ? "common.loading" : "mobile.catalog.unknown")
-                    : t("mobile.catalog.count", { count: catalogCount })}
+                  {catalog.data.known
+                    ? t("mobile.catalog.count", { count: catalog.data.total })
+                    : t(catalog.data.error ? "list.failed" : catalog.paging && catalog.data.loading ? "common.loading" : catalog.expanded ? "mobile2.board.catalogOnScroll" : "mobile.catalog.unknown")}
                 </span>
               </span>
-              <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted ${props.catalogExpanded ? "rotate-90" : ""}`} aria-hidden />
+              <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted ${catalog.expanded ? "-rotate-90" : ""}`} aria-hidden />
             </button>
           ) : null}
-          {props.catalogExpanded ? props.catalog : null}
+          {catalog?.expanded ? (
+            <>
+              {model.recentRest.map((row) => conversation(row, { quiet: true, anchor: true }))}
+              {continuation.map((row) => conversation(row, { quiet: true, anchor: true, onOpen: props.onOpenCatalogConversation }))}
+              <MobileCatalogTail
+                catalog={catalog.data}
+                paging={catalog.paging}
+                rows={model.recentRest.length + continuation.length}
+                onReach={catalog.onReach}
+              />
+            </>
+          ) : null}
         </>,
       )}
     </div>

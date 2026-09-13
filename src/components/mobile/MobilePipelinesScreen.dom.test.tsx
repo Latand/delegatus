@@ -183,6 +183,16 @@ test("the model groups by state and drops what the phone never lists", () => {
   expect(mobilePipelinesModel([{ ...live, hiddenAt: at(60) } as Pipeline]).active).toEqual([]);
 });
 
+test("a lane hidden from the board stays in the list and says so (#1671)", () => {
+  const host = mount(<MobilePipelinesScreen pipelines={[live, { ...parked, dismissedAt: at(30) } as Pipeline]} now={NOW} onOpenPipeline={() => {}} />);
+  const hidden = q(host, '[data-mobile2-pipeline-hidden="p2"]')!;
+  expect(hidden).not.toBeNull();
+  expect(hidden.textContent).toContain(translate("en", "mobile2.pipelines.hiddenTag"));
+  expect(q(hidden, '[data-mobile2-pipeline-row="p2"]')).not.toBeNull();
+  expect(mobilePipelinesModel([{ ...parked, dismissedAt: at(30) } as Pipeline]).needs.map((p) => p.id)).toEqual(["p2"]);
+  expect(q(host, '[data-mobile2-pipeline-hidden="p1"]')).toBeNull();
+});
+
 test("with nothing running the Active section says so rather than rendering an empty stack", () => {
   const host = mount(<MobilePipelinesScreen pipelines={[finished]} now={NOW} onOpenPipeline={() => {}} />);
   expect(host.textContent).toContain(translate("en", "mobile2.pipelines.none"));

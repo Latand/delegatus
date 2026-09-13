@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
+import { Check, CircleX, Eye, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
 
 import { ChevronRight, Loader2, X } from "@/components/icons";
 import { useState, useSyncExternalStore } from "react";
@@ -232,7 +232,9 @@ const ACTION_ICON = {
   retry: RefreshCw,
   pause: Pause,
   resume: Play,
-  archive: Archive,
+  /* Labelled «Close lane» (#1671): the button names what it does, which is
+     stop the lane's agents. */
+  archive: CircleX,
 } as const;
 
 const STAGE_MARK = "grid h-6 w-6 shrink-0 place-items-center rounded-full text-caption font-bold tabular-nums";
@@ -393,6 +395,14 @@ export function MobilePipelineScreen({
       showReceipt(fail ?? t(ACTION_RECEIPT[spec.key]));
     });
   };
+  /* A lane hidden from the board's queue (#1671) comes back from its own
+     screen; the optimistic record puts it back in the queue on the tap. */
+  const showOnBoard = (): void => {
+    void patchPipeline(pipeline.id, "undismiss", undefined, { ...pipeline, dismissedAt: null }).then((fail) => {
+      showReceipt(fail ?? t("mobile2.pipeline.shownOnBoard"));
+    });
+  };
+  const dismissed = Boolean(pipeline.dismissedAt) && pipeline.state !== "closed" && pipeline.state !== "draft";
 
   const title = (
     <span className="flex min-w-0 flex-1 flex-col">
@@ -447,6 +457,21 @@ export function MobilePipelineScreen({
         ) : null}
 
         <ActionRow pipeline={pipeline} held={held} onRun={run} />
+        {dismissed ? (
+          <div className="px-3">
+            <button
+              type="button"
+              data-mobile2-pipeline-action="showOnBoard"
+              data-mobile2-pipeline-patch="undismiss"
+              disabled={held}
+              className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-[8px] bg-card px-3 text-body font-semibold text-secondary shadow-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+              onClick={showOnBoard}
+            >
+              <Eye className="h-4 w-4 shrink-0" aria-hidden />
+              {t("mobile2.pipeline.showOnBoard")}
+            </button>
+          </div>
+        ) : null}
 
         <Section label={t("mobile2.pipeline.stages")} count={pipeline.stages.length} id="stages" />
         <div data-mobile2-stages className="mx-3 flex flex-col divide-y divide-border overflow-hidden rounded-[12px] bg-card shadow-1">

@@ -1744,6 +1744,43 @@ test("set-position persists a finite world pin without changing pipeline executi
   expect((await patchPipeline(created.id, { action: "set-position", pos: { x: Number.NaN, y: 1 } }, h.ports)).status).toBe(400);
 });
 
+test("dismiss and undismiss take a lane off the phone board and back without touching the lane (#1671)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = loadPipelines()[0]!;
+  const callsBefore = h.calls.length;
+
+  const dismissed = await patchPipeline(created.id, { action: "dismiss" }, h.ports);
+  expect(dismissed.error).toBeUndefined();
+  const hiddenAt = dismissed.pipeline!.dismissedAt;
+  expect(typeof hiddenAt).toBe("string");
+  /* The lane itself is exactly what it was: state, cursor, runs, and the
+     markers every other reader takes to mean closed. */
+  const stored = loadPipelines()[0]!;
+  expect(stored).toMatchObject({ state: before.state, closedAt: null, hiddenAt: before.hiddenAt ?? null, dismissedAt: hiddenAt });
+  expect(stored.cursor).toEqual(before.cursor);
+  expect(stored.runs).toEqual(before.runs);
+  expect(h.calls.length).toBe(callsBefore);
+
+  /* A second hide keeps the first instant. */
+  expect((await patchPipeline(created.id, { action: "dismiss" }, h.ports)).pipeline!.dismissedAt).toBe(hiddenAt);
+
+  const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
+  expect(shown.pipeline!.dismissedAt).toBeNull();
+  expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
+
+  const closed = await patchPipeline(created.id, { action: "close" }, h.ports);
+  expect(closed.pipeline!.state).toBe("closed");
+  for (const action of ["dismiss", "undismiss"] as const) {
+    expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
+  }
+
+  savePipelines([]);
+  const draft = await createPipelineFromRequest({ task: "A draft", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false }, h.ports);
+  expect((await patchPipeline(draft.pipeline!.id, { action: "dismiss" }, h.ports)).status).toBe(409);
+  expect(loadPipelines()[0]!.dismissedAt).toBeUndefined();
+});
+
 test("an explicit draft base remains pinned when the draft starts", async () => {
   const h = harness();
   savePipelines([]);
