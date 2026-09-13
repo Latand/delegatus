@@ -186,6 +186,17 @@ export type PipelineStageAttempt = {
     rounds: number;
     retryAfter: string;
   };
+  /** Launches this attempt reserved and then retired because their receipt
+      settled `failed` before any host ran them (#1678): the runtime host was
+      unreachable or the account mutation lock was busy. The receipt's own
+      terminal verdict is what permits re-dispatch; a launch whose fate the
+      receipt cannot vouch for is never retired here. Bounded, oldest first. */
+  retiredLaunches?: Array<{
+    launchId: string;
+    conversationId: string | null;
+    error: string;
+    retiredAt: string;
+  }>;
   /** Exactly-once relay (#353): the `{{prev.output}}` payload persisted when the
       cursor advanced here. Null on pre-v3 attempts, which fall back to the
       legacy positional scan. */

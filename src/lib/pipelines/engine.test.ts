@@ -8255,3 +8255,397 @@ test("a pipeline without a recorded task adopts the fallback task its admission 
   expect(unbound.taskIds).toEqual(["created-fallback"]);
   expect(engineModule.adoptPipelineFallbackTask({ ...bound, taskIds: [] }, [other])).toBe(false);
 });
+
+/* #1678: the 7eef4743 prototype's confirm stage. The spawn reserved a launch,
+   every runtime-host RPC then timed out, the spawn layer recorded the receipt
+   as failed with the actionable host message, and the stage parked on that
+   first sighting until an operator ran retry-stage two minutes later. */
+const HOST_UNAVAILABLE = "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure";
+
+function failedReceipt(launchId: string, conversationId: string, error: string): NonNullable<ReturnType<PipelinePorts["spawnReceipt"]>> {
+  return { state: "failed", launchId, conversationId, sessionId: null, "transcript": null, paneId: null, error };
+}
+
+test("a runtime-host transport failure after reservation retries the same attempt from its failed receipt (#1678)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const receipts = new Map<string, ReturnType<PipelinePorts["spawnReceipt"]>>();
+  const claims: string[] = [];
+  const clientAttemptIds: string[] = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-host-1", conversationId: "conversation_host_1" });
+      receipts.set("launch-host-1", failedReceipt("launch-host-1", "conversation_host_1", HOST_UNAVAILABLE));
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => receipts.get(launchId) ?? null;
+  h.ports.claimSpawnRetry = (launchId, claimId) => {
+    claims.push(`${launchId}:${claimId}`);
+    return "claimed";
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(claims).toEqual([`launch-host-1:${created.id}:plan:launch-host-1`]);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure; retry at /),
+    cursor: { stageId: "plan", state: "pending" },
+  });
+  const waiting = pipeline.runs[0]!.attempts.at(-1)!;
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(waiting).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, error: null });
+  expect(waiting.controllerWait).toMatchObject({ rounds: 1 });
+  expect(waiting.retiredLaunches).toEqual([{
+    launchId: "launch-host-1",
+    conversationId: "conversation_host_1",
+    error: HOST_UNAVAILABLE,
+    retiredAt: expect.any(String),
+  }]);
+  expect(scheduled).toEqual([1_000]);
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(2);
+  expect(new Set(clientAttemptIds).size).toBe(2);
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "plan", state: "running" } });
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({
+    n: 1,
+    state: "running",
+    launchId: "launch-1",
+    conversationId: "conversation_stage_1",
+    retiredLaunches: [{ launchId: "launch-host-1", conversationId: "conversation_host_1" }],
+  });
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test.each([
+  { fate: "no receipt", receipt: null },
+  { fate: "a receipt still starting", receipt: { state: "starting", launchId: "launch-host-unknown", conversationId: "conversation_host_unknown", sessionId: null, "transcript": null, paneId: null } },
+] as const)("a runtime-host transport failure with $fate parks without re-dispatching (#1678)", async ({ receipt }) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  const claims: string[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-host-unknown", conversationId: "conversation_host_unknown" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(claims).toEqual([]);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: HOST_UNAVAILABLE });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    launchId: "launch-host-unknown",
+    conversationId: "conversation_host_unknown",
+    error: HOST_UNAVAILABLE,
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+test("runtime-host retries are bounded and park with the wait they spent (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE);
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(16);
+  expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 57_000]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `stage spawn failed after 15 retries over 600s: ${HOST_UNAVAILABLE}`,
+    cursor: { stageId: "plan", state: "spawning" },
+  });
+  expect(parked.runs[0]!.attempts).toHaveLength(1);
+  /* The last launch stays on the attempt: its receipt is what retry-stage claims. */
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    n: 1,
+    state: "needs_decision",
+    launchId: "launch-host-16",
+    conversationId: "conversation_host_16",
+    error: parked.stateDetail,
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(15);
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.at(-1)).toMatchObject({ launchId: "launch-host-15" });
+});
+
+test("a busy account mutation after reservation retries once its receipt has failed (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-busy-1", conversationId: "conversation_busy_1" });
+      throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-busy-1"
+    ? failedReceipt("launch-busy-1", "conversation_busy_1", "account mutation is busy in this process; retry shortly")
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+  });
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-busy-1", conversationId: "conversation_busy_1" }],
+  });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(2);
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a spawn interrupted by a restart retries from a transient failed receipt instead of parking (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts.push({
+    n: 1,
+    state: "spawning",
+    effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: "launch-interrupted",
+    conversationId: "conversation_interrupted",
+    sessionId: null,
+    agentPath: null,
+    paneId: null,
+    flowId: null,
+    startedAt: h.ports.now(),
+    completedAt: null,
+    input: null,
+    activatedBy: null,
+    output: null,
+    verdict: null,
+    error: null,
+  });
+  pipeline.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([pipeline]);
+  const scheduled: number[] = [];
+  const claims: string[] = [];
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-interrupted"
+    ? failedReceipt("launch-interrupted", "conversation_interrupted", "structured spawn runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure")
+    : null;
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  await tickPipelines([], h.ports);
+  let current = loadPipelines()[0]!;
+  expect(claims).toEqual(["launch-interrupted"]);
+  expect(current).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
+  expect(current.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-interrupted", conversationId: "conversation_interrupted" }],
+  });
+  expect(scheduled).toEqual([1_000]);
+
+  h.advanceWallClock(1_000);
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a spawn interrupted by a restart still parks on a deterministic failed receipt (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts.push({
+    n: 1,
+    state: "spawning",
+    effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: "launch-refused",
+    conversationId: "conversation_refused",
+    sessionId: null,
+    agentPath: null,
+    paneId: null,
+    flowId: null,
+    startedAt: h.ports.now(),
+    completedAt: null,
+    input: null,
+    activatedBy: null,
+    output: null,
+    verdict: null,
+    error: null,
+  });
+  pipeline.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([pipeline]);
+  const claims: string[] = [];
+  h.ports.spawnReceipt = () => failedReceipt("launch-refused", "conversation_refused", "pipeline spawn attempt conflicts with its original request");
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+
+  await tickPipelines([], h.ports);
+
+  expect(claims).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "pipeline spawn attempt conflicts with its original request" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-refused" });
+});
+
+test("a pipeline spawn that finds no runtime host fails its own receipt before it throws (#1678)", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-no-host-registry.json"));
+  const cwd = process.env.LLV_STATE_DIR!;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  setAgentRegistryForTests(registry);
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: "no-host",
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  }));
+  const reservations: Array<{ launchId: string; conversationId: string }> = [];
+  try {
+    const ports = defaultPipelinePorts();
+    await expect(ports.spawnAgent({
+      role: {
+        roleId: "builder",
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+        access: "read-write",
+        promptScaffold: "Builder guidance",
+      },
+      runtimeProfile: { access: "read-write", sandbox: "full" },
+      cwd,
+      project: "repo-00000000000000000000000000000001",
+      requestedAccountId: null,
+      title: "Build scoped change · build",
+      ["prompt"]: "Build the scoped change",
+      parentPath: null,
+      clientAttemptId: "pipeline_no_host_attempt",
+      membership: {
+        kind: "pipeline",
+        containerId: "pipeline-no-host",
+        role: "builder",
+        slot: "build:1",
+        stageId: "build",
+        stageOrder: 0,
+        round: 1,
+        parentConversationId: null,
+      },
+      creatorConversationId: null,
+    }, (created) => { reservations.push(created); })).rejects.toThrow("pipeline structured runtime host is unavailable");
+    const reservation = reservations[0];
+    if (!reservation) throw new Error("pipeline reservation was not captured");
+    expect(ports.spawnReceipt(reservation.launchId)).toMatchObject({
+      state: "failed",
+      launchId: reservation.launchId,
+      conversationId: reservation.conversationId,
+      error: "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure",
+    });
+    expect(ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
+  } finally {
+    resolveSpawn.mockRestore();
+    setAgentRegistryForTests(null);
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+test("a failed receipt that settles before its retry claim parks instead of re-dispatching (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-host-settled", conversationId: "conversation_host_settled" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => failedReceipt("launch-host-settled", "conversation_host_settled", HOST_UNAVAILABLE);
+  h.ports.claimSpawnRetry = () => "settled";
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: HOST_UNAVAILABLE });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    launchId: "launch-host-settled",
+    conversationId: "conversation_host_settled",
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});

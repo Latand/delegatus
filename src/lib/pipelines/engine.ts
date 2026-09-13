@@ -466,7 +466,13 @@ async function spawnPipelineAgent(
   const spec = { ...specBase, launchProfile };
   const client = runtimeHostClient();
   const unavailable = supervisedRuntimeHostUnavailableReason("pipeline structured runtime host");
-  if (!client) throw new Error(unavailable);
+  if (!client) {
+    /* Nothing was dispatched, and the receipt has to say so itself (#1678):
+       the engine re-dispatches only on the receipt's own terminal verdict,
+       exactly as the spawn layer records one after its transport fails. */
+    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    throw new Error(unavailable);
+  }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
   try {
     response = await spawnStructuredConversation({
@@ -1107,6 +1113,16 @@ const SPAWN_HANDSHAKE_RETRY_DELAY_MS = 1_000;
     real time inside `spawnAgent`, and that time is part of the wait. */
 const SPAWN_CONTROLLER_WAIT_BUDGET_MS = 30_000;
 const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
+/** A runtime host whose RPCs time out comes back in minutes, not seconds: the
+    7eef4743 prototype's outage ran four and a half (#1678). A stage whose
+    launch receipt proves nothing was dispatched rides it out on this budget
+    with a slower backoff, because every round burns a real reservation and the
+    admission attempts the spawn layer makes before it records the failure. */
+const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
+const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+/** Retired launches an attempt keeps; the host budget cannot mint more than
+    sixteen, so the cap only guards the record against a future longer budget. */
+const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
@@ -2217,6 +2233,9 @@ async function tickRunStage(
          The activation leaves the loop for the wall-clock wait below rather
          than sleeping here, so it costs the pipelines phase nothing. */
       let controllerFailure: string | null = null;
+      /* The failed receipt behind `controllerFailure` when the spawn had
+         already reserved a launch; retired once a further round is booked. */
+      let failedReceipt: PipelineSpawnReceipt | null = null;
       /* Rounds already booked by earlier ticks of this same activation. The
          retry index continues across them, so every attempt keeps a distinct
          launch identity even though the wait now spans ticks (#1056). */
@@ -2249,11 +2268,19 @@ async function tickRunStage(
              other transient keeps the two immediate handshake retries (#1056),
              which stay well inside the controller's phase deadline. */
           const accountMutationContention = isAccountMutationContention(message);
-          /* A busy account error is retryable only before the registry can
-             publish a launch claim. Once a callback supplied an id, its fate
-             is unknown and the existing receipt recovery must own it. */
-          if (accountMutationContention && attempt.launchId !== null) throw error;
-          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention) {
+          const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
+          /* A busy account or an unreachable runtime host is retryable before
+             the registry publishes a launch claim. Once a callback supplied an
+             id, the receipt alone knows the launch's fate (#1678): `failed` is
+             the spawn layer's own retry-safe verdict and the launch is retired
+             below; anything else parks, and the existing receipt recovery
+             adopts a launch that settles after all. */
+          if ((accountMutationContention || hostUnavailable) && attempt.launchId !== null) {
+            const receipt = ports.spawnReceipt(attempt.launchId);
+            if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
+            failedReceipt = receipt;
+          }
+          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable) {
             controllerFailure = message;
             break;
           }
@@ -2269,6 +2296,17 @@ async function tickRunStage(
            spent inside spawnAgent counts against the budget rather than being
            invisible to it. */
         const failedAt = ports.now();
+        if (failedReceipt) {
+          /* Claimed under the identity retry-stage uses, so a later manual
+             retry of the same launch is idempotent; a claim that finds the
+             receipt settled after all parks, and the completed-receipt
+             reconcile adopts the launch on the next tick. */
+          const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
+          if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+          if (deferred === "settled") throw new Error(controllerFailure);
+          persist();
+          return;
+        }
         if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
@@ -2315,6 +2353,14 @@ async function tickRunStage(
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
       attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
+      /* A launch the spawn layer ended `failed` for a transient reason never
+         reached a host (#1678); the same bounded wait the live activation gets
+         applies, measured from the activation this process inherited. */
+      if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
+        const now = ports.now();
+        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, attempt.startedAt ?? now, now, ports);
+        if (deferred === "waiting") return;
+      }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
         park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
@@ -3077,6 +3123,63 @@ function isAccountMutationContention(failure: string): boolean {
   return failure.startsWith("account mutation is busy");
 }
 
+/** The pipeline spawn adapter's wording for every socket-level runtime-host
+    failure (`supervisedRuntimeHostUnavailableReason`), and the spawn layer's
+    own wording on the receipt it fails for the same reason. The ownership
+    refusal "structured host ownership is unavailable" is a different sentence
+    and a different class, and stays out. */
+function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
+  return failure.includes("runtime host is unavailable");
+}
+
+/**
+ * Retires a launch whose receipt settled `failed` and books the bounded wait
+ * before the same attempt reserves a fresh one (#1678). The receipt is the only
+ * authority consulted: it is the spawn layer's own retry-safe verdict, written
+ * after its admission attempts and its dead-host projection, so the engine
+ * never re-dispatches a launch whose fate it merely failed to observe.
+ *
+ * The claim uses the identity `retry-stage` uses for the same launch, so an
+ * operator retry that reaches the receipt later is idempotent rather than
+ * refused. `settled` means the receipt completed between the read and the
+ * claim: that launch is alive, nothing is retired, and the caller parks so the
+ * completed-receipt reconcile adopts it.
+ */
+function deferRetiredLaunchRetry(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  receipt: PipelineSpawnReceipt,
+  since: string,
+  now: string,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "settled" {
+  const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
+  if (claim !== "claimed") return "settled";
+  const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
+  if (bookControllerWaitRound(attempt, since, now, ports, isRuntimeHostUnavailableSpawnFailure(failure)
+    ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
+    : undefined) === "exhausted") return "exhausted";
+  const retired = attempt.retiredLaunches ?? [];
+  retired.push({
+    launchId: receipt.launchId,
+    conversationId: attempt.conversationId ?? receipt.conversationId ?? null,
+    error: failure,
+    retiredAt: now,
+  });
+  attempt.retiredLaunches = retired.slice(-RETIRED_LAUNCH_LIMIT);
+  attempt.launchId = null;
+  attempt.conversationId = null;
+  attempt.sessionId = null;
+  attempt.agentPath = null;
+  attempt.paneId = null;
+  attempt.state = "pending";
+  attempt.error = null;
+  setCursorState(pipeline, stage.id, "pending");
+  syncControllerWaitStateDetail(pipeline, attempt, failure);
+  return "waiting";
+}
+
 function controllerFailureReason(failure: string): string {
   return failure.replace(/; retry shortly$/, "");
 }
@@ -3087,7 +3190,7 @@ function syncControllerWaitStateDetail(
   failure: string | null,
 ): void {
   const retryAfter = attempt.controllerWait?.retryAfter;
-  if (failure !== null && isAccountMutationContention(failure) && retryAfter !== undefined) {
+  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure)) && retryAfter !== undefined) {
     pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
   } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
     pipeline.stateDetail = null;
@@ -3097,6 +3200,7 @@ function syncControllerWaitStateDetail(
 function isTransientStructuredSpawnFailure(failure: string): boolean {
   return isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
+    || isRuntimeHostUnavailableSpawnFailure(failure)
     || failure.includes("structured initial message")
     || failure.includes("runtime host request timed out");
 }
@@ -3127,13 +3231,14 @@ function bookControllerWaitRound(
   since: string,
   now: string,
   ports: PipelinePorts,
+  budget: { budgetMs: number; retryMaxMs: number } = { budgetMs: SPAWN_CONTROLLER_WAIT_BUDGET_MS, retryMaxMs: SPAWN_CONTROLLER_RETRY_MAX_MS },
 ): "waiting" | "exhausted" {
   const nowMs = unixMs(now);
   const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
-  const remainingMs = SPAWN_CONTROLLER_WAIT_BUDGET_MS - Math.max(0, nowMs - unixMs(wait.startedAt));
+  const remainingMs = budget.budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
   if (remainingMs <= 0) return "exhausted";
   const delayMs = Math.min(
-    SPAWN_CONTROLLER_RETRY_MAX_MS,
+    budget.retryMaxMs,
     SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
     remainingMs,
   );
