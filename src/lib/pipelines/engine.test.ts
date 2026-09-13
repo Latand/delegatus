@@ -492,6 +492,13 @@ function harness() {
       calls.push(`flow-patch:${id}:${action}`);
       if (note) calls.push(`flow-note:${note}`);
       const flow = flows.get(id);
+      if (flow && action === "retry-round") {
+        if (flow.state !== "needs_decision") return { error: "flow cannot retry from its current state", status: 409 };
+        const round = flow.rounds.at(-1);
+        if (round) Object.assign(round, { spawnStartedAt: null, launchId: null, reviewerPath: null, sessionId: null, error: null, terminalAt: null });
+        flow.state = "spawning";
+        flow.stateDetail = null;
+      }
       if (flow && action === "resume" && flow.state === "paused") {
         const round = flow.rounds.at(-1);
         if (round && isRecoverableLegacyRelayFailurePause(flow)) {
@@ -8648,4 +8655,230 @@ test("a failed receipt that settles before its retry claim parks instead of re-d
     conversationId: "conversation_host_settled",
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+/* #1678: pipeline 4d6f4fc1's review stage. The implementer had passed from its
+   transcript artifact, ahead of the scanner; the flow engine paused on the
+   stale completed scan snapshot, a paused flow is never ticked, and the stage
+   parked until an operator resumed the flow by hand. */
+async function reviewFlowPausedOnUnscannedImplementer(h: ReturnType<typeof harness>) {
+  const stages = [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as const;
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  const pauseOnScan = () => {
+    flow.state = "paused";
+    flow.pausedState = "spawning";
+    flow.stateDetail = "implementer transcript is missing";
+  };
+  pauseOnScan();
+  return { flow, pauseOnScan };
+}
+
+test("a review flow paused on an unscanned implementer transcript resumes on a bounded wait (#1678)", async () => {
+  const h = harness();
+  const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(1);
+  expect(flow).toMatchObject({ state: "spawning", pausedState: null });
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^review flow waiting for its implementer transcript to be scanned; retry at /),
+    cursor: { stageId: "review", state: "reviewing" },
+  });
+  expect(pipeline.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, flowId: "flow-1" });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  expect(scheduled).toEqual([1_000]);
+
+  /* The flows phase re-pauses on the same stale snapshot; the next resume is
+     not due until the booked backoff passes. */
+  pauseOnScan();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+  expect(scheduled).toEqual([1_000, 2_000]);
+
+  /* The snapshot caught up: the flow spawned its reviewer and the wait is over. */
+  flow.state = "reviewing";
+  flow.stateDetail = null;
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "review", state: "reviewing" } });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test("a review flow whose implementer transcript the scan never lists parks after the bounded resumes (#1678)", async () => {
+  const h = harness();
+  const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      pauseOnScan();
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(15);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "review flow paused in spawning: implementer transcript is missing (after 15 automatic resumes over 600s)",
+  });
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(flow.state).toBe("paused");
+
+  /* An exhausted park is not resumed again behind the operator's back. */
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(15);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("a review flow paused on a transcript the Viewer does not know parks at once (#1678)", async () => {
+  const h = harness();
+  await reviewFlowPausedOnUnscannedImplementer(h);
+  h.ports.pathForConversation = () => null;
+  h.ports.conversationRegistered = () => false;
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+
+  expect(h.calls).not.toContain("flow-patch:flow-1:resume");
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "review flow paused in spawning: implementer transcript is missing",
+  });
+});
+
+/* #1678: pipeline 4d6f4fc1's review stage again, after the scan caught up. The
+   flow engine met the busy account mutation lock inside prepareReviewerLaunch,
+   ended the round as needs_decision before any launch was reserved, and the
+   pipeline parked on that terminal state twice in a row. */
+const REVIEWER_BUSY = "account mutation is busy; retry shortly";
+
+async function reviewFlowEndedOnBusyAccount(h: ReturnType<typeof harness>) {
+  const stages = [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as const;
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  flow.rounds.push({ n: 1, reviewerPath: null, reviewerConversationId: null, sessionId: null, launchId: null, spawnStartedAt: null, verdict: null, error: null } as never);
+  const busy = () => {
+    flow.state = "needs_decision";
+    flow.stateDetail = REVIEWER_BUSY;
+    flow.rounds.at(-1)!.error = REVIEWER_BUSY;
+  };
+  busy();
+  return { flow, busy };
+}
+
+test("a reviewer launch the flow ended on a busy account lock is retried on a bounded wait (#1678)", async () => {
+  const h = harness();
+  const { flow, busy } = await reviewFlowEndedOnBusyAccount(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+  const retries = () => h.calls.filter((call) => call === "flow-patch:flow-1:retry-round").length;
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(retries()).toBe(1);
+  expect(flow).toMatchObject({ state: "spawning", stateDetail: null });
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^review flow reviewer launch deferred: account mutation is busy; retry at /),
+    cursor: { stageId: "review", state: "reviewing" },
+  });
+  expect(pipeline.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, flowId: "flow-1" });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  expect(scheduled).toEqual([1_000]);
+
+  /* A tick while the fresh round is still waiting to launch keeps the budget. */
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+
+  busy();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(retries()).toBe(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(retries()).toBe(2);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+
+  /* The lock cleared: the fresh round launched and the wait is over. */
+  flow.state = "reviewing";
+  flow.rounds.at(-1)!.spawnStartedAt = h.ports.now();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "review", state: "reviewing" } });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test("a reviewer launch that stays contended parks after the bounded retries (#1678)", async () => {
+  const h = harness();
+  const { busy } = await reviewFlowEndedOnBusyAccount(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      busy();
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(15);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `review loop ended in needs_decision: ${REVIEWER_BUSY} (after 15 automatic launch retries over 600s)`,
+  });
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(15);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("a busy-account round that had already begun a launch parks without a retry (#1678)", async () => {
+  const h = harness();
+  const { flow } = await reviewFlowEndedOnBusyAccount(h);
+  flow.rounds.at(-1)!.spawnStartedAt = h.ports.now();
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+
+  expect(h.calls).not.toContain("flow-patch:flow-1:retry-round");
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `review loop ended in needs_decision: ${REVIEWER_BUSY}`,
+  });
 });

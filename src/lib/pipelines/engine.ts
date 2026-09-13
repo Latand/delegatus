@@ -232,7 +232,7 @@ export interface PipelinePorts {
   conversationIdForPath(pathname: string): string | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
   createFlow(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string }>;
-  patchFlow(id: string, action: "advance" | "pause" | "resume", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
+  patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
     error?: string;
@@ -1730,6 +1730,55 @@ const TERMINAL_REVIEW_FLOW_STATES: ReadonlySet<Flow["state"]> = new Set([
 ]);
 const REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX = "review flow host claim retry: ";
 const REVIEW_FLOW_RELAY_RETRY_PREFIX = "review flow relay retry: ";
+const REVIEW_FLOW_SCAN_WAIT_PREFIX = "review flow waiting for its implementer transcript to be scanned; retry at ";
+/** The flow engine's own pause wording when the controller's completed scan
+    snapshot does not list the implementer transcript (flows/engine.ts). */
+const MISSING_IMPLEMENTER_TRANSCRIPT = "implementer transcript is missing";
+
+/**
+ * Rides out a review flow that paused because the controller's completed scan
+ * snapshot did not list the implementer transcript yet (#1678). The pipeline
+ * itself settled that implementer from its transcript artifact, ahead of the
+ * scanner, and the ordinary snapshot refresh runs minutes apart; the flow
+ * engine pauses on the stale snapshot and a paused flow is never ticked again,
+ * so without this the stage parked on the first sighting and only an
+ * operator's flow resume could free it (pipeline 4d6f4fc1, 2026-09-13).
+ *
+ * The evidence required before any resume is the registry naming the
+ * implementer conversation's transcript: a conversation the Viewer does not
+ * know is not a scan lag and parks as before. The resume is booked on the same
+ * bounded wall-clock wait the host-unavailable spawn uses, so a transcript the
+ * scan never lists ends in a truthful park that counts the resumes.
+ */
+function deferUnscannedImplementerTranscript(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  implementer: PipelineStageAttempt,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "paused" || flow.stateDetail !== MISSING_IMPLEMENTER_TRANSCRIPT) return "not-applicable";
+  const registered = implementer.conversationId
+    ? ports.pathForConversation(implementer.conversationId) !== null
+      || ports.conversationRegistered?.(implementer.conversationId) === true
+    : false;
+  if (!registered) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const resumed = ports.patchFlow(flow.id, "resume");
+  if (resumed.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_SCAN_WAIT_PREFIX}${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
+}
 
 function reviewFlowRetryDetail(flow: Flow): string | null {
   if (flow.state !== "relaying" || !flow.stateDetail?.includes("retrying automatically")) return null;
@@ -2784,10 +2833,20 @@ async function tickReviewStage(
     return;
   }
   if (flow.state === "paused") {
+    const deferred = deferUnscannedImplementerTranscript(pipeline, stage, attempt, flow, implementer, ports);
+    if (deferred === "waiting") return;
     const phase = flow.pausedState && flow.pausedState !== "paused" ? flow.pausedState : "unknown phase";
-    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}`, attempt);
+    const exhausted = deferred === "exhausted"
+      ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic resumes over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+      : "";
+    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}${exhausted}`, attempt);
     return;
   }
+  /* The bounded wait booked by the scan resume above or the launch retry
+     below ends only once the round shows a launch under way or the flow has
+     moved past spawning; a round still waiting to launch keeps the budget it
+     already spent, so repeated stalls cannot restart it. */
+  if (attempt.controllerWait && reviewerLaunchUnderway(flow)) delete attempt.controllerWait;
   /* Advance appends round 1 synchronously, so waiting_ready with zero rounds
      means the advance never landed (crash between persisting flowId and the
      patch) — without a re-issue the flow waits forever for a ready marker a
@@ -2818,6 +2877,8 @@ async function tickReviewStage(
   } else if (
     pipeline.stateDetail?.startsWith(REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX)
     || pipeline.stateDetail?.startsWith(REVIEW_FLOW_RELAY_RETRY_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_SCAN_WAIT_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_LAUNCH_WAIT_PREFIX)
   ) {
     pipeline.stateDetail = null;
   }
@@ -2834,9 +2895,67 @@ async function tickReviewStage(
     persist();
     commitPassedStage(pipeline, stage, attempt, ports);
   } else {
+    const deferredLaunch = deferContendedReviewerLaunch(pipeline, stage, attempt, flow, ports);
+    if (deferredLaunch === "waiting") return;
     const terminalError = terminalReviewFlowError(flow);
-    if (terminalError) park(pipeline, terminalError, attempt);
+    if (terminalError) {
+      const exhausted = deferredLaunch === "exhausted"
+        ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic launch retries over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+        : "";
+      park(pipeline, `${terminalError}${exhausted}`, attempt);
+    }
   }
+}
+
+const REVIEW_FLOW_LAUNCH_WAIT_PREFIX = "review flow reviewer launch deferred: ";
+
+/** True once the flow's current round has begun a launch (a launch id, a
+    spawn start, a reviewer transcript or session) or the flow has moved past
+    `spawning`; false while the round is still waiting to launch. */
+function reviewerLaunchUnderway(flow: Flow): boolean {
+  if (flow.state !== "spawning" && flow.state !== "needs_decision" && flow.state !== "paused") return true;
+  const round = flow.rounds.at(-1);
+  return Boolean(round?.spawnStartedAt || round?.launchId || round?.reviewerPath || round?.sessionId);
+}
+
+/**
+ * Retries a reviewer launch the flow engine ended on a busy account mutation
+ * lock (#1678, the class of #1433 on the flow side). The flow terminalizes
+ * the round as `needs_decision` the moment `prepareReviewerLaunch` meets the
+ * lock, and the pipeline parked on that terminal state; pipeline 4d6f4fc1 hit
+ * it twice in a row on 2026-09-13, each time before any launch was reserved.
+ *
+ * Evidence before any retry: the round never started a launch
+ * (`spawnStartedAt`, `launchId`, `reviewerPath` and `sessionId` all unset), so
+ * a fresh round cannot duplicate a reviewer. The retry is the flow's own
+ * `retry-round`, booked on the same bounded wait a busy run-stage spawn gets;
+ * exhaustion parks with the flow's terminal detail and the retries counted.
+ */
+function deferContendedReviewerLaunch(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "needs_decision" || !isAccountMutationContention(flow.stateDetail ?? "")) return "not-applicable";
+  const round = flow.rounds.at(-1);
+  if (!round || round.spawnStartedAt || round.launchId || round.reviewerPath || round.sessionId) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const reason = controllerFailureReason(flow.stateDetail ?? "");
+  const retried = ports.patchFlow(flow.id, "retry-round");
+  if (retried.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_LAUNCH_WAIT_PREFIX}${reason}; retry at ${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
 }
 
 async function tickPipeline(
