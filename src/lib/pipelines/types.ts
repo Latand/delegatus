@@ -191,11 +191,13 @@ export type PipelineStageAttempt = {
         as the round's own class. */
     budgetMs?: number;
     retryMaxMs?: number;
-    /** Spawn calls this activation has made, immediate handshake retries
-        included; each consumed a client attempt id, so the next retry index
-        starts here rather than at the round count. */
-    spawnAttempts?: number;
   };
+  /** Spawn calls this attempt has made across its activations, immediate
+      handshake retries included (#1678). Each consumed one client attempt id,
+      so the next retry index starts here. Persisted before the call is made:
+      a restart that interrupts a call still counts it, and the retry that
+      follows cannot replay the interrupted call's id. */
+  spawnCalls?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
       unreachable or the account mutation lock was busy. The receipt's own

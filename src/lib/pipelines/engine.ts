@@ -2294,22 +2294,20 @@ async function tickRunStage(
       /* The failed receipt behind `controllerFailure` when the spawn had
          already reserved a launch; retired once a further round is booked. */
       let failedReceipt: PipelineSpawnReceipt | null = null;
-      /* Rounds already booked by earlier ticks of this same activation. The
-         retry index continues across them, so every attempt keeps a distinct
-         launch identity even though the wait now spans ticks (#1056). */
-      /* Every spawn call of this activation consumes one client attempt id,
-         including the immediate handshake retries inside one tick, so the
-         index counts spawn calls rather than wait rounds (review round 2).
-         A wait lost to a restart still leaves its retired launches behind,
-         each of which consumed an id, so those count as a floor. */
-      const priorSpawnAttempts = Math.max(
-        attempt.controllerWait?.spawnAttempts ?? 0,
-        attempt.retiredLaunches?.length ?? 0,
-      );
       while (true) {
         spawnAttempt += 1;
+        /* Every spawn call of this attempt consumes one client attempt id,
+           the immediate handshake retries inside one tick and the rounds of
+           a wait that spans ticks alike (#1056, review round 2), so the retry
+           index counts spawn calls. The count is persisted before the call:
+           a restart that interrupts the call still finds it counted, so the
+           retry that follows the interrupted launch's retirement cannot
+           replay its id. Retired launches are a floor for an attempt
+           persisted before the count existed. */
+        const retryIndex = Math.max(attempt.spawnCalls ?? 0, attempt.retiredLaunches?.length ?? 0);
+        attempt.spawnCalls = retryIndex + 1;
+        persist();
         try {
-          const retryIndex = priorSpawnAttempts + spawnAttempt - 1;
           spawned = await ports.spawnAgent({
             ...spawnInput,
             clientAttemptId: retryIndex === 0
@@ -2371,14 +2369,12 @@ async function tickRunStage(
           if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
           if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
           if (deferred === "settled") throw new Error(controllerFailure);
-          attempt.controllerWait!.spawnAttempts = priorSpawnAttempts + spawnAttempt;
           persist();
           return;
         }
         if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
-        attempt.controllerWait!.spawnAttempts = priorSpawnAttempts + spawnAttempt;
         attempt.state = "pending";
         setCursorState(pipeline, stage.id, "pending");
         syncControllerWaitStateDetail(pipeline, attempt, controllerFailure);

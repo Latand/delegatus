@@ -9147,7 +9147,7 @@ test("a retry after an in-activation handshake retry never reuses a client attem
 
   await tickPipelines([], h.ports);
   expect(spawnCalls).toBe(2);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1, spawnAttempts: 2 });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ spawnCalls: 2, controllerWait: { rounds: 1 } });
   advance(scheduled.at(-1)!);
   await tickPipelines([], h.ports);
 
@@ -9173,4 +9173,71 @@ test("a retry after a restart never reuses the retired launch's client attempt i
   expect(spawnCall).toBeDefined();
   expect(spawnCall).not.toContain(`spawn:pipeline_${created.id}_plan_1:`);
   expect(spawnCall).toContain("spawn:handshake_retry_1_");
+});
+
+test("a spawn call is counted before it is made, so a restart that interrupts it cannot hand its client attempt id to the retry (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const clientAttemptIds: string[] = [];
+  const countedBeforeCall: Array<number | undefined> = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    countedBeforeCall.push(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls);
+    if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
+    if (spawnCalls === 2) {
+      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
+    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+
+  /* One activation: a handshake retry, then a retired host launch. Each call
+     found its own number already persisted when it was made. */
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(countedBeforeCall).toEqual([1, 2]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", spawnCalls: 2, retiredLaunches: [{ launchId: "launch-host-2" }] });
+
+  /* The third call (handshake_retry_2) reserved its launch and the process
+     died before the call returned: the persisted attempt is exactly what the
+     engine wrote before that call, plus the reservation. */
+  advance(scheduled.at(-1)!);
+  const interrupted = loadPipelines()[0]!;
+  const attempt = interrupted.runs[0]!.attempts[0]!;
+  attempt.state = "spawning";
+  attempt.launchId = "launch-host-3";
+  attempt.conversationId = "conversation_host_3";
+  attempt.spawnCalls = 3;
+  interrupted.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([interrupted]);
+  const interruptedId = `handshake_retry_2_pipeline_${created.id}_plan_1`;
+
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-host-2" }, { launchId: "launch-host-3" }],
+  });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(3);
+  expect(clientAttemptIds[2]).toBe(`handshake_retry_3_pipeline_${created.id}_plan_1`);
+  expect(clientAttemptIds).not.toContain(interruptedId);
+  expect(new Set([...clientAttemptIds, interruptedId]).size).toBe(4);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1", spawnCalls: 4 });
 });
