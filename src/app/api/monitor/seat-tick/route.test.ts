@@ -6,12 +6,15 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-route-"));
-const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE };
+const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
 process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", "runs.ndjson");
+/* A Viewer-spawned session inherits the live runtime host's socket; the
+   diagnostics must ask nothing outside this process. */
+delete process.env.LLV_RUNTIME_HOST_SOCKET;
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 

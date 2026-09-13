@@ -344,7 +344,10 @@ function verdictDetail(verdict: SeatTickVerdict): string | null {
  * - What the wake SAYS — the seat epoch, the reasons, the state fingerprint
  *   they were raised against — so a wake that never landed is re-raised at the
  *   next check under the same key and replays instead of stacking a second
- *   copy of a message the seat may still receive.
+ *   copy of a message the seat may still receive. A wake RELEASED as proven
+ *   never executed is the one exception, and the reverse: its key is spent in
+ *   the layers that refused it, so its replacement folds it in and is a new
+ *   message to them (see {@link releasedWakeIdentity}).
  * - WHICH wake it is — the stamp of the last delivered one, which only a
  *   landed send advances. Without it the hourly wake on an unchanged board
  *   would carry the previous hour's key and be swallowed as a replay: silence
@@ -358,13 +361,32 @@ function wakeClientMessageId(
   project: string,
   seatEpoch: number,
   verdict: SeatTickVerdict,
-  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null },
+  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; releasedWake?: SeatTickProjectState["releasedWake"] },
 ): string {
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
     : "proposal";
   return `seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${context.fingerprint}`
-    + wakePromptIdentity(context.monitorPrompt);
+    + wakePromptIdentity(context.monitorPrompt)
+    + releasedWakeIdentity(context.releasedWake ?? null);
+}
+
+/**
+ * The released attempt's share of the next wake's identity (#1672).
+ *
+ * A wake released as proven never executed leaves its key bound in the
+ * runtime journal to the operation the journal refused, and the delivery
+ * record re-arms that same operation for the same key. The wake raised in its
+ * place carries the same obligations and, with nothing landed, the same stamp
+ * and fingerprint — so without this it would be the same key, and the journal
+ * would answer it by replaying the refusal, check after check, delivering
+ * nothing. Folding the released key in makes the replacement a new message to
+ * both layers, and keeps it one: the marker stands until a landing moves the
+ * stamp, so an unlanded replacement still replays under its own key.
+ */
+function releasedWakeIdentity(released: SeatTickProjectState["releasedWake"]): string {
+  if (!released) return "";
+  return `:after-${crypto.createHash("sha256").update(released.clientMessageId).digest("hex").slice(0, 16)}`;
 }
 
 /**
@@ -862,7 +884,9 @@ async function reconcileOutstandingWake(context: {
   const next: SeatTickProjectState = settlement.row === "commit"
     ? seatTickWakeCommit(state, wake.commit, context.now)
     : settlement.row === "clear"
-      ? { ...state, outstandingWake: null }
+      /* Released, and remembered as such: the key stays bound in the layers
+         that refused it, so the wake raised in its place must not be it. */
+      ? { ...state, outstandingWake: null, releasedWake: { clientMessageId: wake.clientMessageId, releasedAt: context.at } }
       : state;
 
   context.appendRecord({
@@ -1034,6 +1058,7 @@ async function check(
     const clientMessageId = wakeClientMessageId(input.project, input.seat.seatEpoch, verdict, {
       fingerprint: input.changeFingerprint,
       lastWakeAt: input.state.lastWakeAt,
+      releasedWake: input.state.releasedWake ?? null,
       /* The same row the message below reads its prompt from, read once: the
          identity and the text have to move together or they are exactly the
          disagreement this key exists to prevent. */

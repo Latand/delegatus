@@ -69,6 +69,9 @@ export interface SeatTickDiagnostics {
     lastCheckAt: string | null;
     lastWakeAt: string | null;
     eventsThrough: number | null;
+    /** The attempt the last release left behind, whose key the next wake's
+        identity is derived from (#1672). */
+    releasedWake: { clientMessageId: string; releasedAt: string } | null;
     accounting: { revision: number; gap: string | null } | null;
   };
   attempts: SeatTickAttemptDiagnostic[];
@@ -149,6 +152,7 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
       lastCheckAt: state.lastCheckAt,
       lastWakeAt: state.lastWakeAt,
       eventsThrough: state.eventsThrough,
+      releasedWake: state.releasedWake ?? null,
       accounting: state.accounting ? { revision: state.accounting.revision, gap: state.accounting.gap } : null,
     },
     attempts,

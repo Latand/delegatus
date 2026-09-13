@@ -166,6 +166,15 @@ function normalizeSourceGap(value: unknown): SeatTickSourceGap | null {
   return { gap, since, lastAttemptAt, attempts, reported: raw.reported === true };
 }
 
+/** The released-attempt marker (#1672), or null for a row from before it. */
+function normalizeReleasedWake(value: unknown): SeatTickProjectState["releasedWake"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const clientMessageId = typeof raw.clientMessageId === "string" && raw.clientMessageId.length > 0 && raw.clientMessageId.length <= 1_000 ? raw.clientMessageId : null;
+  const releasedAt = isoOrNull(raw.releasedAt);
+  return clientMessageId && releasedAt ? { clientMessageId, releasedAt } : null;
+}
+
 function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   const empty = emptySeatTickState();
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
@@ -193,6 +202,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     eventsThrough: eventsThrough(raw, legacy),
     outstandingWake: normalizeOutstandingWake(raw.outstandingWake),
     retiredWakes: normalizeRetiredWakes(raw.retiredWakes),
+    releasedWake: normalizeReleasedWake(raw.releasedWake),
     pullRequestGap: normalizeSourceGap(raw.pullRequestGap),
     /* No legacy row ever carried a children run: the source and its row are
        both #1465, and the SQLite store is the only place they have lived. */
@@ -264,6 +274,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
     retiredWakes: row.retiredWakes ?? [],
+    releasedWake: row.releasedWake ?? null,
     pullRequestGap: row.pullRequestGap,
     childrenGap: row.childrenGap,
     harvestedChildren: row.harvestedChildren,

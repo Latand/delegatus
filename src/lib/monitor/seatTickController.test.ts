@@ -19,6 +19,9 @@ const { openPullRequestsForRepo } = await import("./githubEvidence");
 const { defaultSeatTickSources, journalReceipt, settleRecordFromJournal, wakeStateFromRecord } = await import("./seatTickSources");
 const { resolveOriginalSend, resolveSendReceipt, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON, SEND_UNVERIFIED_REASON, SEND_DISCARDED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { DELIVERY_FENCED_BY_SETTLEMENT } = await import("@/lib/runtime/structuredDeliveryQueue");
+const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
+const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { deliverConversationMessage } = await import("@/lib/delivery");
 const { readSeatTickState, writeSeatTickState } = await import("./seatTickState");
 const { appendSeatTickRecord, readSeatTickRecords } = await import("./journalStore");
@@ -159,10 +162,15 @@ function harness(options: {
   /** Ask the production `wakeState` — the durable delivery record under the
       wake's own key — instead of the stub (#1465). Needs `registry`. */
   realWakeState?: boolean;
-  /** The runtime host's delivery journal, faked in memory, beside the real
-      record and the real settlement: with it, `realWakeState` asks exactly
-      what production asks, in the order production asks it. */
-  journal?: FakeJournal;
+  /** The runtime host's delivery journal — faked in memory, or the real one
+      behind a client — beside the real record and the real settlement: with
+      it, `realWakeState` asks exactly what production asks, in the order
+      production asks it. */
+  journal?: { client: RuntimeHostClient };
+  /** The settlement's clock, when it must differ from the check's: the record
+      stamps a reservation with the wall clock, so a check whose own clock has
+      been advanced past a fresh reservation would end it on sight. */
+  settlementNow?: () => number;
 }): Harness {
   const sent: ConversationMessage[] = [];
   const journal: SeatTickRunRecord[] = [];
@@ -269,7 +277,7 @@ function harness(options: {
       wakeState: async (wake) => {
         if (options.realWakeState && options.journal) {
           const client = options.journal.client;
-          const now = () => options.now ?? NOW;
+          const now = options.settlementNow ?? (() => options.now ?? NOW);
           return wakeStateFromRecord(wake, {
             lookup: (binding) => resolveOriginalSend(binding, { registry: options.registry, client }),
             settle: (operationId) => resolveSendReceipt(operationId, { registry: options.registry, client, now }),
@@ -335,6 +343,25 @@ function fakeJournal(): FakeJournal {
     },
   } as unknown as RuntimeHostClient;
   return journal;
+}
+
+/** The real runtime journal behind the same client shape production uses. */
+function journalClient(journal: InstanceType<typeof RuntimeJournal>): RuntimeHostClient {
+  return {
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    waitEvents: async (after: number) => journal.replay(after),
+    append: async (event) => journal.append(event),
+    operation: async (event) => journal.append(event),
+    command: async (command) => journal.executeOperation(command),
+    operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) =>
+      (options?.currentRetryLeaf ? journal.currentRetryResult(operationId) : journal.operationResult(operationId)),
+    claimDeliveryAction: async (operationId, action) => journal.claimDeliveryAction(operationId, action),
+    producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
+    effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
+    retryOperation: async (operationId, nextIdempotencyKey) => journal.retryOperation(operationId, nextIdempotencyKey),
+  } as RuntimeHostClient;
 }
 
 const OVERDUE = { lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() };
@@ -3913,13 +3940,17 @@ test("the journal's own terminal verdict outranks a record settled without it: r
     const record = await runSeatTickCheck(fixture.project, released.deps);
     /* Proven never executed: the record is settled lost on the journal's word,
        the attempt is released under its key, and the same check raises the
-       wake again — the same key, the same obligations, now deliverable. */
+       wake again — the same obligations under a NEW key, because the old one
+       is spent in the journal that refused it (#1672). */
     expect(released.journal[0]).toMatchObject({ verdict: "dropped", delivery: { clientMessageId: wake.clientMessageId, outcome: "dropped" } });
     expect(released.journal[0]!.detail).toContain(`operation ${operationId}`);
     expect(released.journal[0]!.detail).toContain("settled lost on the journal's own verdict");
-    expect(fixture.registry.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalDisposition: "delivered" });
+    expect(fixture.registry.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalDisposition: "lost" });
     expect(rearmed).toEqual(["assigned"]);
-    expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { clientMessageId: wake.clientMessageId, outcome: "delivered" } });
+    expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "delivered" } });
+    expect(record!.delivery!.clientMessageId).not.toBe(wake.clientMessageId);
+    expect(record!.delivery!.clientMessageId.startsWith(`${wake.clientMessageId}:after-`)).toBe(true);
+    expect(fixture.row().releasedWake).toBeNull();
     expect(released.sent).toHaveLength(1);
     expect(released.sent[0]!.text).toContain(child.id);
     expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: new Date(fixture.now + 16 * MINUTE).toISOString() });
@@ -3992,4 +4023,151 @@ test("the permitted recovery for the stranded shape is supersession: the attempt
   expect(next.sent).toHaveLength(1);
   expect(next.sent[0]!.conversationId).toBe(successor.id);
   expect(fixture.acknowledged()).toEqual([child.id]);
+});
+
+/* ------------------------------------------------------------------------- *
+ * The re-raise through the real transport (#1672). A released attempt leaves
+ * its key bound in the runtime journal to the operation the journal refused,
+ * and the delivery record re-arms that same operation under that key: sent
+ * again as the same message it can only replay the refusal, every check, and
+ * deliver nothing. The wake raised in its place has to be a new message to
+ * both layers, and exactly one.
+ * ------------------------------------------------------------------------- */
+
+/** The seat with a live structured host, in the registry and in a real
+    runtime journal, which is what the transport's admission requires. */
+function hostedSeat(fixture: ChildFixture): { journal: InstanceType<typeof RuntimeJournal>; client: RuntimeHostClient; sessionId: string } {
+  const conversation = fixture.registry.conversation(fixture.seat.conversationId as never)!;
+  const generation = conversation.generations.at(-1)!;
+  const sessionKey = { engine: "claude" as const, sessionId: generation.id };
+  fixture.registry.upsert({
+    key: sessionKey,
+    artifactPath: fixture.seat.path!,
+    cwd: fixture.cwd,
+    accountId: null,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "claude-broker",
+      endpoint: "fixture:seat-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fixture-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(fixture.dir, "runtime.sqlite"), { structuredHosts: true });
+  journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey,
+      hostKind: "claude-broker",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath: fixture.seat.path!,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  return { journal, client: journalClient(journal), sessionId: generation.id };
+}
+
+/** The production send path end to end: `deliverConversationMessage` into
+    `enqueueStructuredMessage`, reserving in the real record and admitting in
+    the real journal. Only the dead-host recovery is stubbed, to the seat. */
+function realTransport(fixture: ChildFixture, client: RuntimeHostClient): (message: ConversationMessage) => Promise<DeliveryOutcome> {
+  return (message) => deliverConversationMessage(message, {
+    recover: async () => ({ path: fixture.seat.path!, conversationId: fixture.seat.conversationId as never, spawned: false, target: null }),
+    enqueueStructured: (request) => enqueueStructuredMessage(request, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => fixture.registry,
+      kick: () => {},
+      requestMigrationTick: () => {},
+    }),
+  });
+}
+
+test("a released wake is raised again as a new message the journal admits, through the real transport, and lands exactly once (#1672)", async () => {
+  const fixture = childFixture("released-real-transport");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  fixture.seed();
+  const { journal, client } = hostedSeat(fixture);
+  try {
+    /* The send that timed out after the reservation, and the deadline that
+       ended it unrecorded — the same shape as the live row. */
+    let operationId = "";
+    await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, journal: { client }, deliverWith: reservedThenTimedOut(fixture, (id) => { operationId = id; }) }).deps);
+    const wake = fixture.row().outstandingWake!;
+    const fenced = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 11 * MINUTE });
+    await runSeatTickCheck(fixture.project, fenced.deps);
+    expect(fenced.journal.map((line) => line.verdict)).toEqual(["uncertain", "wake"]);
+    expect(fixture.registry.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalDisposition: "unverified" });
+
+    /* The host admits the command late, under the identity the record bound,
+       and rejects it. The journal now owns (conversation, key). */
+    const command = {
+      kind: "send" as const, operationId, conversationId: wake.conversationId, idempotencyKey: wake.clientMessageId,
+      text: wake.text!, contentDigest: structuredContentDigest({ text: wake.text!, images: [] }), policy: "interrupt-active" as const,
+    };
+    expect(journal.executeOperation(command).replayed).toBe(false);
+    journal.transitionOperation(operationId, "rejected", { reason: "conversation is not hosted by any structured host" });
+    /* Why the re-raise cannot be the same message: the journal answers the
+       identical command by replaying the refusal, and a changed one under
+       that key by refusing it outright. */
+    expect(journal.executeOperation(command)).toMatchObject({ replayed: true, receipt: { status: "rejected" } });
+    const changed = `${wake.text!} (edited)`;
+    expect(() => journal.executeOperation({ ...command, text: changed, contentDigest: structuredContentDigest({ text: changed, images: [] }) }))
+      .toThrow("idempotency key already belongs to another request");
+
+    /* The release, and the re-raise through the real transport. */
+    /* From here the settlement reads the wall clock the record stamps with,
+       so the replacement's own reservation is judged by its real age. */
+    const live = () => Date.now();
+    const released = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 16 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    const record = await runSeatTickCheck(fixture.project, released.deps);
+    expect(released.journal.map((line) => line.verdict)).toEqual(["dropped", "wake"]);
+    expect(released.journal[0]).toMatchObject({ verdict: "dropped", delivery: { clientMessageId: wake.clientMessageId, outcome: "dropped" } });
+    expect(fixture.registry.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalDisposition: "lost" });
+    expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "queued" } });
+    const replacement = fixture.row().outstandingWake!;
+    expect(replacement.clientMessageId).not.toBe(wake.clientMessageId);
+    expect(replacement.clientMessageId.startsWith(`${wake.clientMessageId}:after-`)).toBe(true);
+    expect(replacement.operationId).not.toBeNull();
+    expect(replacement.operationId).not.toBe(operationId);
+    expect(fixture.row().releasedWake).toMatchObject({ clientMessageId: wake.clientMessageId });
+    /* Two operations in the journal — the refused one and the replacement —
+       and exactly one pending effect, the replacement's. */
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("rejected");
+    expect(journal.operationResult(replacement.operationId!)?.receipt).toMatchObject({ status: "queued", idempotencyKey: replacement.clientMessageId });
+    expect(journal.effectBatch(100, ["runtime.send"]).map((effect) => effect.payload.operationId)).toEqual([replacement.operationId]);
+    expect(fixture.acknowledged()).toEqual([]);
+
+    /* A check while it is queued replays nothing and sends nothing. */
+    const waiting = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 21 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    expect(await runSeatTickCheck(fixture.project, waiting.deps)).toMatchObject({ delivery: { clientMessageId: replacement.clientMessageId, outcome: "deferred-outstanding" } });
+    expect(waiting.sent).toEqual([]);
+    expect(journal.snapshot().recentOperations).toHaveLength(2);
+
+    /* The drain delivers it; the next check credits the plan and clears the marker. */
+    journal.transitionOperation(replacement.operationId!, "delivered");
+    const landed = childRig(fixture, { realWakeState: true, journal: { client }, now: fixture.now + 26 * MINUTE, settlementNow: live, deliverWith: realTransport(fixture, client) });
+    expect(await runSeatTickCheck(fixture.project, landed.deps)).toMatchObject({ verdict: "quiet" });
+    expect(landed.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: replacement.clientMessageId, outcome: "landed" } });
+    expect(fixture.row()).toMatchObject({ outstandingWake: null, releasedWake: null, lastWakeAt: new Date(fixture.now + 26 * MINUTE).toISOString() });
+    expect(fixture.acknowledged()).toEqual([child.id]);
+    expect(landed.sent).toEqual([]);
+    expect(journal.snapshot().recentOperations).toHaveLength(2);
+  } finally {
+    journal.close();
+  }
 });
