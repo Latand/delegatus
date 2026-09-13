@@ -15,8 +15,9 @@ export const dynamic = "force-dynamic";
  * One project's seat tick, read whole and read only: its settings, its row,
  * every attempt the row is holding with the holder's current answer and what
  * would end it, and the project's newest checks. `project` is required;
- * `limit` bounds the journal. Nothing here ends a send, writes a record or
- * moves a stamp — see `seatTickDiagnostics`.
+ * `limit` bounds the journal. Nothing here ends a send, writes a record,
+ * moves a stamp or mints a row for a project nobody has ticked — see
+ * `seatTickDiagnostics`.
  */
 export async function GET(req: NextRequest): Promise<NextResponse<SeatTickDiagnostics | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim();

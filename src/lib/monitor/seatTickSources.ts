@@ -179,10 +179,12 @@ export interface SeatTickWakeEvidence {
       itself failed; `unasked` when nothing called for asking it. */
   journal: SeatTickJournalReceipt | "no-record" | "unreachable" | "unasked";
   /** What this read wrote onto the delivery record from the journal's own
-      terminal verdict: `lost` re-arms the key for the next send, `delivered`
-      records the arrival the record never learned of, and `refused` is a
-      record that could not be re-armed — the key stays absorbed, so the
-      attempt stays fenced. Absent when nothing was written. */
+      terminal verdict: `lost` settles the old reservation as proven never
+      executed, `delivered` records the arrival the record never learned of,
+      and `refused` is a record that could not take the verdict — compacted
+      to its owner row, or absorbing — so the release rests on the journal
+      alone. The wake raised in a released attempt's place is a new message
+      to both layers either way (#1672). Absent when nothing was written. */
   recorded?: "delivered" | "lost" | "refused";
 }
 
@@ -330,18 +332,19 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     return { state: proven === "unknown" ? "uncertain" : proven, evidence: withRecord(current, journal) };
   }
   if (!ports.settleFromJournal) return { state: proven, evidence: withRecord(current, journal) };
-  /* The journal's verdict goes onto the record before it is acted on, because
-     the record is what the delivery layer consults when the same key comes
-     back: a reservation ended `unverified` absorbs its key for ever, and only
-     one settled `lost` re-arms it. A release the record will not honour is no
-     release — the wake would be raised and refused every check — so it is
-     reported as the fenced attempt it still is, with the reason beside it. */
+  /* The journal's verdict goes onto the record before it is acted on, so the
+     record and the journal stop disagreeing about a send whose fate the
+     journal has decided. The release does not depend on the write taking:
+     the wake raised in a released attempt's place is a new message under a
+     new key (#1672), so a record that cannot take the verdict — compacted to
+     its owner row, or absorbing — changes nothing about it. It is said on the
+     evidence, and the journal's own proof is what the release rests on. */
   const written = await ports.settleFromJournal({ conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
   if (proven === "landed") {
     return { state: "landed", evidence: { ...withRecord(written ?? current, journal), ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
   }
   if (written?.resend === "safe") return { state: "dropped", evidence: { ...withRecord(written, journal), recorded: "lost" } };
-  return { state: "uncertain", evidence: { ...withRecord(written ?? current, journal), recorded: "refused" } };
+  return { state: "dropped", evidence: { ...withRecord(written ?? current, journal), recorded: "refused" } };
 }
 
 /**

@@ -467,9 +467,9 @@ function evidenceSummary(evidence: SeatTickWakeEvidence | null): string | null {
     : journal === "unreachable" ? "runtime journal unreachable"
       : journal === "unasked" ? "runtime journal not asked"
         : `runtime journal: ${journal.status}${journal.reason ? ` — ${redactBounded(journal.reason, REASON_LIMIT)}` : ""}`);
-  if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict, so its key re-arms");
+  if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict");
   if (evidence.recorded === "delivered") parts.push("the delivery record was settled delivered on the journal's own verdict");
-  if (evidence.recorded === "refused") parts.push("the delivery record could not be re-armed from the journal's verdict, so its key stays absorbed and the attempt stays fenced");
+  if (evidence.recorded === "refused") parts.push("the delivery record could not take the journal's verdict and keeps its own answer; the release rests on the journal alone");
   return parts.join("; ");
 }
 
@@ -503,9 +503,6 @@ export function seatTickAttemptExits(evidence: SeatTickWakeEvidence | null): str
   ];
   if (evidence?.journal === "no-record" && evidence.operationId) {
     exits.push(`the runtime journal holds no record under operation ${evidence.operationId}, so an operator discard of that operation cannot reach it; supersession is the one exit left that needs no new evidence`);
-  }
-  if (evidence?.recorded === "refused") {
-    exits.push("the journal's verdict could not be written onto the delivery record, so the key stays absorbed on a re-raise; supersession is the one exit left");
   }
   return exits;
 }

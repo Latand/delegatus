@@ -21,7 +21,7 @@ fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 const { GET } = await import("./route");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { appendSeatTickRecord } = await import("@/lib/monitor/journalStore");
-const { writeSeatTickState } = await import("@/lib/monitor/seatTickState");
+const { readSeatTickStateFile, writeSeatTickState } = await import("@/lib/monitor/seatTickState");
 const { emptySeatTickState } = await import("@/lib/monitor/types");
 const { SEND_UNRECORDED_REASON } = await import("@/lib/runtime/sendSettlement");
 import type { SeatTickDiagnostics } from "@/lib/monitor/seatTickDiagnostics";
@@ -113,8 +113,10 @@ test("a fenced attempt is described whole â€” record, journal answer and exits â
   expect(ended.attempts[0]!.exits.at(-1)).toBe("age alone ends nothing");
 });
 
-test("a project nobody has ticked reads as empty rather than failing", async () => {
+test("a project nobody has ticked reads as empty, and the read leaves no row behind", async () => {
   const body = await (await GET(get("?project=never-ticked"))).json() as SeatTickDiagnostics;
   expect(body).toMatchObject({ project: "never-ticked", seat: null, attempts: [], journal: [] });
   expect(body.state.seatEpoch).toBeNull();
+  expect(body.state.accounting).toBeNull();
+  expect(Object.keys(readSeatTickStateFile())).not.toContain("never-ticked");
 });

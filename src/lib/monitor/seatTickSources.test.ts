@@ -1418,9 +1418,9 @@ test("an unverified record yields to the journal's own terminal verdict, and to 
   expect(await classify(unverified, { runtime: "landed" })).toMatchObject({ state: "landed", calls: ["lookup", "journal", "record:op-wake-1"], evidence: { recorded: "delivered" } });
   expect(await classify(unverified, { runtime: "dropped" })).toMatchObject({ state: "dropped", evidence: { recorded: "lost", record: { resend: "safe" } } });
   expect((await classify(unverified, { runtime: { status: "failed", reason: "delivery-discarded" } })).state).toBe("dropped");
-  /* A verdict the record will not take is no release: the key would be
-     absorbed on the re-raise, so the attempt is reported as still fenced. */
-  expect(await classify(unverified, { runtime: "dropped", rearm: "refused" })).toMatchObject({ state: "uncertain", evidence: { recorded: "refused" } });
+  /* A record that will not take the verdict changes nothing: the release
+     rests on the journal, and the replacement is a new message anyway. */
+  expect(await classify(unverified, { runtime: "dropped", rearm: "refused" })).toMatchObject({ state: "dropped", evidence: { recorded: "refused", record: { resend: "verify-first" } } });
   /* An inert read reports what the journal proves and writes nothing. */
   expect(await classify(unverified, { runtime: "dropped", readOnly: true })).toMatchObject({ state: "dropped", calls: ["lookup", "journal"] });
   /* The settlement's own `failed` on an old host is its unverified ending. */

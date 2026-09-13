@@ -6,7 +6,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "./seatTick";
 import { seatTickAttemptExits } from "./seatTickController";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "./seatTickSettings";
 import { wakeRecordPorts, wakeStateFromRecord, type SeatTickWakeObservation } from "./seatTickSources";
-import { readSeatTickState } from "./seatTickState";
+import { peekSeatTickState } from "./seatTickState";
 import type { SeatTickOutstandingWake, SeatTickProjectState, SeatTickRunRecord } from "./types";
 
 /**
@@ -20,10 +20,12 @@ import type { SeatTickOutstandingWake, SeatTickProjectState, SeatTickRunRecord }
  * other, with the holder's current answer and what would end each attempt,
  * in the same words the board card uses.
  *
- * Inert by construction: the holder is asked through {@link wakeRecordPorts}
- * with `end: false`, so an in-flight send is reported as it rests and never
- * ended, and a journal verdict is reported as what it proves and never
- * written onto the record. Ending and writing belong to the check.
+ * Inert by construction: the row is peeked rather than read the way a check
+ * reads it, so a name nobody has ticked mints no accounting row; the holder
+ * is asked through {@link wakeRecordPorts} with `end: false`, so an in-flight
+ * send is reported as it rests and never ended, and a journal verdict is
+ * reported as what it proves and never written onto the record. Ending and
+ * writing belong to the check.
  */
 export interface SeatTickAttemptDiagnostic {
   slot: "outstanding" | "retired";
@@ -95,7 +97,7 @@ export const SEAT_TICK_DIAGNOSTICS_MAX_LIMIT = 200;
 export async function seatTickDiagnostics(project: string, limit: number, ports: SeatTickDiagnosticsPorts = {}): Promise<SeatTickDiagnostics> {
   const canonical = canonicalOrchestratorProject(project);
   const now = (ports.now ?? Date.now)();
-  const state = (ports.readState ?? readSeatTickState)(canonical);
+  const state = (ports.readState ?? peekSeatTickState)(canonical);
   const settings = effectiveSeatTickSettings((ports.settings ?? readSeatTickSettings)(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const active = (ports.seatFor ?? orchestratorSeatFor)(canonical).active ?? null;
   const seat = active ? { conversationId: active.conversationId ?? null, seatEpoch: active.seatEpoch } : null;
