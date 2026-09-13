@@ -1,7 +1,10 @@
 "use client";
 
+import { bandEdgePorts } from "./taskBands";
+import { BOARD_SURFACE, historicalAttemptLabels } from "./boardPresentation";
+
 import { Check, Layers } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps, type CSSProperties } from "react";
 
 import { ChevronRight } from "@/components/icons";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -26,7 +29,7 @@ import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplateP
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
 import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
-import { STAGE_TONES, attemptNavTarget, canSourcePipeline, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, reviewLoopChainValid, stageChipLabel, stageChipState, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
+import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, reviewLoopChainValid, stageChipLabel, stageChipState, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
 import { pushTaskToast } from "@/components/tasks/taskToast";
 import type { TaskRelation } from "@/components/tasks/taskRelations";
 import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
@@ -143,8 +146,16 @@ export const EdgesLayer = memo(function EdgesLayer({
   height: number;
 }) {
   void badgeAnchorRevision;
+  /* Decorative, and stacked above the band chrome. An `<svg>` root is a
+     replaced element: with the default `pointer-events: auto` its whole box is
+     hit-testable, so this full-canvas overlay swallowed every click meant for a
+     band's Details, «+ Agent» or status pill — the controls were live and
+     correctly placed, and nothing reached them. `aria-hidden` decoration must
+     never take pointer input; the same holds for `LoopsLayer` and the pipeline
+     rails below. Interactive parts (the flow hub, edge chips) live outside
+     these SVGs precisely so they keep their own targets. */
   return (
-    <svg width={width} height={height} className="absolute left-0 top-0" aria-hidden>
+    <svg width={width} height={height} className="pointer-events-none absolute left-0 top-0" aria-hidden>
       {edges.map((edge) => {
         /* Hover expansion grows rightward while this anchor stays frozen at the
            original 30px circle center, keeping the structural arrow steady. */
@@ -258,9 +269,38 @@ function loopArrowHead(x: number, y: number, angle: number): string {
 export const LoopsLayer = memo(function LoopsLayer({ loops, width, height }: { loops: FlowLoop[]; width: number; height: number }) {
   if (!loops.length) return null;
   return (
-    <svg width={width} height={height} className="absolute left-0 top-0" aria-hidden>
+    <svg width={width} height={height} className="pointer-events-none absolute left-0 top-0" aria-hidden>
       {loops.map((loop) => {
         const leg = activeLoopLeg(loop.flow);
+        /* Task-band review connector (#1641): one routed path between the
+           implementer card and the reviewer deck as they were placed — around
+           the other cards, across wrapped rows — capped with an arrowhead at
+           each end to read as the review cycle. The active leg tints accent. */
+        if (loop.route && loop.y1 !== undefined && loop.y2 !== undefined) {
+          const live = leg !== null;
+          const color = live ? "var(--color-accent)" : "var(--color-strong)";
+          const toDeck = Math.atan2(loop.y2 - loop.y1, loop.x2 - loop.x1);
+          const toImpl = Math.atan2(loop.y1 - loop.y2, loop.x1 - loop.x2);
+          const headStyle = (d: string) => ({ d: `path("${d}")`, transition: `d ${MOVE_MS}ms ${MOVE_EASE}` }) as React.CSSProperties;
+          const deckHead = loopArrowHead(loop.x2, loop.y2, toDeck);
+          const implHead = loopArrowHead(loop.x1, loop.y1, toImpl);
+          return (
+            <g key={loop.key}>
+              <path
+                d={loop.route}
+                style={{ d: `path("${loop.route}")`, transition: `d ${MOVE_MS}ms ${MOVE_EASE}` } as React.CSSProperties}
+                fill="none"
+                stroke={color}
+                strokeWidth={live ? 3 : 2.5}
+                strokeLinecap="round"
+                strokeDasharray="5 7"
+                className={live ? "loop-arc-live" : undefined}
+              />
+              <path d={deckHead} style={headStyle(deckHead)} fill={color} />
+              <path d={implHead} style={headStyle(implHead)} fill={color} />
+            </g>
+          );
+        }
         const yTop = loop.y + LOOP_ARC_TOP;
         const yBot = loop.y + LOOP_ARC_BOT;
         const forward = `M ${loop.x1} ${yTop} C ${loop.x1 + LOOP_REACH} ${yTop - LOOP_BULGE}, ${loop.x2 - LOOP_REACH} ${
@@ -309,6 +349,7 @@ const RAIL_CLEARANCE = 10;
 export const AgentLinksLayer = memo(function AgentLinksLayer({
   links,
   byPath,
+  loops = [],
   obstacles = [],
   interactive,
   hubInteractive = interactive,
@@ -318,6 +359,11 @@ export const AgentLinksLayer = memo(function AgentLinksLayer({
 }: {
   links: AgentLink[];
   byPath: Map<string, SchemeRect>;
+  /** The review loops as the layout drew them. On the band board a loop
+      carries the point on its routed connector where the ⟳ hub belongs
+      (#1641); a loop without one (the free board) places the hub at the
+      corridor midpoint between its two cards. */
+  loops?: readonly FlowLoop[];
   /** Card rects the pipeline rails must not cross — nodes, decks, stacks, drafts
       (issue #136). A rail excludes its own two endpoints and routes around the
       rest, reusing the task-edge obstacle router (PR #130). */
@@ -343,8 +389,8 @@ export const AgentLinksLayer = memo(function AgentLinksLayer({
   const railGeom = (link: AgentLink): { d: string; mid: { x: number; y: number }; chevrons: string[] } => {
     const from = byPath.get(link.from)!;
     const to = byPath.get(link.to)!;
-    const seg = pipelineRailSegment(from, to);
-    const near = obstacles.filter((rect) => rect !== from && rect !== to);
+    const seg = semanticZoom ? { ...bandEdgePorts(from, to), chevrons: [] } : pipelineRailSegment(from, to);
+    const near = obstacles.filter((rect) => ![from, to].some(endpoint => rect.x === endpoint.x && rect.y === endpoint.y && rect.w === endpoint.w && rect.h === endpoint.h));
     const blocked = near.some((rect) => segHitsRect(seg.x1, seg.y1, seg.x2, seg.y2, rect, RAIL_CLEARANCE));
     if (!blocked) {
       return { d: `M ${seg.x1} ${seg.y1} L ${seg.x2} ${seg.y2}`, mid: { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }, chevrons: seg.chevrons };
@@ -355,11 +401,12 @@ export const AgentLinksLayer = memo(function AgentLinksLayer({
     return { d: route.d, mid: route.mid, chevrons: [] };
   };
   const railByKey = new Map(pipelineLinks.map((link) => [link.key, railGeom(link)] as const));
+  const hubByFlow = new Map(loops.flatMap((loop) => (loop.hub ? [[loop.flow.id, loop.hub] as const] : [])));
 
   return (
     <>
       {pipelineLinks.length ? (
-        <svg width={width} height={height} className="absolute left-0 top-0" aria-hidden>
+        <svg width={width} height={height} className="pointer-events-none absolute left-0 top-0" aria-hidden>
           {pipelineLinks.map((link) => {
             const geom = railByKey.get(link.key)!;
             const color = PIPELINE_RAIL_COLOR[link.pipeline!.tone];
@@ -401,15 +448,23 @@ export const AgentLinksLayer = memo(function AgentLinksLayer({
           const geom = railByKey.get(link.key);
           const x = link.pipeline.anchorOnly ? from.x + from.w / 2 : geom?.mid.x ?? from.x + from.w / 2;
           const y = link.pipeline.anchorOnly ? from.y : geom?.mid.y ?? from.y;
+          if (semanticZoom) {
+            if (link.pipeline.anchorOnly) return null; // the dedicated group header opens these controls
+            return <span key={link.key} data-band-dependency={link.key} aria-label={`${link.pipeline.index + 1}/${link.pipeline.total}`}
+              className="pointer-events-none absolute flex h-5 w-5 items-center justify-center rounded-full border bg-card text-[11px]"
+              style={{ left: x - 10, top: y - 10, color: PIPELINE_RAIL_COLOR[link.pipeline.tone] }}>→</span>;
+          }
           if (link.pipeline.hub) {
             return <PipelineHub key={link.key} pipeline={link.pipeline.pipeline} x={x} y={y} interactive={hubInteractive} moveTransition={MOVE_TRANSITION} semanticZoom={semanticZoom} />;
           }
           return <PipelineEdgeBadge key={link.key} index={link.pipeline.index} total={link.pipeline.total} color={PIPELINE_RAIL_COLOR[link.pipeline.tone]} x={x} y={y} moveTransition={MOVE_TRANSITION} semanticZoom={semanticZoom} />;
         }
         if (!link.flow) return null;
-        /* Corridor midpoint of the pair, level with the cycle arcs' center. */
-        const x = (from.x + from.w + to.x) / 2;
-        const y = Math.min(from.y, to.y) + (LOOP_ARC_TOP + LOOP_ARC_BOT) / 2;
+        /* On the routed connector where the layout put it; otherwise the
+           corridor midpoint of the pair, level with the cycle arcs' center. */
+        const routed = hubByFlow.get(link.flow.flow.id);
+        const x = routed ? routed.x : (from.x + from.w + to.x) / 2;
+        const y = routed ? routed.y : Math.min(from.y, to.y) + (LOOP_ARC_TOP + LOOP_ARC_BOT) / 2;
         return (
           <FlowHub key={link.key} flow={link.flow.flow} x={x} y={y} interactive={interactive} moveTransition={MOVE_TRANSITION} />
         );
@@ -474,7 +529,7 @@ export const GroupsLayer = memo(function GroupsLayer({
                 (and drop targets elsewhere), which keep the warning halo. */}
             <div
               aria-hidden
-              className={`absolute inset-0 rounded-[20px] ${draft ? "border-2 border-dashed" : "border"}`}
+              className={`absolute inset-0 rounded-[20px] ${group.bandHeader ? "hidden" : ""} ${draft ? "border-2 border-dashed" : "border"}`}
               style={
                 draft
                   ? {
@@ -495,19 +550,19 @@ export const GroupsLayer = memo(function GroupsLayer({
             <button
               data-scheme-ui
               data-pipeline-group-header={group.pipeline ? group.id : undefined}
-              className={`absolute -top-3 left-5 z-[8] inline-flex max-w-[26em] items-center gap-[0.4em] rounded-full bg-card px-[0.7em] py-[0.15em] font-bold shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${
+              className={`absolute ${group.bandHeader ? "top-1 left-0" : "-top-3 left-5"} z-[8] inline-flex max-w-[26em] items-center gap-[0.4em] rounded-full bg-card px-[0.7em] py-[0.15em] font-bold shadow-1 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${
                 interactive ? "pointer-events-auto" : ""
               }`}
               /* Font fully counter-scaled (constant on-screen at any zoom); border
                  and padding are in em so the whole chip holds its on-screen size. */
-              style={{ maxWidth: "min(26em, calc(100% - 40px))", borderColor: color, color, borderWidth: "0.18em", borderStyle: draft ? "dashed" : "solid", fontSize: groupLabelFontSize() }}
+              style={{ maxWidth: group.bandHeader ? "100%" : "min(26em, calc(100% - 40px))", borderColor: color, color, borderWidth: "0.18em", borderStyle: draft ? "dashed" : "solid", fontSize: group.bandHeader ? 11 : groupLabelFontSize() }}
               aria-expanded={open}
               aria-haspopup="dialog"
               disabled={!interactive}
               onClick={() => group.taskId ? onOpenTaskHistory?.(group.taskId) : setOpenId((value) => (value === group.id ? null : group.id))}
             >
               <span aria-hidden>{group.kind === "task" ? "▤" : group.kind === "pipeline" ? "⇢" : "⟳"}</span>
-              <span className="truncate">{group.label}</span>
+              <span className="truncate">{group.historical ? `${t("bands.historicalRun")} · ` : ""}{group.label}</span>
               {group.pipeline ? (
                 <>
                   <span
@@ -758,7 +813,7 @@ function LiteDraftShell({ draft, ringed, dimmed }: { draft: DraftNode; ringed: b
     <div
       data-scheme-node={draft.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${draft.x}px, ${draft.y}px)`, width: draft.w, height: draft.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(draft)}
     >
       <div
         className={`flex h-full items-center justify-center rounded-[10px] border border-dashed border-border bg-card/70 ${
@@ -783,7 +838,7 @@ function LiteDeckShell({ deck, dimmed }: { deck: DeckNode; dimmed: boolean }) {
     <div
       data-scheme-node={deck.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${deck.x}px, ${deck.y}px)`, width: deck.w, height: deck.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(deck)}
     >
       <div className="flex h-full flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1">
         {round ? (
@@ -830,7 +885,7 @@ export function MiniStackShell({ stack, dimmed, onSelect }: { stack: MiniStack; 
     <div
       data-scheme-node={stack.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${stack.x}px, ${stack.y}px)`, width: stack.w, height: stack.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(stack)}
     >
       <div className="flex h-full flex-col gap-1.5 overflow-y-auto rounded-[10px] border border-dashed border-strong bg-card/60 p-2">
         {stack.items.map(({ file, branches }) => {
@@ -958,6 +1013,7 @@ const NodeChrome = memo(function NodeChrome({
   flow,
   pipeline,
   pipelineStage,
+  historicalAttempt,
   flows,
   files,
   renderablePaths,
@@ -1001,6 +1057,7 @@ const NodeChrome = memo(function NodeChrome({
   pipeline: Pipeline | null;
   /** The exact pipeline stage represented by this real conversation pane. */
   pipelineStage: PipelineStagePane | null;
+  historicalAttempt?: import("@/lib/pipelines/types").PipelineStageAttempt;
   /** All flows, for the strip's review-loop round counters + open-review. */
   flows: Flow[];
   files: readonly FileEntry[];
@@ -1046,9 +1103,17 @@ const NodeChrome = memo(function NodeChrome({
      stage never reaches here (its node carries the flow, and the strip map
      already excludes it), but gate on !flow so the two can never stack. */
   const boardStrip = pipeline && !flow ? pipeline : null;
+  /* Semantic presentations (#1586): the overview chip is a one-line identity
+     strip and the intermediate summary a title/status tile. Both sit in a
+     dense band grid, so the card's floating controls, strips, handles, badges
+     and under-stacks — all sized for the full reader — stay on the native
+     reader only; they would collide with the band header and neighbours. */
+  const chip = node.presentation === "chip";
+  const compact = chip || node.presentation === "summary";
   return (
     <div
       data-scheme-node={node.file.path}
+      data-scheme-node-presentation={node.presentation ?? undefined}
       data-scheme-node-host={node.ancestry?.hostPath ?? undefined}
       data-scheme-node-elided={node.ancestry?.elided.length ? String(node.ancestry.elided.length) : undefined}
       data-scheme-node-unresolved-parent={node.ancestry?.unresolvedParentId ?? undefined}
@@ -1072,11 +1137,14 @@ const NodeChrome = memo(function NodeChrome({
         /* The promised member tint: readable at far zoom, panes stay legible. */
         <div aria-hidden className="pointer-events-none absolute inset-0 z-[4] rounded-[10px] bg-accent/[0.06]" />
       ) : null}
-      <AncestryChip ancestry={node.ancestry} />
+      {compact ? null : <AncestryChip ancestry={node.ancestry} />}
+      {historicalAttempt ? <span data-historical-attempt className="pointer-events-none absolute -top-6 left-0 text-[11px] font-semibold text-muted">
+        {t("bands.earlierAttempt", { count: historicalAttempt.n, state: attemptStateLabel(t, historicalAttempt.state) })}
+      </span> : null}
       {pipelineStage ? (
         <span
           data-pipeline-stage-label
-          style={node.presentation ? { fontSize: "calc(10.5px * var(--inv-z, 1))", height: "2.3em", paddingInline: ".75em", gap: ".5em", top: "-1.15em", right: "1em" } : undefined}
+          style={node.presentation ? { fontSize: 10.5, height: "2.3em", paddingInline: ".75em", gap: ".5em", top: -26, right: 0 } : undefined}
           className="pointer-events-none absolute -top-3 right-3 z-[7] inline-flex h-6 max-w-[78%] items-center gap-1.5 rounded-full border border-accent/35 bg-card px-2 text-[10.5px] font-bold text-accent shadow-1"
           title={stageChipLabel(t, pipelineStage.stage)}
         >
@@ -1085,7 +1153,7 @@ const NodeChrome = memo(function NodeChrome({
         </span>
       ) : null}
       {/* The loop's shared header hovers above the implementer↔reviewer pair. */}
-      {flow ? (
+      {flow && !compact && !node.presentation ? (
         <div className="absolute -top-[60px] left-0 z-[4]" style={{ width: PAIR_W }}>
           <FlowStrip flow={flow} onFocusRound={(round) => onFocusRound(flow.id, round)} />
         </div>
@@ -1093,7 +1161,7 @@ const NodeChrome = memo(function NodeChrome({
       {/* §2.2 board strip rule: the pipeline's controls mount over its current
           run stage, in the same slot FlowStrip uses (a review-loop stage yields
           the slot to FlowStrip, so the two never coexist here). */}
-      {boardStrip ? (
+      {boardStrip && !compact ? (
         <div className="absolute -top-[60px] left-0 z-[5]" style={{ width: node.w }}>
           <PipelineStrip pipeline={boardStrip} flows={flows} files={files} renderablePaths={renderablePaths} renderableFlows={renderableFlows} linkedTasks={linkedTasks} compact onOpenPath={onOpenPath} onOpenFlow={onOpenFlow} onOpenTask={onOpenTask} />
         </div>
@@ -1102,8 +1170,8 @@ const NodeChrome = memo(function NodeChrome({
           flow eligibility (#93 AC3): it appears on any pipeline-source
           conversation — children and flow-hosting roots included — sitting in
           the controls row when free, or above the flow/pipeline strip when one is up. */}
-      {canFlow || canPipeline ? (
-        <div className={`absolute left-0 z-[4] flex items-center gap-1.5 ${flow || boardStrip ? "-top-[92px]" : "-top-11"}`}>
+      {(canFlow || canPipeline) && !compact ? (
+        <div className={`absolute left-0 z-[4] flex items-center gap-1.5 ${node.presentation ? "-top-16" : flow || boardStrip ? "-top-[92px]" : "-top-11"}`}>
           {canFlow ? (
             <button
               data-scheme-ui
@@ -1148,21 +1216,38 @@ const NodeChrome = memo(function NodeChrome({
       ) : null}
       {/* The hidden stack peeking from under the card: previous chats and
           finished tasks lie beneath the conversation, deck-style. */}
-      {node.under.length ? (
+      {node.under.length && !compact ? (
         <>
           <div className="absolute inset-x-4 -bottom-4 h-5 rounded-[10px] border border-border bg-card/70 shadow-1" aria-hidden />
           <div className="absolute inset-x-2 -bottom-2 h-5 rounded-[10px] border border-border bg-card/90 shadow-1" aria-hidden />
         </>
       ) : null}
       <div className={`relative z-[1] flex h-full ${ringed ? "rounded-[10px] ring-2 ring-accent/60 ring-offset-2 ring-offset-canvas" : ""}`}>
-        {node.presentation === "summary" ? <button data-scheme-ui className="relative h-full w-full rounded-xl border border-border bg-card text-left" onClick={() => onSelect(node.file)}>
-          <div className="absolute left-0 top-0 flex flex-col items-start justify-center gap-3 p-5 text-ui" style={{ width: node.w / (node.readerScale ?? 1), height: node.h / (node.readerScale ?? 1), transform: `scale(${node.readerScale ?? 1})`, transformOrigin: "top left" }}>
-            <strong className="line-clamp-3">{cleanTitle(node.file.title,90)}</strong><CardStatusBadge file={node.file} />
+        {chip ? (
+          <button
+            data-scheme-ui
+            data-scheme-chip={node.file.path}
+            className="relative h-full w-full rounded-[8px] border border-border bg-card text-left shadow-1 hover:border-accent/45"
+            title={cleanTitle(node.file.title, 120)}
+            onClick={() => onSelect(node.file)}
+          >
+            <div
+              className="absolute left-0 top-0 flex items-center gap-2 px-2.5 text-ui"
+              style={{ width: node.w / (node.readerScale ?? 1), height: node.h / (node.readerScale ?? 1), transform: `scale(${node.readerScale ?? 1})`, transformOrigin: "top left" }}
+            >
+              <span className="min-w-0 flex-1 truncate font-semibold text-primary">{cleanTitle(node.file.title, 60)}</span>
+              <CardStatusBadge file={node.file} />
+            </div>
+          </button>
+        ) : null}
+        {node.presentation === "summary" ? <button data-scheme-ui data-scheme-summary={node.file.path} className="relative h-full w-full rounded-xl border border-border bg-card text-left" onClick={() => onSelect(node.file)}>
+          <div className="absolute left-0 top-0 flex flex-col items-start justify-center gap-1 px-3 py-2 text-ui" style={{ width: node.w / (node.readerScale ?? 1), height: node.h / (node.readerScale ?? 1), transform: `scale(${node.readerScale ?? 1})`, transformOrigin: "top left" }}>
+            <strong className="line-clamp-3 text-[13px] leading-[18px]">{cleanTitle(node.file.title,180)}</strong><CardStatusBadge file={node.file} />
           </div>
         </button> : null}
-        <div ref={nativeSlot} className="absolute left-0 top-0 flex min-h-0 min-w-0" style={{width:node.w/(node.readerScale??1),height:node.h/(node.readerScale??1),transform:`scale(${node.readerScale??1})`,transformOrigin:"top left",display:node.presentation === "summary" ? "none" : undefined}} />
+        <div ref={nativeSlot} className="absolute left-0 top-0 flex min-h-0 min-w-0" style={{width:node.w/(node.readerScale??1),height:node.h/(node.readerScale??1),transform:`scale(${node.readerScale??1})`,transformOrigin:"top left",display:node.presentation === "summary" || chip ? "none" : undefined}} />
       </div>
-      <SubagentBadges
+      {compact ? null : <SubagentBadges
         conversationId={conversationIdentity(node.file)}
         entries={files}
         cardRect={node}
@@ -1174,8 +1259,9 @@ const NodeChrome = memo(function NodeChrome({
           const target = files.find((entry) => entry.path === path);
           if (target) onSelect(target);
         }}
-      />
+      />}
       {(() => {
+        if (compact) return null;
         const tray = trayApi?.trays.get(conversationIdentity(node.file));
         return tray ? (
           <SubagentTray
@@ -1186,12 +1272,12 @@ const NodeChrome = memo(function NodeChrome({
           />
         ) : null;
       })()}
-      {flow ? <RoleTag role="implementer" active={activeLoopRole(flow) === "implementer"} /> : null}
+      {flow && !pipelineStage ? <div data-board-role className="absolute inset-x-0" style={{ top: node.presentation ? -14 : 0 }}><RoleTag role="implementer" active={activeLoopRole(flow) === "implementer"} /></div> : null}
       {node.presentation ? null : <FarLabel file={node.file} />}
       {/* The handoff handle pinned outside the card's bottom-left corner —
           where child arrows start; a click hangs a draft conversation below. */}
-      {onHandoff && canHandoff(node.file) ? <HandoffHandle file={node.file} onHandoff={() => onHandoff(node.file)} /> : null}
-      {node.under.length ? (
+      {onHandoff && canHandoff(node.file) && !compact ? <HandoffHandle file={node.file} onHandoff={() => onHandoff(node.file)} /> : null}
+      {node.under.length && !compact ? (
         <button
           className="absolute -bottom-11 left-1/2 z-[2] inline-flex h-7 -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-card px-2.5 text-[11px] font-semibold text-muted shadow-1 hover:border-accent/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           aria-expanded={underOpen}
@@ -1248,6 +1334,15 @@ const NodeShell = memo(function NodeShell(props: NativeNodeProps) {
 });
 
 /** A conversation draft as a scheme citizen: positioned like a fresh root node. */
+/** A band may hand a draft, slot, deck or stack less room than its natural
+    size (#1586): the shell keeps its natural box and scales it uniformly, so
+    its rendered contents fit the band with it. */
+function fittedShellStyle(rect: SchemeRect): CSSProperties {
+  const fit = rect.fit ?? 1;
+  if (fit === 1) return { transform: `translate(${rect.x}px, ${rect.y}px)`, width: rect.w, height: rect.h, transition: MOVE_TRANSITION };
+  return { transform: `translate(${rect.x}px, ${rect.y}px) scale(${fit})`, transformOrigin: "top left", width: rect.w / fit, height: rect.h / fit, transition: MOVE_TRANSITION };
+}
+
 function DraftShell({
   draft,
   project,
@@ -1269,7 +1364,7 @@ function DraftShell({
     <div
       data-scheme-node={draft.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${draft.x}px, ${draft.y}px)`, width: draft.w, height: draft.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(draft)}
     >
       <div className={`flex h-full ${ringed ? "rounded-[10px] ring-2 ring-accent/60 ring-offset-2 ring-offset-canvas" : ""}`}>
         {isWorkflowDraftId(draft.id) ? (
@@ -1328,7 +1423,7 @@ function EscapeToClose({ onClose }: { onClose: () => void }) {
  * wraps. Every add is an optimistic add-stage PATCH on the same draft
  * contract, applied locally first (issue #221 §3).
  */
-function StageSlotShell({ slot, lite, dimmed, files, onSelect }: { slot: StageSlot; lite: boolean; dimmed: boolean; files: FileEntry[]; onSelect: (file: FileEntry) => void }) {
+function StageSlotShell({ slot, lite, dimmed, files, onSelect, onToggleDetails }: { slot: StageSlot; lite: boolean; dimmed: boolean; files: FileEntry[]; onSelect: (file: FileEntry) => void; onToggleDetails?: (key: string) => void }) {
   const { t } = useLocale();
   const [busy, setBusy] = useState(false);
   const [rowOpen, setRowOpen] = useState(false);
@@ -1339,7 +1434,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect }: { slot: StageSl
      disclosure floats the full card over the board on demand, so the operator can
      still read the prompt and open the transcript without the finished stage
      claiming a pending card's weight. */
-  if (slot.collapsedRow) {
+  if (slot.collapsedRow && slot.detailsExpanded === undefined) {
     const target = slot.attempt ? attemptNavTarget(slot.attempt) : null;
     const file = target ? resolveStageNavFile(target, files) : null;
     const cardId = `${slot.key}::card`;
@@ -1347,7 +1442,7 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect }: { slot: StageSl
       <div
         data-scheme-node={slot.key}
         className={`scheme-enter absolute${dimClass(dimmed)} ${rowOpen ? "z-30" : ""}`}
-        style={{ transform: `translate(${slot.x}px, ${slot.y}px)`, width: slot.w, height: slot.h, transition: MOVE_TRANSITION }}
+        style={fittedShellStyle(slot)}
       >
         {slot.incoming ? (
           <span
@@ -1392,14 +1487,14 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect }: { slot: StageSl
   /* A completed stage of an active pipeline renders as a full conversation card
      at its stage position — same footprint as the live and placeholder cards, so
      the group reads as real cards rather than compact history stubs (#507 F2). */
-  if (slot.presentation === "completed") {
+  if (slot.presentation === "completed" && slot.detailsExpanded === undefined) {
     const target = slot.attempt ? attemptNavTarget(slot.attempt) : null;
     const file = target ? resolveStageNavFile(target, files) : null;
     return (
       <div
         data-scheme-node={slot.key}
         className={`scheme-enter absolute${dimClass(dimmed)}`}
-        style={{ transform: `translate(${slot.x}px, ${slot.y}px)`, width: slot.w, height: slot.h, transition: MOVE_TRANSITION }}
+        style={fittedShellStyle(slot)}
       >
         {slot.incoming ? (
           <span
@@ -1437,11 +1532,31 @@ function StageSlotShell({ slot, lite, dimmed, files, onSelect }: { slot: StageSl
       setBusy(false);
     });
   };
+  if (slot.detailsExpanded !== undefined) {
+    const target = slot.attempt ? attemptNavTarget(slot.attempt) : null;
+    const file = target ? resolveStageNavFile(target, files) : null;
+    return <div data-scheme-node={slot.key} data-stage-details-expanded={slot.detailsExpanded}
+      className={`scheme-enter absolute${dimClass(dimmed)}`} style={fittedShellStyle(slot)}>
+      <div style={{ height: BOARD_SURFACE.stage.h }}>
+        <StageStatusRow slot={slot} expanded={slot.detailsExpanded} controls={`${slot.key}::details`}
+          onToggle={!lite ? () => onToggleDetails?.(slot.key) : undefined} />
+      </div>
+      {slot.detailsExpanded ? <div id={`${slot.key}::details`} data-stage-row-card className="flex flex-col" style={{ height: BOARD_SURFACE.stageDetails.h - BOARD_SURFACE.stage.h }}>
+        <EscapeToClose onClose={() => onToggleDetails?.(slot.key)} />
+        <div className="flex min-h-0 flex-1">{slot.presentation === "completed" ? <StageCompletedCard slot={slot} onOpen={file && !lite ? () => onSelect(file) : undefined} /> : <StagePlaceholderPane slot={slot} interactive={!lite} />}</div>
+        {canAdd ? <div data-scheme-ui className="flex h-9 shrink-0 items-center gap-2 bg-card px-2">
+          {last ? <button type="button" className="rounded border border-border px-2 py-1 text-label" disabled={busy} onClick={() => addAfter("run")}>{t("pipelineSlot.addAgent")}</button> : null}
+          {slot.stage.kind === "run" ? <button type="button" className="rounded border border-border px-2 py-1 text-label" disabled={busy || !canAddReview} onClick={() => addAfter("review-loop")}>{t("pipelineSlot.addReview")}</button> : null}
+        </div> : null}
+      </div> : null}
+    </div>;
+  }
+
   return (
     <div
       data-scheme-node={slot.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${slot.x}px, ${slot.y}px)`, width: slot.w, height: slot.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(slot)}
     >
       {slot.incoming ? (
         <span
@@ -1510,10 +1625,10 @@ function DeckShell({
     <div
       data-scheme-node={deck.key}
       className={`scheme-enter absolute${dimClass(dimmed)}`}
-      style={{ transform: `translate(${deck.x}px, ${deck.y}px)`, width: deck.w, height: deck.h, transition: MOVE_TRANSITION }}
+      style={fittedShellStyle(deck)}
     >
       <RoundDeck flow={deck.flow} rounds={deck.rounds} focusRound={focusRound} dormant={dormant} groupLabel={groupLabel} />
-      <RoleTag role="reviewer" active={activeLoopRole(deck.flow) === "reviewer"} />
+      <div data-board-role className="absolute inset-x-0" style={{ top: deck.bandSurface ? -14 : 0 }}><RoleTag role="reviewer" active={activeLoopRole(deck.flow) === "reviewer"} /></div>
     </div>
   );
 }
@@ -1555,7 +1670,9 @@ export const NodesLayer = memo(function NodesLayer({
   onExpand,
   onToggleMember,
   onPipelineCreated,
+  onToggleStageDetails,
 }: {
+  onToggleStageDetails?: (key: string) => void;
   visiblePaths?: ReadonlySet<string>;
   expandedPath?: string | null;
   fullWindowPlace?: HTMLElement | null;
@@ -1635,6 +1752,7 @@ export const NodesLayer = memo(function NodesLayer({
   /* Which stage each live transcript runs — the shared index (#658), so the
      board node and the full-window overlay name a stage pane identically. */
   const pipelineStageByPath = useMemo(() => pipelineStageByAgentPath(pipelines), [pipelines]);
+  const historicalByPath = useMemo(() => historicalAttemptLabels(pipelines), [pipelines]);
   /* Activity ranking reaches the screen through each host's x/y transform.
      Stable sibling order keeps React from moving stateful hosts in the DOM,
      preserving scroll, focus, selection, and draft/deck state. */
@@ -1694,7 +1812,7 @@ export const NodesLayer = memo(function NodesLayer({
       {/* Placeholder windows for planned pipeline stages (issue #196): dashed
           chat-window shells the live stage windows replace in place. */}
       {slotsInDomOrder.map((slot) => (
-        <DormantView key={slot.key} active={visiblePaths?.has(slot.key) ?? true}><StageSlotShell slot={slot} lite={lite} dimmed={attentionPaths !== null} files={files} onSelect={onSelect} /></DormantView>
+        <DormantView key={slot.key} active={visiblePaths?.has(slot.key) ?? true}><StageSlotShell onToggleDetails={onToggleStageDetails} slot={slot} lite={lite} dimmed={attentionPaths !== null} files={files} onSelect={onSelect} /></DormantView>
       ))}
       {draftsInDomOrder.map((draft) =>
         lite ? (
@@ -1745,6 +1863,7 @@ export const NodesLayer = memo(function NodesLayer({
             flow={flowsByImpl.get(node.file.path) ?? null}
             pipeline={pipeline}
             pipelineStage={pipelineStageByPath.get(node.file.path) ?? null}
+            historicalAttempt={historicalByPath.get(node.file.path)}
             linkedTasks={pipeline ? linkedTasksByPipeline.get(pipeline.id) ?? EMPTY_TASKS : EMPTY_TASKS}
             relatedTasks={relatedTasksByPath?.get(node.file.path) ?? EMPTY_RELATIONS}
             flows={flows}

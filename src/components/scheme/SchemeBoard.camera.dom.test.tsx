@@ -150,15 +150,17 @@ test("hand, Space-pan, and lasso own pipeline header gestures without position P
     expect(header).toBeTruthy();
     expect(header.disabled).toBe(true);
 
+    /* Bands span the viewport (#1586), so the world's x axis is locked and a
+       pan shows on the y axis: the drag carries a vertical component. */
     const before = world.style.transform;
     flushSync(() => viewport.dispatchEvent(new dom.PointerEvent("pointerdown", {
       bubbles: true, isPrimary: true, pointerId: 41, pointerType: "mouse", button: 0, clientX: 500, clientY: 300,
     }) as unknown as Event));
     flushSync(() => viewport.dispatchEvent(new dom.PointerEvent("pointermove", {
-      bubbles: true, isPrimary: true, pointerId: 41, pointerType: "mouse", button: 0, clientX: 420, clientY: 300,
+      bubbles: true, isPrimary: true, pointerId: 41, pointerType: "mouse", button: 0, clientX: 420, clientY: 240,
     }) as unknown as Event));
     flushSync(() => viewport.dispatchEvent(new dom.PointerEvent("pointerup", {
-      bubbles: true, isPrimary: true, pointerId: 41, pointerType: "mouse", button: 0, clientX: 420, clientY: 300,
+      bubbles: true, isPrimary: true, pointerId: 41, pointerType: "mouse", button: 0, clientX: 420, clientY: 240,
     }) as unknown as Event));
     await settle();
 
@@ -253,6 +255,9 @@ test("the scheme viewport keeps its minimap and camera gestures after descendant
   );
   await settle();
   expect(viewport.className).toContain("cursor-grabbing");
+  /* A diagonal drag: the band board is a document whose stack fits the
+     viewport here, so only the vertical component can move it (#1641), and
+     the camera already rests at the strip-keeping top bound, so it moves down. */
   flushSync(() =>
     viewport.dispatchEvent(new dom.PointerEvent("pointermove", {
       bubbles: true,
@@ -261,7 +266,7 @@ test("the scheme viewport keeps its minimap and camera gestures after descendant
       pointerType: "mouse",
       button: 0,
       clientX: 340,
-      clientY: 300,
+      clientY: 360,
     }) as unknown as Event),
   );
   await settle();
@@ -324,6 +329,12 @@ test("0 frames current work, repeated 0 escalates to all, and Shift+0 fits all d
   const key = (shiftKey = false) => window.dispatchEvent(
     new dom.KeyboardEvent("keydown", { key: "0", shiftKey, bubbles: true }) as unknown as Event,
   );
+  /* A fresh band board opens on the current-work framing itself, so move the
+     camera first; otherwise the first 0 correctly escalates straight to all. */
+  const pan = new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 240 });
+  Object.defineProperties(pan, { clientX: { value: 600 }, clientY: { value: 400 }, ctrlKey: { value: false } });
+  flushSync(() => viewport.dispatchEvent(pan as unknown as Event));
+  await settle();
 
   flushSync(() => key());
   await settle();
@@ -347,7 +358,7 @@ test("0 frames current work, repeated 0 escalates to all, and Shift+0 fits all d
   expect(host.querySelector('button[title^="Fit all content"]')).toBeTruthy();
 });
 
-test("arrow navigation lands on a placed task with a visible ring and spoken title", async () => {
+test("arrow navigation lands on a task band with a visible ring and spoken title", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -381,13 +392,18 @@ test("arrow navigation lands on a placed task with a visible ring and spoken tit
   ));
   await settle();
 
-  const task = host.querySelector('[data-scheme-task="nav-task"]')!;
-  expect(task.firstElementChild?.className).toContain("ring-2");
+  /* Task-centered board (#1586): the task is a full-width band, so keyboard
+     navigation rings the band header, never a floating card. */
+  expect(host.querySelector("[data-scheme-task]")).toBeNull();
+  const band = host.querySelector('[data-scheme-band-task="nav-task"]')!;
+  expect(band).toBeTruthy();
+  const header = band.querySelector("[data-scheme-band-header]") as HTMLElement;
+  expect(header.className).toContain("ring-2");
   expect(host.textContent).toContain("Navigate to bounded task");
-  expect(document.activeElement).not.toBe(task);
+  expect(document.activeElement).not.toBe(band);
 });
 
-test("expanding full task text reflows a covered neighbour without persisting positions", async () => {
+test("empty tasks share a compact row in creation order and persist nothing", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -428,17 +444,18 @@ test("expanding full task text reflows a covered neighbour without persisting po
     });
     await settle();
 
-    const older = host.querySelector('[data-scheme-task="older"]') as HTMLElement;
-    const younger = host.querySelector('[data-scheme-task="younger"]') as HTMLElement;
-    expect(younger.style.transform).toBe("translate(0px, 200px)");
-    flushSync(() => (older.querySelector("[data-task-disclosure]") as HTMLButtonElement).click());
-    await settle();
-    expect(younger.style.transform).not.toBe("translate(0px, 200px)");
+    /* Empty tasks share a compact row in creation order. Their authored pins
+       remain untouched by presentation; no writes occur. */
+    expect(host.querySelector("[data-scheme-task]")).toBeNull();
+    const older = host.querySelector('[data-scheme-band-task="older"]') as HTMLElement;
+    const younger = host.querySelector('[data-scheme-band-task="younger"]') as HTMLElement;
+    expect(older).toBeTruthy();
+    expect(younger).toBeTruthy();
+    expect(parseFloat(younger.style.left)).toBeGreaterThan(parseFloat(older.style.left) + parseFloat(older.style.width));
+    expect(older.style.width).toBe(younger.style.width);
+    expect(younger.style.top).toBe(older.style.top);
+    expect(host.textContent).toContain("Neighbour");
     expect(writes).toEqual([]);
-
-    flushSync(() => (older.querySelector("[data-task-disclosure]") as HTMLButtonElement).click());
-    await settle();
-    expect(younger.style.transform).toBe("translate(0px, 200px)");
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -496,7 +513,7 @@ test("a pane's reserved relation strip opens the assigned task without floating 
   expect(openedTasks).toEqual(["strip-task"]);
 });
 
-test("an assignment chip opens the current conversation generation and centers its pane", async () => {
+test("a task's assigned conversation resolves to its current generation inside the task's band", async () => {
   const agent: FileEntry = {
     path: "/agent-current", root: "claude-projects", name: "agent-current.jsonl", project: "task-open", title: "Current agent",
     engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: 2, size: 1, activity: "live",
@@ -532,15 +549,162 @@ test("an assignment chip opens the current conversation generation and centers i
   });
   await settle();
 
-  const viewport = host.querySelector('[aria-label^="Agent board"]') as HTMLDivElement;
-  const world = Array.from(viewport.children).find((child) =>
-    (child as HTMLElement).style.transform.includes("scale("),
-  ) as HTMLElement;
-  const before = world.style.transform;
-  flushSync(() => (host.querySelector("[data-task-open-agent]") as HTMLButtonElement).click());
+  /* The assignment names an archived path; the band shows the conversation's
+     current generation as its member and opens exactly that one. */
+  const band = host.querySelector('[data-scheme-band-task="open-task"]') as HTMLElement;
+  expect(band).toBeTruthy();
+  const node = host.querySelector('[data-scheme-node="/agent-current"]') as HTMLElement;
+  expect(node.getAttribute("data-scheme-node-presentation")).toBe("summary");
+  const bandBox = { x: parseFloat(band.style.left), y: parseFloat(band.style.top), w: parseFloat(band.style.width), h: parseFloat(band.style.height) };
+  const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(node.style.transform)!;
+  const nodeBox = { x: parseFloat(match[1]!), y: parseFloat(match[2]!), w: parseFloat(node.style.width), h: parseFloat(node.style.height) };
+  expect(nodeBox.x).toBeGreaterThanOrEqual(bandBox.x);
+  expect(nodeBox.y).toBeGreaterThanOrEqual(bandBox.y);
+  expect(nodeBox.x + nodeBox.w).toBeLessThanOrEqual(bandBox.x + bandBox.w + 0.001);
+  expect(nodeBox.y + nodeBox.h).toBeLessThanOrEqual(bandBox.y + bandBox.h + 0.001);
+  flushSync(() => (node.querySelector("button[data-scheme-summary]") as HTMLButtonElement).click());
+  await settle();
+  expect(selected).toEqual(["/agent-current"]);
+});
+
+/* The saved camera and the board it was saved against (#1614). Two tasks make a
+   short band stack a few hundred pixels tall — the shape a 390-task board takes
+   once its empty bands are off it — while the stored camera is the one the
+   operator actually had: parked 25 000px down the stack the board no longer has. */
+const bandBoardTasks = (project: string) => [
+  { id: "first", project, status: "assigned" as const, text: "First task", placement: "pinned" as const, pos: { x: 0, y: 0 }, assignments: [], createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z" },
+  { id: "second", project, status: "assigned" as const, text: "Second task", placement: "pinned" as const, pos: { x: 0, y: 200 }, assignments: [], createdAt: "2026-07-02T00:00:00.000Z", updatedAt: "2026-07-02T00:00:00.000Z" },
+];
+
+async function mountBandBoard(project: string): Promise<HTMLElement> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.add(root);
+  flushSync(() => {
+    root.render(
+      <SchemeBoard
+        project={project}
+        groups={[]}
+        manual={[]}
+        files={[]}
+        flows={[]}
+        tasks={bandBoardTasks(project)}
+        drafts={[]}
+        focus={null}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onDraftClose={() => {}}
+        onDraftSpawned={() => {}}
+      />,
+    );
+  });
+  await settle();
+  return host;
+}
+
+const worldTransform = (host: HTMLElement) => {
+  const viewport = host.querySelector('[aria-label^="Agent board"]') as HTMLElement;
+  const world = Array.from(viewport.children).find((child) => (child as HTMLElement).style.transform.includes("scale(")) as HTMLElement;
+  return world.style.transform;
+};
+
+test("a saved camera the board shrank out from under is re-fitted, not restored onto empty canvas", async () => {
+  dom.sessionStorage.setItem("llvCam:camera-offworld", JSON.stringify({ x: 0, y: -25239.92, z: 1.6 }));
+  const host = await mountBandBoard("camera-offworld");
+  /* The standing rule waits for the board to settle before it judges a framing
+     (a board mid-measure reports a world a pixel wide), so wait past it. */
+  await new Promise((resolve) => setTimeout(resolve, 500));
   await settle();
 
-  expect(selected).toEqual(["/agent-current"]);
-  expect(world.style.transform).not.toBe(before);
-  expect(world.style.transform).toContain("scale(1)");
+  const transform = worldTransform(host);
+  /* Not the stored coordinates: that camera looks 25 000px past the last band. */
+  expect(transform).not.toContain("-25239.92px");
+  /* And what it framed instead actually holds the board: both bands are inside
+     the viewport the board was measured at (1400x900). */
+  const viewport = host.querySelector('[aria-label^="Agent board"]') as HTMLElement;
+  const camera = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(transform)!;
+  const [x, y, z] = [Number(camera[1]), Number(camera[2]), Number(camera[3])];
+  const bands = Array.from(host.querySelectorAll<HTMLElement>("[data-scheme-band-task]"));
+  expect(bands).toHaveLength(2);
+  for (const band of bands) {
+    const top = parseFloat(band.style.top) * z + y;
+    const left = parseFloat(band.style.left) * z + x;
+    expect(top).toBeGreaterThan(-1);
+    expect(top).toBeLessThan(viewport.getBoundingClientRect().height);
+    expect(left).toBeGreaterThan(-1);
+    expect(left).toBeLessThan(viewport.getBoundingClientRect().width);
+  }
+});
+
+test("a saved camera that still shows the board is restored exactly as it was left", async () => {
+  dom.sessionStorage.setItem("llvCam:camera-inbounds", JSON.stringify({ x: 0, y: 0, z: 0.9 }));
+  const host = await mountBandBoard("camera-inbounds");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await settle();
+  /* Scroll position is state: an in-bounds camera is never silently re-framed,
+     including after the settle window the rule above waits out. */
+  expect(worldTransform(host)).toBe("translate(0px, 0px) scale(0.9)");
+});
+
+test("hiding the empty task bands under a camera parked deep in the stack brings the board back", async () => {
+  /* The production sequence, in order: the board is opened deep in a long band
+     stack, and the one-time migration then takes 384 empty bands off it. The
+     camera was in bounds when it was set, so nothing rejects it at restore —
+     the world moves out from under it while the board is mounted. */
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    id: `task-${index}`, project: "camera-shrink", status: "assigned" as const,
+    text: `Task ${index}`, placement: "pinned" as const, pos: { x: 0, y: index * 200 },
+    assignments: [], createdAt: `2026-07-${String((index % 27) + 1).padStart(2, "0")}T00:00:00.000Z`,
+    updatedAt: "2026-07-01T00:00:00.000Z",
+  }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.add(root);
+  const render = (tasks: typeof many) => flushSync(() => {
+    root.render(
+      <SchemeBoard
+        project="camera-shrink" groups={[]} manual={[]} files={[]} flows={[]}
+        tasks={tasks} drafts={[]} focus={null}
+        onSelect={() => {}} onClose={() => {}} onDraftClose={() => {}} onDraftSpawned={() => {}}
+      />,
+    );
+  });
+  render(many);
+  await settle();
+
+  const viewport = host.querySelector('[aria-label^="Agent board"]') as HTMLElement;
+  const world = Array.from(viewport.children).find((child) => (child as HTMLElement).style.transform.includes("scale(")) as HTMLElement;
+  /* Park the camera at the bottom of the long stack by wheeling there, so the
+     position under test is one the board itself produced and clamped. */
+  for (let step = 0; step < 12; step += 1) {
+    const wheel = new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 900 });
+    Object.defineProperties(wheel, { clientX: { value: 600 }, clientY: { value: 400 }, ctrlKey: { value: false } });
+    flushSync(() => viewport.dispatchEvent(wheel as unknown as Event));
+    await settle();
+  }
+  const parked = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(world.style.transform)!;
+  expect(Number(parked[2])).toBeLessThan(-500);
+
+  /* The migration: every empty band leaves the board. */
+  render(many.slice(0, 2));
+  await settle();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await settle();
+
+  /* The board is on screen again, and the bands with it. */
+  const camera = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(world.style.transform)!;
+  const [x, y, z] = [Number(camera[1]), Number(camera[2]), Number(camera[3])];
+  expect(y).toBeGreaterThan(Number(parked[2]));
+  const bands = Array.from(host.querySelectorAll<HTMLElement>("[data-scheme-band-task]"));
+  expect(bands.length).toBeGreaterThan(0);
+  for (const band of bands) {
+    const top = parseFloat(band.style.top) * z + y;
+    const left = parseFloat(band.style.left) * z + x;
+    expect(top).toBeGreaterThan(-1);
+    expect(top).toBeLessThan(900);
+    expect(left).toBeGreaterThan(-1);
+    expect(left).toBeLessThan(1400);
+  }
 });

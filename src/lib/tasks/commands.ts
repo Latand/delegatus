@@ -3,10 +3,25 @@ import crypto from "node:crypto";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
-import type { AssignmentRef, BoardTask, TaskAttachment, TaskAssignment, TaskSource, TaskStatus } from "./types";
+import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
+import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
+import type { AssignmentRef, BoardTask, TaskAttachment, TaskAssignment, TaskBoardVisibility, TaskSource, TaskStatus } from "./types";
 
 export const TASK_TEXT_LIMIT = 6000;
-export const TASKS_PER_PROJECT_LIMIT = 300;
+/**
+ * How many bands one project's board may carry (#1627).
+ *
+ * A DISPLAY bound, and only that: it counts the tasks the board draws, never
+ * the rows the task file stores. The stored list is a history — since #1614
+ * every task that has nothing on the canvas keeps its row and its place in the
+ * task list with `board: "hidden"` — and a history has no cap here, so a
+ * project with hundreds of finished tasks can still take a new one. What is
+ * bounded is the vertical stack of bands that made the board unusable in the
+ * first place.
+ *
+ * The number is unchanged from the row cap it replaces.
+ */
+export const BOARD_TASKS_PER_PROJECT_LIMIT = 300;
 /** How many recent create receipts are kept for `clientRequestId` replay. Sized
     to the double-tap / retry-after-timeout window; a replay older than the cap
     can mint a twin (documented, durability beyond the cap is deferred). */
@@ -39,6 +54,10 @@ export interface CreateTaskInput {
   attachments?: unknown;
   clientRequestId?: unknown;
   source?: unknown;
+  /** Optional board membership of the new task's band. Omitted creates a task
+      the board shows; `"hidden"` creates it off the board, which is how a
+      caller records work while the board is full. */
+  board?: unknown;
 }
 
 export interface PatchTaskInput {
@@ -50,6 +69,7 @@ export interface PatchTaskInput {
   pos?: unknown;
   dueAt?: unknown;
   dueTz?: unknown;
+  board?: unknown;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -58,6 +78,23 @@ export interface TaskCommandDeps {
   now?: () => string;
   id?: () => string;
   attachmentExists?: (att: TaskAttachment) => boolean;
+  /** Whether a hidden task still holds something the board draws — the answer
+      only a caller that can see the resolved bands has. Defaults to "no", which
+      counts exactly the bands the board was ASKED to draw; see
+      {@link countBoardTasks} for why guessing it from stored rows is worse than
+      not answering. */
+  hasBoardMembers?: (task: BoardTask) => boolean;
+}
+
+/** The refusal both admission paths give when the board is full. */
+function boardFullError(field: "board" | "project"): TaskRefusal {
+  return {
+    ok: false,
+    error: `The board already shows ${BOARD_TASKS_PER_PROJECT_LIMIT} task bands for this project. Hide a band you no longer need, or keep this task off the board with board: "hidden".`,
+    status: 409,
+    code: "TASK_BOARD_FULL",
+    field,
+  };
 }
 
 export type SpawnEngine = "claude" | "codex";
@@ -90,6 +127,10 @@ function normalizePos(value: unknown): { x: number; y: number } | null {
 
 function normalizeStatus(value: unknown): TaskStatus | null {
   return value === "inbox" || value === "assigned" || value === "blocked" || value === "done" ? value : null;
+}
+
+function normalizeBoardVisibility(value: unknown): TaskBoardVisibility | null {
+  return value === "shown" || value === "hidden" ? value : null;
 }
 
 /** Client-writable placement values; `auto` is server-reserved (#17). */
@@ -204,9 +245,14 @@ export function createTask(
 
   const source = normalizeSource(input.source);
   if (source === null) return { ok: false, error: "invalid task source", status: 400 };
-  const count = existing.filter((task) => task.project === project).length;
-  if (count >= TASKS_PER_PROJECT_LIMIT) {
-    return { ok: false, error: `The project already has ${TASKS_PER_PROJECT_LIMIT} tasks. Close or delete extra tasks.`, status: 409 };
+
+  const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
+  if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
+  /* The bound is on bands, so only a task that will occupy one is counted
+     against it: a task created off the board joins the history, which has no
+     cap, and no durable identity is ever refused to keep a display small. */
+  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false)) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+    return boardFullError("project");
   }
 
   const now = deps.now?.() ?? isoNow();
@@ -221,6 +267,7 @@ export function createTask(
     ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz } : {}),
     ...(attachments.attachments ? { attachments: attachments.attachments } : {}),
     ...(source ? { source } : {}),
+    ...(board ? { board } : {}),
     assignments: [],
     createdAt: now,
     updatedAt: now,
@@ -231,7 +278,7 @@ export function createTask(
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
 }
 
-export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: { requirePlacementGuards?: boolean } = {}): TaskCommandResult {
+export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: { requirePlacementGuards?: boolean; hasBoardMembers?: (task: BoardTask) => boolean } = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const task = existing[index]!;
@@ -256,6 +303,11 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!text) return { ok: false, error: "task text is required", status: 400 };
     if (text.length > TASK_TEXT_LIMIT) return textLimitError();
     patch.text = text;
+    /* An operator's edit names a placeholder for good: a later agent
+       refinement returns "already named" instead of overwriting it (#1586). */
+    if (existing[index]!.origin?.refinement === "pending" && text !== existing[index]!.text) {
+      patch.origin = { ...existing[index]!.origin!, refinement: "titled" };
+    }
   }
   if (Object.hasOwn(input, "status")) {
     const status = normalizeStatus(input.status);
@@ -270,6 +322,25 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
        the collision pass then leaves it exactly where the user dropped it. */
     patch.pos = pos;
     patch.placement = "pinned";
+  }
+  /* Board membership of the band. Reversible either way, never a delete: the
+     task keeps its row, its assignments and its place in the task list. */
+  if (Object.hasOwn(input, "board")) {
+    const board = normalizeBoardVisibility(input.board);
+    if (!board) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
+    /* Restoring a band is the board's other admission (#1627), so it answers to
+       the same bound as a create — otherwise the cap would only ever move a
+       task's growth from one control to the other. A task that already occupies
+       a band takes no new slot, so re-asserting `shown` is never refused, and
+       neither is hiding one; and because the count is taken from the snapshot
+       this call was handed, the serialized read-modify-write around it (see
+       `mutateTasks`) is what stops two writers taking the last slot at once. */
+    const hasMembers = options.hasBoardMembers ?? (() => false);
+    if (board === "shown" && !taskShowsOnBoard(task, hasMembers(task))
+      && countBoardTasks(existing, task.project, hasMembers) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+      return boardFullError("board");
+    }
+    patch.board = board;
   }
   if (Object.hasOwn(input, "placement")) {
     const placement = normalizePlacement(input.placement);
@@ -307,10 +378,52 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   return { ok: true, tasks, task: updated };
 }
 
-export function deleteTask(existing: BoardTask[], id: string): { ok: true; tasks: BoardTask[] } | { ok: false; error: string; status: number } {
-  const tasks = existing.filter((task) => task.id !== id);
-  if (tasks.length === existing.length) return { ok: false, error: "task not found", status: 404 };
-  return { ok: true, tasks };
+export interface MembershipDeps {
+  now?: () => string;
+  id?: () => string;
+}
+
+/**
+ * The conversations of `removed` rows that no remaining task still records,
+ * each bound to a replacement placeholder in the same snapshot (#1586): every
+ * board conversation belongs to a task, and unlinking or deleting must not
+ * leave one outside every task between two writes. The replacement carries the
+ * row's admission origin (its launch key, else the conversation), so a replay
+ * of that launch converges on the replacement. `forbid` names the task a
+ * replacement may not resolve to, which is the very task the row leaves.
+ */
+function replaceLostMemberships(
+  tasks: BoardTask[],
+  project: string,
+  removed: readonly TaskAssignment[],
+  forbid: string | null,
+  deps: MembershipDeps,
+): { ok: true; tasks: BoardTask[]; replacements: string[] } | TaskRefusal {
+  let current = tasks;
+  const replacements: string[] = [];
+  for (const assignment of removed) {
+    if (assignment.state === "failed") continue;
+    const identity: MembershipIdentity | null = assignmentIdentity(assignment);
+    const origin = assignmentAdmissionOrigin(assignment);
+    if (!identity || !origin || identityHeldBy(current, identity)) continue;
+    const result = ensureTaskMembership(current, { project, origin, identity }, deps);
+    if (!result.ok) return result;
+    if (forbid && result.taskIds.includes(forbid)) {
+      return { ok: false, error: "this task is the conversation's own membership; link the conversation to another task first or delete the task", status: 409 };
+    }
+    current = result.tasks;
+    replacements.push(...result.created);
+  }
+  return { ok: true, tasks: current, replacements };
+}
+
+/** Deletes a task. Conversations whose only membership it held are bound to
+    replacement placeholders in the same snapshot; nothing is left unbound. */
+export function deleteTask(existing: BoardTask[], id: string, deps: MembershipDeps = {}): { ok: true; tasks: BoardTask[]; replacements: string[] } | TaskRefusal {
+  const task = existing.find((candidate) => candidate.id === id);
+  if (!task) return { ok: false, error: "task not found", status: 404 };
+  const tasks = existing.filter((candidate) => candidate.id !== id);
+  return replaceLostMemberships(tasks, task.project, task.assignments, null, deps);
 }
 
 /** Parse a usable assignment handle from the DELETE request body. */
@@ -343,19 +456,26 @@ function assignmentMatchesRef(assignment: TaskAssignment, ref: AssignmentRef): b
 /**
  * Detach one assignment through its strongest available identity. A string
  * keeps the original path-based interface. An unmatched handle succeeds and
- * leaves the task object unchanged, which makes repeated recovery safe.
+ * leaves the task object unchanged, which makes repeated recovery safe. When
+ * the detached row was the conversation's last membership, a replacement
+ * placeholder is bound in the same snapshot; detaching a conversation from the
+ * placeholder that is its own admission is refused, because the replacement
+ * would be that task again.
  */
-export function removeAssignment(existing: BoardTask[], id: string, handle: string | AssignmentRef, now = isoNow()): TaskCommandResult {
+export function removeAssignment(existing: BoardTask[], id: string, handle: string | AssignmentRef, now = isoNow(), deps: MembershipDeps = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const ref: AssignmentRef = typeof handle === "string" ? { path: handle } : handle;
   const task = existing[index]!;
   const assignments = task.assignments.filter((assignment) => !assignmentMatchesRef(assignment, ref));
   if (assignments.length === task.assignments.length) return { ok: true, tasks: existing, task };
+  const removed = task.assignments.filter((assignment) => assignmentMatchesRef(assignment, ref));
   const updated: BoardTask = { ...task, assignments, updatedAt: now };
   const tasks = existing.slice();
   tasks[index] = updated;
-  return { ok: true, tasks, task: updated };
+  const replaced = replaceLostMemberships(tasks, task.project, removed, id, { now: () => now, ...deps });
+  if (!replaced.ok) return replaced;
+  return { ok: true, tasks: replaced.tasks, task: updated };
 }
 
 export interface AssignmentPatch {
@@ -420,7 +540,7 @@ export function applyAssignmentPatches(
   const task = existing[index]!;
   const assignments = mergeAssignments(task.assignments, patches);
   const hasOwner = assignments.some(
-    (assignment) => assignment.state === "delivered" || assignment.state === "spawning" || assignment.state === "handoff",
+    (assignment) => assignment.state === "delivered" || assignment.state === "spawning" || assignment.state === "handoff" || assignment.state === "linked",
   );
   let status = task.status;
   if (status === "inbox" || status === "assigned") {
