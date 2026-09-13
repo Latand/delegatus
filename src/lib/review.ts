@@ -37,10 +37,11 @@ const VERDICT_TOKEN = String.raw`(REQUEST_CHANGES|APPROVE|COMMENT)[*_]{0,3}(?![A
     stay findings. Up to three spaces of indent; four make a code block. */
 export const VERDICT_LINE_RE = new RegExp(String.raw`^ {0,3}(?:${VERDICT_LABEL})?${VERDICT_TOKEN}`, "m");
 const ANY_VERDICT_TOKEN_RE = /(?<![\w-])(?:REQUEST_CHANGES|APPROVE|COMMENT)(?![\w-])/;
-/** A negation or condition straight after the token takes the verdict back:
-    `VERDICT: APPROVE once tests pass`, `## VERDICT: APPROVE — not yet`. */
-const HEDGED_VERDICT_RE =
-  /^[\s*_—–:,(-]*(?:not|never|unless|if|once|until|pending|would|cannot|only\s+(?:if|when|once|after))\b/i;
+/** A negation or condition straight after APPROVE takes the approval back:
+    `VERDICT: APPROVE once tests pass`, `**VERDICT: APPROVE** (after fixes)`.
+    After REQUEST_CHANGES or COMMENT the same words describe the code. */
+const HEDGED_APPROVAL_RE =
+  /^[\s*_—–:,(-]*(?:not|never|unless|if|once|until|pending|after|when|assuming|provided|subject\s+to|conditional(?:ly)?|would|could|should|cannot|can't|only\s+(?:if|when|once|after))(?![\w'])/i;
 /** A bare token that runs on into a sentence is prose about a verdict:
     `APPROVE requires findings to be empty`, `APPROVE received.`. Reviewers do
     name what they judged with `at` and `for`, as in `REQUEST_CHANGES at <sha>`. */
@@ -202,15 +203,21 @@ export function countFindingBlocks(text: string): number {
   return bullets;
 }
 
-function verdictFromLine(line: string): ReviewVerdict | null {
+type VerdictLine = { verdict: ReviewVerdict; labelled: boolean; accepted: boolean };
+
+/** A line with the verdict shape, and whether it states that verdict. A
+    refused line still counts against an approval in reviewVerdict. */
+function verdictLine(line: string): VerdictLine | null {
   const match = line.match(VERDICT_LINE_RE);
   if (!match) return null;
   const verdict = match[1] as ReviewVerdict;
   const rest = line.slice(match[0].length);
-  if (/^[ \t]*\?/.test(rest) || ANY_VERDICT_TOKEN_RE.test(rest) || HEDGED_VERDICT_RE.test(rest)) return null;
-  const bare = match[0].trimStart().startsWith(verdict);
-  if (bare && BARE_TOKEN_SENTENCE_RE.test(rest)) return null;
-  return verdict;
+  const labelled = !match[0].trimStart().startsWith(verdict);
+  const refused =
+    ANY_VERDICT_TOKEN_RE.test(rest)
+    || (verdict === "APPROVE" && (/^[ \t*_]*\?/.test(rest) || HEDGED_APPROVAL_RE.test(rest)))
+    || (!labelled && BARE_TOKEN_SENTENCE_RE.test(rest));
+  return { verdict, labelled, accepted: !refused };
 }
 
 /** Lines a reviewer wrote as its own prose. Fenced code and blockquotes hold
@@ -230,19 +237,26 @@ function* ownProseLines(text: string): Generator<string> {
   }
 }
 
-/** The review's verdict: every verdict line in its own prose must name the
-    same one. Lines that disagree leave no verdict, so a changed mind or a
-    pasted template cannot turn into an approval. */
+/** The review's verdict, read from its own prose. Labelled `VERDICT:` lines
+    decide, bare token lines only when no labelled line exists, and the
+    deciding lines must agree. An approval must also be unanimous: any other
+    verdict-shaped line, refused or naming another verdict, leaves no verdict.
+    A hedged change request, a changed mind or a pasted template therefore
+    cannot become an approval. */
 export function reviewVerdict(text: string): ReviewVerdict | null {
   if (!/REQUEST_CHANGES|APPROVE|COMMENT/.test(text)) return null;
-  let verdict: ReviewVerdict | null = null;
+  const lines: VerdictLine[] = [];
   for (const line of ownProseLines(text)) {
-    const found = verdictFromLine(line);
-    if (!found) continue;
-    if (verdict && verdict !== found) return null;
-    verdict = found;
+    const found = verdictLine(line);
+    if (found) lines.push(found);
   }
-  return verdict;
+  const accepted = lines.filter((line) => line.accepted);
+  const deciding = accepted.some((line) => line.labelled) ? accepted.filter((line) => line.labelled) : accepted;
+  const verdicts = new Set(deciding.map((line) => line.verdict));
+  if (verdicts.size !== 1) return null;
+  const [verdict] = [...verdicts];
+  if (verdict === "APPROVE" && lines.some((line) => !line.accepted || line.verdict !== "APPROVE")) return null;
+  return verdict ?? null;
 }
 
 export function parseReview(text: string, ts: unknown): ReviewCardItem | null {

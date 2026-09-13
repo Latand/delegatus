@@ -157,3 +157,35 @@ test("conflicting verdict lines yield no verdict instead of the first one", () =
   expect(verdictOf("VERDICT: APPROVE\n\nOn a second look the migration drops rows.\n\nVERDICT: REQUEST_CHANGES\n")).toBeNull();
   expect(verdictOf("**VERDICT: REQUEST_CHANGES**\n\nActually fine.\n\n**VERDICT: APPROVE**\n")).toBeNull();
 });
+
+test("words after a change request describe the code and never make room for a later approval (review round 1)", () => {
+  expect(verdictOf("VERDICT: REQUEST_CHANGES — cannot merge: the migration drops rows.\n\n1. HIGH — src/example/alpha.ts:4 — drops rows\n\nAfter the fix, I expect:\n\nVERDICT: APPROVE\n"))
+    .toBeNull();
+  expect(verdictOf("VERDICT: REQUEST_CHANGES if the lock is intended to be reentrant.\n\nAPPROVE — NO FINDINGS on the docs part\n"))
+    .toBe("REQUEST_CHANGES");
+  expect(verdictOf("**VERDICT: REQUEST_CHANGES** — not ready to merge\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("VERDICT: REQUEST_CHANGES — would break prod\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("**VERDICT: REQUEST_CHANGES** — APPROVE once the guard lands\n\nVERDICT: APPROVE\n")).toBeNull();
+});
+
+test("an approval must be unanimous across the reviewer's own verdict lines (review round 1)", () => {
+  expect(verdictOf("VERDICT: APPROVE if CI stays green\n\n**VERDICT: APPROVE**\n")).toBeNull();
+  expect(verdictOf("Output exactly this format:\nVERDICT: APPROVE | REQUEST_CHANGES | COMMENT\n\nVERDICT: APPROVE\n")).toBeNull();
+  expect(verdictOf("**VERDICT: APPROVE**\n\nREQUEST_CHANGES — none left\n")).toBeNull();
+  expect(verdictOf("Output exactly this format:\nVERDICT: APPROVE | REQUEST_CHANGES | COMMENT\n\nVERDICT: REQUEST_CHANGES\n"))
+    .toBe("REQUEST_CHANGES");
+});
+
+test("a labelled verdict line outranks bare finding lines (review round 1)", () => {
+  expect(verdictOf("VERDICT: REQUEST_CHANGES\n\nCOMMENT — src/example/beta.ts:9 — naming\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("**VERDICT: COMMENT**\n\nREQUEST_CHANGES — the guard is optional\n")).toBe("COMMENT");
+});
+
+test("a conditional clause after an approval takes it back (review round 1)", () => {
+  expect(verdictOf("**VERDICT: APPROVE** (after fixes)\n")).toBeNull();
+  expect(verdictOf("Verdict: APPROVE should be withheld until CI\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE when the flake is fixed\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE, assuming the migration was dry-run\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE provided CI stays green\n")).toBeNull();
+  expect(verdictOf("**VERDICT: APPROVE** (NO FINDINGS)\n")).toBe("APPROVE");
+});
