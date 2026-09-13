@@ -21,6 +21,7 @@ import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
 import { resolveSpawnLineage, SpawnParentError } from "@/lib/agent/spawnParent";
+import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
 import {
   SpawnAdmissionError,
   SpawnAdmissionFenceConflictError,
@@ -57,8 +58,9 @@ import type { ApiError } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
-import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
+import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
+import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
 
 const SUGGEST_SCAN_LIMIT = 80;
 const SUGGEST_MAX = 10;
@@ -218,7 +220,7 @@ export async function executeSpawnRequest(
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown };
+  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -238,8 +240,10 @@ export async function executeSpawnRequest(
   const requestedPlugins = normalizeSpawnPlugins(body.plugins);
   if (!requestedPlugins.ok) return NextResponse.json({ error: requestedPlugins.error }, { status: 400 });
 
-  const lineageError = agentSpawnLineageError(req, body);
-  if (lineageError) return NextResponse.json({ error: lineageError }, { status: 400 });
+  /* The caller is established BEFORE the first refusal that writes a fence
+     (#1641). The 403 itself still waits until after validation, so a stranger
+     learns the ordinary refusal and no more — but an unauthenticated one can
+     never burn another caller's downstream key. */
   const agentInitiated = isAgentInitiatedSpawn(req);
   let registryForCaller: ReturnType<SpawnCommandDependencies["registry"]> | null = null;
   let authenticatedCaller: AuthenticatedSpawnCaller | null = null;
@@ -257,22 +261,24 @@ export async function executeSpawnRequest(
       };
     }
   }
+  /* Every pre-reservation refusal below records the request-bound fence, so a
+     caller whose dispatch was interrupted can recover this exact key to a
+     terminal NOT_EXECUTED instead of an indefinite unknown (#1641). */
+  const refuse = (error: string): NextResponse<ApiError> => {
+    if (!authenticatedCallerError) {
+      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
+    }
+    return NextResponse.json({ error }, { status: 400 });
+  };
+  const lineageError = agentSpawnLineageError(req, body);
+  if (lineageError) return refuse(lineageError);
   if (body.allowSubagents !== undefined && typeof body.allowSubagents !== "boolean") {
     return NextResponse.json({ error: "allowSubagents must be a boolean" }, { status: 400 });
   }
   const role = resolveSpawnRole(body);
-  if (!role.ok) {
-    if (!authenticatedCallerError) {
-      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, role.error, dependencies);
-    }
-    return NextResponse.json({ error: role.error }, { status: 400 });
-  }
-  if (role.value?.role === "reviewer" && (typeof body.reviews !== "string" || !body.reviews.trim())) {
-    return NextResponse.json({ error: "reviewer requires reviews" }, { status: 400 });
-  }
-  if (role.value?.role !== "reviewer" && body.reviews !== undefined) {
-    return NextResponse.json({ error: "reviews requires role: reviewer" }, { status: 400 });
-  }
+  if (!role.ok) return refuse(role.error);
+  const reviewsError = mandatoryReviewsError(role.value?.role ?? null, body);
+  if (reviewsError) return refuse(reviewsError);
   /* Reviewer isolation (#393): reviewer/verifier launch profiles always carry
      allowSubagents:false, so every engine denies native multi-agent tools on
      fresh launch, resume, and restart adoption. Even the operator lane cannot
@@ -560,6 +566,12 @@ export async function executeSpawnRequest(
     const launchDisplay = (!reportClassGrant && (userPrompt.trim() || images.length))
       ? { ["prompt"]: userPrompt, images: images.length, echo: prompt }
       : null;
+    /* The explicit task of a band-local «+ Agent» (#1586): the only launch
+       target the HTTP body alone knows. It rides on the reservation, where the
+       registry validates it and commits the membership in the same step it
+       uses for every other launch, so a task that does not exist aborts the
+       launch before anything is actuated. */
+    const explicitTaskIds = typeof body.taskId === "string" && body.taskId.trim() ? [body.taskId.trim()] : null;
     /* Both a runnable launch and an explicit-account preflight failure reserve
        the same durable launch identity. Keep the request assembled at this
        seam so the terminal receipt retains the lineage, origin, grants and
@@ -594,6 +606,7 @@ export async function executeSpawnRequest(
       launchProfile,
       clientAttemptId,
       requestDigest,
+      ...(explicitTaskIds ? { taskIds: explicitTaskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
          draft and canonical delivered echo persist through scan lag. */
       launchDisplay,
@@ -811,6 +824,42 @@ export async function executeSpawnRequest(
     });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created") launchId = begun.receipt.launchId;
+    /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
+       longer refuses a launch that NAMES an account outside the project's pool,
+       so the crossing has to be visible instead — the project view renders this
+       journal beside the pool, and an account carrying work it is not bound to
+       must read as a decision somebody made rather than as a fence that quietly
+       stopped holding. Recorded once the receipt exists, because that is the
+       point past which this account is what the work runs on, and only for the
+       account the request actually named: a degraded pin landed on a different
+       account and nobody chose that one. Within the pool it records nothing.
+
+       `created` ONLY. A replay of the same `clientAttemptId` — a lost response
+       retried, an existing attempt resumed — is the same launch arriving twice,
+       not a second choice, and the journal is capped: duplicates evict the
+       older crossings it exists to keep. */
+    const accountOverride = begun.kind === "created" && requestedAccountId && account.accountId === requestedAccountId
+      ? attributeNamedAccountChoice({
+        engine,
+        project: spawnProject,
+        accountId: requestedAccountId,
+        conversationId: begun.receipt.conversationId ?? null,
+        actor: authenticatedCaller?.kind === "agent"
+          ? { kind: "agent", conversationId: authenticatedCaller.conversationId }
+          : { kind: "operator" },
+        via: "launch",
+      }) ?? undefined
+      : undefined;
+    /* THE NOTICE RIDES THE ANSWER, as it does at the two switch seams
+       (`delivery.ts`, `structuredControls.ts`). It is the contract
+       `attributeNamedAccountChoice` states: a journal that would not take the
+       record answers `recorded: false` with the reason, and the caller's answer
+       carries it to whoever made the choice. That matters more here than there
+       — this journal is now the ONLY thing that makes an out-of-pool launch
+       visible, so a state directory that cannot be written to would otherwise
+       let the crossing happen behind a perfectly ordinary spawn response. */
+    const withAccountOverride = (body: SpawnResponse): SpawnResponse =>
+      (accountOverride ? { ...body, accountOverride } : body);
     let queuedReceipt = begun.receipt;
     if (queuedUntil && queuedTitle && requestedAccountId) {
       const existingQueue = begun.receipt.queuedPinnedSpawn;
@@ -989,10 +1038,10 @@ export async function executeSpawnRequest(
         && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
         await adoptMaterializedAttempt(receipt, receipt.artifactPath);
       }
-      const response = spawnResponseForReceipt(receipt, receipt.artifactPath, {
+      const response = withAccountOverride(spawnResponseForReceipt(receipt, receipt.artifactPath, {
         structured,
         initialMessage: queuedUntil ? "queued" : initialMessage,
-      });
+      }));
       return NextResponse.json(response, { status: spawnReplayStatus(response, structured) });
     }
     if (queuedUntil) {
@@ -1001,10 +1050,10 @@ export async function executeSpawnRequest(
         ? registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt
         : queuedReceipt;
       return NextResponse.json(
-        spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
+        withAccountOverride(spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
           structured: transport === "structured",
           initialMessage: "queued",
-        }),
+        })),
         { status: 202 },
       );
     }
@@ -1017,9 +1066,9 @@ export async function executeSpawnRequest(
       catch (error) { throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error)); }
       deferStructuredSpawn(begun.receipt, runtimeClient, imageRefs);
       return NextResponse.json(
-        spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
+        withAccountOverride(spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
           structured: true,
-        }),
+        })),
         { status: 202 },
       );
     }
@@ -1059,11 +1108,11 @@ export async function executeSpawnRequest(
     if (!pane.host || !await verifyTmuxHostEvidence(pane.host)) {
       agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API confirmation");
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(spawnResponseForReceipt(lost, childPath));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
     if (!childPath || !key || !pane.receipt) {
       const pending = agentRegistry().markSpawnPathPending(begun.receipt.launchId);
-      return NextResponse.json(spawnResponseForReceipt(pending, null));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(pending, null)));
     }
     const settled = agentRegistry().settleSpawn(pane.receipt.launchId, {
       key,
@@ -1076,7 +1125,7 @@ export async function executeSpawnRequest(
       claimOwner: null,
       pendingAction: "spawn",
     });
-    if (settled.kind === "conflict") return NextResponse.json(spawnResponseForReceipt(settled.receipt));
+    if (settled.kind === "conflict") return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt)));
     recordActualLaunchAccount(settled.receipt, account.accountId, childPath);
     await adoptMaterializedAttempt(settled.receipt, childPath);
     if (runtimeClient && operationId) {
@@ -1103,9 +1152,9 @@ export async function executeSpawnRequest(
     if (!await verifyTmuxHostEvidence(pane.host)) {
       agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API response");
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(spawnResponseForReceipt(lost, childPath));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
-    return NextResponse.json(spawnResponseForReceipt(settled.receipt, childPath));
+    return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt, childPath)));
   } catch (error) {
     const receipt = launchId ? registry.readOnlySnapshot().receipts[launchId] : null;
     if (!receipt || receipt.pane === null) {
@@ -1113,6 +1162,7 @@ export async function executeSpawnRequest(
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     /* Typed terminal admission rejection (#393): the durable receipt already
