@@ -9027,3 +9027,150 @@ test("a spawn interrupted by a restart with its wait already spent parks with th
   });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-interrupted" });
 });
+
+test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute budget (#1678 review 2)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls <= 7) {
+      onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    if (spawnCalls === 8) throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
+    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  /* Seven host failures spend 1+2+4+8+16+32+60 = 123 s of the ten-minute budget. */
+  for (let round = 0; round < 7; round += 1) {
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    advance(scheduled.at(-1)!);
+  }
+  expect(spawnCalls).toBe(7);
+
+  /* The eighth activation meets the busy lock 123 s in; the wait keeps the host budget. */
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(8);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+  });
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 8, budgetMs: 600_000, retryMaxMs: 60_000 });
+  expect(scheduled.at(-1)).toBe(60_000);
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(9);
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "plan", state: "running" } });
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a busy-lock wait alone still ends at thirty seconds (#1678 review 2)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async () => { throw new Error("account mutation is busy; retry shortly"); };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+  for (let round = 0; round < 8 && loadPipelines()[0]!.state === "running"; round += 1) {
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") advance(scheduled.at(-1)!);
+  }
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "stage spawn failed after 6 retries over 30s: account mutation is busy",
+  });
+});
+
+test("the reviewer launch deferral keeps its status line through a tick before the retry is due (#1678 review 2)", async () => {
+  const h = harness();
+  const { busy } = await reviewFlowEndedOnBusyAccount(h);
+  frozenWallClock(h);
+  Object.assign(h.ports, { scheduleTick: () => {} });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const deferred = loadPipelines()[0]!.stateDetail;
+  expect(deferred).toMatch(/^review flow reviewer launch deferred: account mutation is busy; retry at /);
+
+  /* The fresh round met the lock again before the backoff fell due. */
+  busy();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: deferred });
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(1);
+});
+
+test("a retry after an in-activation handshake retry never reuses a client attempt id (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const clientAttemptIds: string[] = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
+    if (spawnCalls === 2) {
+      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-host-2"
+    ? failedReceipt("launch-host-2", "conversation_host_2", HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1, spawnAttempts: 2 });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+
+  expect(spawnCalls).toBe(3);
+  expect(new Set(clientAttemptIds).size).toBe(3);
+  expect(clientAttemptIds[0]).toBe(`pipeline_${created.id}_plan_1`);
+  expect(clientAttemptIds[2]).not.toBe(clientAttemptIds[1]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
+});
+
+test("a retry after a restart never reuses the retired launch's client attempt id (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  Object.assign(h.ports, { scheduleTick: () => {} });
+  interruptedSpawnAttempt(h, h.ports.now());
+
+  await tickPipelines([], h.ports);
+  h.advanceWallClock(1_000);
+  await tickPipelines([], h.ports);
+
+  const spawnCall = h.calls.find((call) => call.startsWith("spawn:"))!;
+  expect(spawnCall).toBeDefined();
+  expect(spawnCall).not.toContain(`spawn:pipeline_${created.id}_plan_1:`);
+  expect(spawnCall).toContain("spawn:handshake_retry_1_");
+});

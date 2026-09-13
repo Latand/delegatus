@@ -185,6 +185,16 @@ export type PipelineStageAttempt = {
     startedAt: string;
     rounds: number;
     retryAfter: string;
+    /** The largest budget any round of this wait asked for, and its backoff
+        cap (#1678): a later round of a cheaper class keeps the wait's budget.
+        Absent on waits persisted before these fields existed, which then read
+        as the round's own class. */
+    budgetMs?: number;
+    retryMaxMs?: number;
+    /** Spawn calls this activation has made, immediate handshake retries
+        included; each consumed a client attempt id, so the next retry index
+        starts here rather than at the round count. */
+    spawnAttempts?: number;
   };
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was

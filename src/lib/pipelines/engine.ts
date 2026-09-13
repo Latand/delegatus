@@ -2297,11 +2297,19 @@ async function tickRunStage(
       /* Rounds already booked by earlier ticks of this same activation. The
          retry index continues across them, so every attempt keeps a distinct
          launch identity even though the wait now spans ticks (#1056). */
-      const priorControllerRounds = attempt.controllerWait?.rounds ?? 0;
+      /* Every spawn call of this activation consumes one client attempt id,
+         including the immediate handshake retries inside one tick, so the
+         index counts spawn calls rather than wait rounds (review round 2).
+         A wait lost to a restart still leaves its retired launches behind,
+         each of which consumed an id, so those count as a floor. */
+      const priorSpawnAttempts = Math.max(
+        attempt.controllerWait?.spawnAttempts ?? 0,
+        attempt.retiredLaunches?.length ?? 0,
+      );
       while (true) {
         spawnAttempt += 1;
         try {
-          const retryIndex = priorControllerRounds + spawnAttempt - 1;
+          const retryIndex = priorSpawnAttempts + spawnAttempt - 1;
           spawned = await ports.spawnAgent({
             ...spawnInput,
             clientAttemptId: retryIndex === 0
@@ -2363,12 +2371,14 @@ async function tickRunStage(
           if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
           if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
           if (deferred === "settled") throw new Error(controllerFailure);
+          attempt.controllerWait!.spawnAttempts = priorSpawnAttempts + spawnAttempt;
           persist();
           return;
         }
         if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
+        attempt.controllerWait!.spawnAttempts = priorSpawnAttempts + spawnAttempt;
         attempt.state = "pending";
         setCursorState(pipeline, stage.id, "pending");
         syncControllerWaitStateDetail(pipeline, attempt, controllerFailure);
@@ -2892,6 +2902,11 @@ async function tickReviewStage(
     attempt.reviewHeadSha = capturedReviewHead;
     persist();
   }
+  /* Before the status line is reconciled below: a launch retry whose backoff
+     has not fallen due keeps its "deferred; retry at" detail on the board
+     (review round 2), and the flow's needs_decision is not terminal for it. */
+  const deferredLaunch = deferContendedReviewerLaunch(pipeline, stage, attempt, flow, ports);
+  if (deferredLaunch === "waiting") return;
   const retryDetail = reviewFlowRetryDetail(flow);
   if (retryDetail) {
     pipeline.stateDetail = retryDetail;
@@ -2916,8 +2931,6 @@ async function tickReviewStage(
     persist();
     commitPassedStage(pipeline, stage, attempt, ports);
   } else {
-    const deferredLaunch = deferContendedReviewerLaunch(pipeline, stage, attempt, flow, ports);
-    if (deferredLaunch === "waiting") return;
     const terminalError = terminalReviewFlowError(flow);
     if (terminalError) {
       const exhausted = deferredLaunch === "exhausted"
@@ -3388,17 +3401,25 @@ function bookControllerWaitRound(
 ): "waiting" | "exhausted" {
   const nowMs = unixMs(now);
   const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
-  const remainingMs = budget.budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
+  /* One wait keeps the largest budget any of its rounds asked for (review
+     round 2): a busy-lock sighting a minute into a runtime-host outage must
+     not cut the host's ten minutes down to the lock's thirty seconds. */
+  const budgetMs = Math.max(wait.budgetMs ?? 0, budget.budgetMs);
+  const retryMaxMs = Math.max(wait.retryMaxMs ?? 0, budget.retryMaxMs);
+  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
   if (remainingMs <= 0) return "exhausted";
   const delayMs = Math.min(
-    budget.retryMaxMs,
+    retryMaxMs,
     SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
     remainingMs,
   );
   attempt.controllerWait = {
+    ...wait,
     startedAt: wait.startedAt,
     rounds: wait.rounds + 1,
     retryAfter: new Date(nowMs + delayMs).toISOString(),
+    budgetMs,
+    retryMaxMs,
   };
   ports.scheduleTick?.(delayMs);
   return "waiting";
