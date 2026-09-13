@@ -77,3 +77,83 @@ test("counts finding blocks from headings, severity bullets, or nothing at all",
   expect(countFindingBlocks(PROSE_BULLETS)).toBe(2);
   expect(countFindingBlocks("VERDICT: APPROVE\n\nThe change is scoped and the tests cover it.\n")).toBe(0);
 });
+
+const verdictOf = (text: string) => parseReview(text, null)?.verdict ?? null;
+
+test("reads a verdict line wrapped in Markdown emphasis or led by a heading (#1682)", () => {
+  expect(verdictOf("Summary.\n\n**VERDICT: APPROVE**\n")).toBe("APPROVE");
+  expect(verdictOf("Summary.\n\n__VERDICT: APPROVE__\n")).toBe("APPROVE");
+  expect(verdictOf("Summary.\n\n***VERDICT: COMMENT***\n")).toBe("COMMENT");
+  expect(verdictOf("## VERDICT: APPROVE\n\nSummary.\n")).toBe("APPROVE");
+  expect(verdictOf("### **Verdict:** REQUEST_CHANGES\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("**VERDICT:** COMMENT\n")).toBe("COMMENT");
+  expect(verdictOf("**Verdict**: APPROVE\n")).toBe("APPROVE");
+  expect(verdictOf("Verdict: **REQUEST_CHANGES**\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("Summary.\r\n\r\n**VERDICT: APPROVE**\r\n")).toBe("APPROVE");
+});
+
+test("keeps the trailing notes reviewers put after an emphasized verdict (#1682)", () => {
+  expect(verdictOf("**VERDICT: APPROVE** at `a1b2c3d`\n")).toBe("APPROVE");
+  expect(verdictOf("## VERDICT: APPROVE — NO FINDINGS\n")).toBe("APPROVE");
+  expect(verdictOf("**VERDICT: APPROVE — NO FINDINGS**\n")).toBe("APPROVE");
+  expect(verdictOf("**VERDICT: REQUEST_CHANGES** for reviewed SHA `a1b2c3d`\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("**VERDICT: APPROVE** — only cosmetic notes remain\n")).toBe("APPROVE");
+});
+
+test("keeps the plain verdict lines the parser already accepted", () => {
+  expect(verdictOf("VERDICT: REQUEST_CHANGES\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("VERDICT: REQUEST_CHANGES — 3 HIGH, 2 MEDIUM, 1 LOW\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("VERDICT: APPROVE  \n")).toBe("APPROVE");
+  expect(verdictOf("APPROVE — NO FINDINGS\n")).toBe("APPROVE");
+  expect(verdictOf("REQUEST_CHANGES\n\n1. High — src/example/alpha.ts:4 — broken\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("REQUEST_CHANGES at `a1b2c3d`.\n")).toBe("REQUEST_CHANGES");
+  expect(verdictOf("APPROVE for this stage: the deliverable is complete.\n")).toBe("APPROVE");
+  expect(verdictOf("VERDICT: APPROVE\n\nDetails.\n\n**VERDICT: APPROVE**\n")).toBe("APPROVE");
+});
+
+test("a verdict word inside prose, a finding heading or a longer token is not a verdict", () => {
+  expect(verdictOf("I would approve this once tests pass.\n")).toBeNull();
+  expect(verdictOf("The reviewer ends with **VERDICT: APPROVE** when the diff is clean.\n")).toBeNull();
+  expect(verdictOf("Example: **VERDICT: APPROVE**\n")).toBeNull();
+  expect(verdictOf("- **VERDICT: APPROVE**\n")).toBeNull();
+  expect(verdictOf("**APPROVE**\n")).toBeNull();
+  expect(verdictOf("### COMMENT — the cache key ignores the locale\n")).toBeNull();
+  expect(verdictOf("**Verdict: APPROVED.**\n")).toBeNull();
+  expect(verdictOf("- Verdict: `APPROVE_DECISION`\n")).toBeNull();
+  expect(verdictOf("COMMENT-level notes only.\n")).toBeNull();
+  expect(verdictOf("VERDICT: REQUEST_CHANGES\n\n### COMMENT — the cache key ignores the locale\n**COMMENT — `src/example/alpha.ts:4`** — naming\n"))
+    .toBe("REQUEST_CHANGES");
+});
+
+test("a quoted prior review or a code snippet never supplies the verdict", () => {
+  expect(verdictOf("Round 1 said:\n\n> **VERDICT: APPROVE**\n> VERDICT: APPROVE\n")).toBeNull();
+  expect(verdictOf("Format:\n\n```\nVERDICT: APPROVE\n```\n")).toBeNull();
+  expect(verdictOf("Format:\n\n~~~markdown\n**VERDICT: APPROVE**\n~~~\n")).toBeNull();
+  expect(verdictOf("````md\n```\nVERDICT: APPROVE\n```\n````\n")).toBeNull();
+  expect(verdictOf("`VERDICT: APPROVE`\n")).toBeNull();
+  expect(verdictOf("Format:\n\n    VERDICT: APPROVE\n")).toBeNull();
+  expect(verdictOf("Previous round:\n\n> **VERDICT: APPROVE**\n\nThe fix regressed.\n\n**VERDICT: REQUEST_CHANGES**\n"))
+    .toBe("REQUEST_CHANGES");
+  expect(verdictOf("```\nVERDICT: REQUEST_CHANGES\n```\n\n**VERDICT: APPROVE**\n")).toBe("APPROVE");
+});
+
+test("an embedded prompt, a negated or conditional verdict, or a question is not a verdict", () => {
+  expect(verdictOf("Output exactly this format:\nVERDICT: APPROVE | REQUEST_CHANGES | COMMENT\n")).toBeNull();
+  expect(verdictOf("**VERDICT: APPROVE or REQUEST_CHANGES**\n")).toBeNull();
+  expect(verdictOf("APPROVE requires findings to be empty.\n")).toBeNull();
+  expect(verdictOf("APPROVE received. No findings require changes.\n")).toBeNull();
+  expect(verdictOf("REQUEST_CHANGES is not the right verdict here.\n")).toBeNull();
+  expect(verdictOf("APPROVE: no blocking issues remain\nREQUEST_CHANGES: required fixes\nCOMMENT: non-blocking notes\n")).toBeNull();
+  expect(verdictOf("**VERDICT: NOT APPROVE**\n")).toBeNull();
+  expect(verdictOf("VERDICT: ~~APPROVE~~\n")).toBeNull();
+  expect(verdictOf("**VERDICT: APPROVE** once tests pass\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE if CI stays green\n")).toBeNull();
+  expect(verdictOf("## VERDICT: APPROVE — not yet\n")).toBeNull();
+  expect(verdictOf("**VERDICT: APPROVE** only if CI stays green\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE?\n")).toBeNull();
+});
+
+test("conflicting verdict lines yield no verdict instead of the first one", () => {
+  expect(verdictOf("VERDICT: APPROVE\n\nOn a second look the migration drops rows.\n\nVERDICT: REQUEST_CHANGES\n")).toBeNull();
+  expect(verdictOf("**VERDICT: REQUEST_CHANGES**\n\nActually fine.\n\n**VERDICT: APPROVE**\n")).toBeNull();
+});

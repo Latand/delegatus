@@ -20,7 +20,31 @@ export interface ReviewCardItem {
 }
 
 export const RAW_DEBUG_KEEP = 24_000;
-export const VERDICT_LINE_RE = /^\s*(?:VERDICT:\s*)?(REQUEST_CHANGES|APPROVE|COMMENT)\b/m;
+type ReviewVerdict = NonNullable<ReviewCardItem["verdict"]>;
+/** Emphasis runs reviewers wrap around a verdict: `*`, `**`, `***`, `_`, `__`, `___`. */
+const EMPHASIS = String.raw`[*_]{1,3}`;
+/** The `VERDICT:` label with the Markdown reviewers put around it — a heading
+    marker, emphasis around the label, the value or the whole line — as in
+    `**VERDICT: APPROVE**`, `## VERDICT: APPROVE`, `**Verdict:** APPROVE` and
+    `Verdict: **APPROVE**` (#1682). */
+const VERDICT_LABEL =
+  String.raw`(?:#{1,6}[ \t]+)?(?:${EMPHASIS}[ \t]*)?(?:VERDICT|Verdict|verdict)[*_]{0,3}[ \t]*:[ \t]*(?:${EMPHASIS}[ \t]*)?`;
+/** The verdict token and its closing emphasis; `APPROVED`, `APPROVE_DECISION`
+    and `COMMENT-level` are other words. */
+const VERDICT_TOKEN = String.raw`(REQUEST_CHANGES|APPROVE|COMMENT)[*_]{0,3}(?![A-Za-z0-9_]|-[A-Za-z0-9])`;
+/** One verdict line: the labelled form, or the bare token as a plain line. The
+    Markdown forms need the label, so finding headings like `### COMMENT — …`
+    stay findings. Up to three spaces of indent; four make a code block. */
+export const VERDICT_LINE_RE = new RegExp(String.raw`^ {0,3}(?:${VERDICT_LABEL})?${VERDICT_TOKEN}`, "m");
+const ANY_VERDICT_TOKEN_RE = /(?<![\w-])(?:REQUEST_CHANGES|APPROVE|COMMENT)(?![\w-])/;
+/** A negation or condition straight after the token takes the verdict back:
+    `VERDICT: APPROVE once tests pass`, `## VERDICT: APPROVE — not yet`. */
+const HEDGED_VERDICT_RE =
+  /^[\s*_—–:,(-]*(?:not|never|unless|if|once|until|pending|would|cannot|only\s+(?:if|when|once|after))\b/i;
+/** A bare token that runs on into a sentence is prose about a verdict:
+    `APPROVE requires findings to be empty`, `APPROVE received.`. Reviewers do
+    name what they judged with `at` and `for`, as in `REQUEST_CHANGES at <sha>`. */
+const BARE_TOKEN_SENTENCE_RE = /^(?:[ \t]+(?!(?:at|for)\b)[a-z0-9]|[ \t]*=)/;
 const FINDING_ITEM_RE = /^\s*(\d+)[.)]\s+(.*)$/;
 const FINDING_HEADING_RE = /^\s*#{1,6}\s+finding\s+\d+\b.*$/i;
 /** Reviewers label the same fields with any mix of leading bullet and bold, so
@@ -178,8 +202,51 @@ export function countFindingBlocks(text: string): number {
   return bullets;
 }
 
+function verdictFromLine(line: string): ReviewVerdict | null {
+  const match = line.match(VERDICT_LINE_RE);
+  if (!match) return null;
+  const verdict = match[1] as ReviewVerdict;
+  const rest = line.slice(match[0].length);
+  if (/^[ \t]*\?/.test(rest) || ANY_VERDICT_TOKEN_RE.test(rest) || HEDGED_VERDICT_RE.test(rest)) return null;
+  const bare = match[0].trimStart().startsWith(verdict);
+  if (bare && BARE_TOKEN_SENTENCE_RE.test(rest)) return null;
+  return verdict;
+}
+
+/** Lines a reviewer wrote as its own prose. Fenced code and blockquotes hold
+    examples and quoted earlier reviews, so their lines are skipped. */
+function* ownProseLines(text: string): Generator<string> {
+  let fence: { marker: string; length: number } | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceMatch) {
+      const token = fenceMatch[1]!;
+      if (!fence) fence = { marker: token[0]!, length: token.length };
+      else if (token[0] === fence.marker && token.length >= fence.length && !fenceMatch[2]!.trim()) fence = null;
+      continue;
+    }
+    if (fence || /^\s*>/.test(line)) continue;
+    yield line;
+  }
+}
+
+/** The review's verdict: every verdict line in its own prose must name the
+    same one. Lines that disagree leave no verdict, so a changed mind or a
+    pasted template cannot turn into an approval. */
+export function reviewVerdict(text: string): ReviewVerdict | null {
+  if (!/REQUEST_CHANGES|APPROVE|COMMENT/.test(text)) return null;
+  let verdict: ReviewVerdict | null = null;
+  for (const line of ownProseLines(text)) {
+    const found = verdictFromLine(line);
+    if (!found) continue;
+    if (verdict && verdict !== found) return null;
+    verdict = found;
+  }
+  return verdict;
+}
+
 export function parseReview(text: string, ts: unknown): ReviewCardItem | null {
-  const verdict = text.match(VERDICT_LINE_RE)?.[1] as ReviewCardItem["verdict"] | undefined;
+  const verdict = reviewVerdict(text);
   if (!verdict) return null;
   const findings = parseStructuredFindings(text);
   const hasStructuredFindings = findings.length > 0;
