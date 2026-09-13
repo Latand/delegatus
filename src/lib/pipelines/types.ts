@@ -196,7 +196,9 @@ export type PipelineStageAttempt = {
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
       a restart that interrupts a call still counts it, and the retry that
-      follows cannot replay the interrupted call's id. */
+      follows cannot replay the interrupted call's id. An attempt an engine
+      without this count left behind starts it past every id that engine
+      could have spent (#1678 review 3). */
   spawnCalls?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was

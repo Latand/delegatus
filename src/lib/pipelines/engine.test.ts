@@ -2451,6 +2451,8 @@ test("a controller that is between publications is never spawned into (#1191)", 
   await tickPipelines([], h.ports);
 
   expect(spawnCalls).toBe(1);
+  /* A fresh attempt keeps its base id through the wait (#1678 review 3). */
+  expect(h.calls.find((call) => call.startsWith("spawn:"))).not.toContain("handshake_retry_");
   expect(loadPipelines()[0]!).toMatchObject({
     state: "running",
     cursor: { stageId: "plan", state: "running" },
@@ -9172,7 +9174,10 @@ test("a retry after a restart never reuses the retired launch's client attempt i
   const spawnCall = h.calls.find((call) => call.startsWith("spawn:"))!;
   expect(spawnCall).toBeDefined();
   expect(spawnCall).not.toContain(`spawn:pipeline_${created.id}_plan_1:`);
-  expect(spawnCall).toContain("spawn:handshake_retry_1_");
+  /* The fixture carries no call count, so the retry starts past every id an
+     uncounted engine could have spent: the round the recovery booked plus
+     the three calls of one activation (#1678 review 3). */
+  expect(spawnCall).toContain("spawn:handshake_retry_4_");
 });
 
 test("a spawn call is counted before it is made, so a restart that interrupts it cannot hand its client attempt id to the retry (#1678 review 2)", async () => {
@@ -9240,4 +9245,105 @@ test("a spawn call is counted before it is made, so a restart that interrupts it
   expect(clientAttemptIds).not.toContain(interruptedId);
   expect(new Set([...clientAttemptIds, interruptedId]).size).toBe(4);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1", spawnCalls: 4 });
+});
+
+/* The engine before #1678 numbered a spawn call `rounds + call - 1` and
+   persisted no call count, so the ids it spent are known only up to that
+   bound: a handshake retry before the controller failure spends one more id
+   than the round it books. These fixtures let the current engine create the
+   attempt through one such activation, then strip what that engine did not
+   write. A registry that meets a spent id replays or rejects that launch,
+   which parks the stage. */
+async function legacySpawnAttempt(h: ReturnType<typeof harness>) {
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let fixtureCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    fixtureCalls += 1;
+    if (fixtureCalls === 1) throw new Error("structured initial message was not acknowledged");
+    onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-fixture"
+    ? failedReceipt("launch-fixture", "conversation_fixture", HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+  await tickPipelines([], h.ports);
+  expect(fixtureCalls).toBe(2);
+
+  const baseId = `pipeline_${created.id}_plan_1`;
+  const spent = [baseId, `handshake_retry_1_${baseId}`];
+  const clientAttemptIds: string[] = [];
+  h.ports.spawnAgent = async (input, onReserved) => {
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spent.includes(input.clientAttemptId)) {
+      throw new Error(`client attempt id ${input.clientAttemptId} replays launch-legacy-2, whose receipt is failed`);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-legacy-2"
+    ? failedReceipt("launch-legacy-2", "conversation_legacy_2", HOST_UNAVAILABLE)
+    : null;
+  const legacy = loadPipelines()[0]!;
+  const attempt = legacy.runs[0]!.attempts[0]!;
+  const wait = attempt.controllerWait!;
+  delete attempt.spawnCalls;
+  delete attempt.retiredLaunches;
+  attempt.launchId = "launch-legacy-2";
+  attempt.conversationId = "conversation_legacy_2";
+  attempt.controllerWait = { startedAt: wait.startedAt, rounds: wait.rounds, retryAfter: wait.retryAfter };
+  return { legacy, attempt, spent, clientAttemptIds, advance, scheduled };
+}
+
+test("a spawn wait persisted by the engine before #1678 retries under an id that engine never spent (#1678 review 3)", async () => {
+  const h = harness();
+  const { legacy, attempt, spent, clientAttemptIds, advance, scheduled } = await legacySpawnAttempt(h);
+  /* Its last activation: a handshake retry, then a reservation that met an
+     unavailable runtime host. It booked round one and kept the launch. */
+  expect(attempt).toMatchObject({ state: "pending", controllerWait: { rounds: 1 } });
+  savePipelines([legacy]);
+
+  /* The deploy lands during a publication handoff, so the first activation
+     of this engine only waits; the count it records must keep the bound. */
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "rebinding" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", controllerWait: { rounds: 2 } });
+
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "ready" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(1);
+  expect(spent).not.toContain(clientAttemptIds[0]);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
+});
+
+test("a spawn the engine before #1678 left interrupted retries under an id that engine never spent (#1678 review 3)", async () => {
+  const h = harness();
+  const { legacy, attempt, spent, clientAttemptIds, advance, scheduled } = await legacySpawnAttempt(h);
+  /* A restart interrupted its handshake retry after the reservation, before
+     any wait was booked; the spawn layer then failed that receipt. */
+  attempt.state = "spawning";
+  delete attempt.controllerWait;
+  legacy.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  legacy.stateDetail = null;
+  savePipelines([legacy]);
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", retiredLaunches: [{ launchId: "launch-legacy-2" }] });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(1);
+  expect(spent).not.toContain(clientAttemptIds[0]);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
 });

@@ -2230,6 +2230,10 @@ async function tickRunStage(
        (structuredSpawn's publishHost), so an attempt issued now burns a real
        engine launch before it can fail. */
     if (publication === "rebinding") {
+      /* This wait precedes any spawn call of this engine, so it records the
+         count here: a fresh attempt starts at zero, and a later activation
+         cannot mistake the wait for one an earlier engine left mid-spawn. */
+      attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
         syncControllerWaitStateDetail(pipeline, attempt, null);
         persist();
@@ -2302,9 +2306,12 @@ async function tickRunStage(
            index counts spawn calls. The count is persisted before the call:
            a restart that interrupts the call still finds it counted, so the
            retry that follows the interrupted launch's retirement cannot
-           replay its id. Retired launches are a floor for an attempt
-           persisted before the count existed. */
-        const retryIndex = Math.max(attempt.spawnCalls ?? 0, attempt.retiredLaunches?.length ?? 0);
+           replay its id. An attempt persisted before the count existed starts
+           past every id the earlier engine could have spent. */
+        const retryIndex = Math.max(
+          attempt.spawnCalls ?? uncountedSpawnCallFloor(attempt),
+          attempt.retiredLaunches?.length ?? 0,
+        );
         attempt.spawnCalls = retryIndex + 1;
         persist();
         try {
@@ -3372,6 +3379,19 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function controllerWaitElapsedMs(attempt: PipelineStageAttempt, nowMs: number): number {
   const startedAt = attempt.controllerWait?.startedAt;
   return startedAt ? Math.max(0, nowMs - unixMs(startedAt)) : 0;
+}
+
+/**
+ * The first retry index past every client attempt id an engine without the
+ * persisted call count could have spent (#1678 review 3). That engine numbered
+ * a call `rounds + call - 1` inside an activation of up to
+ * SPAWN_HANDSHAKE_MAX_ATTEMPTS calls, and recorded only the rounds, so the
+ * bound is all it left behind. An attempt with no wait, launch or retired
+ * launch has made no call and keeps its base id.
+ */
+function uncountedSpawnCallFloor(attempt: PipelineStageAttempt): number {
+  if (!attempt.controllerWait && !attempt.launchId && !attempt.retiredLaunches?.length) return 0;
+  return (attempt.controllerWait?.rounds ?? 0) + SPAWN_HANDSHAKE_MAX_ATTEMPTS;
 }
 
 /**
