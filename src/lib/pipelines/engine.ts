@@ -156,6 +156,11 @@ export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId"
 export type PipelineSpawnReceipt = PipelineStageSpawn & {
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   error?: string | null;
+  /** A session identity was staged for this launch, so an engine host was
+      started and may have run its first turn before the receipt failed
+      (#1678). Independent of the identity fence that withholds `sessionId`
+      and `transcript` from an unpublished receipt. */
+  staged?: boolean;
 };
 
 export interface PipelinePorts {
@@ -974,6 +979,7 @@ export function defaultPipelinePorts(
         paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null,
         accountId: receipt.accountId,
         error: receipt.error,
+        staged: receipt.key !== null,
       };
     },
     claimSpawnRetry: (launchId, claimId) => {
@@ -1746,9 +1752,13 @@ const MISSING_IMPLEMENTER_TRANSCRIPT = "implementer transcript is missing";
  *
  * The evidence required before any resume is the registry naming the
  * implementer conversation's transcript: a conversation the Viewer does not
- * know is not a scan lag and parks as before. The resume is booked on the same
- * bounded wall-clock wait the host-unavailable spawn uses, so a transcript the
- * scan never lists ends in a truthful park that counts the resumes.
+ * know is not a scan lag and parks as before. Only a flow paused in
+ * `spawning` is resumed, the one phase the live run showed and the only one
+ * in which the round has not launched: the attempt's controller wait ends on
+ * launch evidence, so a pause in a later phase would end the wait on every
+ * resume and never reach exhaustion. The resume is booked on the same bounded
+ * wall-clock wait the host-unavailable spawn uses, so a transcript the scan
+ * never lists ends in a truthful park that counts the resumes.
  */
 function deferUnscannedImplementerTranscript(
   pipeline: Pipeline,
@@ -1758,11 +1768,10 @@ function deferUnscannedImplementerTranscript(
   implementer: PipelineStageAttempt,
   ports: PipelinePorts,
 ): "waiting" | "exhausted" | "not-applicable" {
-  if (flow.state !== "paused" || flow.stateDetail !== MISSING_IMPLEMENTER_TRANSCRIPT) return "not-applicable";
-  const registered = implementer.conversationId
-    ? ports.pathForConversation(implementer.conversationId) !== null
-      || ports.conversationRegistered?.(implementer.conversationId) === true
-    : false;
+  if (flow.state !== "paused" || flow.pausedState !== "spawning" || flow.stateDetail !== MISSING_IMPLEMENTER_TRANSCRIPT) {
+    return "not-applicable";
+  }
+  const registered = implementer.conversationId !== null && ports.pathForConversation(implementer.conversationId) !== null;
   if (!registered) return "not-applicable";
   const now = ports.now();
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
@@ -2352,6 +2361,7 @@ async function tickRunStage(
              reconcile adopts the launch on the next tick. */
           const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
           if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+          if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
           if (deferred === "settled") throw new Error(controllerFailure);
           persist();
           return;
@@ -2402,13 +2412,24 @@ async function tickRunStage(
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
       attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
-      /* A launch the spawn layer ended `failed` for a transient reason never
-         reached a host (#1678); the same bounded wait the live activation gets
-         applies, measured from the activation this process inherited. */
+      /* A launch the spawn layer ended `failed` for a transient reason gets
+         the same bounded wait the live activation gets (#1678). The budget
+         starts at this process's first sighting: the interrupted activation's
+         own clock includes the restart, which would spend the budget before a
+         single retry. A wait persisted from before the restart keeps its own
+         start, so its exhaustion still counts every round. */
       if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
         const now = ports.now();
-        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, attempt.startedAt ?? now, now, ports);
+        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
         if (deferred === "waiting") return;
+        if (deferred === "exhausted") {
+          park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
+          return;
+        }
+        if (deferred === "unsafe") {
+          park(pipeline, stagedLaunchRetryRefusal(receipt.error), attempt);
+          return;
+        }
       }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
         park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
@@ -3263,6 +3284,14 @@ function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
  * refused. `settled` means the receipt completed between the read and the
  * claim: that launch is alive, nothing is retired, and the caller parks so the
  * completed-receipt reconcile adopts it.
+ *
+ * `unsafe` is a failed receipt that had staged a session identity for a
+ * read-write stage: the spawn layer can fail a receipt after the engine host
+ * started and ran its first turn (a transport failure while marking the
+ * first message delivered), and the host is killed on that path, but the
+ * worktree may hold its partial edits. `retry-stage` resets the worktree
+ * before it re-dispatches; this path does not, so it refuses and the park
+ * says which action to take. A read-only stage has nothing to reset.
  */
 function deferRetiredLaunchRetry(
   pipeline: Pipeline,
@@ -3272,7 +3301,8 @@ function deferRetiredLaunchRetry(
   since: string,
   now: string,
   ports: PipelinePorts,
-): "waiting" | "exhausted" | "settled" {
+): "waiting" | "exhausted" | "settled" | "unsafe" {
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") return "unsafe";
   const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
   if (claim !== "claimed") return "settled";
   const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
@@ -3301,6 +3331,10 @@ function deferRetiredLaunchRetry(
 
 function controllerFailureReason(failure: string): string {
   return failure.replace(/; retry shortly$/, "");
+}
+
+function stagedLaunchRetryRefusal(failure: string): string {
+  return `${controllerFailureReason(failure)}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`;
 }
 
 function syncControllerWaitStateDetail(
