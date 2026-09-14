@@ -125,6 +125,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { recordReplySuggestions } from "@/lib/suggestions/store";
 import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
+import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
@@ -1320,7 +1321,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const taskId = required(args, "taskId");
   const patch = withoutKeys(args, ["taskId", "clientRequestId"]);
   const result = mutateTasks((tasks) => {
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true });
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", seatHolding: taskSeatHolding });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });

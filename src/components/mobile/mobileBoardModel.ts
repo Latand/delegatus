@@ -1,5 +1,6 @@
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
+import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -321,23 +322,6 @@ export function needsDecisionPipelineRows(
 }
 
 const NO_IDS: readonly string[] = [];
-
-/* The instants the engine stamps on a lane's rounds as it moves: a round
-   starting and ending, a launch waiting on its controller, a verdict re-read.
-   None of them changes while a lane sits parked on one decision. */
-function laneMovedAt(pipeline: Pipeline): number {
-  let latest = Number.NEGATIVE_INFINITY;
-  for (const run of pipeline.runs) {
-    for (const attempt of run.attempts) {
-      const stamps = [attempt.startedAt, attempt.completedAt, attempt.controllerWait?.startedAt, attempt.verdictRecovery?.startedAt, attempt.verdictRecovery?.lastCheckedAt];
-      for (const stamp of stamps) {
-        const at = stamp ? Date.parse(stamp) : Number.NaN;
-        if (at > latest) latest = at;
-      }
-    }
-  }
-  return latest;
-}
 
 /**
  * Whether the operator's Hide still covers the decision this lane waits on
