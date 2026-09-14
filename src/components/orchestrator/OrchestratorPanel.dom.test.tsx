@@ -1616,3 +1616,25 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
   expect(seatPosts[0]?.model).toBe("gpt-5.6-luna");
   expect(seatPosts[0]?.effort).toBe(expected || undefined);
 });
+
+test("a panel handed its host's seat read shows that seat and never polls the seat route itself (#1695 kanban seat)", async () => {
+  let seatReads = 0;
+  const stubbed = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith("/api/orchestrator/seat?")) seatReads += 1;
+    return stubbed(input, init);
+  }) as typeof fetch;
+  incumbentStatus = incumbent();
+  const read = { status: { seat: activeSeat(), pending: null, exists: true, viewerMcpRegistered: true }, failed: false, refresh: async () => undefined } as never;
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(
+    <OrchestratorPanel project="atlas" projectName="Atlas" projectCwd="/repos/atlas" files={[{ ...orchestratorFile, proc: "running", pid: 4_242 } as FileEntry]} onClose={() => undefined} variant="seat" seatRead={read} />,
+  ));
+  await settle();
+  flushSync(() => undefined);
+  expect(incumbentRow(host as unknown as HTMLElement)).not.toBeNull();
+  expect(seatReads).toBe(0);
+});

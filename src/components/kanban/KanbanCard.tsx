@@ -11,7 +11,7 @@ import type { FileEntry } from "@/lib/types";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { attemptStateLabel, pipelineStateLabel, stageAttempts, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
-import { CardInlineText } from "./CardInlineText";
+import { CardInlineText, withinEdit } from "./CardInlineText";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 
@@ -384,10 +384,24 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       ) : null}
       {!collapsed && incomingEdit ? (
-        <div className="notice info" role="status" data-edit-incoming={incomingEdit.field}>
+        /* Part of the edit: pressing its buttons, however slowly, never counts
+           as leaving the field, and only leaving both saves. */
+        <div
+          className="notice info"
+          role="status"
+          data-edit-incoming={incomingEdit.field}
+          data-edit-scope=""
+          onBlur={(event) => {
+            const cardElement = event.currentTarget.closest<HTMLElement>("[data-kanban-card]");
+            setTimeout(() => {
+              if (!cardElement?.isConnected || withinEdit(cardElement, document.activeElement)) return;
+              props.onCommitEdit(card.id);
+            }, 0);
+          }}
+        >
           <span className="msg">{t(incomingEdit.field === "title" ? "kanban.incomingTitle" : "kanban.incomingDescription", { value: incomingEdit.value })}</span>
-          <button type="button" onClick={() => props.onUseTheirs(card.id)}>{t("kanban.useTheirs")}</button>
-          <button type="button" onClick={() => props.onKeepMine(card.id)}>{t("kanban.keepMine")}</button>
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onUseTheirs(card.id)}>{t("kanban.useTheirs")}</button>
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onKeepMine(card.id)}>{t("kanban.keepMine")}</button>
         </div>
       ) : null}
       {!collapsed && resurfaced ? (

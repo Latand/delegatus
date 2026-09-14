@@ -432,3 +432,128 @@ test("a bulk hide shows every card at once and writes them one task at a time", 
   expect((await Promise.all(outcomes)).map((outcome) => outcome.kind)).toEqual(["failed", "saved", "saved"]);
   expect([...mutations.edits().keys()]).toEqual(["b", "c"]);
 });
+
+/* ── Polls older than this device's own later writes (#1695 K4b review) ── */
+
+const hiddenRow = (id: string, revision: number) => withFields(task(id, "done", revision), { groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator", admitted: [] } });
+
+async function answer(server: ReturnType<typeof scripted>, index: number, result: PatchResult) {
+  await flush();
+  server.patches[index]!.answer.resolve(result);
+  await flush();
+}
+
+test("hide then Undo: the poll carrying the hide's own revision keeps Undo on screen; the Undo's revision or a newer foreign one releases it", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "done", 1);
+  const hide = mutations.edit(original, { field: "hide", value: true });
+  await answer(server, 0, { ok: true, task: hiddenRow("a", 2) });
+  await hide;
+  const undo = mutations.edit(original, { field: "hide", value: false });
+  await answer(server, 1, { ok: true, task: task("a", "done", 3) });
+  await undo;
+  mutations.reconcile([hiddenRow("a", 2)]);
+  expect(mutations.edits().get("a")).toEqual({ hide: false });
+  mutations.reconcile([original]);
+  expect(mutations.edits().get("a")).toEqual({ hide: false });
+  /* A revision nobody on this device wrote is newer: it decides. */
+  mutations.reconcile([hiddenRow("a", 9)]);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("rename A then rename B: the poll carrying A's revision keeps B", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "assigned", 1);
+  const first = mutations.edit(original, { field: "text", value: "Title A" });
+  await answer(server, 0, { ok: true, task: withFields(task("a", "assigned", 2), { text: "Title A" }) });
+  await first;
+  const second = mutations.edit(original, { field: "text", value: "Title B" });
+  await answer(server, 1, { ok: true, task: withFields(task("a", "assigned", 3), { text: "Title B" }) });
+  await second;
+  expect(server.patches[1]!.body).toMatchObject({ expectedRevision: REV(2) });
+  mutations.reconcile([withFields(task("a", "assigned", 2), { text: "Title A" })]);
+  expect(mutations.edits().get("a")).toEqual({ text: "Title B" });
+  mutations.reconcile([withFields(task("a", "assigned", 3), { text: "Title B" })]);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("colour then hide: the colour's poll keeps both the colour and the hide", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "done", 1);
+  const colour = mutations.edit(original, { field: "color", value: "sky" });
+  await answer(server, 0, { ok: true, task: withFields(task("a", "done", 2), { color: "sky" }) });
+  await colour;
+  const hide = mutations.edit(original, { field: "hide", value: true });
+  await answer(server, 1, { ok: true, task: withFields(hiddenRow("a", 3), { color: "sky" }) });
+  await hide;
+  mutations.reconcile([withFields(task("a", "done", 2), { color: "sky" })]);
+  expect(mutations.edits().get("a")).toEqual({ color: "sky", hide: true });
+  mutations.reconcile([withFields(hiddenRow("a", 3), { color: "sky" })]);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("two status moves: the poll carrying the first move's revision keeps the second", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "inbox", 1);
+  const first = mutations.move(original, "assigned");
+  await answer(server, 0, { ok: true, task: task("a", "assigned", 2) });
+  await first;
+  const second = mutations.move(original, "done");
+  await answer(server, 1, { ok: true, task: task("a", "done", 3) });
+  await second;
+  mutations.reconcile([task("a", "assigned", 2)]);
+  expect(mutations.statuses().get("a")).toBe("done");
+  mutations.reconcile([task("a", "blocked", 7)]);
+  expect(mutations.statuses().has("a")).toBe(false);
+});
+
+test("a title saved while an agent rewrote only the description is put onto their text and sent once; a moved title is still a conflict", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = withFields(task("a", "assigned", 1), { text: "Old title\nOld description" });
+  const rebase = (stored: string) => (stored.split("\n", 1)[0] === "Old title" ? `New title${stored.slice(stored.indexOf("\n"))}` : null);
+  const done = mutations.edit(original, { field: "text", value: "New title\nOld description", rebase });
+  await answer(server, 0, { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", error: "stale" });
+  server.reads[0]!.answer.resolve(withFields(task("a", "assigned", 4), { text: "Old title\nAgent description" }));
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ text: "New title\nAgent description", expectedProject: "fixture", expectedRevision: REV(4) });
+  server.patches[1]!.answer.resolve({ ok: true, task: withFields(task("a", "assigned", 5), { text: "New title\nAgent description" }) });
+  expect((await done).kind).toBe("saved");
+  expect(mutations.edits().get("a")).toEqual({ text: "New title\nAgent description" });
+  expect(server.patches).toHaveLength(2);
+
+  const again = mutations.edit(withFields(task("b", "assigned", 1), { text: "Old title" }), { field: "text", value: "Mine", rebase: (stored) => (stored.split("\n", 1)[0] === "Old title" ? "Mine" : null) });
+  await answer(server, 2, { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", error: "stale" });
+  server.reads[1]!.answer.resolve(withFields(task("b", "assigned", 2), { text: "Agent title" }));
+  expect(await again).toMatchObject({ kind: "conflict", serverValue: "Agent title" });
+  expect(server.patches).toHaveLength(3);
+});
+
+test("a refused Undo of a saved hide keeps the group hidden on screen until a poll says otherwise", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "done", 1);
+  const hide = mutations.edit(original, { field: "hide", value: true });
+  await answer(server, 0, { ok: true, task: hiddenRow("a", 2) });
+  await hide;
+  const undo = mutations.edit(original, { field: "hide", value: false });
+  expect(mutations.edits().get("a")).toEqual({ hide: false });
+  await answer(server, 1, { ok: false, status: 500, error: "disk full" });
+  expect((await undo).kind).toBe("failed");
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  /* The row from before the hide is older than what the board shows. */
+  mutations.reconcile([original]);
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  mutations.reconcile([hiddenRow("a", 2)]);
+  expect(mutations.edits().has("a")).toBe(false);
+
+  /* With nothing confirmed before it, a refusal simply rolls back. */
+  const colour = mutations.edit(task("b", "inbox", 1), { field: "color", value: "sky" });
+  await answer(server, 2, { ok: false, status: 500, error: "disk full" });
+  await colour;
+  expect(mutations.edits().has("b")).toBe(false);
+});

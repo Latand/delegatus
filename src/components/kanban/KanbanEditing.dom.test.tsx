@@ -438,7 +438,22 @@ test("Hide finished tasks keeps working and seat groups, writes one task at a ti
   click(receiptAction(view.host, text));
   await tick();
   expect(patches.slice(3).map((patch) => [patch.id, (patch.body as { hide: boolean }).hide])).toEqual([[patches[1]!.id, false]]);
-  expect(receiptTexts(view.host)).toContain("2 tasks are back on the board");
+  /* The server keeps the first group hidden: it gets its own receipt with
+     Retry, the next unhide still goes out, and the count leaves it out. */
+  answers[3]!({ ok: false, status: 500, error: "disk full" });
+  await tick();
+  expect(patches.slice(4).map((patch) => [patch.id, (patch.body as { hide: boolean }).hide])).toEqual([[patches[2]!.id, false]]);
+  answers[4]!({ ok: true, task: task(patches[2]!.id, "done", "x", { revision: REV(3) }) });
+  await tick();
+  await tick();
+  const titles: Record<string, string> = { a: "Merge the approved queue adapter", b: "Compact board stages", c: "Universal interrupt" };
+  const refusedText = `Couldn't show «${titles[patches[1]!.id]}»: disk full`;
+  expect(receiptTexts(view.host)).toContain(refusedText);
+  expect(receiptAction(view.host, refusedText)?.textContent).toBe("Retry");
+  expect(receiptTexts(view.host)).toContain("1 task is back on the board");
+  expect(receiptTexts(view.host).some((line) => line?.startsWith("2 tasks"))).toBe(false);
+  expect(columnOf(view.host, patches[1]!.id)).toBeNull();
+  expect(columnOf(view.host, patches[2]!.id)).toBe("done");
 });
 
 test("colour comes from the card menu or C, shows at once, and is written on its own", async () => {
@@ -503,4 +518,127 @@ test("a hidden group that admits a new conversation comes back with a receipt sa
   expect(columnOf(view.host, "a")).toBeNull();
   await tick();
   expect(view.server.patches).toEqual([{ id: "a", body: { hide: true, expectedProject: "fixture", expectedRevision: REV(2) } }]);
+});
+
+/* ── Review follow-ups (#1695 K4b) ───────────────────────────────────────── */
+
+test("pressing Use theirs or Keep mine stays inside the edit: no save, however long the press, and leaving both saves the draft", async () => {
+  const view = mount([task("a", "assigned", "Repair old links"), task("b", "assigned", "Write the release notes")]);
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  type(editor(view.host, "a")!, "Operator title");
+  view.render([task("a", "assigned", "Agent title", { revision: REV(2) }), task("b", "assigned", "Write the release notes")]);
+  await tick();
+  const buttons = () => [...cardEl(view.host, "a")!.querySelectorAll<HTMLElement>("[data-edit-incoming] button")];
+  /* A mouse press does not take focus from the field. */
+  const press = new dom.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  buttons()[0]!.dispatchEvent(press as unknown as Event);
+  expect(press.defaultPrevented).toBe(true);
+  /* Where focus does move to a notice button (keyboard, touch), that is still the edit. */
+  flushSync(() => buttons()[1]!.focus());
+  await tick(20);
+  expect(editor(view.host, "a")?.value).toBe("Operator title");
+  click(buttons()[1]);
+  await tick(20);
+  expect(editor(view.host, "a")?.value).toBe("Operator title");
+  expect(cardEl(view.host, "a")?.querySelector("[data-edit-incoming]")).toBeNull();
+  expect(view.server.patches).toHaveLength(0);
+
+  view.render([task("a", "assigned", "Agent title 2", { revision: REV(3) }), task("b", "assigned", "Write the release notes")]);
+  await tick();
+  flushSync(() => buttons()[0]!.focus());
+  await tick(20);
+  click(buttons()[0]);
+  await tick(20);
+  expect(editor(view.host, "a")?.value).toBe("Agent title 2");
+  expect(view.server.patches).toHaveLength(0);
+
+  /* Keep mine, then leave for another card: the draft is saved once. */
+  type(editor(view.host, "a")!, "Operator title again");
+  view.render([task("a", "assigned", "Agent title 3", { revision: REV(4) }), task("b", "assigned", "Write the release notes")]);
+  await tick();
+  flushSync(() => buttons()[1]!.focus());
+  await tick(20);
+  expect(view.server.patches).toHaveLength(0);
+  flushSync(() => cardEl(view.host, "b")!.focus());
+  await tick(20);
+  expect(view.server.patches.map((patch) => (patch.body as { text: string }).text)).toEqual(["Operator title again"]);
+});
+
+test("a title saved while an agent rewrote only the description keeps both, is sent once more, and raises no notice", async () => {
+  let stored = task("a", "assigned", "Repair old links\nOld description");
+  const patches: PatchBody[] = [];
+  const ports: TaskMutationPorts = {
+    patch: async (_id, body) => {
+      patches.push(body);
+      if (patches.length === 1) {
+        stored = task("a", "assigned", "Repair old links\nAgent description", { revision: REV(3) });
+        return { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", error: "expectedRevision is stale" };
+      }
+      stored = task("a", "assigned", (body as { text: string }).text, { revision: REV(4) });
+      return { ok: true, task: stored };
+    },
+    read: async () => stored,
+    changed: () => {},
+  };
+  const view = mount([task("a", "assigned", "Repair old links\nOld description")], { ports });
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  type(editor(view.host, "a")!, "Repair every old link");
+  key(editor(view.host, "a"), "Enter");
+  await tick();
+  await tick();
+  expect(patches.map((body) => (body as { text: string }).text)).toEqual(["Repair every old link\nOld description", "Repair every old link\nAgent description"]);
+  expect(stored.text).toBe("Repair every old link\nAgent description");
+  expect(cardEl(view.host, "a")?.querySelector("[data-edit-incoming]")).toBeNull();
+  expect(editor(view.host, "a")).toBeNull();
+  expect(cardEl(view.host, "a")?.querySelector(".title")?.textContent).toBe("Repair every old link");
+  expect(cardEl(view.host, "a")?.querySelector(".desc")?.textContent).toBe("Agent description");
+});
+
+test("reopening a field after a refused save starts from the kept draft", async () => {
+  const view = mount([task("a", "assigned", "Repair old links")]);
+  view.server.answers.push({ ok: false, status: 500, error: "disk full" });
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  type(editor(view.host, "a")!, "Repair every old link");
+  key(editor(view.host, "a"), "Enter");
+  await tick();
+  await tick();
+  expect(cardEl(view.host, "a")?.querySelector("[data-edit-failed]")).toBeTruthy();
+  click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  expect(editor(view.host, "a")?.value).toBe("Repair every old link");
+  expect(cardEl(view.host, "a")?.querySelector("[data-edit-failed]")).toBeNull();
+  key(editor(view.host, "a"), "Enter");
+  await tick();
+  expect(view.server.patches.map((patch) => (patch.body as { text: string }).text)).toEqual(["Repair every old link", "Repair every old link"]);
+});
+
+test("after hide and Undo, a poll that left before the Undo keeps the card on the board and focused", async () => {
+  const original = task("a", "done", "Merge the approved queue adapter");
+  const view = mount([original, task("b", "done", "Compact board stages")]);
+  click(cardEl(view.host, "a")?.querySelector("[data-hide]"));
+  await tick();
+  const hiddenRow = view.server.patches.length === 1 ? { ...original, revision: REV(11), groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" as const, admitted: [] } } : null;
+  expect(hiddenRow).toBeTruthy();
+  click(receiptAction(view.host, "Hidden «Merge the approved queue adapter»"));
+  await tick();
+  expect(view.server.patches.map((patch) => (patch.body as { hide: boolean }).hide)).toEqual([true, false]);
+  expect(document.activeElement).toBe(cardEl(view.host, "a"));
+  /* The poll carrying the hide's own revision arrives after the Undo landed. */
+  view.render([hiddenRow as BoardTask, task("b", "done", "Compact board stages")]);
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("done");
+  expect(document.activeElement).toBe(cardEl(view.host, "a"));
+});
+
+test("an Undo the server refuses takes back its success receipt and offers Retry", async () => {
+  const view = mount([task("a", "done", "Merge the approved queue adapter")]);
+  click(cardEl(view.host, "a")?.querySelector("[data-hide]"));
+  await tick();
+  view.server.answers.push({ ok: false, status: 500, error: "disk full" });
+  click(receiptAction(view.host, "Hidden «Merge the approved queue adapter»"));
+  expect(columnOf(view.host, "a")).toBe("done");
+  await tick();
+  await tick();
+  expect(columnOf(view.host, "a")).toBeNull();
+  expect(receiptTexts(view.host)).not.toContain("«Merge the approved queue adapter» is back on the board");
+  expect(receiptAction(view.host, "Couldn't show «Merge the approved queue adapter»: disk full")?.textContent).toBe("Retry");
 });

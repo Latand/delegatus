@@ -46,7 +46,7 @@ import {
   type SeatTransition,
 } from "./seatState";
 import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
-import { useOrchestratorSeat } from "./useOrchestratorSeat";
+import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 
@@ -134,6 +134,7 @@ export function OrchestratorPanel({
   onClose,
   variant = "dock",
   collapsed = false,
+  seatRead,
 }: {
   project: string;
   projectName: string;
@@ -146,9 +147,13 @@ export function OrchestratorPanel({
       control collapses the panel to that header instead of closing it. */
   variant?: "dock" | "seat";
   collapsed?: boolean;
+  /** A read of this project's seat its host already keeps (the kanban board,
+      for the same project and cwd): the panel uses it and polls nothing. */
+  seatRead?: OrchestratorSeatRead;
 }) {
   const { t } = useLocale();
-  const { status, failed, refresh } = useOrchestratorSeat(project, projectCwd);
+  const ownRead = useOrchestratorSeat(seatRead ? null : project, projectCwd);
+  const { status, failed, refresh } = seatRead ?? ownRead;
   const [formError, setFormError] = useState<string | null>(null);
   const [mandate, setMandateState] = useState(() => readDraftField(project, "mandate") || ORCHESTRATOR_SYSTEM_PROMPT);
   /* The conversation the open rotate draft is replacing. Non-null IS the rotate

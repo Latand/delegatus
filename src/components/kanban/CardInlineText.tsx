@@ -4,6 +4,12 @@ import { useLayoutEffect, useRef } from "react";
 
 import { useLocale } from "@/lib/i18n";
 
+/** Whether focus is still inside an edit of this card: its field, its Save and
+    Cancel, or a notice marked as part of the edit. */
+export function withinEdit(card: HTMLElement, active: Element | null): boolean {
+  return Boolean(active && card.contains(active) && typeof active.closest === "function" && active.closest("[data-edit-scope]"));
+}
+
 /**
  * A kanban card's title or description, edited in place (#1695 K4b, prototype
  * `renderEditor`). The field takes the place of the text it edits: `Enter`
@@ -50,12 +56,14 @@ export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
     }
   };
   /* Leaving the field saves, unless focus only moved to the editor's own Save
-     or Cancel, which act on their own. */
+     or Cancel, or to a notice that belongs to this edit (an agent's text
+     offered beside the draft); those act on their own. */
   const onBlur = () => {
     setTimeout(() => {
       const element = ref.current;
       if (!element?.isConnected) return;
-      if (wrap.current?.contains(document.activeElement)) return;
+      const card = wrap.current?.closest<HTMLElement>("[data-kanban-card]") ?? wrap.current;
+      if (card && withinEdit(card, document.activeElement)) return;
       onCommit();
     }, 0);
   };
@@ -72,7 +80,7 @@ export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
     "data-card-editor": field,
   };
   return (
-    <div ref={wrap} className="editor" data-editor-field={field}>
+    <div ref={wrap} className="editor" data-editor-field={field} data-edit-scope="">
       {isTitle ? (
         <input {...common} type="text" className="edit title-edit" aria-label={t("kanban.editTitleAria")} maxLength={200} placeholder={t("kanban.editTitlePlaceholder")} />
       ) : (

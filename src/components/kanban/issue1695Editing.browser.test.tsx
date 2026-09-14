@@ -47,6 +47,9 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 
 type Scheme = "light" | "dark";
 type Evidence = {
+  agentWritesDescriptionQuietly: (id: string, description: string) => void;
+  filesDelayMs: number;
+  seatReads: number;
   taskPatches: Array<{ id: string; body: Record<string, unknown> }>;
   taskWrites: Array<{ id: string; startedAt: number; answeredAt: number }>;
   boardMutations: Array<Record<string, unknown>>;
@@ -68,6 +71,21 @@ async function boardReady(page: Page) {
   await page.waitForSelector("[data-kanban-seat] [data-orchestrator-panel]", { state: "attached", timeout: 20_000 });
   await page.waitForTimeout(600);
 }
+
+/** A press the way a person makes one: down, a beat, up. */
+async function humanPress(page: Page, selector: string, holdMs = 90) {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) throw new Error(`nothing to press at ${selector}`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await page.mouse.up();
+}
+
+const writesSettled = (page: Page, count: number, timeout = 10_000) => page.waitForFunction((expected) => {
+  const writes = (window as unknown as { evidence: Evidence }).evidence.taskWrites;
+  return writes.length === expected && writes.every((write) => write.answeredAt > 0);
+}, count, { timeout });
 
 /** The width the board gets beside the Viewer's project rail. */
 const boardWidth = (page: Page) => page.evaluate(() => Math.round(document.querySelector("[data-kanban-board]")?.getBoundingClientRect().width ?? 0));
@@ -363,7 +381,20 @@ browserTest("#1695 K4b: inline editing, colour, group hide and the Hidden tray o
       if (optimistic !== "Export presets: three, plus advanced") failures.push(`rename: optimistic title ${optimistic}`);
       if (refused.title !== "Simplify the export settings sheet" || !refused.notice?.includes("Your text is kept")) failures.push(`rename: refused ${JSON.stringify(refused)}`);
       if (stored !== "Export presets: three, plus advanced\nFold the eleven toggles into three sensible presets and one advanced disclosure.") failures.push(`rename: stored ${JSON.stringify(stored)}`);
-      flows.renameRefused = { optimistic, refused, stored };
+      /* Refused again, then reopened: the field starts from the kept draft. */
+      await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.refuseNextTaskPatch = true; });
+      await page.click(`${card("t-export")} [data-rename]`);
+      await page.fill(`${card("t-export")} input.title-edit`, "Export presets, kept draft");
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(`${card("t-export")} [data-edit-failed]`, { timeout: 5_000 });
+      await page.click(`${card("t-export")} [data-rename]`);
+      const reopened = await page.evaluate((selector) => ({ value: document.querySelector<HTMLInputElement>(`${selector} input.title-edit`)?.value ?? null, notice: Boolean(document.querySelector(`${selector} [data-edit-failed]`)) }), card("t-export"));
+      await page.keyboard.press("Enter");
+      await writesSettled(page, 4);
+      await page.waitForTimeout(300);
+      const reopenedStored = await evidenceOf(page, (evidence) => String(evidence.storedTask("t-export")?.text ?? "").split("\n", 1)[0]);
+      if (reopened.value !== "Export presets, kept draft" || reopened.notice || reopenedStored !== "Export presets, kept draft") failures.push(`rename: reopened ${JSON.stringify({ reopened, reopenedStored })}`);
+      flows.renameRefused = { optimistic, refused, stored, reopened, reopenedStored };
     }, "rename refused flow");
     await prototype("fail=title", "light", async (page) => {
       await page.click(`${protoCard("t-export")} .title`);
@@ -382,11 +413,26 @@ browserTest("#1695 K4b: inline editing, colour, group hide and the Hidden tray o
       const incoming = await page.evaluate((selector) => ({ notice: document.querySelector(`${selector} [data-edit-incoming] .msg`)?.textContent ?? null, draft: document.querySelector<HTMLInputElement>(`${selector} input.title-edit`)?.value ?? null }), card("t-export"));
       await page.waitForTimeout(350);
       await shot(page, "production", "flow-concurrent-edit");
-      await page.click(`${card("t-export")} [data-edit-incoming] button:has-text("Use theirs")`);
-      const theirs = await page.evaluate((selector) => document.querySelector<HTMLInputElement>(`${selector} input.title-edit`)?.value ?? null, card("t-export"));
+      const editorState = () => page.evaluate((selector) => ({
+        value: document.querySelector<HTMLInputElement>(`${selector} input.title-edit`)?.value ?? null,
+        focused: document.activeElement === document.querySelector(`${selector} input.title-edit`),
+        notice: Boolean(document.querySelector(`${selector} [data-edit-incoming]`)),
+      }), card("t-export"));
+      /* A person's press, 90 ms between down and up, on Use theirs. */
+      await humanPress(page, `${card("t-export")} [data-edit-incoming] button:has-text("Use theirs")`);
+      await page.waitForTimeout(400);
+      const theirs = { ...(await editorState()), patches: await evidenceOf(page, (evidence) => evidence.taskPatches.length) };
       if (incoming.draft !== "Export presets, my draft" || incoming.notice !== "An agent changed the title while you edit: «Simplify the export settings sheet (agent revision)»") failures.push(`concurrent edit: ${JSON.stringify(incoming)}`);
-      if (theirs !== "Simplify the export settings sheet (agent revision)") failures.push(`concurrent edit: Use theirs left ${theirs}`);
-      flows.concurrentEdit = { incoming, theirs };
+      if (theirs.value !== "Simplify the export settings sheet (agent revision)" || theirs.notice || theirs.patches !== 0) failures.push(`concurrent edit: Use theirs left ${JSON.stringify(theirs)}`);
+      /* And on Keep mine, after the agent writes again. */
+      await page.fill(`${card("t-export")} input.title-edit`, "Export presets, second draft");
+      await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.agentWritesTitle("t-export", "Simplify the export settings sheet (agent revision 2)"));
+      await page.waitForSelector(`${card("t-export")} [data-edit-incoming]`, { timeout: 5_000 });
+      await humanPress(page, `${card("t-export")} [data-edit-incoming] button:has-text("Keep mine")`);
+      await page.waitForTimeout(400);
+      const mine = { ...(await editorState()), patches: await evidenceOf(page, (evidence) => evidence.taskPatches.length), stored: await evidenceOf(page, (evidence) => String(evidence.storedTask("t-export")?.text ?? "").split("\n", 1)[0]) };
+      if (mine.value !== "Export presets, second draft" || mine.notice || mine.patches !== 0 || mine.stored !== "Simplify the export settings sheet (agent revision 2)") failures.push(`concurrent edit: Keep mine left ${JSON.stringify(mine)}`);
+      flows.concurrentEdit = { incoming, theirs, mine };
     }, "concurrent edit flow");
     await prototype("", "light", async (page) => {
       await page.click(`${protoCard("t-export")} .title`);
@@ -460,6 +506,107 @@ browserTest("#1695 K4b: inline editing, colour, group hide and the Hidden tray o
       if (restored.count !== "3" || JSON.stringify(restored.mutations) !== JSON.stringify([{ kind: "restore", path: "/repo/old-spike.jsonl", placement: "manual" }])) failures.push(`tray restore: ${JSON.stringify(restored)}`);
       flows.tray = { shown, restored };
     }, "tray flow");
+
+    await production("light", async (page) => {
+      /* The agent rewrites the description where the board cannot see it yet;
+         the operator's title is put onto that text and sent once more. */
+      await page.locator(card("t-export")).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.click(`${card("t-export")} [data-rename]`);
+      await page.fill(`${card("t-export")} input.title-edit`, "Export presets, merged");
+      await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.agentWritesDescriptionQuietly("t-export", "Agent: three presets and one advanced disclosure."));
+      await page.keyboard.press("Enter");
+      await writesSettled(page, 2);
+      await page.waitForTimeout(500);
+      const merged = {
+        stored: await evidenceOf(page, (evidence) => String(evidence.storedTask("t-export")?.text ?? "")),
+        patches: await evidenceOf(page, (evidence) => evidence.taskPatches.map((patch) => String(patch.body.text ?? ""))),
+        notice: await page.evaluate((selector) => Boolean(document.querySelector(`${selector} [data-edit-incoming]`)), card("t-export")),
+      };
+      if (merged.stored !== "Export presets, merged\nAgent: three presets and one advanced disclosure." || merged.patches.length !== 2 || merged.notice) failures.push(`field-aware save: ${JSON.stringify(merged)}`);
+      flows.fieldAwareSave = merged;
+    }, "field-aware save flow");
+
+    await production("light", async (page) => {
+      /* Every catalog read now takes 1.8 s and carries what the store held when
+         it began: the poll that follows the hide lands after the Undo. */
+      await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.filesDelayMs = 1_800; });
+      await page.hover(card("t-search"));
+      await page.click(`${card("t-search")} [data-hide]`);
+      await writesSettled(page, 1);
+      await page.click('[data-kanban-receipt] .act:has-text("Undo")');
+      const started = Date.now();
+      const timeline: Array<{ ms: number; present: boolean; focused: boolean }> = [];
+      while (Date.now() - started < 4_000) {
+        timeline.push({ ms: Date.now() - started, ...(await page.evaluate((selector) => ({ present: Boolean(document.querySelector(selector)), focused: document.activeElement === document.querySelector(selector) }), card("t-search"))) });
+        await page.waitForTimeout(150);
+      }
+      await writesSettled(page, 2);
+      const gone = timeline.filter((sample) => !sample.present);
+      const unfocused = timeline.filter((sample) => sample.ms > 300 && !sample.focused);
+      if (gone.length || unfocused.length) failures.push(`delayed poll after Undo: ${JSON.stringify({ gone, unfocused })}`);
+      flows.delayedPollUndo = { samples: timeline.length, gone: gone.length, unfocused: unfocused.length, first: timeline[0], last: timeline.at(-1) };
+    }, "delayed poll flow");
+
+    await production("light", async (page) => {
+      const title = "Restore search results after the index rebuild";
+      await page.hover(card("t-search"));
+      await page.click(`${card("t-search")} [data-hide]`);
+      await writesSettled(page, 1);
+      await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.refuseNextTaskPatch = true; });
+      await page.click('[data-kanban-receipt] .act:has-text("Undo")');
+      const onClick = await columnOf(page, "t-search");
+      await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
+      await page.waitForTimeout(300);
+      const refused = { onClick, after: await columnOf(page, "t-search"), receipts: await receipts(page) };
+      await page.waitForTimeout(50);
+      await shot(page, "production", "flow-undo-refused");
+      await page.click(`[data-kanban-receipt].error .act:has-text("Retry")`);
+      await writesSettled(page, 3);
+      await page.waitForTimeout(300);
+      const retried = { column: await columnOf(page, "t-search"), stored: await evidenceOf(page, (evidence) => Boolean(evidence.storedTask("t-search")?.groupHidden)) };
+      if (refused.onClick !== "assigned" || refused.after !== null || refused.receipts.includes(`«${title}» is back on the board`) || !refused.receipts.includes(`Couldn't show «${title}»: refused by the evidence fixture`)) failures.push(`refused undo: ${JSON.stringify(refused)}`);
+      if (retried.column !== "assigned" || retried.stored) failures.push(`refused undo: retry left ${JSON.stringify(retried)}`);
+      flows.refusedUndo = { refused, retried };
+    }, "refused undo flow");
+
+    await production("light", async (page) => {
+      await page.click('[data-colmenu="done"]');
+      await page.click('.menu [role="menuitem"]:has-text("Hide finished")');
+      await writesSettled(page, 3);
+      const order = await evidenceOf(page, (evidence) => evidence.taskWrites.map((write) => write.id));
+      await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.refuseNextTaskPatch = true; });
+      await page.click('[data-kanban-receipt] .act:has-text("Undo")');
+      await writesSettled(page, 6);
+      await page.waitForTimeout(400);
+      const titles: Record<string, string> = { "t-interrupt": "Universal interrupt and stop for every engine", "t-voice": "Keep the orchestrator role when voice is enabled", "t-queue": "Preserve native queue recovery through journal compaction" };
+      const refusedTitle = titles[order[0]!]!;
+      const short = refusedTitle.length > 48 ? `${refusedTitle.slice(0, 46).trimEnd()}…` : refusedTitle;
+      const after = {
+        receipts: await receipts(page),
+        done: await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.column[data-status="done"] .card')].map((node) => node.dataset.id)),
+        refusedStillHidden: await evidenceOf(page, (evidence) => Boolean(evidence.storedTask("t-interrupt")?.groupHidden)),
+      };
+      await shot(page, "production", "flow-bulk-undo-refused");
+      const retry = await page.locator(`[data-kanban-receipt].error:has-text("${short}") .act`).textContent().catch(() => null);
+      if (!after.receipts.includes(`Couldn't show «${short}»: refused by the evidence fixture`) || retry !== "Retry") failures.push(`bulk undo refusal: ${JSON.stringify({ after, retry })}`);
+      if (!after.receipts.includes("2 tasks are back on the board") || after.receipts.some((text) => text.startsWith("3 tasks"))) failures.push(`bulk undo count: ${JSON.stringify(after.receipts)}`);
+      if (after.done.length !== 3 || after.done.includes(`task:${order[0]}`)) failures.push(`bulk undo board: ${JSON.stringify(after.done)}`);
+      flows.bulkUndoRefused = { order, after, retry };
+    }, "bulk undo refusal flow");
+
+    await production("light", async (page) => {
+      /* The page reads the seat once per interval: the board and the panel
+         above it share one read. */
+      await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.seatReads = 0; });
+      await page.waitForTimeout(12_500);
+      const seat = {
+        reads: await evidenceOf(page, (evidence) => evidence.seatReads),
+        panel: await page.evaluate(() => Boolean(document.querySelector("[data-kanban-seat] [data-orchestrator-panel]"))),
+        lock: await page.evaluate((selector) => Boolean(document.querySelector(`${selector} [data-lock]`)), card("t-seat")),
+      };
+      if (seat.reads < 1 || seat.reads > 3 || !seat.panel || !seat.lock) failures.push(`seat read: ${JSON.stringify(seat)}`);
+      flows.seatRead = seat;
+    }, "seat read flow");
 
     await production("light", async (page) => {
       const active = () => page.evaluate(() => ({ card: document.activeElement?.closest<HTMLElement>(".card")?.dataset.id ?? null, editor: (document.activeElement as HTMLElement | null)?.dataset?.cardEditor ?? null, menu: Boolean(document.activeElement?.closest(".menu")) }));

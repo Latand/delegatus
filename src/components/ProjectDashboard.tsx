@@ -2491,8 +2491,8 @@ function ProjectDashboardView({
                 projectCwd={projectCwd}
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
-                seat={(boardId) => (
-                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} />
+                seat={(boardId, seatRead) => (
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
                 )}
                 onOpenCatalog={() => setTransientView("list")}
                 onOpenOnBoard={() => setTransientView("scheme")}

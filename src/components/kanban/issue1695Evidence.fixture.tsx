@@ -277,6 +277,20 @@ const evidence = {
     tasks[index] = { ...row, text: newline < 0 ? title : title + row.text.slice(newline), updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
     window.dispatchEvent(new Event("llv:tasks-changed"));
   },
+  /* An agent rewrites a task's description where this page cannot see it
+     yet: the board's next guarded write meets the newer revision. */
+  agentWritesDescriptionQuietly(id: string, description: string) {
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index < 0) return;
+    const row = tasks[index]!;
+    const title = row.text.split(/\r?\n/, 1)[0] ?? "";
+    tasks[index] = { ...row, text: `${title}\n${description}`, updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
+  },
+  /* How long each catalog read takes to answer. The answer is what the store
+     held when the read began, as a slow poll would carry. */
+  filesDelayMs: 0,
+  /* Reads of the orchestrator seat route. */
+  seatReads: 0,
   /* A conversation starts waiting on the operator, arriving on the next read. */
   askDecision(pathname: string) {
     const index = files.findIndex((entry) => entry.path === pathname);
@@ -310,7 +324,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
-    return json({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows: [], pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
+    const body = JSON.stringify({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows: [], pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
+    if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
+    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (url.pathname === "/api/board") {
@@ -404,6 +420,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
   if (url.pathname === "/api/orchestrator/seat") {
+    evidence.seatReads += 1;
     return json({
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",

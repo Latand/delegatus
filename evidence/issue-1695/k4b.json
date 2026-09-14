@@ -326,14 +326,31 @@
         "title": "Simplify the export settings sheet",
         "notice": "Not saved: refused by the evidence fixture. Your text is kept."
       },
-      "stored": "Export presets: three, plus advanced\nFold the eleven toggles into three sensible presets and one advanced disclosure."
+      "stored": "Export presets: three, plus advanced\nFold the eleven toggles into three sensible presets and one advanced disclosure.",
+      "reopened": {
+        "value": "Export presets, kept draft",
+        "notice": false
+      },
+      "reopenedStored": "Export presets, kept draft"
     },
     "concurrentEdit": {
       "incoming": {
         "notice": "An agent changed the title while you edit: «Simplify the export settings sheet (agent revision)»",
         "draft": "Export presets, my draft"
       },
-      "theirs": "Simplify the export settings sheet (agent revision)"
+      "theirs": {
+        "value": "Simplify the export settings sheet (agent revision)",
+        "focused": true,
+        "notice": false,
+        "patches": 0
+      },
+      "mine": {
+        "value": "Export presets, second draft",
+        "focused": true,
+        "notice": false,
+        "patches": 0,
+        "stored": "Simplify the export settings sheet (agent revision 2)"
+      }
     },
     "resurface": {
       "before": null,
@@ -380,6 +397,67 @@
           "«Spike: a virtualized Done column» is back on the board"
         ]
       }
+    },
+    "fieldAwareSave": {
+      "stored": "Export presets, merged\nAgent: three presets and one advanced disclosure.",
+      "patches": [
+        "Export presets, merged\nFold the eleven toggles into three sensible presets and one advanced disclosure.",
+        "Export presets, merged\nAgent: three presets and one advanced disclosure."
+      ],
+      "notice": false
+    },
+    "delayedPollUndo": {
+      "samples": 27,
+      "gone": 0,
+      "unfocused": 0,
+      "first": {
+        "ms": 0,
+        "present": true,
+        "focused": true
+      },
+      "last": {
+        "ms": 3929,
+        "present": true,
+        "focused": true
+      }
+    },
+    "refusedUndo": {
+      "refused": {
+        "onClick": "assigned",
+        "after": null,
+        "receipts": [
+          "Couldn't show «Restore search results after the index rebuild»: refused by the evidence fixture"
+        ]
+      },
+      "retried": {
+        "column": "assigned",
+        "stored": false
+      }
+    },
+    "bulkUndoRefused": {
+      "order": [
+        "t-interrupt",
+        "t-voice",
+        "t-queue"
+      ],
+      "after": {
+        "receipts": [
+          "Couldn't show «Universal interrupt and stop for every engine»: refused by the evidence fixture",
+          "2 tasks are back on the board"
+        ],
+        "done": [
+          "task:t-attach",
+          "task:t-voice",
+          "task:t-queue"
+        ],
+        "refusedStillHidden": true
+      },
+      "retry": "Retry"
+    },
+    "seatRead": {
+      "reads": 2,
+      "panel": true,
+      "lock": true
     },
     "keys": {
       "rename": {

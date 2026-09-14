@@ -32,9 +32,16 @@ import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
  * - the server already holds the value: settled;
  * - a colour or a hide: sent once more with the stored guard, since the label
  *   and the hide say nothing about what else changed;
- * - text: sent again only while the stored text is still the text the edit
- *   started from; otherwise the edit is a conflict and the caller shows both.
+ * - text: sent again while the stored text is still the text the edit started
+ *   from. When only another part of the text moved (an agent rewrote the
+ *   description under a new title), the caller's `rebase` puts the edit onto
+ *   the stored text and that is sent once instead. Only a change to the part
+ *   being edited is a conflict, and the caller shows both.
  * A refusal with its own code (a protected seat) is final and rolls back.
+ *
+ * A poll carrying a revision this device's own later write replaced is older
+ * than what the board shows: it never releases an optimistic value, of any
+ * field or of the status. A newer revision from elsewhere still does.
  */
 
 export type StatusMoveOutcome =
@@ -51,7 +58,9 @@ export type TaskFieldChange =
   /* `replaces` names the stored hide (its `at`) of a group that came back to
      the board: hiding it again is a new hide, even though the row has one. */
   | { field: "hide"; value: boolean; replaces?: string | null }
-  | { field: "text"; value: string };
+  /* `rebase` receives stored text that moved since the edit began and returns
+     the edit applied to it, or null when the edited part itself moved. */
+  | { field: "text"; value: string; rebase?: (stored: string) => string | null };
 
 export type TaskField = TaskFieldChange["field"];
 
@@ -98,6 +107,13 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "color") return task.color ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
   return task.text;
+}
+
+/** The change that would show `value` in `field`. */
+function changeOf(field: TaskField, value: unknown): TaskFieldChange {
+  if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
+  if (field === "hide") return { field, value: Boolean(value) };
+  return { field, value: String(value ?? "") };
 }
 
 /** Whether a stored row already shows `change`. */
@@ -171,6 +187,7 @@ export class TaskStatusMutations {
       if (override.pending > 0) continue;
       const row = byId.get(id);
       const revision = row ? revisionOf(row) : null;
+      if (revision !== null && this.replaced.get(id)?.has(revision)) continue;
       const caughtUp = !row
         || row.status === override.status
         || (revision !== null && revision === override.confirmedRevision)
@@ -183,6 +200,7 @@ export class TaskStatusMutations {
     for (const [id, fields] of this.fieldOverrides) {
       const row = byId.get(id);
       const revision = row ? revisionOf(row) : null;
+      if (revision !== null && this.replaced.get(id)?.has(revision)) continue;
       for (const [field, override] of fields) {
         if (override.pending > 0) continue;
         const caughtUp = !row
@@ -227,7 +245,7 @@ export class TaskStatusMutations {
     return run;
   }
 
-  private settleField(id: string, field: TaskField, value: unknown, confirmed: string | null, keep: boolean): void {
+  private settleField(id: string, field: TaskField, value: unknown, confirmed: string | null, keep: boolean, change?: TaskFieldChange): void {
     const fields = this.fieldOverrides.get(id);
     const override = fields?.get(field);
     if (!fields || !override) return;
@@ -235,6 +253,8 @@ export class TaskStatusMutations {
     if (override.pending === 0) {
       if (keep) {
         override.value = value;
+        if (change) override.change = change;
+        else if (override.change.field === "text" && typeof value === "string") override.change = { field: "text", value };
         override.confirmedRevision = confirmed;
       } else {
         fields.delete(field);
@@ -254,8 +274,13 @@ export class TaskStatusMutations {
   private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown): Promise<FieldEditOutcome> {
     const id = task.id;
     const field = change.field;
+    /* A refused edit returns the field to where it started. When an earlier
+       write of this device confirmed that value (a hide, before its refused
+       Undo), the board keeps showing it until the poll catches up, instead of
+       falling back to a row older than that write. */
     const failed = (status: number, error: string, code?: string): FieldEditOutcome => {
-      this.settleField(id, field, from, null, false);
+      const confirmed = this.fieldOverrides.get(id)?.get(field)?.confirmedRevision ?? null;
+      this.settleField(id, field, from, confirmed, confirmed !== null, changeOf(field, from));
       return { kind: "failed", field, error, status, ...(code ? { code } : {}) };
     };
     let guard = this.guardFor(task);
@@ -266,9 +291,9 @@ export class TaskStatusMutations {
       guard = this.guardFor(stored)!;
     }
     const first = await this.patchSafely(id, this.bodyFor(change, guard));
-    const savedField = (saved: BoardTask, replacing: string | null): FieldEditOutcome => {
+    const savedField = (saved: BoardTask, replacing: string | null, value: unknown = change.value): FieldEditOutcome => {
       this.remember(saved, replacing);
-      this.settleField(id, field, change.value, revisionOf(saved), true);
+      this.settleField(id, field, value, revisionOf(saved), true);
       this.ports.changed();
       return { kind: "saved", field, task: saved };
     };
@@ -286,9 +311,21 @@ export class TaskStatusMutations {
       this.ports.changed();
       return { kind: "settled", field, task: stored };
     }
+    const storedGuard = { project: stored.project, revision: revisionOf(stored) ?? "" };
     if (field !== "text" || storedValue === from) {
-      const retry = await this.patchSafely(id, this.bodyFor(change, { project: stored.project, revision: revisionOf(stored) ?? "" }));
+      const retry = await this.patchSafely(id, this.bodyFor(change, storedGuard));
       if (retry.ok) return savedField(retry.task, revisionOf(stored));
+      return failed(retry.status, retry.error, retry.code);
+    }
+    const rebased = change.field === "text" && change.rebase ? change.rebase(stored.text) : null;
+    if (rebased !== null) {
+      if (rebased === stored.text) {
+        this.settleField(id, field, stored.text, revisionOf(stored), true);
+        this.ports.changed();
+        return { kind: "settled", field, task: stored };
+      }
+      const retry = await this.patchSafely(id, this.bodyFor({ field: "text", value: rebased }, storedGuard));
+      if (retry.ok) return savedField(retry.task, revisionOf(stored), rebased);
       return failed(retry.status, retry.error, retry.code);
     }
     this.settleField(id, field, storedValue, revisionOf(stored), true);

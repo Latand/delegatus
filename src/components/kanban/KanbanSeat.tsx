@@ -5,6 +5,7 @@ import { useCallback, useRef, useState, type CSSProperties } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import { OrchestratorPanel } from "@/components/orchestrator/OrchestratorPanel";
+import type { OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 
 import { clampSeatHeight, SEAT_KEY_STEP, useKanbanSeat } from "./kanbanSeatStore";
 
@@ -16,13 +17,15 @@ import { clampSeatHeight, SEAT_KEY_STEP, useKanbanSeat } from "./kanbanSeatStore
  * with a smaller default height, a grip that resizes it and is remembered on
  * this device, and Collapse where the dock had Close.
  */
-export function KanbanSeat({ project, projectName, projectCwd, files, boardId }: {
+export function KanbanSeat({ project, projectName, projectCwd, files, boardId, seatRead }: {
   project: string;
   projectName: string;
   projectCwd?: string;
   files: readonly FileEntry[];
   /** The board region `Skip to the board` lands on. */
   boardId: string;
+  /** The board's read of this project's seat, shared so the page polls it once. */
+  seatRead?: OrchestratorSeatRead | null;
 }) {
   const { t } = useLocale();
   const seat = useKanbanSeat(project);
@@ -90,6 +93,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, boardId }:
           projectName={projectName}
           projectCwd={projectCwd}
           files={files}
+          {...(seatRead ? { seatRead } : {})}
         />
         {seat.collapsed ? null : (
           <div
