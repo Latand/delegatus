@@ -1,10 +1,9 @@
 import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import tailwind from "@tailwindcss/postcss";
-import { chromium, type Browser, type Page } from "playwright-core";
-import postcss from "postcss";
+import { chromium, type Page } from "playwright-core";
 
+import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 
 /*
@@ -139,42 +138,11 @@ function gateGeometry(geometry: BoardGeometry, failures: string[], label: string
   if (geometry.beyondWindow > 1) failures.push(`${label}: board reaches ${geometry.beyondWindow}px past the window`);
 }
 
-async function openFixture(browser: Browser, url: string, viewport: { width: number; height: number }, scheme: "light" | "dark") {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: "no-preference" });
-  const page = await context.newPage();
-  const pageErrors: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.goto(url);
-  return { context, page, pageErrors };
-}
-
 browserTest("#1695 kanban board: the prototype's columns and cards over the real Viewer, light and dark", async () => {
   fs.mkdirSync(OUT, { recursive: true });
   fs.mkdirSync(EVIDENCE, { recursive: true });
-  const build = await Bun.build({
-    entrypoints: [path.resolve("src/components/kanban/issue1695Evidence.fixture.tsx")],
-    target: "browser",
-    outdir: path.join(OUT, "bundle"),
-    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
-  });
-  if (!build.success) throw new Error(build.logs.join("\n"));
-  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
-  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const pathname = new URL(request.url).pathname;
-      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
-      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
-      return new Response(
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
-        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
-        { headers: { "content-type": "text/html" } },
-      );
-    },
-  });
-  const base = `http://127.0.0.1:${server.port}/`;
+  const server = await serveEvidenceFixture(OUT);
+  const base = server.base;
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
   const failures: string[] = [];
   const frames: unknown[] = [];
@@ -416,7 +384,7 @@ browserTest("#1695 kanban board: the prototype's columns and cards over the real
     }
   } finally {
     await browser.close();
-    server.stop(true);
+    server.stop();
   }
   const modes = new Set(frames.map((frame) => (frame as { production: BoardGeometry }).production.mode));
   for (const mode of ["wide", "narrow", "scroll", "tabs"]) if (!modes.has(mode)) failures.push(`no frame rendered the ${mode} mode`);

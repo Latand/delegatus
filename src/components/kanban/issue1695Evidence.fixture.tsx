@@ -1,5 +1,7 @@
 import { createRoot } from "react-dom/client";
 
+import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -13,9 +15,10 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * to the approved prototype's fixture (`prototypes/kanban-board/fixture.js`):
  * the same tasks in the same columns, the branch-retry-review pipeline, the
  * eight-stage chain, the simple chain parked on a decision, a forward fail
- * branch, and plain conversation members. Every request the Viewer makes is
- * answered here; nothing reaches a server, a store or a state directory.
- * Driven by `issue1695Kanban.browser.test.tsx`.
+ * branch, and plain conversation members; the project's orchestrator seat and
+ * short transcripts for its conversations, one of them empty (K3). Every
+ * request the Viewer makes is answered here; nothing reaches a server, a store
+ * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
 const PROJECT = "atlas";
@@ -82,7 +85,8 @@ const limitsBuild = add(conversation("limits-build", "Rate limited before the ve
 const limitsDiag = add(conversation("limits-diag", "Retry on another account, or wait for the reset?", { mtime: now - 3 * 24 * 60 * MIN + 20 * MIN }));
 /* t-auth and t-pending: one conversation each. */
 const authImpl = add(conversation("auth-impl", "Implementer: passkey sign-in", { mtime: now - 20 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
-const pendingWorker = add(conversation("pending-worker", "Worker waiting for a seat", { mtime: now - 6 * MIN }));
+/* A transcript with nothing in it yet: its reader settles on the empty state. */
+const pendingWorker = add(conversation("pending-worker", "Worker waiting for a seat", { mtime: now - 6 * MIN, size: 0 }));
 /* t-attach: done by decision while its verify stage still runs; t-compact: completed. */
 const attachBuild = add(conversation("attach-build", "Streams attachments in 256 KB chunks", { mtime: now - 13 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const attachVerify = add(conversation("attach-verify", "Re-running the phone matrix", working({ plan: { current: "Re-running the phone matrix" } })));
@@ -90,6 +94,10 @@ const attachVerify = add(conversation("attach-verify", "Re-running the phone mat
 const compactBuild = conversation("compact-build", "Folded finished stages into one row", { mtime: now - 3 * 24 * 60 * MIN });
 const compactRev = add(conversation("compact-rev", "Approved", { mtime: now - 2 * 24 * 60 * MIN - 90 * MIN, engine: "codex", model: "gpt-5.6" }));
 const compactVer = add(conversation("compact-ver", "Board frames match at five widths", { mtime: now - 2 * 24 * 60 * MIN }));
+/* The project's orchestrator: seated above the board, and, as in production,
+   also a conversation on it ("Not on a task" here). Its one composer is the
+   seat's. */
+const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({ plan: { current: "Watching the search fix" } })));
 
 const pipelines: Pipeline[] = [
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -165,6 +173,40 @@ const tasks: BoardTask[] = [
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
 ];
 
+/* Short transcripts in the Claude line format, so every reader has a feed. */
+const line = (secondsAgo: number, body: Record<string, unknown>) => JSON.stringify({ timestamp: iso(secondsAgo), ...body });
+const said = (secondsAgo: number, text: string) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+const asked = (secondsAgo: number, text: string) => line(secondsAgo, { type: "user", message: { role: "user", content: text }, promptSource: "typed", origin: { kind: "human" } });
+const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => [
+  line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } }),
+  line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
+];
+function transcriptOf(pathname: string): string {
+  const file = files.find((entry) => entry.path === pathname);
+  if (!file || file === pendingWorker) return "";
+  /* The running verifier has a long transcript: its reader scrolls. */
+  if (file === searchVer2) {
+    const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
+    for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    return `${long.join("\n")}\n`;
+  }
+  const lines = file === orchestrator
+    ? [
+      asked(8 * MIN, "Keep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback."),
+      said(7 * MIN, "Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again."),
+      ...tool(6 * MIN, "toolu_seat_1", "mcp__viewer__list_pipelines", { project: PROJECT }),
+      said(2 * MIN, "The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins."),
+    ]
+    : [
+      asked(40 * MIN, `${file.title} — pick it up from the task text.`),
+      said(38 * MIN, "Starting on it."),
+      ...tool(36 * MIN, `toolu_${file.name}_1`, "Read", { file_path: "src/export/presets.ts" }),
+      ...tool(34 * MIN, `toolu_${file.name}_2`, "Bash", { command: "rg --files src/components" }),
+      said(30 * MIN, "Checking the fallback path next; nothing to decide yet."),
+    ];
+  return `${lines.join("\n")}\n`;
+}
+
 const params = new URLSearchParams(location.search);
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
@@ -176,14 +218,43 @@ let board = {
 
 const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
-  presence: [] as Array<{ mode: string; visiblePaths: string[] }>,
+  presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
+  assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
+  /* The focus handoff this page's Viewer runs, for driving an attention
+     arrival without a server behind the offer. */
+  focus: { bus: focusHandoffBus, runFocusTransaction },
+  /* Transcript reads for this path fail, as a broken route would. */
+  failLogsFor: null as string | null,
+  /* A write another client made to a task, arriving on the next task read:
+     the card re-ranks within its column. */
+  touchTask(id: string) {
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index >= 0) tasks[index] = { ...tasks[index]!, updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
+    window.dispatchEvent(new Event("llv:tasks-changed"));
+  },
+  /* A status another client wrote, arriving on the next task read. */
+  setTaskStatus(id: string, status: TaskStatus) {
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index >= 0) tasks[index] = { ...tasks[index]!, status, updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
+    window.dispatchEvent(new Event("llv:tasks-changed"));
+  },
   boardMutations: [] as BoardMutationV1[],
   refuseNextTaskPatch: false,
   taskAnswerDelayMs: 400,
 };
 Object.assign(window, { evidence });
 
-class QuietEventSource { addEventListener() {} removeEventListener() {} close() {} }
+/* Streams stay silent, except the log stream, which reports it cannot connect
+   so the feeds read their transcripts through the polled route below. */
+class QuietEventSource {
+  onerror: ((event: Event) => void) | null = null;
+  constructor(url: string | URL) {
+    if (String(url).startsWith("/api/logs/stream")) setTimeout(() => this.onerror?.(new Event("error")), 0);
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+}
 Object.assign(window, { EventSource: QuietEventSource });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -206,8 +277,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/view/presence" && method === "POST") {
-    const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[] };
-    evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths });
+    const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[]; focusedPath?: string | null };
+    evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
@@ -228,8 +299,50 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     tasks[index] = next;
     return json({ ok: true, task: next });
   }
+  if (url.pathname.startsWith("/api/tasks/") && url.pathname.endsWith("/assignment")) {
+    const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.assignments.push({ method, id, body });
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index < 0) return json({ error: "task not found" }, 404);
+    const current = tasks[index]!;
+    if (method === "POST") {
+      const next = { ...current, assignments: [...current.assignments, { path: String(body.path), panePid: null, state: "handoff", error: null, at: new Date().toISOString() }], revision: REV(revision++) } as BoardTask;
+      tasks[index] = next;
+      return json({ ok: true, task: next });
+    }
+    const matches = (assignment: BoardTask["assignments"][number]) => (body.conversationId ? assignment.conversationId === body.conversationId : assignment.path === body.path);
+    /* A conversation whose only task this is has nowhere to go: the route's refusal. */
+    if (current.assignments.filter(matches).length && !tasks.some((other) => other.id !== id && other.assignments.some(matches))) {
+      return json({ error: "this task is the conversation's own membership; link the conversation to another task first or delete the task" }, 409);
+    }
+    const next = { ...current, assignments: current.assignments.filter((assignment) => !matches(assignment)), revision: REV(revision++) } as BoardTask;
+    tasks[index] = next;
+    return json({ ok: true, task: next });
+  }
+  if (url.pathname === "/api/logs" && method === "POST") {
+    const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
+    return json({ chunks: Object.fromEntries(reqs.map((req) => {
+      if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
+      const data = transcriptOf(req.path);
+      const size = new TextEncoder().encode(data).length;
+      return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
+    })) });
+  }
+  if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
-  if (url.pathname === "/api/orchestrator/seat") return json({ seat: null, pending: null, exists: true });
+  if (url.pathname === "/api/orchestrator/seat") {
+    return json({
+      seat: {
+        project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",
+        promptVersion: null, predecessorConversationId: null, state: "active",
+        intent: { clientRequestId: "seat-atlas", mode: "spawn", launchId: null, error: null }, designatedAt: iso(9 * 60 * MIN), activatedAt: iso(9 * 60 * MIN),
+      },
+      pending: null,
+      exists: true,
+      viewerMcpRegistered: true,
+    });
+  }
   return json({}, 404);
 }) as typeof fetch;
 

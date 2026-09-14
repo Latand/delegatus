@@ -54,7 +54,7 @@
           "tileWidth": 212
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -188,7 +188,7 @@
           "tileWidth": 168
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -322,7 +322,7 @@
           "tileWidth": 228
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -456,7 +456,7 @@
           "tileWidth": 228
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -590,7 +590,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -650,7 +650,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -710,7 +710,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -770,7 +770,7 @@
           "tileWidth": 212
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -904,7 +904,7 @@
           "tileWidth": 168
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -1038,7 +1038,7 @@
           "tileWidth": 228
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -1172,7 +1172,7 @@
           "tileWidth": 228
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": {
@@ -1306,7 +1306,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -1366,7 +1366,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -1426,7 +1426,7 @@
           "tileWidth": 0
         },
         "hiddenCount": "1",
-        "cards": 17,
+        "cards": 18,
         "pipelineSections": 6
       },
       "prototype": null,
@@ -1479,10 +1479,15 @@
       "top": {
         "posts": 1,
         "mode": "scheme",
-        "reported": 6,
+        "reported": 7,
         "tiles": [
           {
             "path": "/repo/pending-worker.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/orchestrator.jsonl",
             "onScreen": true,
             "reported": true
           },
@@ -1506,10 +1511,15 @@
       "scrolled": {
         "posts": 2,
         "mode": "scheme",
-        "reported": 6,
+        "reported": 7,
         "tiles": [
           {
             "path": "/repo/pending-worker.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/orchestrator.jsonl",
             "onScreen": true,
             "reported": true
           },
@@ -1566,6 +1576,7 @@
           "roots": [
             "/repo/attach-verify.jsonl",
             "/repo/export-impl.jsonl",
+            "/repo/orchestrator.jsonl",
             "/repo/search-ver-2.jsonl",
             "/repo/upload-ui.jsonl",
             "/repo/pending-worker.jsonl",
@@ -1592,6 +1603,7 @@
           "roots": [
             "/repo/attach-verify.jsonl",
             "/repo/export-impl.jsonl",
+            "/repo/orchestrator.jsonl",
             "/repo/search-ver-2.jsonl",
             "/repo/upload-ui.jsonl",
             "/repo/pending-worker.jsonl",

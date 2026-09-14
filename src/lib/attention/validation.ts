@@ -144,7 +144,7 @@ export function validateAttentionEvent(value: unknown): AttentionEvent {
     }
     case "arrive": {
       const resolution = body.resolution;
-      if (resolution !== "exact" && resolution !== "approximate" && resolution !== "lost") {
+      if (resolution !== "exact" && resolution !== "approximate" && resolution !== "reader" && resolution !== "lost") {
         throw new AttentionRequestError("INVALID_REQUEST", "invalid resolution");
       }
       return {

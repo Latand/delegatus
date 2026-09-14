@@ -46,7 +46,10 @@ export const NativeConversationPane = memo(function NativeConversationPane({
 }, (before, after) => !before.active && !after.active && before.place === after.place && before.fullWindowPlace === after.fullWindowPlace);
 
 
-function captureReader(container: HTMLElement) {
+/** What moving a reader's DOM would lose: focus, selection, field carets and
+ * feed scroll. Shared with the kanban board's readers (#1695), which move the
+ * same way between cards. */
+export function captureReader(container: HTMLElement) {
   const focused = document.activeElement instanceof HTMLElement && container.contains(document.activeElement) ? document.activeElement : null;
   const selection = document.getSelection();
   const range = selection?.rangeCount && container.contains(selection.anchorNode) ? selection.getRangeAt(0).cloneRange() : null;
@@ -62,11 +65,26 @@ function captureReader(container: HTMLElement) {
   return { focused, range, scrolls, fields };
 }
 
+export type ReaderSnapshot = ReturnType<typeof captureReader>;
+
+/** Put back what `captureReader` saw, once the reader is in its new place. */
+export function restoreReader(snapshot: ReaderSnapshot) {
+  snapshot.focused?.focus({ preventScroll: true });
+  const selection = document.getSelection();
+  if (snapshot.range && selection) { selection.removeAllRanges(); selection.addRange(snapshot.range); }
+  for (const { element, start, end, direction } of snapshot.fields) element.setSelectionRange(start, end, direction ?? undefined);
+  for (const { element, top, row, offset, followed } of snapshot.scrolls) {
+    if (followed) { element.scrollTop = element.scrollHeight; continue; }
+    element.scrollTop = top;
+    if (row) { const frame = element.getBoundingClientRect(), scale = frame.height / element.clientHeight || 1; element.scrollTop += (row.getBoundingClientRect().top - frame.top) / scale - offset; }
+  }
+}
+
 type PlacementProps = { active: boolean; container: HTMLElement; place: HTMLElement | null; fullWindowPlace: HTMLElement | null; children: React.ReactNode };
 /** Capture before React hides/removes the old destination. A layout effect is
  * too late to measure a reader whose former ancestor already left the DOM. */
 class NativePlacement extends Component<PlacementProps> {
-  private retained: ReturnType<typeof captureReader> | null = null;
+  private retained: ReaderSnapshot | null = null;
   getSnapshotBeforeUpdate() {
     const snapshot=captureReader(this.props.container);
     if(snapshot.scrolls.some(({element})=>element.getBoundingClientRect().height>0))this.retained=snapshot;
@@ -80,15 +98,7 @@ class NativePlacement extends Component<PlacementProps> {
     if (!destination || (container.parentNode === destination && !restore)) return;
     destination.append(container);
     if (!snapshot) return;
-    snapshot.focused?.focus({ preventScroll: true });
-    const selection = document.getSelection();
-    if (snapshot.range && selection) { selection.removeAllRanges(); selection.addRange(snapshot.range); }
-    for (const { element, start, end, direction } of snapshot.fields) element.setSelectionRange(start, end, direction ?? undefined);
-    for (const { element, top, row, offset, followed } of snapshot.scrolls) {
-      if (followed) { element.scrollTop = element.scrollHeight; continue; }
-      element.scrollTop = top;
-      if (row) { const frame = element.getBoundingClientRect(), scale = frame.height / element.clientHeight || 1; element.scrollTop += (row.getBoundingClientRect().top - frame.top) / scale - offset; }
-    }
+    restoreReader(snapshot);
   }
   render() { return this.props.children; }
 }

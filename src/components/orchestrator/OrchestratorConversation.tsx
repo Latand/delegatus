@@ -25,7 +25,13 @@ const noop = () => undefined;
  * conversation also has a card on the board behind the panel, and the one
  * hoisted composer must render HERE while both are on screen.
  */
-export function OrchestratorConversation({ file, projectName }: { file: FileEntry; projectName: string }) {
+export function OrchestratorConversation({ file, projectName, hostControls = true }: {
+  file: FileEntry;
+  projectName: string;
+  /** False where the surface's own header carries the host control (the
+      kanban seat, #1695), so it is not a second row here. */
+  hostControls?: boolean;
+}) {
   const { t } = useLocale();
   const { caps } = useAgentCapabilities(file);
   const deadHost = caps.surface === "dead";
@@ -46,7 +52,7 @@ export function OrchestratorConversation({ file, projectName }: { file: FileEntr
           compact
         />
       </ToolDisclosurePolicy>
-      <ProcessStatusControls file={file} hideChip />
+      {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
       <AgentControlStrip file={file} />
       <TmuxComposer
         file={file}
