@@ -203,7 +203,7 @@ export function countFindingBlocks(text: string): number {
   return bullets;
 }
 
-type VerdictLine = { verdict: ReviewVerdict; labelled: boolean; accepted: boolean };
+type VerdictLine = { verdict: ReviewVerdict; labelled: boolean; accepted: boolean; finding: boolean };
 
 /** A line with the verdict shape, and whether it states that verdict. A
     refused line still counts against an approval in reviewVerdict. */
@@ -217,7 +217,11 @@ function verdictLine(line: string): VerdictLine | null {
     ANY_VERDICT_TOKEN_RE.test(rest)
     || (verdict === "APPROVE" && (/^[ \t*_]*\?/.test(rest) || HEDGED_APPROVAL_RE.test(rest)))
     || (!labelled && BARE_TOKEN_SENTENCE_RE.test(rest));
-  return { verdict, labelled, accepted: !refused };
+  /* `COMMENT: naming could be clearer` and `COMMENT — src/b.ts:9` are finding
+     lines at the lowest severity. A bare COMMENT with nothing after it, or with
+     anything but a separator and text, stays a verdict line. */
+  const finding = !labelled && verdict === "COMMENT" && /^[ \t]*[:—–-]+[ \t]*[^\s*_]/.test(rest);
+  return { verdict, labelled, accepted: !refused, finding };
 }
 
 /** Lines a reviewer wrote as its own prose. Fenced code and blockquotes hold
@@ -226,7 +230,11 @@ function* ownProseLines(text: string): Generator<string> {
   let fence: { marker: string; length: number } | null = null;
   for (const line of text.split(/\r?\n/)) {
     const fenceMatch = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fenceMatch) {
+    /* A backtick run with another backtick later on its line is inline code,
+       as in `` ```bun test``` passes ``: a backtick fence's info string holds
+       no backtick in CommonMark, so this line opens nothing. */
+    const inlineCode = !fence && fenceMatch?.[1]![0] === "`" && fenceMatch[2]!.includes("`");
+    if (fenceMatch && !inlineCode) {
       const token = fenceMatch[1]!;
       if (!fence) fence = { marker: token[0]!, length: token.length };
       else if (token[0] === fence.marker && token.length >= fence.length && !fenceMatch[2]!.trim()) fence = null;
@@ -242,7 +250,8 @@ function* ownProseLines(text: string): Generator<string> {
     deciding lines must agree. An approval must also be unanimous: any other
     verdict-shaped line, refused or naming another verdict, leaves no verdict.
     A hedged change request, a changed mind or a pasted template therefore
-    cannot become an approval. */
+    cannot become an approval. The one line an approval passes over is a bare
+    COMMENT finding line under a labelled approval, which asks for nothing. */
 export function reviewVerdict(text: string): ReviewVerdict | null {
   if (!/REQUEST_CHANGES|APPROVE|COMMENT/.test(text)) return null;
   const lines: VerdictLine[] = [];
@@ -255,7 +264,10 @@ export function reviewVerdict(text: string): ReviewVerdict | null {
   const verdicts = new Set(deciding.map((line) => line.verdict));
   if (verdicts.size !== 1) return null;
   const [verdict] = [...verdicts];
-  if (verdict === "APPROVE" && lines.some((line) => !line.accepted || line.verdict !== "APPROVE")) return null;
+  const labelledApproval = deciding.some((line) => line.labelled);
+  if (verdict === "APPROVE" && lines.some((line) => (
+    (!line.accepted || line.verdict !== "APPROVE") && !(labelledApproval && line.finding)
+  ))) return null;
   return verdict ?? null;
 }
 

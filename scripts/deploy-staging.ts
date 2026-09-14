@@ -142,6 +142,57 @@ export function stagingAgentControl(
   return { origin, authenticated: token !== null, headers: stagingRequestHeaders(token) };
 }
 
+export type StagingReleaseTargetReading =
+  | { state: "absent" }
+  | { state: "unreadable" }
+  | { state: "present"; mcpRuntime: ViewerMcpRuntimeIdentity | null };
+
+/** What a staging release target names, read leniently: the prune below only
+    needs to know which MCP runtime it keeps alive, and refuses to prune at all
+    when it cannot tell. */
+export function readStagingReleaseTarget(filename: string): StagingReleaseTargetReading {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filename, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { state: "absent" } : { state: "unreadable" };
+  }
+  try {
+    const target = JSON.parse(raw) as { mcpRuntime?: unknown } | null;
+    if (!target || typeof target !== "object" || Array.isArray(target)) return { state: "unreadable" };
+    if (target.mcpRuntime === undefined) return { state: "present", mcpRuntime: null };
+    const runtime = target.mcpRuntime as Partial<ViewerMcpRuntimeIdentity> | null;
+    if (!runtime || typeof runtime !== "object" || typeof runtime.source !== "string") return { state: "unreadable" };
+    if (runtime.source === "managed" && (typeof runtime.releaseId !== "string" || !/^[a-z0-9-]+$/.test(runtime.releaseId))) {
+      return { state: "unreadable" };
+    }
+    return { state: "present", mcpRuntime: runtime as ViewerMcpRuntimeIdentity };
+  } catch {
+    return { state: "unreadable" };
+  }
+}
+
+/** Each staging deploy copies a revision's MCP bundle and production
+    node_modules (about 600 MB) into the staging state dir. After a deploy has
+    passed its gates, keep the runtime the staging release target names now and
+    the one the target named before this deploy, the rollback's, and remove the
+    rest. The store is rooted in the staging state dir, so nothing outside it is
+    touched. A target that cannot be read, before or after, prunes nothing. */
+export function retainStagingMcpRuntimes(
+  store: McpRuntimeReleaseStore,
+  releaseTargetFile: string,
+  previous: StagingReleaseTargetReading,
+): { pruned: boolean; retained: string[] } {
+  const current = readStagingReleaseTarget(releaseTargetFile);
+  if (current.state !== "present" || current.mcpRuntime?.source !== "managed" || previous.state === "unreadable") {
+    return { pruned: false, retained: [] };
+  }
+  const retained = [current.mcpRuntime, previous.state === "present" ? previous.mcpRuntime : null]
+    .filter((runtime): runtime is ViewerMcpRuntimeIdentity => runtime?.source === "managed");
+  store.retainOnly(retained);
+  return { pruned: true, retained: [...new Set(retained.map((runtime) => runtime.releaseId!))] };
+}
+
 function writeComposeSnapshot(filename: string, snapshot: string): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const temporary = `${filename}.${process.pid}.${randomUUID()}.tmp`;
@@ -297,6 +348,7 @@ async function main(): Promise<void> {
      until the authority catches up. The compose snapshot is where an agent's
      MCP server finds the staging Viewer's credential. */
   writeComposeSnapshot(viewerComposeSnapshotPath(stagingStateDir, STAGING_VIEWER_CONTAINER), composeSnapshot);
+  const previousTarget = readStagingReleaseTarget(paths.releaseTarget);
   const releaseTarget: ViewerReleaseIdentity = {
     image,
     container: STAGING_VIEWER_CONTAINER,
@@ -330,10 +382,18 @@ async function main(): Promise<void> {
   if (changes.violation) {
     throw new Error(`stage deploy touched prod ${changes.violation} — investigate before trusting this staging instance`);
   }
+  /* The deploy has passed every gate; a failed prune is reported, never a failed deploy. */
+  let mcpRuntimeRetention: ReturnType<typeof retainStagingMcpRuntimes> | { pruned: false; error: string };
+  try {
+    mcpRuntimeRetention = retainStagingMcpRuntimes(mcpRuntimeStore, paths.releaseTarget, previousTarget);
+  } catch (error) {
+    mcpRuntimeRetention = { pruned: false, error: error instanceof Error ? error.message : "MCP runtime prune failed" };
+  }
   console.log(JSON.stringify({
     ...record,
     mcpRuntime,
     agentControl: { origin: agentControl.origin, authenticated: agentControl.authenticated },
+    mcpRuntimeRetention,
     prodState: changes,
   }, null, 2));
 }
