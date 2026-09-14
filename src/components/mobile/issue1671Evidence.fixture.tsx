@@ -93,8 +93,12 @@ const evidence = {
   catalogRequests: [] as string[],
   pipelinePatches: [] as Array<{ id: string; action: string }>,
   closesAnswered: [] as string[],
+  hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
   refuseNextPipelinePatch: false,
+  /* Holds each pipeline answer this long, so a step can watch the frames
+     painted while its requests are out. */
+  pipelineAnswerDelayMs: 0,
 };
 Object.assign(window, { evidence });
 
@@ -145,8 +149,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     const found = pipelines.find((pipeline) => pipeline.id === id);
     if (!found) return json({ error: "pipeline not found" }, 404);
-    if (body.action === "dismiss") found.dismissedAt = new Date().toISOString();
+    if (evidence.pipelineAnswerDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.pipelineAnswerDelayMs));
+    /* The engine's own rule: a lane already hidden keeps its first Hide
+       instant through a later dismiss, and undismiss clears it. */
+    if (body.action === "dismiss") found.dismissedAt = found.dismissedAt ?? new Date().toISOString();
     if (body.action === "undismiss") found.dismissedAt = null;
+    if (body.action === "dismiss" || body.action === "undismiss") evidence.hidesAnswered.push({ id, action: body.action, dismissedAt: found.dismissedAt ?? null });
     if (body.action === "close") {
       await new Promise((resolve) => setTimeout(resolve, CLOSE_ANSWER_MS));
       Object.assign(found, { state: "closed", closedAt: new Date().toISOString(), hiddenAt: new Date().toISOString() });

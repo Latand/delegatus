@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import { translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -293,4 +294,46 @@ test("phone: a Close lane that has gone out stays off the board and the badge un
   expect(row(host, "p-a")).toBeNull();
   expect(badge(host)).toBe("1");
   expect(receiptText()).toContain("the lane is still publishing");
+});
+
+test("phone: a lane hidden before that parked again hides again: its old Hide is cleared first, and the row and the count stay gone once the server answers", async () => {
+  /* Hidden an hour before the round that parked it again, so it is back in
+     Needs you. The server here keeps a lane's first Hide instant through a
+     later dismiss, as the engine does, and undismiss clears it. */
+  let stored = { ...lane("p-a", "Fast conversation switching"), dismissedAt: iso(7_000) } as Pipeline;
+  served = [stored, PIPELINES[1]!];
+  const host = await mountViewer();
+  await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
+  expect(badge(host)).toBe("2");
+  const answers: Array<() => void> = [];
+  pipelineReply = (body) => new Promise<Response>((resolve) => {
+    answers.push(() => {
+      if (body.action === "dismiss") stored = { ...stored, dismissedAt: stored.dismissedAt ?? new Date().toISOString() };
+      if (body.action === "undismiss") stored = { ...stored, dismissedAt: null };
+      served = [stored, PIPELINES[1]!];
+      resolve(Response.json({ ok: true, pipeline: stored }));
+    });
+  });
+
+  act(() => swipeLeft(row(host, "p-a")!));
+  act(() => trayButton(host, "p-a", "hide").click());
+  await until(() => answers.length === 1);
+  expect(pipelinePatches).toEqual([{ action: "undismiss" }]);
+  expect(row(host, "p-a")).toBeNull();
+  expect(badge(host)).toBe("1");
+
+  /* The old Hide is cleared; the new one goes out, and the row stays gone. */
+  await act(async () => { answers[0]!(); await Bun.sleep(20); });
+  await until(() => answers.length === 2);
+  expect(pipelinePatches).toEqual([{ action: "undismiss" }, { action: "dismiss" }]);
+  expect(row(host, "p-a")).toBeNull();
+  expect(badge(host)).toBe("1");
+
+  /* The answer stamps this decision, so the echo keeps the lane hidden. */
+  await act(async () => { answers[1]!(); await Bun.sleep(40); });
+  expect(Date.parse(stored.dismissedAt!)).toBeGreaterThan(Date.parse(iso(3_600)));
+  expect(row(host, "p-a")).toBeNull();
+  expect(badge(host)).toBe("1");
+  /* The receipt that went up on the tap is still the Hide's own. */
+  expect(receiptText()).toContain(translate("en", "mobile2.board.pipelineHidden", { task: "Fast conversation switching" }));
 });
