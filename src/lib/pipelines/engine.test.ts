@@ -1605,14 +1605,14 @@ test("auto-start creation persists the fetched origin/main identity before provi
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
 });
 
 test("auto-start creation rejects an unavailable remote without persisting a pipeline", async () => {
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => args[0] === "fetch"
+  h.ports.exec = (command, args, cwd) => (command === "timeout" ? args.slice(args.indexOf("git") + 1) : args)[0] === "fetch"
     ? { code: 128, stdout: "", stderr: "origin unavailable" }
     : baseExec(command, args, cwd);
 
@@ -1719,7 +1719,7 @@ test("controller recovery stamps an older unresolved provisioning record before 
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
 });
 
 test("autoStart false persists a draft without provisioning or spawning", async () => {
@@ -5111,29 +5111,6 @@ test("a remote that never answers parks after a bounded wait that counts its ret
   expect(effects()).toEqual(baseline);
 });
 
-test("a pipeline an older build parked on a remote-head timeout resumes once and settles the approved head (#1692)", async () => {
-  const h = harness();
-  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
-  control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey)." };
-  await tickPipelines([], h.ports);
-  /* The record exactly as the build without a retry left it: parked on the
-     transport failure, no wait booked. */
-  const legacy = `approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: ${SSH_CONNECT_TIMEOUT}`;
-  const stored = loadPipelines()[0]!;
-  stored.stateDetail = legacy;
-  stored.runs[1]!.attempts[0]!.error = legacy;
-  savePipelines([stored]);
-
-  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${stored.branch}\n`, stderr: "" };
-  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
-
-  const completed = loadPipelines()[0]!;
-  expect(completed.state).toBe("completed");
-  expect(completed.runs[1]!.attempts).toHaveLength(1);
-  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA });
-  expect(effects()).toEqual(baseline);
-});
-
 /* --- internal publication: the Viewer's own state is the authority (#1692) --- */
 
 /** Takes the network away after creation: every push, fetch and remote read,
@@ -5275,6 +5252,27 @@ test("an internal terminal pass an older build left waiting on publication close
   expect(completed.state).toBe("completed");
   expect(completed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", error: null });
   expect(remoteCalls).toHaveLength(publishAttempts);
+});
+
+test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {
+  const h = harness();
+  const { remoteCalls } = networkDown(h);
+  savePipelines([]);
+
+  const created = await createPipelineFromRequest({ task: "Pinned offline", repoDir: "/repo", baseRef: ORIGIN_MAIN_SHA, stages: RUN_STAGES as never }, h.ports);
+  expect(created.pipeline).toMatchObject({ state: "provisioning", baseRef: ORIGIN_MAIN_SHA });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: ORIGIN_MAIN_SHA, lastPassedCommit: ORIGIN_MAIN_SHA });
+  expect(remoteCalls).toEqual([]);
+
+  /* Without a pin, creation asks the remote for the current base once, and a
+     remote that cannot answer refuses the creation instead of guessing. */
+  savePipelines([]);
+  const unpinned = await createPipelineFromRequest({ task: "Unpinned offline", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  expect(unpinned.status).toBe(409);
+  expect(unpinned.error).toStartWith("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(remoteCalls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
+  expect(loadPipelines()).toEqual([]);
 });
 
 test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {

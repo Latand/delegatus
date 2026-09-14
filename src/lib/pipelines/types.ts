@@ -141,7 +141,10 @@ export type PipelineVerdictRecovery = {
     own durable state is the authority. A stage passes on its attempt, its
     verdict and the exact clean local revision it was judged on; a review
     settles on the SHA the reviewer was fenced to, read from the local
-    worktree. Nothing is pushed, fetched or read from a remote.
+    worktree. Nothing is pushed, fetched or read from a remote while the
+    pipeline runs. Creating or starting one without `baseRef` still fetches
+    `origin/<base>` once, time-bounded, so it starts from the current base;
+    a pinned `baseRef` never touches the network.
 
     `remote-branch`: the caller asked for publication. Every accepted revision
     is pushed to `origin/<branch>`, reviewers launch only on a published head,
@@ -214,8 +217,8 @@ export type PipelineStageAttempt = {
       whose final remote read the network failed (#1692). Same shape and
       arithmetic as `controllerWait`, kept apart because that wait ends the
       moment a reviewer launch is under way, which an approved flow always is.
-      Left in place when the budget runs out, so the park it ends in is never
-      mistaken for one an older build left behind. */
+      Left in place when the budget runs out, as the record of the retries the
+      park counts. */
   remoteHeadWait?: PipelineBoundedWait;
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,

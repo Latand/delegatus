@@ -26,6 +26,22 @@ function validPipelineBranch(value: string): boolean {
   return validBaseBranch(value);
 }
 
+/* A single-branch fetch of a repository that is already cloned. The bound
+   only has to stop an unanswered connection from holding the caller: the
+   create request, or the provisioning tick with the pipeline mutation held. */
+const BASE_FETCH_TIMEOUT = "60s";
+
+/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
+    usually ends on SIGKILL with no exit status at all (#1692). */
+function killedAtBound(result: ExecResult): boolean {
+  return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
+}
+
+/** Resolves the exact commit a pipeline starts from. Without `baseRef` this
+    is the one remote read an internal pipeline makes: a bounded fetch of
+    `origin/<base>`, so the worktree starts from the current base (#360). A
+    remote that cannot answer refuses the creation rather than starting from
+    a stale ref. A pinned `baseRef` never touches the network. */
 export function resolvePipelineBase(
   repoDir: string,
   input: { baseBranch?: string; baseRef?: string },
@@ -36,10 +52,11 @@ export function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = exec(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      "timeout",
+      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
       repoDir,
     );
+    if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
   }
   const ref = requestedRef || `origin/${baseBranch}`;
@@ -217,7 +234,7 @@ const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failur
 /** Whether a failed remote read is one the network failed (#1692): it says
     nothing about the branch, so asking again is sound. A refused login, a
     missing repository and anything unrecognized are not. */
-export function remoteReadFailureIsTransient(error: string): boolean {
+function remoteReadFailureIsTransient(error: string): boolean {
   return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
 }
 
@@ -256,9 +273,7 @@ function readRemotePipelineBranch(
     pipeline.worktreeDir,
   );
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
-  /* `--signal=KILL` takes `timeout` down with its command, so a real expiry
-     usually ends on SIGKILL with no exit status at all (#1692). */
-  if (result.code === 124 || result.code === 137 || result.signal === "SIGKILL") {
+  if (killedAtBound(result)) {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
   }
   return failure(step, result);

@@ -78,9 +78,20 @@ test("default base fetches and resolves origin/main without inspecting a dirty s
 
   expect(resolvePipelineBase("/repo", {}, exec)).toEqual({ ok: true, baseBranch: "main", baseRef: expectedBase });
   expect(calls).toEqual([
-    "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+    "timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
     "git rev-parse --verify --end-of-options origin/main^{commit}",
   ]);
+});
+
+test("a base fetch the network never answers is killed at its bound and reported as a timeout (#1692)", () => {
+  const calls: string[] = [];
+  const exec: ExecPort = (command, args) => {
+    calls.push(`${command} ${args.join(" ")}`);
+    return command === "timeout" ? { code: null, stdout: "", stderr: "", signal: "SIGKILL" } : { code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" };
+  };
+
+  expect(resolvePipelineBase("/repo", {}, exec)).toEqual({ ok: false, error: "fetching origin/main: git fetch timed out after 60s" });
+  expect(calls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
 });
 
 test("an explicit base resolves to an exact SHA without fetching", () => {

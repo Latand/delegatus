@@ -46,7 +46,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, remoteReadFailureIsTransient, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -3148,19 +3148,14 @@ function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttem
 }
 
 /** A park a build before #1692 left because the remote head could not be
-    read, with the flow still approved. An internal pipeline never needed
-    that read, so it resumes once and settles on the local fence alone. A
-    `remote-branch` one resumes only from a network failure with no wait
-    booked, into the bounded wait; a park that wait ended keeps its wait and
-    stays put. A park on a remote head that answered a different SHA is a
-    verdict about the remote and never resumes here. */
+    read, with the flow still approved. Every such record is internal, and an
+    internal pipeline never needed that read, so it resumes once and settles
+    on the local fence alone. A park on a remote head that answered a
+    different SHA is a verdict about the remote and never resumes here. */
 function parkedOnUnverifiedRemoteHead(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, flow: Flow | null): boolean {
-  const prefix = `${APPROVED_REMOTE_HEAD_UNVERIFIED}: `;
   return flow?.state === "approved"
-    && !!attempt
-    && !attempt.remoteHeadWait
-    && !!attempt.error?.startsWith(prefix)
-    && (!publishesRemoteBranch(pipeline) || remoteReadFailureIsTransient(attempt.error.slice(prefix.length)));
+    && !publishesRemoteBranch(pipeline)
+    && !!attempt?.error?.startsWith(`${APPROVED_REMOTE_HEAD_UNVERIFIED}: `);
 }
 
 function terminalReviewFlowError(flow: Flow): string | null {
@@ -3791,7 +3786,7 @@ const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relati
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}} — run stages only`;
-const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and only creation or start without baseRef fetches the base, time-bounded) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 function stageViolations(violations: PipelineValidationViolation[]): { error: string; violations: PipelineValidationViolation[] } {
