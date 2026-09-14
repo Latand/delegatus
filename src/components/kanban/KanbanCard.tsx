@@ -5,11 +5,13 @@ import { memo } from "react";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { TaskStatus } from "@/lib/tasks/types";
+import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
+import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { attemptStateLabel, pipelineStateLabel, stageAttempts, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
+import { CardInlineText, withinEdit } from "./CardInlineText";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 
@@ -28,6 +30,25 @@ export const MoreGlyph = () => (
     <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
   </svg>
 );
+
+export const CloseGlyph = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
+export const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+
+/** The hue each colour name is drawn with; the name is what the board says. */
+export const TASK_COLOR_HEX: Record<TaskColor, string> = {
+  coral: "#e07a5f",
+  amber: "#d9a400",
+  lime: "#7cb342",
+  teal: "#1a9e8f",
+  sky: "#3d7fd6",
+  violet: "#8a63d2",
+  pink: "#d64f8a",
+  slate: "#7b8a99",
+};
+
+export function resurfaceText(t: TFunction, reason: GroupResurfaceReason): string {
+  return t(`kanban.resurfaced.${reason.kind}`);
+}
 
 export function statusLabel(t: TFunction, status: TaskStatus): string {
   return t(`kanban.status.${status}`);
@@ -187,6 +208,21 @@ export interface KanbanCardProps {
   onFocusCard: (cardId: string) => void;
   onOpenCatalog: () => void;
   onOpenOnBoard: () => void;
+  /** The title or description being edited on this card, with its draft. */
+  editing: { field: "title" | "description"; draft: string } | null;
+  /** A save the server refused: the draft is kept for Retry. */
+  failedEdit: { field: "title" | "description"; draft: string; message: string } | null;
+  /** Text an agent wrote to the field being edited, offered beside the draft. */
+  incomingEdit: { field: "title" | "description"; value: string } | null;
+  onStartEdit: (card: KanbanCardModel, field: "title" | "description") => void;
+  onEditDraft: (cardId: string, draft: string) => void;
+  onCommitEdit: (cardId: string) => void;
+  onCancelEdit: (cardId: string) => void;
+  onRetryEdit: (cardId: string) => void;
+  onDiscardEdit: (cardId: string) => void;
+  onUseTheirs: (cardId: string) => void;
+  onKeepMine: (cardId: string) => void;
+  onHide: (card: KanbanCardModel) => void;
   /** Open readers this card shows, by conversation identity, one per line —
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
@@ -200,7 +236,10 @@ function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
 }
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
-  const { card, status, pending, collapsed, nowMs } = props;
+  const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
+  /* The card holding the orchestrator's conversation stays on the board. */
+  const protectedSeat = card.holdsSeat;
+  const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
   const { t } = useLocale();
   const workspace = status === "assigned";
   const title = card.titlePending ? t("kanban.untitled") : card.title;
@@ -227,6 +266,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   if (card.conversations) activity.push({ key: "conversations", node: <span className="quiet num">{t("kanban.activityConversations", { count: card.conversations })}</span> });
   else if (card.pipelines.length === 0) activity.push({ key: "none", node: <span className="quiet">{t("kanban.activityNoAgent")}</span> });
   if (pipelinesWaiting) activity.push({ key: "waiting", node: <span className="quiet num">{t("kanban.activityStagesWaiting", { count: pipelinesWaiting })}</span> });
+  const hex = card.color ? TASK_COLOR_HEX[card.color] : null;
+  const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
     <article
       className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}`}
@@ -234,17 +275,43 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       data-kanban-card={card.id}
       data-pending={pending ? "1" : "0"}
       data-collapsed={collapsed ? "1" : "0"}
+      data-color={card.color ?? "none"}
+      data-protected={protectedSeat ? "1" : undefined}
+      style={style}
       tabIndex={0}
-      aria-label={aria}
+      aria-label={protectedSeat ? `${aria}, ${t("kanban.staysOnBoard")}` : aria}
       onKeyDown={(event) => props.onKey(card, event)}
       onPointerDown={(event) => props.onPointerDown(card, event)}
     >
       <span className="label" aria-hidden="true" />
       <span className="saving" aria-hidden="true" />
       <div className="head">
-        <h3 className={`title${card.titlePending ? " pending" : ""}`} title={card.title.length > 80 ? card.title : undefined}>
-          <span className="clamp">{title}</span>
-        </h3>
+        {editing?.field === "title" ? (
+          <CardInlineText
+            field="title"
+            draft={editing.draft}
+            onDraft={(draft) => props.onEditDraft(card.id, draft)}
+            onCommit={() => props.onCommitEdit(card.id)}
+            onCancel={() => props.onCancelEdit(card.id)}
+          />
+        ) : (
+          <h3 className={`title${card.titlePending ? " pending" : ""}`}>
+            {card.task ? (
+              <button
+                type="button"
+                className="title-trigger"
+                data-rename={card.id}
+                aria-label={card.titlePending ? t("kanban.renamePending") : t("kanban.renameAria", { title })}
+                title={card.title.length > 80 ? card.title : t("kanban.renameHint")}
+                onClick={() => props.onStartEdit(card, "title")}
+              >
+                <span className="clamp">{title}</span>
+              </button>
+            ) : (
+              <span className="clamp" title={card.title.length > 80 ? card.title : undefined}>{title}</span>
+            )}
+          </h3>
+        )}
         <div className="tools">
           <button
             type="button"
@@ -256,6 +323,22 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           >
             {collapsed ? <ChevronRight /> : <ChevronDown />}
           </button>
+          {card.task && protectedSeat ? (
+            <span className="icon-btn lock" role="img" aria-label={t("kanban.seatProtected")} title={t("kanban.seatProtected")} data-lock="">
+              <LockGlyph />
+            </span>
+          ) : card.task ? (
+            <button
+              type="button"
+              className="icon-btn hide"
+              data-hide={card.id}
+              aria-label={t("kanban.hideAria", { title })}
+              title={t("kanban.hideHint")}
+              onClick={() => props.onHide(card)}
+            >
+              <CloseGlyph />
+            </button>
+          ) : null}
           {card.task ? (
             <button
               type="button"
@@ -270,9 +353,62 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      {card.titlePending ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
-      {!collapsed && card.description ? (
+      {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
+      {collapsed ? null : editing?.field === "description" ? (
+        <CardInlineText
+          field="description"
+          draft={editing.draft}
+          onDraft={(draft) => props.onEditDraft(card.id, draft)}
+          onCommit={() => props.onCommitEdit(card.id)}
+          onCancel={() => props.onCancelEdit(card.id)}
+        />
+      ) : card.task && (card.description || workspace) ? (
+        <button
+          type="button"
+          className={`desc${card.description ? "" : " placeholder"}`}
+          data-describe={card.id}
+          aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
+          onClick={() => props.onStartEdit(card, "description")}
+        >
+          <span className="clamp">{card.description || t("kanban.addDescription")}</span>
+        </button>
+      ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
+      ) : null}
+
+      {!collapsed && failedEdit ? (
+        <div className="notice error" role="alert" data-edit-failed={failedEdit.field}>
+          <span className="msg">{t("kanban.notSaved", { error: failedEdit.message })}</span>
+          <button type="button" onClick={() => props.onRetryEdit(card.id)}>{t("kanban.retry")}</button>
+          <button type="button" onClick={() => props.onDiscardEdit(card.id)}>{t("kanban.discard")}</button>
+        </div>
+      ) : null}
+      {!collapsed && incomingEdit ? (
+        /* Part of the edit: pressing its buttons, however slowly, never counts
+           as leaving the field, and only leaving both saves. */
+        <div
+          className="notice info"
+          role="status"
+          data-edit-incoming={incomingEdit.field}
+          data-edit-scope=""
+          onBlur={(event) => {
+            const cardElement = event.currentTarget.closest<HTMLElement>("[data-kanban-card]");
+            setTimeout(() => {
+              if (!cardElement?.isConnected || withinEdit(cardElement, document.activeElement)) return;
+              props.onCommitEdit(card.id);
+            }, 0);
+          }}
+        >
+          <span className="msg">{t(incomingEdit.field === "title" ? "kanban.incomingTitle" : "kanban.incomingDescription", { value: incomingEdit.value })}</span>
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onUseTheirs(card.id)}>{t("kanban.useTheirs")}</button>
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onKeepMine(card.id)}>{t("kanban.keepMine")}</button>
+        </div>
+      ) : null}
+      {!collapsed && resurfaced ? (
+        <div className="notice info resurfaced" role="status" data-resurfaced={resurfaced.kind}>
+          <span className="msg">{t("kanban.resurfacedLine", { reason: resurfaceText(t, resurfaced) })}</span>
+          {protectedSeat ? null : <button type="button" onClick={() => props.onHide(card)}>{t("kanban.hideAgain")}</button>}
+        </div>
       ) : null}
 
       <div className="activity">

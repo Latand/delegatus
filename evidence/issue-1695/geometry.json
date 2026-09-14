@@ -1477,7 +1477,7 @@
     },
     "presence": {
       "top": {
-        "posts": 1,
+        "posts": 2,
         "mode": "scheme",
         "reported": 7,
         "tiles": [
@@ -1509,9 +1509,9 @@
         ]
       },
       "scrolled": {
-        "posts": 2,
+        "posts": 3,
         "mode": "scheme",
-        "reported": 7,
+        "reported": 6,
         "tiles": [
           {
             "path": "/repo/pending-worker.jsonl",

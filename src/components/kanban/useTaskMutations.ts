@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { fireTasksChanged } from "@/components/tasks/taskApi";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 
 /**
  * Optimistic status moves for the kanban board (#1695 K2).
@@ -24,6 +24,24 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
  * The optimistic status stays until the poll shows the write (its revision or
  * its status) or shows a newer write, so a card never blinks back to its old
  * column between the response and the next poll.
+ *
+ * Field edits (#1695 K4b) — the colour label, the group hide and the task's
+ * text — ride the same per-task queue and the same revision memory, so an edit
+ * and a status move of one task never race each other's guard. Their 409 is
+ * read the same way:
+ * - the server already holds the value: settled;
+ * - a colour or a hide: sent once more with the stored guard, since the label
+ *   and the hide say nothing about what else changed;
+ * - text: sent again while the stored text is still the text the edit started
+ *   from. When only another part of the text moved (an agent rewrote the
+ *   description under a new title), the caller's `rebase` puts the edit onto
+ *   the stored text and that is sent once instead. Only a change to the part
+ *   being edited is a conflict, and the caller shows both.
+ * A refusal with its own code (a protected seat) is final and rolls back.
+ *
+ * A poll carrying a revision this device's own later write replaced is older
+ * than what the board shows: it never releases an optimistic value, of any
+ * field or of the status. A newer revision from elsewhere still does.
  */
 
 export type StatusMoveOutcome =
@@ -33,10 +51,32 @@ export type StatusMoveOutcome =
   | { kind: "conflict"; task: BoardTask; from: TaskStatus; to: TaskStatus; serverStatus: TaskStatus }
   | { kind: "failed"; from: TaskStatus; to: TaskStatus; error: string; status: number };
 
-export type PatchResult = { ok: true; task: BoardTask } | { ok: false; status: number; error: string };
+export type PatchResult = { ok: true; task: BoardTask } | { ok: false; status: number; error: string; code?: string };
+
+export type TaskFieldChange =
+  | { field: "color"; value: TaskColor | null }
+  /* `replaces` names the stored hide (its `at`) of a group that came back to
+     the board: hiding it again is a new hide, even though the row has one. */
+  | { field: "hide"; value: boolean; replaces?: string | null }
+  /* `rebase` receives stored text that moved since the edit began and returns
+     the edit applied to it, or null when the edited part itself moved. */
+  | { field: "text"; value: string; rebase?: (stored: string) => string | null };
+
+export type TaskField = TaskFieldChange["field"];
+
+/** What an edit resolved to. `value` is the field's value as the board should
+    now show it: the new one after a save, the stored one after a conflict or
+    a settle, the previous one after a refusal. */
+export type FieldEditOutcome =
+  | { kind: "noop"; field: TaskField }
+  | { kind: "saved" | "settled"; field: TaskField; task: BoardTask }
+  | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
+  | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
+
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { hide: boolean } | { text: string });
 
 export interface TaskMutationPorts {
-  patch(id: string, body: { status: TaskStatus; expectedProject: string; expectedRevision: string }): Promise<PatchResult>;
+  patch(id: string, body: PatchBody): Promise<PatchResult>;
   /** The stored task, unremapped, or null when it no longer exists. */
   read(id: string): Promise<BoardTask | null>;
   /** A write landed: pollers should refresh. */
@@ -53,6 +93,40 @@ interface Override {
   confirmedRevision: string | null;
 }
 
+interface FieldOverride {
+  value: unknown;
+  /** The latest change this override shows. */
+  change: TaskFieldChange;
+  pending: number;
+  baseRevision: string | null;
+  confirmedRevision: string | null;
+}
+
+/** The field as a stored row holds it. */
+export function fieldValue(task: BoardTask, field: TaskField): unknown {
+  if (field === "color") return task.color ?? null;
+  if (field === "hide") return Boolean(task.groupHidden);
+  return task.text;
+}
+
+/** The change that would show `value` in `field`. */
+function changeOf(field: TaskField, value: unknown): TaskFieldChange {
+  if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
+  if (field === "hide") return { field, value: Boolean(value) };
+  return { field, value: String(value ?? "") };
+}
+
+/** Whether a stored row already shows `change`. */
+export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
+  if (change.field === "color") return (task.color ?? null) === change.value;
+  if (change.field === "text") return task.text === change.value;
+  if (!change.value) return !task.groupHidden;
+  return Boolean(task.groupHidden) && task.groupHidden!.at !== (change.replaces ?? null);
+}
+
+/** The edits a board shows ahead of the poll, per task. */
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; hide?: boolean; text?: string }>;
+
 export function revisionOf(task: BoardTask): string | null {
   const revision = (task as BoardTask & { revision?: unknown }).revision;
   return typeof revision === "string" ? revision : null;
@@ -68,6 +142,8 @@ export class TaskStatusMutations {
   private readonly replaced = new Map<string, Set<string>>();
   private readonly listeners = new Set<() => void>();
   private snapshot: ReadonlyMap<string, TaskStatus> = new Map();
+  private readonly fieldOverrides = new Map<string, Map<TaskField, FieldOverride>>();
+  private fieldSnapshot: FieldEdits = new Map();
 
   constructor(private readonly ports: TaskMutationPorts) {}
 
@@ -78,12 +154,17 @@ export class TaskStatusMutations {
 
   statuses = (): ReadonlyMap<string, TaskStatus> => this.snapshot;
 
+  edits = (): FieldEdits => this.fieldSnapshot;
+
   pending(id: string): boolean {
-    return (this.overrides.get(id)?.pending ?? 0) > 0;
+    if ((this.overrides.get(id)?.pending ?? 0) > 0) return true;
+    for (const override of this.fieldOverrides.get(id)?.values() ?? []) if (override.pending > 0) return true;
+    return false;
   }
 
   private emit(): void {
     this.snapshot = new Map([...this.overrides].map(([id, override]) => [id, override.status] as const));
+    this.fieldSnapshot = new Map([...this.fieldOverrides].map(([id, fields]) => [id, Object.fromEntries([...fields].map(([field, override]) => [field, override.value]))] as const));
     for (const listener of this.listeners) listener();
   }
 
@@ -106,6 +187,7 @@ export class TaskStatusMutations {
       if (override.pending > 0) continue;
       const row = byId.get(id);
       const revision = row ? revisionOf(row) : null;
+      if (revision !== null && this.replaced.get(id)?.has(revision)) continue;
       const caughtUp = !row
         || row.status === override.status
         || (revision !== null && revision === override.confirmedRevision)
@@ -115,7 +197,140 @@ export class TaskStatusMutations {
         changed = true;
       }
     }
+    for (const [id, fields] of this.fieldOverrides) {
+      const row = byId.get(id);
+      const revision = row ? revisionOf(row) : null;
+      if (revision !== null && this.replaced.get(id)?.has(revision)) continue;
+      for (const [field, override] of fields) {
+        if (override.pending > 0) continue;
+        const caughtUp = !row
+          || rowHolds(row, override.change)
+          || (revision !== null && revision === override.confirmedRevision)
+          || (revision !== null && revision !== override.baseRevision && revision !== override.confirmedRevision);
+        if (caughtUp) {
+          fields.delete(field);
+          changed = true;
+        }
+      }
+      if (!fields.size) this.fieldOverrides.delete(id);
+    }
     if (changed) this.emit();
+  }
+
+  /** Edit one field of `task`. Resolves once the server has answered. The
+      board shows the edit at once; with `after`, the write itself waits for
+      that promise to settle, so a bulk edit reaches the server one task at a
+      time while every card already shows it. */
+  edit(task: BoardTask, change: TaskFieldChange, options: { after?: Promise<unknown> } = {}): Promise<FieldEditOutcome> {
+    const id = task.id;
+    const fields = this.fieldOverrides.get(id) ?? new Map<TaskField, FieldOverride>();
+    const current = fields.get(change.field);
+    const from = current ? current.value : fieldValue(task, change.field);
+    const shown = current ? current.value === change.value && !(change.field === "hide" && change.replaces) : rowHolds(task, change);
+    if (shown && !current?.pending) return Promise.resolve({ kind: "noop", field: change.field });
+    const override: FieldOverride = current ?? { value: change.value, change, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
+    override.value = change.value;
+    override.change = change;
+    override.pending += 1;
+    fields.set(change.field, override);
+    this.fieldOverrides.set(id, fields);
+    this.emit();
+
+    const settled = (promise: Promise<unknown> | undefined) => (promise ?? Promise.resolve()).then(() => undefined, () => undefined);
+    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then(() => this.writeField(task, change, from));
+    this.chains.set(id, run);
+    void run.finally(() => {
+      if (this.chains.get(id) === run) this.chains.delete(id);
+    });
+    return run;
+  }
+
+  private settleField(id: string, field: TaskField, value: unknown, confirmed: string | null, keep: boolean, change?: TaskFieldChange): void {
+    const fields = this.fieldOverrides.get(id);
+    const override = fields?.get(field);
+    if (!fields || !override) return;
+    override.pending = Math.max(0, override.pending - 1);
+    if (override.pending === 0) {
+      if (keep) {
+        override.value = value;
+        if (change) override.change = change;
+        else if (override.change.field === "text" && typeof value === "string") override.change = { field: "text", value };
+        override.confirmedRevision = confirmed;
+      } else {
+        fields.delete(field);
+        if (!fields.size) this.fieldOverrides.delete(id);
+      }
+    }
+    this.emit();
+  }
+
+  private bodyFor(change: TaskFieldChange, guard: { project: string; revision: string }): PatchBody {
+    const fence = { expectedProject: guard.project, expectedRevision: guard.revision };
+    if (change.field === "color") return { ...fence, color: change.value ?? "none" };
+    if (change.field === "hide") return { ...fence, hide: change.value };
+    return { ...fence, text: change.value };
+  }
+
+  private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown): Promise<FieldEditOutcome> {
+    const id = task.id;
+    const field = change.field;
+    /* A refused edit returns the field to where it started. When an earlier
+       write of this device confirmed that value (a hide, before its refused
+       Undo), the board keeps showing it until the poll catches up, instead of
+       falling back to a row older than that write. */
+    const failed = (status: number, error: string, code?: string): FieldEditOutcome => {
+      const confirmed = this.fieldOverrides.get(id)?.get(field)?.confirmedRevision ?? null;
+      this.settleField(id, field, from, confirmed, confirmed !== null, changeOf(field, from));
+      return { kind: "failed", field, error, status, ...(code ? { code } : {}) };
+    };
+    let guard = this.guardFor(task);
+    if (!guard) {
+      const stored = await this.readSafely(id);
+      if (!stored) return failed(404, "task not found");
+      this.remember(stored);
+      guard = this.guardFor(stored)!;
+    }
+    const first = await this.patchSafely(id, this.bodyFor(change, guard));
+    const savedField = (saved: BoardTask, replacing: string | null, value: unknown = change.value): FieldEditOutcome => {
+      this.remember(saved, replacing);
+      this.settleField(id, field, value, revisionOf(saved), true);
+      this.ports.changed();
+      return { kind: "saved", field, task: saved };
+    };
+    if (first.ok) return savedField(first.task, guard.revision);
+    if (first.status !== 409 || (first.code && first.code !== "TASK_REVISION_MISMATCH" && first.code !== "TASK_PROJECT_MISMATCH")) {
+      return failed(first.status, first.error, first.code);
+    }
+
+    const stored = await this.readSafely(id);
+    if (!stored) return failed(404, "task not found");
+    this.remember(stored);
+    const storedValue = fieldValue(stored, field);
+    if (rowHolds(stored, change)) {
+      this.settleField(id, field, change.value, revisionOf(stored), true);
+      this.ports.changed();
+      return { kind: "settled", field, task: stored };
+    }
+    const storedGuard = { project: stored.project, revision: revisionOf(stored) ?? "" };
+    if (field !== "text" || storedValue === from) {
+      const retry = await this.patchSafely(id, this.bodyFor(change, storedGuard));
+      if (retry.ok) return savedField(retry.task, revisionOf(stored));
+      return failed(retry.status, retry.error, retry.code);
+    }
+    const rebased = change.field === "text" && change.rebase ? change.rebase(stored.text) : null;
+    if (rebased !== null) {
+      if (rebased === stored.text) {
+        this.settleField(id, field, stored.text, revisionOf(stored), true);
+        this.ports.changed();
+        return { kind: "settled", field, task: stored };
+      }
+      const retry = await this.patchSafely(id, this.bodyFor({ field: "text", value: rebased }, storedGuard));
+      if (retry.ok) return savedField(retry.task, revisionOf(stored), rebased);
+      return failed(retry.status, retry.error, retry.code);
+    }
+    this.settleField(id, field, storedValue, revisionOf(stored), true);
+    this.ports.changed();
+    return { kind: "conflict", field, task: stored, serverValue: storedValue };
   }
 
   /** Move `task` to `to`. Resolves once the server has answered. */
@@ -221,7 +436,7 @@ export class TaskStatusMutations {
     return { kind: "failed", from, to, error, status };
   }
 
-  private async patchSafely(id: string, body: { status: TaskStatus; expectedProject: string; expectedRevision: string }): Promise<PatchResult> {
+  private async patchSafely(id: string, body: PatchBody): Promise<PatchResult> {
     try {
       return await this.ports.patch(id, body);
     } catch (error) {
@@ -245,9 +460,9 @@ export const browserTaskMutationPorts: TaskMutationPorts = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const json = (await response.json().catch(() => null)) as { task?: BoardTask; error?: string } | null;
+    const json = (await response.json().catch(() => null)) as { task?: BoardTask; error?: string; code?: string } | null;
     if (response.ok && json?.task) return { ok: true, task: json.task };
-    return { ok: false, status: response.status, error: json?.error ?? `HTTP ${response.status}` };
+    return { ok: false, status: response.status, error: json?.error ?? `HTTP ${response.status}`, ...(json?.code ? { code: json.code } : {}) };
   },
   async read(id) {
     const response = await fetch("/api/tasks", { cache: "no-store" });
@@ -268,6 +483,7 @@ export function useTaskMutations(tasks: readonly BoardTask[], ports: TaskMutatio
   }), []);
   useEffect(() => { portsRef.current = ports; }, [ports]);
   const statuses = useSyncExternalStore(controller.subscribe, controller.statuses, controller.statuses);
+  const edits = useSyncExternalStore(controller.subscribe, controller.edits, controller.edits);
   useEffect(() => { controller.reconcile(tasks); }, [controller, tasks]);
-  return { controller, statuses };
+  return { controller, statuses, edits };
 }

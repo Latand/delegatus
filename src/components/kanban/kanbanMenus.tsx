@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import type { TaskStatus } from "@/lib/tasks/types";
+import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 
 /* Menus and popovers of the kanban board, ported from the approved prototype
    (`prototypes/kanban-board/app.js` openMenu/openTray): fixed to the viewport
@@ -12,6 +12,8 @@ import type { TaskStatus } from "@/lib/tasks/types";
 export type KanbanMenuItem =
   | { type: "head"; label: string }
   | { type: "sep" }
+  /* The colour labels as a row of swatches, each a radio item; `null` is none. */
+  | { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
   | {
     type: "item" | "radio";
     label: string;
@@ -20,6 +22,9 @@ export type KanbanMenuItem =
     status?: TaskStatus;
     checked?: boolean;
     disabled?: boolean;
+    /** The item moves focus itself (an editor opens, the card leaves): the
+        menu closes without handing focus back to its anchor. */
+    keepFocus?: boolean;
     onSelect: () => void;
   };
 
@@ -90,6 +95,30 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
       {items.map((item, index) => {
         if (item.type === "sep") return <div key={`sep-${index}`} className="sep" role="separator" />;
         if (item.type === "head") return <div key={`head-${index}`} className="head">{item.label}</div>;
+        if (item.type === "swatches") {
+          return (
+            <div key={`swatches-${index}`} className="swatches" role="group" aria-label={item.label}>
+              {[null, ...TASK_COLORS].map((color) => (
+                <button
+                  key={color ?? "none"}
+                  type="button"
+                  className="swatch"
+                  role="menuitemradio"
+                  aria-checked={item.value === color}
+                  aria-label={item.names(color)}
+                  title={item.names(color)}
+                  data-swatch={color ?? "none"}
+                  data-none={color ? undefined : "1"}
+                  style={color ? ({ "--c": item.hex[color] } as React.CSSProperties) : undefined}
+                  onClick={() => {
+                    onClose(true);
+                    item.onPick(color);
+                  }}
+                />
+              ))}
+            </div>
+          );
+        }
         return (
           <button
             key={`${item.type}-${item.label}`}
@@ -99,7 +128,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
             aria-disabled={item.disabled ? true : undefined}
             onClick={() => {
               if (item.disabled) return;
-              onClose(true);
+              onClose(!item.keepFocus);
               item.onSelect();
             }}
           >

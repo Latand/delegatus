@@ -7,7 +7,8 @@ import { conversationIdentity, formatConversationHash } from "@/lib/accounts/ide
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import { admissionSnapshot, type SeatRefs } from "@/lib/tasks/groupHide";
+import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { compactPipelineLayoutFlows, latestAttempt } from "@/components/pipelines/pipelineModel";
@@ -19,13 +20,15 @@ import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 import { cleanTitle } from "@/components/utils";
 
-import { KanbanCard, MoreGlyph, statusLabel } from "./KanbanCard";
+import { HiddenTray } from "./HiddenTray";
+import { KanbanCard, MoreGlyph, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
-import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
+import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
@@ -40,6 +43,12 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type Reade
  * grouping never differ between the two boards while both exist. Status moves
  * are optimistic and revision-guarded (`useTaskMutations`); every other write
  * this slice offers goes through an existing route.
+ *
+ * K4b: a card's title, description and colour are edited in place, and a task
+ * group is hidden with `×`, its menu, `H` or a column's bulk hide, each with
+ * one Undo. All of them ride the same guarded queue. The Hidden tray lists
+ * every group, empty task and closed conversation the board is not drawing,
+ * and a hidden group that needs the operator again comes back with its reason.
  */
 
 export type KanbanLayoutMode = "wide" | "narrow" | "scroll" | "tabs";
@@ -79,7 +88,7 @@ export interface KanbanBoardProps {
   viewSwitch?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
-  seat?: (boardId: string) => ReactNode;
+  seat?: (boardId: string, seatRead: OrchestratorSeatRead | null) => ReactNode;
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
@@ -89,6 +98,16 @@ export interface KanbanBoardProps {
   onOpenCatalog: () => void;
   /** The scheme board, for surfaces this board does not draw yet. */
   onOpenOnBoard: () => void;
+  /** Conversations closed on this project's board (the `hidden` board
+      preference); the Hidden tray lists the ones this board carries. */
+  closedPaths?: readonly string[];
+  /** Restore a closed conversation to the board. */
+  onRestoreConversation?: (file: FileEntry) => void;
+  /** The project's checkout, for the orchestrator seat read. */
+  projectCwd?: string;
+  /** The project's seat as a caller already knows it; read from the seat
+      route when absent. */
+  seatRefs?: SeatRefs | null;
   mutationPorts?: TaskMutationPorts;
   assignmentPorts?: AssignmentPorts;
   /** Where open readers are remembered; this browser's storage by default. */
@@ -117,6 +136,33 @@ function cssEscape(value: string): string {
 function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
   return model.columns[card.status].shown.some((shown) => shown.id === card.id) || model.unlinkedShown.some((shown) => shown.id === card.id);
 }
+
+type EditField = "title" | "description";
+
+/** The title (first line) or description (the rest) of a task's text. */
+function textField(text: string, field: EditField): string {
+  const newline = text.search(/\r?\n/);
+  if (field === "title") return (newline < 0 ? text : text.slice(0, newline)).trim();
+  return newline < 0 ? "" : text.slice(newline).trim();
+}
+
+/** The task's text with one of its fields replaced, the other kept byte for byte. */
+function withField(text: string, field: EditField, value: string): string {
+  const newline = text.search(/\r?\n/);
+  if (field === "title") return newline < 0 ? value : value + text.slice(newline);
+  const first = newline < 0 ? text : text.slice(0, newline);
+  return value ? `${first}\n${value}` : first;
+}
+
+function withEntry<V>(map: ReadonlyMap<string, V>, key: string, value: V | undefined): ReadonlyMap<string, V> {
+  if (value === undefined && !map.has(key)) return map;
+  const next = new Map(map);
+  if (value === undefined) next.delete(key);
+  else next.set(key, value);
+  return next;
+}
+
+const NO_EDITS: ReadonlyMap<string, never> = new Map<string, never>();
 
 function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -158,7 +204,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
-    { kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
+    { kind: "status" | "card" | "colour"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -170,14 +216,67 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (latestUndo.current && !receipts.some((receipt) => receipt.id === latestUndo.current!.receiptId)) latestUndo.current = null;
   }, [receipts]);
 
-  const { bands, projection } = useBands(props);
-  const { controller, statuses } = useTaskMutations(allTasks, props.mutationPorts);
+  const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
+  /* The board draws the edits it has sent ahead of the poll: a new title or
+     colour at once, and a hidden group gone at once with a hide stamped now. */
+  const hideStamps = useRef(new Map<string, string>());
+  const effectiveTasks = useMemo(() => {
+    if (!edits.size) {
+      hideStamps.current.clear();
+      return allTasks;
+    }
+    return allTasks.map((task) => {
+      const edit = edits.get(task.id);
+      if (!edit) {
+        hideStamps.current.delete(task.id);
+        return task;
+      }
+      const next: BoardTask = { ...task };
+      if ("color" in edit) {
+        if (edit.color) next.color = edit.color;
+        else delete next.color;
+      }
+      if (edit.hide === true) {
+        let at = hideStamps.current.get(task.id);
+        if (!at) hideStamps.current.set(task.id, (at = new Date().toISOString()));
+        next.groupHidden = { at, by: "operator", admitted: admissionSnapshot(task.assignments) };
+      } else {
+        hideStamps.current.delete(task.id);
+        if (edit.hide === false) delete next.groupHidden;
+      }
+      if (typeof edit.text === "string") {
+        next.text = edit.text;
+        if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
+      }
+      return next;
+    });
+  }, [allTasks, edits]);
+  const { bands, projection } = useBands({ ...props, allTasks: effectiveTasks });
+  /* The seat as its route reports it, active and pending. While it is unknown
+     the board guesses nothing: the × stays, and the server decides. This is
+     the page's one read of the seat: the orchestrator panel above the columns
+     is handed the same read and polls nothing of its own. */
+  const seatRead = useOrchestratorSeat(props.seatRefs === undefined ? project : null, props.projectCwd);
+  const seatKey = props.seatRefs !== undefined
+    ? (props.seatRefs ? JSON.stringify(props.seatRefs) : "")
+    : (seatRead.status ? JSON.stringify([seatRead.status.seat, seatRead.status.pending].map((seat) => [seat?.conversationId ?? null, seat?.path ?? null])) : "");
+  const seatRefs = useMemo<SeatRefs | null>(() => {
+    if (props.seatRefs !== undefined) return props.seatRefs;
+    const status = seatRead.status;
+    if (!status) return null;
+    const seats = [status.seat, status.pending];
+    return {
+      conversationIds: seats.flatMap((seat) => (seat?.conversationId ? [seat.conversationId] : [])),
+      paths: seats.flatMap((seat) => (seat?.path ? [seat.path] : [])),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by what the seat names
+  }, [seatKey]);
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: allTasks, pipelines, projection, files, statusOverrides: statuses, query, now: modelNow }),
-    [bands, allTasks, pipelines, projection, files, statuses, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, statuses, seatRefs, query, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
@@ -187,6 +286,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
   const tasksById = useRef(new Map<string, BoardTask>());
   tasksById.current = new Map(allTasks.map((task) => [task.id, task] as const));
+  const effectiveById = useRef(new Map<string, BoardTask>());
+  effectiveById.current = new Map(effectiveTasks.map((task) => [task.id, task] as const));
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file] as const)), [files]);
 
   /* ── Readers: conversations open inside cards ────────────────────────── */
@@ -393,6 +494,320 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (target) move(card, target, { focus });
   }, [move]);
 
+  /* ── Inline title and description (prototype `startEdit`/`commitEdit`) ── */
+  /* Drafts belong to the board, keyed by card, so a card that re-ranks, moves
+     or re-renders keeps what the operator typed. A refused save keeps the
+     draft for Retry; text an agent wrote meanwhile is offered beside it. */
+  const [editing, setEditing] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string }>>(NO_EDITS);
+  const [failedEdits, setFailedEdits] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string; message: string }>>(NO_EDITS);
+  const [incomingEdits, setIncomingEdits] = useState<ReadonlyMap<string, { field: EditField; value: string }>>(NO_EDITS);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const failedRef = useRef(failedEdits);
+  failedRef.current = failedEdits;
+  const incomingRef = useRef(incomingEdits);
+  incomingRef.current = incomingEdits;
+  /* A card that should hold focus once React has drawn it: the card an edit
+     closed on, or the next card after a hide. */
+  const pendingCardFocus = useRef<{ cardId: string; fallback: TaskStatus | null; always: boolean } | null>(null);
+  const shortTitle = (card: KanbanCardModel) => {
+    const title = card.titlePending ? t("kanban.untitled") : card.title;
+    return title.length > 48 ? `${title.slice(0, 46).trimEnd()}…` : title;
+  };
+  const startEdit = useCallback((card: KanbanCardModel, field: EditField) => {
+    const task = card.task ? effectiveById.current.get(card.task.id) : undefined;
+    if (!task) return;
+    const base = textField(task.text, field);
+    /* A draft a refused save kept is what the field reopens with. */
+    const kept = failedRef.current.get(card.id);
+    const retained = kept?.field === field ? kept : null;
+    if (retained) setFailedEdits((current) => withEntry(current, card.id, undefined));
+    setIncomingEdits((current) => withEntry(current, card.id, undefined));
+    setEditing((current) => withEntry(current, card.id, retained
+      ? { field, draft: retained.draft, base: retained.base }
+      : { field, draft: field === "title" && card.titlePending ? "" : base, base }));
+    if (field === "description") {
+      setCollapsed((current) => {
+        if (!current.has(card.id)) return current;
+        const next = new Set(current);
+        next.delete(card.id);
+        return next;
+      });
+    }
+  }, []);
+  /* `base` is the field as the edit found it: a save whose stored field still
+     reads `base` goes onto the stored text, whatever else moved there. */
+  const saveText = useCallback(async (cardId: string, field: EditField, draft: string, base?: string): Promise<void> => {
+    const card = cardsByIdRef.current.get(cardId);
+    const raw = card?.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!card || !raw) return;
+    const value = draft.trim();
+    const currentText = effectiveById.current.get(raw.id)?.text ?? raw.text;
+    const found = base ?? textField(currentText, field);
+    if (field === "title" && !value) {
+      setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: t("kanban.titleRequired") }));
+      return;
+    }
+    if (textField(currentText, field) === value && !(field === "title" && card.titlePending)) {
+      setFailedEdits((current) => withEntry(current, cardId, undefined));
+      return;
+    }
+    setFailedEdits((current) => withEntry(current, cardId, undefined));
+    const outcome: FieldEditOutcome = await controller.edit(raw, {
+      field: "text",
+      value: withField(currentText, field, value),
+      rebase: (stored) => (textField(stored, field) === found ? withField(stored, field, value) : null),
+    });
+    if (outcome.kind === "failed") {
+      flash(cardId);
+      setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: /[.!?…]$/.test(outcome.error.trim()) ? outcome.error.trim() : `${outcome.error.trim()}.` }));
+    } else if (outcome.kind === "conflict") {
+      /* An agent wrote this field meanwhile: the editor comes back with the
+         operator's draft, and their text beside it. */
+      const theirs = textField(typeof outcome.serverValue === "string" ? outcome.serverValue : "", field);
+      if (theirs === value) return;
+      setEditing((current) => withEntry(current, cardId, { field, draft, base: theirs }));
+      setIncomingEdits((current) => withEntry(current, cardId, { field, value: theirs }));
+    } else {
+      setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    }
+  }, [controller, flash, t]);
+  const commitEdit = useCallback((cardId: string) => {
+    const entry = editingRef.current.get(cardId);
+    if (!entry) return;
+    /* Enter or Save keeps the operator on the card; leaving the field for
+       somewhere else leaves focus where they put it. */
+    const editor = rootRef.current?.querySelector(`.card[data-id="${cssEscape(cardId)}"] [data-card-editor]`)?.closest(".editor");
+    if (editor && editor.contains(document.activeElement)) pendingCardFocus.current = { cardId, fallback: null, always: true };
+    setEditing((current) => withEntry(current, cardId, undefined));
+    setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    void saveText(cardId, entry.field, entry.draft, entry.base);
+  }, [saveText]);
+  const cancelEdit = useCallback((cardId: string) => {
+    pendingCardFocus.current = { cardId, fallback: null, always: true };
+    setEditing((current) => withEntry(current, cardId, undefined));
+    setIncomingEdits((current) => withEntry(current, cardId, undefined));
+  }, []);
+  const editDraft = useCallback((cardId: string, draft: string) => {
+    setEditing((current) => {
+      const entry = current.get(cardId);
+      return entry ? withEntry(current, cardId, { ...entry, draft }) : current;
+    });
+  }, []);
+  const focusEditor = (cardId: string) => queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"] [data-card-editor]`)?.focus());
+  const retryEdit = useCallback((cardId: string) => {
+    const failed = failedRef.current.get(cardId);
+    if (!failed) return;
+    setFailedEdits((current) => withEntry(current, cardId, undefined));
+    void saveText(cardId, failed.field, failed.draft, failed.base);
+  }, [saveText]);
+  const discardEdit = useCallback((cardId: string) => {
+    pendingCardFocus.current = { cardId, fallback: null, always: true };
+    setFailedEdits((current) => withEntry(current, cardId, undefined));
+  }, []);
+  const takeTheirs = useCallback((cardId: string) => {
+    const incoming = incomingRef.current.get(cardId);
+    setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    if (incoming) setEditing((current) => withEntry(current, cardId, { field: incoming.field, draft: incoming.value, base: incoming.value }));
+    focusEditor(cardId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusEditor reads refs only
+  }, []);
+  const keepMine = useCallback((cardId: string) => {
+    setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    focusEditor(cardId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusEditor reads refs only
+  }, []);
+  /* A poll that brings different text into a field being edited never
+     overwrites the draft: it is offered beside it, once per change. */
+  useEffect(() => {
+    if (!editing.size) return;
+    let changed = false;
+    const nextEditing = new Map(editing);
+    let nextIncoming = incomingRef.current;
+    for (const [cardId, entry] of editing) {
+      const card = cardsByIdRef.current.get(cardId);
+      const raw = card?.task ? allTasks.find((task) => task.id === card.task!.id) : undefined;
+      /* A write of this device still ahead of the poll is not an agent's text. */
+      if (!raw || controller.pending(raw.id) || controller.edits().get(raw.id)?.text !== undefined) continue;
+      const theirs = textField(raw.text, entry.field);
+      if (theirs === entry.base) continue;
+      nextEditing.set(cardId, { ...entry, base: theirs });
+      changed = true;
+      if (theirs !== entry.draft.trim()) nextIncoming = withEntry(nextIncoming, cardId, { field: entry.field, value: theirs });
+    }
+    if (!changed) return;
+    setEditing(nextEditing);
+    setIncomingEdits(nextIncoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the stored rows change
+  }, [allTasks]);
+
+  /* ── Colour ─────────────────────────────────────────────────────────────── */
+  const setColor = useCallback((card: KanbanCardModel, color: TaskColor | null) => {
+    const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!raw) return;
+    void controller.edit(raw, { field: "color", value: color }).then((outcome) => {
+      if (outcome.kind !== "failed") return;
+      flash(card.id);
+      show(t("kanban.colorFailed", { title: shortTitle(card), error: outcome.error }), {
+        label: t("kanban.retry"),
+        run: () => {
+          const current = cardsByIdRef.current.get(card.id);
+          if (current) setColor(current, color);
+        },
+      }, { error: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shortTitle reads the card it is given
+  }, [controller, flash, show, t]);
+
+  /* ── Group hide, one card or a column's worth (prototype `hideTask`/`hideMany`) ── */
+  /* Showing a hidden group again: the inverse write, through the same queue. */
+  const showGroup = useCallback((taskId: string, title: string, options: { receipt?: boolean; focus?: boolean } = {}) => {
+    const raw = tasksById.current.get(taskId);
+    if (!raw) return;
+    const receiptId = options.receipt !== false ? show(t("kanban.restoredReceipt", { title })) : null;
+    if (options.focus) pendingCardFocus.current = { cardId: `task:${taskId}`, fallback: null, always: true };
+    void controller.edit(raw, { field: "hide", value: false }).then((outcome) => {
+      if (outcome.kind !== "failed") return;
+      /* The group is hidden again: the receipt that said otherwise goes. */
+      if (receiptId !== null) dismiss(receiptId);
+      show(t("kanban.showFailed", { title, error: outcome.error }), { label: t("kanban.retry"), run: () => showGroup(taskId, title, options) }, { error: true });
+    });
+  }, [controller, dismiss, show, t]);
+  /* The card focus moves to when a card leaves its column: the next one, else
+     the previous, else the column's menu. */
+  const neighbourOf = (cardId: string): { cardId: string; fallback: TaskStatus | null; always: boolean } | null => {
+    const element = rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`);
+    if (!element) return null;
+    const siblings = [...(element.closest(".col-body")?.querySelectorAll<HTMLElement>(".card[data-id]") ?? [])];
+    const index = siblings.indexOf(element);
+    const next = siblings[index + 1] ?? siblings[index - 1];
+    const status = (element.closest<HTMLElement>(".column")?.dataset.status as TaskStatus | undefined) ?? null;
+    return { cardId: next?.dataset.id ?? "", fallback: status, always: element.contains(document.activeElement) };
+  };
+  const hideFailedReceipt = (card: KanbanCardModel, outcome: Extract<FieldEditOutcome, { kind: "failed" }>, retry: (() => void) | null) => {
+    flash(card.id);
+    if (outcome.code === "TASK_HIDE_PROTECTED") show(t("kanban.hideProtected", { title: shortTitle(card) }), undefined, { error: true });
+    else show(t("kanban.hideFailed", { title: shortTitle(card), error: outcome.error }), retry ? { label: t("kanban.retry"), run: retry } : undefined, { error: true });
+  };
+  const hideCard = useCallback((card: KanbanCardModel) => {
+    const raw = card.task ? tasksById.current.get(card.task.id) : undefined;
+    if (!raw) return;
+    const title = shortTitle(card);
+    if (card.holdsSeat) {
+      show(t("kanban.hideProtected", { title }), undefined, { error: true });
+      return;
+    }
+    pendingCardFocus.current = neighbourOf(card.id);
+    const undo = () => showGroup(raw.id, title, { focus: true });
+    const receiptId = show(card.working ? t("kanban.hiddenReceiptWorking", { title, count: card.working }) : t("kanban.hiddenReceipt", { title }), { label: t("kanban.undo"), run: undo });
+    latestUndo.current = { receiptId, run: undo };
+    void controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }).then((outcome) => {
+      if (outcome.kind !== "failed") return;
+      dismiss(receiptId);
+      if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
+      hideFailedReceipt(card, outcome, () => {
+        const current = cardsByIdRef.current.get(card.id);
+        if (current) hideCard(current);
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read refs and the card they are given
+  }, [controller, dismiss, show, showGroup, t]);
+  /* Many groups at once: every card leaves at once, the writes go one task at
+     a time, one Undo brings back every group that was hidden, and each task
+     the server refuses comes back with its own receipt. Groups with a working
+     agent and the seat's group are never in the list. */
+  const hideMany = useCallback((cards: readonly KanbanCardModel[], text: string) => {
+    const targets = cards.flatMap((card) => {
+      const raw = card.task && !card.holdsSeat ? tasksById.current.get(card.task.id) : undefined;
+      return raw ? [{ card, raw }] : [];
+    });
+    if (!targets.length) return;
+    const refused = new Set<string>();
+    let previous: Promise<unknown> = Promise.resolve();
+    const outcomes = targets.map(({ raw }) => {
+      const outcome = controller.edit(raw, { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { after: previous });
+      previous = outcome;
+      return outcome;
+    });
+    /* Undo shows every group this hide hid, one write at a time. A group the
+       server keeps hidden gets its own receipt with Retry, and the count says
+       only how many came back. */
+    const undo = () => {
+      let chain: Promise<unknown> = Promise.resolve();
+      const back = targets.filter(({ raw }) => !refused.has(raw.id)).map(({ card, raw }) => {
+        const outcome = controller.edit(tasksById.current.get(raw.id) ?? raw, { field: "hide", value: false }, { after: chain });
+        chain = outcome;
+        return outcome.then((result) => {
+          if (result.kind !== "failed") return true;
+          const title = shortTitle(card);
+          show(t("kanban.showFailed", { title, error: result.error }), { label: t("kanban.retry"), run: () => showGroup(raw.id, title, { focus: true }) }, { error: true });
+          return false;
+        });
+      });
+      void Promise.all(back).then((results) => {
+        const count = results.filter(Boolean).length;
+        if (count) show(t("kanban.backOnBoardMany", { count }));
+      });
+    };
+    const receiptId = show(text, { label: t("kanban.undo"), run: undo });
+    latestUndo.current = { receiptId, run: undo };
+    targets.forEach(({ card, raw }, index) => {
+      void outcomes[index]!.then((outcome) => {
+        if (outcome.kind !== "failed") return;
+        refused.add(raw.id);
+        hideFailedReceipt(card, outcome, null);
+        if (refused.size === targets.length) {
+          dismiss(receiptId);
+          if (latestUndo.current?.receiptId === receiptId) latestUndo.current = null;
+        }
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers read refs and the cards they are given
+  }, [controller, dismiss, show, showGroup, t]);
+  /* The column's own bulk hides, as its menu and the idle divider offer them. */
+  const idleToHide = (column: KanbanModel["columns"][TaskStatus]) => column.shown.filter((card) => card.idle && !card.holdsSeat && card.task);
+  const hideIdle = (status: TaskStatus) => {
+    const idle = idleToHide(modelRef.current.columns[status]);
+    hideMany(idle, t("kanban.hiddenIdle", { count: idle.length }));
+  };
+  useLayoutEffect(() => {
+    const wanted = pendingCardFocus.current;
+    if (!wanted) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const active = document.activeElement;
+    /* Focus is moved only when the operator's own control went away with the
+       change, or the change asked for it. */
+    if (!wanted.always && active && active !== document.body && root.contains(active)) {
+      pendingCardFocus.current = null;
+      return;
+    }
+    const card = wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null;
+    const target = card ?? (wanted.fallback ? root.querySelector<HTMLElement>(`[data-colmenu="${wanted.fallback}"]`) : null);
+    if (!target) return;
+    pendingCardFocus.current = null;
+    target.focus({ preventScroll: !card });
+    if (card) card.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
+
+  /* A hidden group that something newer brought back says so once, as it
+     happens; one already back when the board opened says it on its card. */
+  const hiddenBefore = useRef<ReadonlySet<string>>(new Set());
+  /* The first seat read is the board learning the seat, never a designation. */
+  const seatKnownBefore = useRef(false);
+  useEffect(() => {
+    const now = new Set(model.hiddenGroups.flatMap((card) => (card.task ? [card.task.id] : [])));
+    for (const { card, reason } of model.resurfaced) {
+      const id = card.task?.id;
+      if (!id || !hiddenBefore.current.has(id) || edits.get(id)?.hide !== undefined) continue;
+      if (reason.kind === "seat" && !seatKnownBefore.current) continue;
+      show(t("kanban.resurfacedReceipt", { title: shortTitle(card), reason: resurfaceText(t, reason) }));
+    }
+    hiddenBefore.current = now;
+    seatKnownBefore.current = seatRefs !== null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the model only
+  }, [model]);
+
   /* ── Menus ───────────────────────────────────────────────────────────── */
   const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => KANBAN_STATUSES.map((status) => ({
     type: "radio" as const,
@@ -406,19 +821,36 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const open = menu.open;
     if (!open) return null;
     if (open.value.kind === "column") {
-      const hidden = model.offBoard.length;
-      return {
-        label: t("kanban.columnActions", { column: statusLabel(t, open.value.status) }),
-        items: [{
+      const status = open.value.status;
+      const column = model.columns[status];
+      const items: KanbanMenuItem[] = [];
+      if (status === "assigned") {
+        const idle = idleToHide(column);
+        items.push({ type: "item", label: t("kanban.hideIdle", { count: idle.length }), why: t("kanban.hideIdleWhy"), disabled: !idle.length, keepFocus: true, onSelect: () => hideMany(idle, t("kanban.hiddenIdle", { count: idle.length })) });
+      }
+      if (status === "done") {
+        const eligible = column.shown.filter((card) => card.task && !card.holdsSeat);
+        const finished = eligible.filter((card) => card.activity === 0);
+        const kept = eligible.length - finished.length;
+        items.push({
           type: "item",
-          label: t("kanban.showHiddenTasks", { count: hidden }),
-          disabled: hidden === 0,
-          onSelect: () => {
-            const pill = rootRef.current?.querySelector<HTMLElement>("[data-hidden-pill]");
-            if (pill) queueMicrotask(() => menu.setOpen({ anchor: pill, value: { kind: "tray" } }));
-          },
-        }],
-      };
+          label: t("kanban.hideFinished", { count: finished.length }),
+          why: kept ? t("kanban.hideFinishedKeeps", { count: kept }) : t("kanban.hideFinishedWhy"),
+          disabled: !finished.length,
+          keepFocus: true,
+          onSelect: () => hideMany(finished, kept ? t("kanban.hiddenFinishedKept", { count: finished.length, kept }) : t("kanban.hiddenFinished", { count: finished.length })),
+        });
+      }
+      items.push({
+        type: "item",
+        label: t("kanban.showHiddenTasks", { count: hiddenCount }),
+        disabled: hiddenCount === 0,
+        onSelect: () => {
+          const pill = rootRef.current?.querySelector<HTMLElement>("[data-hidden-pill]");
+          if (pill) queueMicrotask(() => menu.setOpen({ anchor: pill, value: { kind: "tray" } }));
+        },
+      });
+      return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
     if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
@@ -434,13 +866,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (value.kind === "status") {
       return { label: t("kanban.statusOf", { title }), items: [{ type: "head", label: t("kanban.moveTo") }, ...statusItems(card, true), ...common] };
     }
+    const swatches: KanbanMenuItem = {
+      type: "swatches",
+      label: t("kanban.colour"),
+      value: card.color,
+      names: (color) => t(`kanban.color.${color ?? "none"}`),
+      hex: TASK_COLOR_HEX,
+      onPick: (color) => setColor(card, color),
+    };
+    if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
     return {
       label: t("kanban.cardActions", { title }),
       items: [
         { type: "head", label: t("kanban.moveTo") },
         ...statusItems(card, false),
         { type: "sep" },
+        { type: "head", label: t("kanban.colour") },
+        swatches,
+        { type: "sep" },
         { type: "item", label: collapsed.has(card.id) ? t("kanban.expandCardShort") : t("kanban.collapseCardShort"), onSelect: () => toggleCollapsed(card.id) },
+        { type: "item", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
+        { type: "item", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
+        { type: "sep" },
+        card.holdsSeat
+          ? { type: "item", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
+          : { type: "item", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), keepFocus: true, onSelect: () => hideCard(card) },
       ],
     };
   };
@@ -530,6 +980,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const key = event.key;
     if (key === "[" && card.task) { event.preventDefault(); shift(card, -1); }
     else if (key === "]" && card.task) { event.preventDefault(); shift(card, 1); }
+    else if (key === "Enter" && card.task) { event.preventDefault(); startEdit(card, "title"); }
+    else if ((key === "e" || key === "E") && card.task) { event.preventDefault(); startEdit(card, "description"); }
+    else if ((key === "h" || key === "H") && card.task) { event.preventDefault(); hideCard(card); }
+    else if ((key === "c" || key === "C") && card.task) {
+      event.preventDefault();
+      const more = element.querySelector<HTMLElement>("[data-menu]");
+      if (more) menu.setOpen({ anchor: more, value: { kind: "colour", cardId: card.id } });
+    }
     else if ((key === "s" || key === "S") && card.task) {
       event.preventDefault();
       const pill = element.querySelector<HTMLElement>(".pill");
@@ -556,7 +1014,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         (destination[Math.min(index, destination.length - 1)] ?? rootRef.current?.querySelector<HTMLElement>(`[data-colmenu="${status}"]`))?.focus();
       });
     }
-  }, [mode, openCardMenu, openStatusMenu, shift]);
+  }, [mode, openCardMenu, openStatusMenu, shift, startEdit, hideCard, menu]);
 
   /* ── Pointer drag to a column ────────────────────────────────────────── */
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
@@ -901,6 +1359,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
     },
   }), [project, focusIndex, anchors, filesByPath, openReaderFor, revealCard, memory, placement]);
 
+  /* ── What the board is not drawing: hidden groups, empty tasks off the
+     board, and conversations closed on it ─────────────────────────────── */
+  const closedFiles = useMemo(
+    () => (props.onRestoreConversation ? (props.closedPaths ?? []).flatMap((path) => filesByPath.get(path) ?? []) : []),
+    [props.onRestoreConversation, props.closedPaths, filesByPath],
+  );
+  const hiddenCount = model.hiddenGroups.length + model.offBoard.length + closedFiles.length;
+  const restoreConversation = useCallback((file: FileEntry) => {
+    props.onRestoreConversation?.(file);
+    show(t("kanban.restoredReceipt", { title: cleanTitle(file.title ?? "", 48) || t("kanban.untitledConversation") }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the handler prop is read when called
+  }, [props.onRestoreConversation, show, t]);
+
   /* ── Show an off-board task again (existing `board` preference) ───────── */
   const showOnBoard = useCallback((task: BoardTask) => {
     const title = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
@@ -911,7 +1382,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [show, t]);
 
   const onboardCount = model.totals.onBoard;
-  const hiddenCount = model.offBoard.length;
   const filtering = query.trim().length > 0;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
@@ -948,6 +1418,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       pendingIds={controller}
+      editing={editing}
+      failedEdits={failedEdits}
+      incomingEdits={incomingEdits}
+      onHideIdle={() => hideIdle(status)}
       reading={readingStatuses.has(status)}
       readerKeysByCard={readerKeysByCard}
       placement={placement}
@@ -963,6 +1437,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onFocusCard: focusCard,
         onOpenCatalog,
         onOpenOnBoard,
+        onStartEdit: startEdit,
+        onEditDraft: editDraft,
+        onCommitEdit: commitEdit,
+        onCancelEdit: cancelEdit,
+        onRetryEdit: retryEdit,
+        onDiscardEdit: discardEdit,
+        onUseTheirs: takeTheirs,
+        onKeepMine: keepMine,
+        onHide: hideCard,
       }}
     />
   ));
@@ -1013,7 +1496,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       </header>
 
       <div className="kb-page">
-      {props.seat ? props.seat(boardId) : null}
+      {props.seat ? props.seat(boardId, props.seatRefs === undefined ? seatRead : null) : null}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
         <div className="board-loading" role="status">{t("kanban.loading")}</div>
@@ -1114,20 +1597,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </KanbanPopover>
       ) : null}
       {trayOpen ? (
-        <KanbanPopover anchor={trayOpen.anchor} label={t("kanban.hiddenTitle")} onClose={menu.close}>
-          <div className="head">{t("kanban.hiddenTitle")} <span className="n">· {hiddenCount}</span></div>
-          {model.offBoard.map((task) => (
-            <div key={task.id} className="row" data-hidden-task={task.id}>
-              <span className="pill" data-status={task.status} style={{ pointerEvents: "none" }}>{statusLabel(t, task.status)}</span>
-              <span className="t">
-                <span className="title">{task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled")}</span>
-                <span className="meta">{t("kanban.offBoardMeta")}</span>
-              </span>
-              <button type="button" className="show" onClick={() => { menu.close(false); showOnBoard(task); }}>{t("kanban.showOnBoard")}</button>
-            </div>
-          ))}
-          <p className="note">{hiddenCount ? t("kanban.hiddenNote") : t("kanban.hiddenEmpty")}</p>
-        </KanbanPopover>
+        <HiddenTray
+          anchor={trayOpen.anchor}
+          groups={model.hiddenGroups}
+          offBoard={model.offBoard}
+          closed={closedFiles}
+          nowMs={props.now * 1000}
+          onClose={menu.close}
+          onShowGroup={(card) => card.task && showGroup(card.task.id, shortTitle(card), { focus: true })}
+          onShowTask={showOnBoard}
+          onRestore={restoreConversation}
+        />
       ) : null}
       {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
@@ -1137,11 +1617,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
-  "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
+  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
+  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, reading, readerKeysByCard, placement, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, placement, onColumnMenu, cardProps }: {
   status: TaskStatus;
+  editing: ReadonlyMap<string, { field: EditField; draft: string }>;
+  failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
+  incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
+  onHideIdle: () => void;
   reading: boolean;
   readerKeysByCard: ReadonlyMap<string, string>;
   placement: ReaderPlacement;
@@ -1168,6 +1653,9 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
       nowMs={nowMs}
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       placement={placement}
+      editing={editing.get(card.id) ?? null}
+      failedEdit={failedEdits.get(card.id) ?? null}
+      incomingEdit={incomingEdits.get(card.id) ?? null}
       {...cardProps}
     />
   );
@@ -1210,8 +1698,11 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
         {active.map(renderCard)}
         {idle.length ? (
           <>
-            <div className="divider" role="separator" aria-label={t("kanban.idleAria", { count: idle.length })}>
-              <span>{t("kanban.idleDivider", { count: idle.length })}</span>
+            <div className="divider">
+              <span role="separator" aria-label={t("kanban.idleAria", { count: idle.length })}>{t("kanban.idleDivider", { count: idle.length })}</span>
+              {idle.some((card) => card.task && !card.holdsSeat) ? (
+                <button type="button" data-hide-idle="" title={t("kanban.hideIdleWhy")} onClick={onHideIdle}>{t("kanban.hideIdleShort")}</button>
+              ) : null}
             </div>
             {idle.map(renderCard)}
           </>

@@ -75,6 +75,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
       selection={new Set()}
       onOpenCatalog={() => {}}
       onOpenOnBoard={() => {}}
+      seatRefs={null}
       mutationPorts={ports}
     />,
   ));
@@ -224,7 +225,7 @@ test("U undoes only while the move's receipt is on screen", async () => {
   const ports: TaskMutationPorts = {
     patch: async (id, body) => {
       patches.push({ id, body });
-      return { ok: true, task: task(id, body.status, "Write the release notes", { revision: REV(patches.length + 1) }) };
+      return { ok: true, task: task(id, (body as { status: TaskStatus }).status, "Write the release notes", { revision: REV(patches.length + 1) }) };
     },
     read: async () => null,
     changed: () => {},
