@@ -189,3 +189,30 @@ test("a conditional clause after an approval takes it back (review round 1)", ()
   expect(verdictOf("VERDICT: APPROVE provided CI stays green\n")).toBeNull();
   expect(verdictOf("**VERDICT: APPROVE** (NO FINDINGS)\n")).toBe("APPROVE");
 });
+
+test("an indented verdict line is a code block and gives no verdict (integration review)", () => {
+  expect(verdictOf("Summary.\n\n\tVERDICT: APPROVE\n")).toBeNull();
+  expect(verdictOf("Summary.\n\n    **VERDICT: APPROVE**\n")).toBeNull();
+  expect(verdictOf("Summary.\n\n   VERDICT: APPROVE\n")).toBe("APPROVE");
+});
+
+test("a bare COMMENT finding line under a labelled approval asks for nothing (integration review)", () => {
+  expect(verdictOf("VERDICT: APPROVE\n\nCOMMENT: naming in the helper could be clearer\n")).toBe("APPROVE");
+  expect(verdictOf("**VERDICT: APPROVE**\n\nCOMMENT — src/example/beta.ts:9 — naming\n")).toBe("APPROVE");
+  /* Everything else that disagrees with the approval still leaves no verdict. */
+  expect(verdictOf("VERDICT: APPROVE\n\nCOMMENT\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE\n\nREQUEST_CHANGES: add the missing guard\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE\n\nCOMMENT requires a second look at the lock\n")).toBeNull();
+  expect(verdictOf("APPROVE\n\nCOMMENT: naming in the helper could be clearer\n")).toBeNull();
+  expect(verdictOf("VERDICT: APPROVE once CI passes\n\nCOMMENT: naming in the helper could be clearer\n")).not.toBe("APPROVE");
+  expect(verdictOf("VERDICT: REQUEST_CHANGES\n\nCOMMENT: naming in the helper could be clearer\n")).toBe("REQUEST_CHANGES");
+});
+
+test("a line that opens and closes triple backticks is inline code, not a fence (integration review)", () => {
+  expect(verdictOf("```bun test src/example/alpha.test.ts``` passes.\n\n**VERDICT: APPROVE**\n")).toBe("APPROVE");
+  expect(verdictOf("```bun test``` fails:\n\nVERDICT: REQUEST_CHANGES\n")).toBe("REQUEST_CHANGES");
+  /* A real fence still hides what it holds, and an inline run inside it does not close it. */
+  expect(verdictOf("```\nVERDICT: APPROVE\n```\n")).toBeNull();
+  expect(verdictOf("```\n```bun test``` \nVERDICT: APPROVE\n")).toBeNull();
+  expect(verdictOf("~~~\n~~~`tilde fence`\nVERDICT: APPROVE\n")).toBeNull();
+});
