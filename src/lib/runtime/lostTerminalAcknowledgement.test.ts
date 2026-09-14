@@ -110,7 +110,14 @@ function runtimeClient(
   return client as unknown as RuntimeHostClient;
 }
 
-function seedConversation(registry: AgentRegistry, directory: string, name: string): { conversationId: `conversation_${string}`; key: SessionKey } {
+function seedConversation(
+  registry: AgentRegistry,
+  directory: string,
+  name: string,
+  /** The writer claim owner. An injection is bound to the claim that owns the
+      host when it is admitted, so only the injection cases need one. */
+  claimOwner: string | null = null,
+): { conversationId: `conversation_${string}`; key: SessionKey } {
   const artifactPath = path.join(directory, `${name}.jsonl`);
   const launchProfile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{
@@ -145,15 +152,16 @@ function seedConversation(registry: AgentRegistry, directory: string, name: stri
       activeFlags: [],
     },
     claimEpoch: 0,
-    claimOwner: null,
+    claimOwner,
     pendingAction: null,
   });
   return { conversationId: conversation.id as `conversation_${string}`, key };
 }
 
 const ORIGINAL_TEXT = "the original message, delivered exactly once";
+const INJECTION_OWNER = "lost-ack-owner";
 
-function fixture(name: string, generation: HostGeneration = {}) {
+function fixture(name: string, generation: HostGeneration = {}, options: { injection?: boolean } = {}) {
   const directory = fs.mkdtempSync(path.join(isolated, `${name}-`));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -165,8 +173,28 @@ function fixture(name: string, generation: HostGeneration = {}) {
   const acknowledged: string[] = [];
   const client = runtimeClient(journal, faults, acknowledged, generation);
   const ledger = createFakeDeliveryLedger();
-  const host = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} });
-  const { conversationId, key } = seedConversation(registry, directory, name);
+  const { conversationId, key } = seedConversation(registry, directory, name, options.injection ? INJECTION_OWNER : null);
+  /* An injection runs only against the thread its binding names, so the host
+     reports the seeded generation as its session, and it advertises injection
+     the way a negotiated Codex protocol does. */
+  const host = Object.assign(
+    options.injection
+      ? new FakeEngineHost(ledger, {
+          status: "idle",
+          sessionKey: key.sessionId,
+          endpoint: "fake:lost-ack-fixture-host",
+          pid: 1,
+          processStartIdentity: "fake:1",
+          eventCursor: 0,
+          protocolVersion: "fake-v1",
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: ["native-inject"],
+          account: null,
+        })
+      : new FakeEngineHost(ledger),
+    { onStateChange: () => () => {} },
+  );
   journal.append({
     scope: { type: "session", id: conversationId },
     kind: "session-status",
@@ -178,7 +206,8 @@ function fixture(name: string, generation: HostGeneration = {}) {
       turn: "idle",
       provenance: "structured",
       artifactPath: path.join(directory, `${name}.jsonl`),
-      capabilities: { steer: true, structuredAttention: true },
+      capabilities: { steer: true, structuredAttention: true, ...(options.injection ? { inject: true } : {}) },
+      ...(options.injection ? { accountId: "lost-ack-fixture-account", writerClaim: `${INJECTION_OWNER}:0` } : {}),
     },
   });
   const operationId = `op-${name}`;
@@ -219,6 +248,29 @@ function fixture(name: string, generation: HostGeneration = {}) {
         text: ORIGINAL_TEXT,
         contentDigest,
         policy: "queue",
+      });
+      return held.id;
+    },
+    /** The same for Add to context (#1560): the composer's injection holds a
+        reservation too, and its terminal transition settles it. */
+    admitInjection(): string {
+      const held = registry.holdDelivery(
+        conversationId,
+        ORIGINAL_TEXT,
+        clientMessageId,
+        "text",
+        [],
+        contentDigest,
+        { operationId, kind: "inject" },
+      );
+      registry.beginDeliveryAttempt(held.id, held.generationId!);
+      journal.executeOperation({
+        kind: "inject",
+        operationId,
+        idempotencyKey: clientMessageId,
+        conversationId,
+        text: ORIGINAL_TEXT,
+        contentDigest,
       });
       return held.id;
     },
@@ -313,6 +365,44 @@ test("repeated drains and a controller rebind after the repair write nothing fur
     expect(settled.deliveredAt).toBe(repaired.deliveredAt);
     expect(subject.ledger.writes.length).toBe(1);
     // Nothing re-acknowledges a receipt whose retention is already released.
+    expect(subject.acknowledged).toEqual([subject.operationId]);
+  } finally {
+    await subject.release();
+  }
+});
+
+test("a lost delivered acknowledgement on an injection settles its reservation once and never injects again", async () => {
+  const subject = fixture("lost-inject-ack", {}, { injection: true });
+  try {
+    await subject.bind();
+    const deliveryId = subject.admitInjection();
+    subject.faults.loseDeliveredAcknowledgement = true;
+
+    await drain();
+    /* The evidence read that ends an injection runs detached from the pass
+       that issued it, so its `delivered` lands after the drain returns. */
+    await settles(
+      () => subject.delivery(deliveryId).state === "delivered",
+      "the injection's reservation",
+    );
+    // The fault fired: the `delivered` transition committed and its answer was lost.
+    expect(subject.faults.loseDeliveredAcknowledgement).toBe(false);
+    const repaired = subject.delivery(deliveryId);
+    expect(subject.journal.operationResult(subject.operationId)?.receipt.status).toBe("delivered");
+    expect(subject.acknowledged).toEqual([subject.operationId]);
+    expect(subject.journal.unprojectedTerminalOperationIds()).toEqual([]);
+
+    await drain(3);
+    await subject.bind();
+    await drain(2);
+
+    const settled = subject.delivery(deliveryId);
+    expect(settled.state).toBe("delivered");
+    expect(settled.deliveredAt).toBe(repaired.deliveredAt);
+    // One insertion, and it never went down the message path.
+    expect(subject.ledger.injections.length).toBe(1);
+    expect(subject.ledger.injections[0]!.operationId).toBe(subject.operationId);
+    expect(subject.ledger.writes.length).toBe(0);
     expect(subject.acknowledged).toEqual([subject.operationId]);
   } finally {
     await subject.release();
