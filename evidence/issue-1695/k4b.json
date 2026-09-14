@@ -190,11 +190,11 @@
         "hint": "Enter saves · Esc cancels",
         "cardBefore": {
           "width": 454,
-          "height": 256
+          "height": 704
         },
         "cardDuring": {
           "width": 454,
-          "height": 276
+          "height": 724
         }
       },
       "prototype": {
@@ -416,7 +416,7 @@
         "focused": true
       },
       "last": {
-        "ms": 3929,
+        "ms": 3933,
         "present": true,
         "focused": true
       }

@@ -1,4 +1,5 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { groupHideState, seatAssignment, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
@@ -8,6 +9,8 @@ import { latestAttempt, stageAttempts, stageChipState, type StageChipState } fro
 import type { TaskBand } from "@/components/scheme/taskBands";
 import { taskTitle } from "@/components/tasks/taskModel";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
+
+import { pastAttempts, stageViews, type PastAttempt, type StageView } from "./pipelineGraph";
 
 /**
  * The kanban board's projection (#1695 K1).
@@ -65,6 +68,8 @@ export interface KanbanLoop {
 
 export interface KanbanPipeline {
   pipeline: Pipeline;
+  /** Each stage as the graph draws it (#1695 K5a), by stage id. */
+  views: Map<string, StageView>;
   chips: KanbanStageChip[];
   loops: KanbanLoop[];
   /** Stages with no attempt yet. */
@@ -100,6 +105,8 @@ export interface KanbanCard {
   searchText: string;
   /** The task's colour label, when it names one this build knows. */
   color: TaskColor | null;
+  /** Earlier attempts and review rounds of the card's pipelines, newest first. */
+  past: PastAttempt[];
   /** Whether the task's group is hidden, and why a hidden one came back. */
   hide: GroupHideState;
   /** The task holds the project's orchestrator seat conversation, active or
@@ -146,6 +153,8 @@ export interface KanbanModelInput {
   /** Every conversation this board carries, so a durable row naming one of
       them is never reported as missing. */
   files?: readonly FileEntry[];
+  /** The review flows the board carries, for the rounds of review stages. */
+  flows?: readonly Flow[];
   /** Optimistic statuses of tasks with a write in flight. */
   statusOverrides?: ReadonlyMap<string, TaskStatus>;
   /** The project's orchestrator seat as the board last read it; null or absent
@@ -193,8 +202,9 @@ function passPath(pipeline: Pipeline): string[] {
   return path;
 }
 
-export function summarizePipeline(pipeline: Pipeline): KanbanPipeline {
+export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map()): KanbanPipeline {
   const byId = stageIndex(pipeline);
+  const views = stageViews(pipeline, flowsById);
   const main = passPath(pipeline);
   const onMain = new Set(main);
   /* Stages reached only through a fail edge are branches; any other stage the
@@ -216,7 +226,7 @@ export function summarizePipeline(pipeline: Pipeline): KanbanPipeline {
     const rounds = stage.kind === "review-loop"
       ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.reviewFlowSync?.roundCount ?? 0), 0)
       : 0;
-    return { stage, state: stageChipState(pipeline, stage), rounds, branch: failOnly.has(id) };
+    return { stage, state: views.get(id)?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id) };
   });
   const attempts = pipeline.runs.flatMap((run) => run.attempts);
   const loops: KanbanLoop[] = [];
@@ -229,7 +239,7 @@ export function summarizePipeline(pipeline: Pipeline): KanbanPipeline {
     loops.push({ from: stage, to, fired, max: edge.maxRounds });
   }
   const waiting = pipeline.stages.filter((stage) => latestAttempt(pipeline, stage.id) === null).length;
-  return { pipeline, chips, loops, waiting };
+  return { pipeline, views, chips, loops, waiting };
 }
 
 function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string, { pipeline: Pipeline; stage: PipelineStage }>, now: number): KanbanMember {
@@ -272,6 +282,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   }
   const query = input.query ?? "";
   const pipelineById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
+  const flowsById = new Map((input.flows ?? []).map((flow) => [flow.id, flow] as const));
   const stageByPath = new Map<string, { pipeline: Pipeline; stage: PipelineStage }>();
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
@@ -329,7 +340,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       for (const reference of execution.references) countReference(reference);
     }
 
-    const summaries = [...cardPipelines.values()].map(summarizePipeline);
+    const summaries = [...cardPipelines.values()].map((pipeline) => summarizePipeline(pipeline, flowsById));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
     const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision");
     const working = members.filter((member) => member.working).length;
@@ -373,6 +384,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         .join("\n")
         .toLowerCase(),
       color,
+      past: pastAttempts(summaries.map((summary) => summary.pipeline), flowsById),
       hide,
       holdsSeat,
     };
