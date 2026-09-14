@@ -1053,6 +1053,16 @@ function writeDraftFiles(id: string, slots: readonly PendingAttachment[]): void 
   } catch { /* The visible in-memory tray remains authoritative. */ }
 }
 
+/** Takes delivered documents off a conversation's persisted tray marker, so
+    the conversation does not ask for them to be attached again. */
+function forgetDraftFiles(id: string, delivered: readonly string[]): void {
+  try {
+    const kept = readDraftFiles(id).filter((entry) => !entry.id || !delivered.includes(entry.id));
+    if (!kept.length) sessionStorage.removeItem(draftFilesKey(id));
+    else sessionStorage.setItem(draftFilesKey(id), JSON.stringify(kept));
+  } catch { /* A marker left in place asks for the file again; nothing is sent from it. */ }
+}
+
 function readDraftImages(id: string): PendingImage[] | null {
   try {
     const raw = sessionStorage.getItem(draftImagesKey(id));
@@ -3575,6 +3585,14 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       }).finally(() => {
         for (const file of requestedFiles) injectingFileIds.current.delete(file.id);
       });
+      /* The composer may show another conversation by now, or none. The answer
+         settles the conversation that pressed it, in its stored draft, and
+         leaves the words and status on screen to their owner. */
+      if (payloadOwner.current !== cardId) {
+        if (answer.ok) forgetDraftFiles(cardId, requestedFiles.map((file) => file.id));
+        else if (snapshotText && !sessionStorage.getItem(draftKey(cardId))) sessionStorage.setItem(draftKey(cardId), snapshotText);
+        return;
+      }
       if (answer.ok) {
         /* Accepted, and only that. The placement is the receipt's to report,
            once the insertion has been observed in the thread. */

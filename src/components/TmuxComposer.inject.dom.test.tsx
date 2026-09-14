@@ -765,3 +765,55 @@ test("Add to context sends nothing while a large queue hand-off is still saving 
     delete (subtle as unknown as { digest?: unknown }).digest;
   }
 });
+
+/* #1689 review: the composer instance can move to another conversation while an
+   Add to context is unanswered. Its answer belongs to the conversation that
+   pressed it, and the one now on screen is left alone. */
+
+const otherConversation = () => ({ ...file, ...observed, path: "/other.jsonl", conversationId: "conv-other" }) as FileEntry;
+
+test("a refusal that lands after the composer moved to another conversation gives the words back to their own", async () => {
+  turn = "running";
+  holdInjection = true;
+  injectAnswer = { ok: false, status: 409, error: "the injection was refused" };
+  const first = await mount();
+  await type(first.host, "context for the first conversation");
+  await openSendMenu(first.host);
+  await settle(() => menuAction(first.host, "Add to context")!.click());
+  expect(injections).toHaveLength(1);
+
+  await settle(() => first.root.render(<TmuxComposer file={otherConversation()} />));
+  await settle(() => releaseInjection?.());
+  expect(textarea(first.host).value).toBe("");
+  expect(sessionStorage.getItem("llvDraft:conv-other")).toBeNull();
+  expect(first.host.textContent).not.toContain("the injection was refused");
+  first.root.unmount();
+
+  /* Shown again, the first conversation has its words back. */
+  const again = await mount();
+  expect(textarea(again.host).value).toBe("context for the first conversation");
+  again.root.unmount();
+});
+
+test("an acceptance that lands after the composer moved away takes its documents off the first conversation's tray", async () => {
+  turn = "running";
+  holdInjection = true;
+  const first = await mount();
+  await type(first.host, "read the notes");
+  await stageFile(first.host, "design-notes.md", "# notes\n");
+  await openSendMenu(first.host);
+  await settle(() => menuAction(first.host, "Add to context")!.click());
+  expect(sessionStorage.getItem(`llvDraftFiles:${CARD}`)).toContain("design-notes.md");
+
+  await settle(() => first.root.render(<TmuxComposer file={otherConversation()} />));
+  await settle(() => releaseInjection?.());
+  expect(first.host.textContent).not.toContain("design-notes.md");
+  first.root.unmount();
+
+  /* The document went into the context: nothing asks for it to be attached again. */
+  expect(sessionStorage.getItem(`llvDraftFiles:${CARD}`)).toBeNull();
+  const again = await mount();
+  expect(again.host.textContent).not.toContain("design-notes.md");
+  expect(textarea(again.host).value).toBe("");
+  again.root.unmount();
+});
