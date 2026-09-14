@@ -70,10 +70,12 @@ export interface PatchTaskInput {
   dueAt?: unknown;
   dueTz?: unknown;
   board?: unknown;
-  /** One of `TASK_COLORS`, or "none" to clear the label. */
+  /** One of `TASK_COLORS`, or "none" to clear the label. Leaves `updatedAt`
+      unchanged when it is the whole patch (with `hide`). */
   color?: unknown;
   /** `true` hides the task's whole group from the kanban board, `false` shows
-      it again. Requires the revision fence. */
+      it again. Requires the revision fence. Leaves `updatedAt` unchanged when
+      it is the whole patch (with `color`). */
   hide?: unknown;
 }
 
@@ -413,7 +415,15 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
 
-  const updated: BoardTask = { ...task, ...patch, updatedAt: now };
+  /* A colour label or a group hide is presentation of the task, never work on
+     it: `updatedAt` stays, so the board's ranking and age and the seat tick's
+     reading of card movement (its quiet guard, its "assigned, nothing started
+     it" window) are unchanged by them. The revision still moves, because it
+     hashes every field, so the fence and board freshness keep working, and a
+     hide records its own instant in `groupHidden.at`. */
+  const presentationOnly = Object.keys(input).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision")
+    && (Object.hasOwn(input, "color") || Object.hasOwn(input, "hide"));
+  const updated: BoardTask = { ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now };
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
   if (Object.hasOwn(patch, "dueAt") && patch.dueAt === undefined) {

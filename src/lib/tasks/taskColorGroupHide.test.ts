@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { groupHideState } from "./groupHide";
 import { patchTask, type SeatHolding } from "./commands";
-import { taskRevision } from "./revision";
 import { taskSeatHolding } from "./seatHolding";
 import type { BoardTask } from "./types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -36,6 +35,11 @@ const free = (): SeatHolding => "free";
 test("a colour is one of the nine names; none clears it; anything else is refused with its field", () => {
   const set = patchTask([task()], "task-a", { color: "teal" }, NOW);
   expect(set).toMatchObject({ ok: true, task: { color: "teal" } });
+  /* Presentation, not work: the task's own update time and rank do not move. */
+  expect(set.ok && set.task.updatedAt).toBe(task().updatedAt);
+  /* With real work in the same patch, it does. */
+  const renamed = patchTask([task()], "task-a", { color: "teal", text: "Repair old links now" }, NOW);
+  expect(renamed.ok && renamed.task.updatedAt).toBe(NOW);
   if (!set.ok) return;
   const cleared = patchTask(set.tasks, "task-a", { color: "none" }, NOW);
   expect(cleared.ok && "color" in cleared.task).toBe(false);
@@ -55,15 +59,14 @@ test("a hide is fenced: no guard is a 400, and a stale revision or another proje
   expect(existing[0]!.groupHidden).toBeUndefined();
 });
 
-test("hiding writes the hide and nothing else; showing removes it; hiding again moves its instant forward", () => {
+test("hiding writes the hide and nothing else, not even updatedAt; showing removes it; hiding again moves its instant forward", () => {
   const before = task();
   const hidden = patchTask([before], "task-a", { hide: true, ...guard }, NOW, { actor: "agent", seatHolding: free });
   expect(hidden.ok).toBe(true);
   if (!hidden.ok) return;
   expect(hidden.task.groupHidden).toEqual({ at: NOW, by: "agent" });
-  const { groupHidden: _hide, updatedAt: _updated, ...rest } = hidden.task;
-  const { updatedAt: _beforeUpdated, ...unchanged } = before;
-  expect(rest).toEqual(unchanged);
+  const { groupHidden: _hide, ...rest } = hidden.task;
+  expect(rest).toEqual(before);
   expect(hidden.task.assignments).toBe(before.assignments);
 
   const shown = patchTask(hidden.tasks, "task-a", { hide: false, ...guard }, "2026-09-14T12:05:00.000Z");
