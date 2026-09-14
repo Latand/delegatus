@@ -34,7 +34,21 @@ export interface FocusDestination {
       object to select: a geometric target, or a landing degraded to the frame a
       vanished anchor used to occupy. */
   anchorKeys: readonly string[];
+  /** What the request asked for. A board with readers instead of a camera
+      opens the target's reader for `open`; a camera frames either the same. */
+  intent?: "open" | "show";
+  /** The conversation behind the request, when it names one. */
+  path?: string | null;
 }
+
+/**
+ * What a surface without a camera can OBSERVE about an arrival (#1695).
+ *
+ * `reader`: the target's reader is mounted, expanded, on screen and settled.
+ * `visible`: the target's card is on screen, which is the whole of a `show`.
+ * Null while neither holds yet.
+ */
+export type StructuralArrival = "reader" | "visible";
 
 export interface BoardFocusController {
   /** Which project's layout this controller speaks for. */
@@ -48,6 +62,17 @@ export interface BoardFocusController {
   /** Put the camera back exactly where it was — the return path, which restores
       a framing rather than framing a thing. False on a surface with no camera. */
   restoreCamera(camera: { x: number; y: number; zoom: number }): boolean;
+  /**
+   * Optional: a board that has no camera proves an arrival from its own page
+   * instead (#1695). Present, it is the ONLY evidence the transaction accepts:
+   * an `open` of a conversation settles on `reader` alone, and anything else
+   * on `visible` or `reader`. Read afresh on every poll, because the reader it
+   * measures mounts after the move.
+   */
+  arrival?(destination: FocusDestination): StructuralArrival | null;
+  /** Optional: undo what this board's last handoff opened — the Return half of
+      `arrival`, for a surface whose way back is closing the reader it opened. */
+  returnFromHandoff?(): void;
 }
 
 export interface ShellNavigator {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, LoaderCircle, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronUp, LoaderCircle, Lock, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -131,12 +131,20 @@ export function OrchestratorPanel({
   projectCwd,
   files,
   onClose,
+  variant = "dock",
+  collapsed = false,
 }: {
   project: string;
   projectName: string;
   projectCwd?: string;
   files: readonly FileEntry[];
+  /** The dock's close; on the seat, the Collapse/Expand toggle. */
   onClose: () => void;
+  /** `seat`: the kanban board's orchestrator above its columns (#1695), in the
+      approved prototype's header. The seat never hides, so its one header
+      control collapses the panel to that header instead of closing it. */
+  variant?: "dock" | "seat";
+  collapsed?: boolean;
 }) {
   const { t } = useLocale();
   const { status, failed, refresh } = useOrchestratorSeat(project, projectCwd);
@@ -356,6 +364,34 @@ export function OrchestratorPanel({
       data-orchestrator-mode={rotating ? "rotate" : "default"}
       aria-label={t("orchPanel.regionAria", { project: projectName })}
     >
+      {variant === "seat" ? (
+        <header className="seat-head">
+          <span className={`av ${file?.engine === "codex" ? "codex" : "claude"}`} aria-hidden>
+            <Bot />
+          </span>
+          <span className="seat-title">
+            <strong>{t("orchPanel.title")}</strong>
+            <span className="proj" title={projectName}>{projectName}</span>
+            <StateBadge state={state} file={file} word />
+          </span>
+          <span className="lock" title={t("orchPanel.seatStaysTitle")}>
+            <Lock aria-hidden />
+            <span>{t("orchPanel.seatStays")}</span>
+          </span>
+          <span className="grow" />
+          <button
+            type="button"
+            className="icon-btn"
+            data-seat-collapse
+            onClick={onClose}
+            aria-expanded={!collapsed}
+            aria-label={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
+            title={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
+          >
+            {collapsed ? <ChevronDown aria-hidden /> : <ChevronUp aria-hidden />}
+          </button>
+        </header>
+      ) : (
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
           <Bot className="h-4 w-4" />
@@ -375,6 +411,7 @@ export function OrchestratorPanel({
           <X className="h-4 w-4" aria-hidden />
         </button>
       </header>
+      )}
 
       {state.kind === "loading" ? (
         <Centered>
@@ -946,7 +983,7 @@ const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
  * island popover read, so the dock can never name a wait differently from the
  * surfaces the operator reached it through.
  */
-function StateBadge({ state, file }: { state: OrchestratorPanelState; file: FileEntry | null }) {
+function StateBadge({ state, file, word = false }: { state: OrchestratorPanelState; file: FileEntry | null; word?: boolean }) {
   const { t, locale } = useLocale();
   const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;
   const badge = seatBadge ? SEAT_BADGE[seatBadge] : null;
@@ -970,6 +1007,16 @@ function StateBadge({ state, file }: { state: OrchestratorPanelState; file: File
      the decision behind it, and every other badge is already its own whole
      answer. */
   const decision = seatBadge === "needs-you" && file ? decisionLine(t, locale, file) : null;
+  if (word) {
+    /* The seat header's form: a dot and the word, toned the same way. */
+    const wordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";
+    return (
+      <span className={`state ${wordTone}`} data-orchestrator-badge={seatBadge ?? state.kind} title={decision ?? undefined}>
+        <i aria-hidden />
+        {label}
+      </span>
+    );
+  }
   return (
     <span
       data-orchestrator-badge={seatBadge ?? state.kind}

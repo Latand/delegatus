@@ -117,21 +117,24 @@ export function KanbanMenu({ anchor, label, items, onClose }: {
   );
 }
 
-export function KanbanPopover({ anchor, label, onClose, children }: {
+export function KanbanPopover({ anchor, label, onClose, children, initialFocus = "button", className }: {
   anchor: HTMLElement;
   label: string;
   onClose: (refocus: boolean) => void;
   children: ReactNode;
+  /** Selector of what takes focus on open. */
+  initialFocus?: string;
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
     place(ref.current, anchor);
-    ref.current.querySelector<HTMLElement>("button")?.focus();
-  }, [anchor]);
+    ref.current.querySelector<HTMLElement>(initialFocus)?.focus();
+  }, [anchor, initialFocus]);
   return (
-    <div ref={ref} className="popover" role="dialog" aria-label={label}>
+    <div ref={ref} className={`popover${className ? ` ${className}` : ""}`} role="dialog" aria-label={label}>
       {children}
     </div>
   );

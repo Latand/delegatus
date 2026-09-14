@@ -20,9 +20,13 @@
   background: var(--surface-canvas);
   -webkit-font-smoothing: antialiased;
 }
-.kb button, .kb input { font: inherit; color: inherit; }
-.kb button { background: none; border: 0; padding: 0; }
-.kb :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+/* The board's own controls start from nothing. The conversations and the
+   orchestrator mounted inside it are the Viewer's components, styled by their
+   own utilities, so none of these element rules reach into them. */
+.kb :where(button, input):not(:where(.reader-host *, .seat *)) { font: inherit; color: inherit; }
+.kb button:not(:where(.reader-host *, .seat *)) { background: none; border: 0; padding: 0; }
+.kb :focus-visible:not(:where(.reader-host *, .seat *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+.kb :where(.seat-head, .conv-head) :where(button), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
 
 /* ── Bar ─────────────────────────────────────────────────────────────────── */
@@ -345,3 +349,119 @@
   .kb .card.flash, .kb .card.landed, .kb .menu, .kb .receipt, .kb .card .saving { animation: none; }
   .kb .card[data-pending="1"] .saving { opacity: 1; transform: none; }
 }
+
+/* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
+/* The seat keeps its height and the board keeps a full page below it; the
+   page scrolls between the two instead of squeezing the columns (prototype
+   `#app > .board`). */
+.kb .kb-page { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
+.kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
+.kb .skip-board {
+  position: absolute; left: 20px; top: 8px; z-index: 6; transform: translateY(-300%);
+  padding: 6px 12px; border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--color-accent);
+  color: var(--color-accent); font-size: var(--text-ui); font-weight: 600; box-shadow: var(--shadow-1);
+}
+.kb .skip-board:focus { transform: none; }
+
+.kb .seat {
+  position: relative; z-index: 3; flex: 0 0 auto; width: calc(100% - 40px); max-width: 1040px; margin: 12px auto 0;
+  height: var(--seat-h, clamp(300px, 44vh, 460px));
+  border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
+  display: flex; flex-direction: column;
+}
+.kb .seat > [data-orchestrator-panel] { border-radius: inherit; overflow: hidden; background: var(--surface-card); }
+.kb .seat.folded { height: auto; }
+/* The composer keeps 240 px of transcript above it in a tall pane; the seat is
+   short on purpose, so here it keeps a smaller strip of the conversation and
+   the composer is never squeezed shut. */
+.kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 96px); }
+.kb .seat.folded [data-orchestrator-panel] > :not(.seat-head) { display: none; }
+.kb .seat-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; min-height: 46px; }
+.kb .seat:not(.folded) .seat-head { border-bottom: 1px solid var(--border-default); }
+.kb .seat .av { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: #fff; background: var(--color-claude); }
+.kb .seat .av.codex { background: var(--color-codex); }
+.kb .seat .av svg { width: 14px; height: 14px; }
+.kb .seat-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.kb .seat-title strong { font-size: var(--text-body); font-weight: 650; white-space: nowrap; }
+.kb .seat-title .proj { font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.kb .seat-title .state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); white-space: nowrap; }
+.kb .seat-title .state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.kb .seat-title .state.working { color: var(--color-success); }
+.kb .seat-title .state.needs { color: var(--color-warning); }
+.kb .seat-title .state.failed { color: var(--color-danger); }
+.kb .seat-title .state.accent { color: var(--color-accent); }
+.kb .seat .lock { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); background: var(--surface-well); white-space: nowrap; }
+.kb .seat .lock svg { width: 11px; height: 11px; }
+.kb .seat .grow { flex: 1; }
+.kb .seat-grip { position: absolute; left: 0; right: 0; bottom: -7px; height: 14px; z-index: 4; cursor: ns-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
+.kb .seat-grip::before { content: ""; width: 44px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.kb .seat-grip:hover::before, .kb .seat-grip:focus-visible::before { background: var(--color-accent); }
+@media (max-width: 1199px) { .kb .seat { width: calc(100% - 32px); margin-top: 10px; } }
+@media (max-width: 767px) {
+  .kb .seat { width: calc(100% - 24px); margin-top: 8px; }
+  .kb .seat-head { flex-wrap: wrap; row-gap: 2px; }
+  .kb .seat-title .proj, .kb .seat .lock span { display: none; }
+}
+
+/* ── Readers: conversations open inside cards (K3) ───────────────────────── */
+.kb .card.has-reader { content-visibility: visible; }
+.kb .readers { display: flex; flex-direction: column; gap: 8px; }
+.kb .member-reader { flex: 1 1 100%; min-width: 0; }
+.kb .reader-slot { width: 100%; min-width: 0; }
+.kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
+.kb .reader.conv {
+  width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 10px; max-height: min(620px, 74vh); overflow: hidden;
+  border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
+  container-type: inline-size; text-align: left;
+}
+.kb .reader.conv:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
+.kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
+.kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
+.kb .reader.conv.folded > :not(.conv-head):not(.rlatest) { display: none; }
+.kb .reader [data-feed-state] > .text-center { margin-top: 12px; margin-bottom: 8px; }
+.kb .reader .conv-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex-shrink: 0; }
+.kb .reader .ch-row { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; }
+.kb .reader .ch-row .spacer { flex: 1; }
+.kb .reader .ch-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--border-strong); }
+.kb .reader .ch-dot.tone-success { background: var(--color-success); }
+.kb .reader .ch-dot.tone-warning { background: var(--color-warning); }
+.kb .reader .ch-dot.tone-danger { background: var(--color-danger); }
+.kb .reader .ch-dot.tone-accent { background: var(--color-accent); }
+.kb .reader .ch-dot.live { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
+.kb .reader .ch-title { min-width: 0; font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .reader .ch-host-slot { display: inline-flex; flex-shrink: 0; align-items: center; }
+.kb .reader .icon-btn.sm { width: 24px; height: 24px; }
+.kb .reader .icon-btn.sm svg { width: 14px; height: 14px; }
+.kb .reader .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
+.kb .reader .ch-state { font-weight: 600; white-space: nowrap; color: var(--color-secondary); }
+.kb .reader .ch-state .num { font-weight: 400; color: var(--color-muted); }
+.kb .reader .ch-state.tone-success { color: var(--color-success); }
+.kb .reader .ch-state.tone-warning { color: var(--color-warning); }
+.kb .reader .ch-state.tone-danger { color: var(--color-danger); }
+.kb .reader .ch-state.tone-accent { color: var(--color-accent); }
+.kb .reader .ch-engine { height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; color: #fff; flex-shrink: 0; }
+.kb .reader .ch-engine.claude { background: var(--color-claude); }
+.kb .reader .ch-engine.codex { background: var(--color-codex); }
+.kb .reader .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.kb .reader .ch-tree { display: inline-flex; align-items: center; gap: 3px; font: var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-muted); white-space: nowrap; }
+.kb .reader .ch-tree svg { width: 11px; height: 11px; }
+.kb .reader .rlatest { text-align: left; font-size: var(--text-ui); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 24px; padding: 0 4px; border-radius: 6px; }
+.kb .reader .rlatest:hover { background: var(--surface-well); }
+@container (max-width: 430px) { .kb .reader .opt-full { display: none; } }
+
+/* A shelf column holding an open conversation widens to reading width; the
+   board then scrolls sideways inside itself, never the page. */
+.kb .board.reading { overflow-x: auto; }
+.kb .board.scroll .column.reading { flex-basis: 460px; }
+
+/* One reader may take the window; it is the same reader, moved. */
+.kb .reader-full { position: fixed; inset: 0; z-index: 64; display: flex; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--color-primary) 28%, transparent); }
+.kb .reader-full .reader-slot { width: min(1100px, 100%); height: 100%; display: flex; }
+.kb .reader-full .reader-host { max-width: none; height: 100%; }
+.kb .reader-full .reader.conv { max-height: none; height: 100%; box-shadow: var(--shadow-2); }
+
+/* ── Link to a task ──────────────────────────────────────────────────────── */
+.kb .popover.link-picker .search { display: block; padding: 0 8px 6px; }
+.kb .popover.link-picker .search input { width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-sunken); font-size: var(--text-ui); }
+.kb .popover.link-picker .search input:focus { outline: none; border-color: var(--color-accent); background: var(--surface-card); }
+.kb .popover .row.pick { width: 100%; text-align: left; }

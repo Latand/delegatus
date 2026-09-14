@@ -104,8 +104,13 @@ export interface FocusFrame {
 }
 
 /** Whether the anchor was still there when the operator agreed. Degradation is
-    one-way and always spoken. */
-export type FocusResolutionKind = "exact" | "approximate" | "lost";
+    one-way and always spoken.
+
+    `reader` is the arrival of an `open` on a board without a camera (#1695):
+    the target's conversation reader is mounted, expanded, on screen and its
+    feed has settled, which an empty transcript does as soon as its empty state
+    renders. It is observed on the page, never inferred from a move. */
+export type FocusResolutionKind = "exact" | "approximate" | "reader" | "lost";
 
 /**
  * Why a request ended without an answer. Kept on the record rather than only in

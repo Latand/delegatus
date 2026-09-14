@@ -1566,6 +1566,7 @@
           "roots": [
             "/repo/attach-verify.jsonl",
             "/repo/export-impl.jsonl",
+            "/repo/orchestrator.jsonl",
             "/repo/search-ver-2.jsonl",
             "/repo/upload-ui.jsonl",
             "/repo/pending-worker.jsonl",
@@ -1592,6 +1593,7 @@
           "roots": [
             "/repo/attach-verify.jsonl",
             "/repo/export-impl.jsonl",
+            "/repo/orchestrator.jsonl",
             "/repo/search-ver-2.jsonl",
             "/repo/upload-ui.jsonl",
             "/repo/pending-worker.jsonl",

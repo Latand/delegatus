@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 
+import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
@@ -10,6 +11,7 @@ import { cleanTitle, fmtAge } from "@/components/utils";
 import { attemptStateLabel, pipelineStateLabel, stageAttempts, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
+import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 
 /* One card of the kanban board, in the approved prototype's anatomy
    (`renderCard`): colour label, saving bar, title and tools, description,
@@ -185,6 +187,10 @@ export interface KanbanCardProps {
   onFocusCard: (cardId: string) => void;
   onOpenCatalog: () => void;
   onOpenOnBoard: () => void;
+  /** Open readers this card shows, by conversation identity, one per line —
+      a string so an unchanged set never re-renders the card. */
+  readerKeys: string;
+  placement: ReaderPlacement;
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -203,6 +209,13 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   /* A pipeline stage's conversation is reached through its stage chip, as in
      the prototype; tiles are the conversations that run outside a pipeline. */
   const tiles = card.members.filter((member) => member.stage === null);
+  const readerKeys = props.readerKeys ? props.readerKeys.split("\n") : [];
+  const reading = !collapsed && readerKeys.length > 0;
+  const tileKeys = new Set(tiles.map((member) => conversationIdentity(member.file)));
+  /* A stage's reader opens under the card's pipeline; a tile's reader takes
+     the tile's place. */
+  const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
+  const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", card.needsYou ? t("kanban.activityNeeds") : "", collapsed ? t("kanban.collapsed") : ""]
     .filter(Boolean)
     .join(", ");
@@ -216,7 +229,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   if (pipelinesWaiting) activity.push({ key: "waiting", node: <span className="quiet num">{t("kanban.activityStagesWaiting", { count: pipelinesWaiting })}</span> });
   return (
     <article
-      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}`}
+      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}`}
       data-id={card.id}
       data-kanban-card={card.id}
       data-pending={pending ? "1" : "0"}
@@ -275,11 +288,24 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <PipelineSummary key={summary.pipeline.id} summary={summary} onOpenStage={props.onOpenStage} />
       )) : null}
 
+      {!collapsed && stageReaders.length ? (
+        <div className="readers">
+          {stageReaders.map((key) => <ReaderSlot key={key} placement={props.placement} readerKey={key} />)}
+        </div>
+      ) : null}
+
       {!collapsed && tiles.length ? (
         <div className="members" role="list" aria-label={t("kanban.conversations")}>
-          {tiles.map((member) => (
-            <MemberTile key={member.key} member={member} workspace={workspace} onOpen={props.onOpenMember} />
-          ))}
+          {tiles.map((member) => {
+            const key = conversationIdentity(member.file);
+            return openTiles.has(key) ? (
+              <div key={member.key} role="listitem" className="member-reader">
+                <ReaderSlot placement={props.placement} readerKey={key} />
+              </div>
+            ) : (
+              <MemberTile key={member.key} member={member} workspace={workspace} onOpen={props.onOpenMember} />
+            );
+          })}
         </div>
       ) : null}
 

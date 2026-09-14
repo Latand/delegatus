@@ -4,7 +4,7 @@ import { focusTargetAnchorKeys, isGeometricTarget } from "@/lib/attention/target
 import type { FocusTarget } from "@/lib/attention/types";
 import type { AttentionRequestV1, FocusFrame, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
 
-import type { FocusHandoffBus } from "./focusHandoffBus";
+import type { FocusDestination, FocusHandoffBus } from "./focusHandoffBus";
 
 /**
  * What an accepted request actually does to the view (#688 D7/D8).
@@ -39,6 +39,8 @@ export interface FocusHandoffResult {
   /** Whether the view was actually asked to move. False for `lost`. */
   moved: boolean;
   frame: FocusFrame | null;
+  /** The destination the board was asked to take, when it was asked. */
+  destination?: FocusDestination;
   /** True when the transaction's signal ended it early. Nothing may be posted
       about an aborted move — the record is closed by the server's own bounded
       deadline, not by a report from a tab that stopped mid-flight. */
@@ -108,6 +110,24 @@ export function usableFrame(frame: FocusFrame | null | undefined): FocusFrame | 
 function presentAnchorKeys(target: FocusTarget | null, index: FocusFrameIndex): string[] {
   if (!target || isGeometricTarget(target)) return [];
   return navigableAnchorKeys(index, focusTargetAnchorKeys(target));
+}
+
+/** The destination a board is handed. A board that measures its own arrival
+    also learns the intent and the conversation, because opening a reader is
+    how it arrives; a camera frames the same rect either way. */
+function destinationFor(
+  request: Pick<AttentionRequestV1, "target" | "intent" | "zoom">,
+  resolved: ReturnType<typeof resolveFocusTarget>,
+  frame: FocusFrame,
+  board: NonNullable<ReturnType<FocusHandoffBus["board"]>>,
+): FocusDestination {
+  const destination: FocusDestination = {
+    rect: frame.rect,
+    zoom: request.zoom,
+    anchorKeys: presentAnchorKeys(resolved.degraded ? null : resolved.target, board.index),
+  };
+  if (!board.arrival) return destination;
+  return { ...destination, intent: request.intent, path: request.target.kind === "conversation" ? request.target.path : null };
 }
 
 async function boardForProject(bus: FocusHandoffBus, project: string, timing: HandoffTiming) {
@@ -196,11 +216,8 @@ export async function runFocusHandoff(
     return { resolution: "lost", moved: false, frame: null };
   }
 
-  const moved = board.moveTo({
-    rect: resolved.frame.rect,
-    zoom: request.zoom,
-    anchorKeys: presentAnchorKeys(resolved.degraded ? null : resolved.target, board.index),
-  });
+  const destination = destinationFor(request, resolved, resolved.frame, board);
+  const moved = board.moveTo(destination);
   /* A surface that cannot go there has not gone there. The phone shows one pane
      at a time and has no camera, so "where that card used to be" is not
      somewhere it can take anyone — and saying so is better than a card that
@@ -218,7 +235,26 @@ export async function runFocusHandoff(
     if (shell.openPathQuiet) shell.openPathQuiet(request.target.path);
     else if (!asked) shell.placePath(request.target.path);
   }
-  return { resolution: resolved.resolution, moved: true, frame: resolved.frame };
+  return { resolution: resolved.resolution, moved: true, frame: resolved.frame, destination };
+}
+
+/**
+ * What a camera-less board's own page says about an arrival, as the resolution
+ * the record takes, or null while it has not happened (#1695).
+ *
+ * An `open` of a conversation is its reader, and nothing less: a card on screen
+ * with the reader still loading has not put the conversation in front of the
+ * operator. Everything else arrives when its card is on screen, keeping the
+ * resolution the anchor itself resolved to.
+ */
+function structuralResolution(
+  request: Pick<AttentionRequestV1, "target" | "intent">,
+  observed: "reader" | "visible" | null,
+  resolved: FocusResolutionKind,
+): FocusResolutionKind | null {
+  if (observed === null) return null;
+  if (request.intent === "open" && request.target.kind === "conversation") return observed === "reader" ? "reader" : null;
+  return resolved;
 }
 
 /** Two camera readings that describe the same place. */
@@ -296,6 +332,17 @@ async function settleFocusTransaction(
      report: re-running the move would re-glide a camera that has landed and,
      for `open`, re-record the gesture in history. Resolved against the live
      board exactly as the move itself would resolve it. */
+  if (options.resume) {
+    const board = bus.board();
+    if (board?.arrival && board.project === focusHandoffProject(request)) {
+      const resolved = resolveFocusTarget(request.target, usableFrame(request.frameAtCreation), board.index);
+      if (resolved.frame && resolved.resolution !== "lost") {
+        const destination = destinationFor(request, resolved, resolved.frame, board);
+        const already = structuralResolution(request, board.arrival(destination), resolved.resolution);
+        if (already) return { resolution: already, moved: true, frame: resolved.frame, destination };
+      }
+    }
+  }
   if (options.resume && options.observe) {
     const board = bus.board();
     if (board && board.project === focusHandoffProject(request)) {
@@ -308,12 +355,31 @@ async function settleFocusTransaction(
 
   const result = await runFocusHandoff(request, bus, options);
   if (aborted()) return { ...result, aborted: true };
-  if (!result.moved || !result.frame || !options.observe) return result;
+  if (!result.moved || !result.frame) return result;
 
   const pollMs = options.pollMs ?? BOARD_POLL_MS;
   const sleep = options.sleep ?? wait;
   const now = options.now ?? (() => Date.now());
   const deadline = now() + (options.timeoutMs ?? BOARD_WAIT_MS);
+
+  /* A board that measures its own page is the only witness to its arrival:
+     it has no camera to watch, and a focused path there means a reader was
+     opened, not that it is on screen with its transcript settled. */
+  const measuring = bus.board();
+  if (measuring?.arrival && result.destination && measuring.project === focusHandoffProject(request)) {
+    const destination = result.destination;
+    for (;;) {
+      const board = bus.board();
+      const arrived = board?.arrival && board.project === measuring.project
+        ? structuralResolution(request, board.arrival(destination), result.resolution)
+        : null;
+      if (arrived) return { ...result, resolution: arrived };
+      if (aborted()) return { ...result, aborted: true };
+      if (now() >= deadline) return { resolution: "lost", moved: false, frame: null };
+      await sleep(pollMs);
+    }
+  }
+  if (!options.observe) return result;
   const openedPath = request.intent === "open" && request.target.kind === "conversation" ? request.target.path : null;
 
   let previous: FocusObservation["camera"] = null;
@@ -379,6 +445,9 @@ export async function restoreFocusPoint(
   timing: HandoffTiming = {},
 ): Promise<boolean> {
   const shell = bus.shell();
+  /* A board whose handoff opened a reader closes it on the way back: that is
+     the part of "where they were" a camera-less board changed. */
+  bus.board()?.returnFromHandoff?.();
 
   /* Answered before anything else, because the steps below would otherwise put
      the operator back into the project they were being brought out of. */

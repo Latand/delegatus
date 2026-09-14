@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Redo2, Search, Undo2, UserRound } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useBoardActionHistory } from "@/hooks/useBoardActionHistory";
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -71,6 +71,8 @@ import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { SchemeBoard } from "./scheme/SchemeBoard";
 import { KanbanBoard } from "./kanban/KanbanBoard";
+import { KanbanSeat } from "./kanban/KanbanSeat";
+import { useKanbanSeat } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
 import { Switchboard } from "./Switchboard";
@@ -167,6 +169,10 @@ interface Props {
       wiring) the button does not render. */
   orchestratorPanelOpen?: boolean;
   onToggleOrchestratorPanel?: () => void;
+  /** Desktop shell: whether the kanban board, which seats the orchestrator
+      above its own columns (#1695 K3), is the face on screen. The Viewer keeps
+      its side dock closed while it is, so the seat has one composer. */
+  onKanbanFace?: (active: boolean) => void;
   /** Dashboard-local navigation and focus (switchboard/quiet-list opens,
       drafts, pipeline and task jumps) supersede any unresolved deep-link
       intent held above; the Viewer cancels its pending hash here. */
@@ -397,6 +403,7 @@ function ProjectDashboardView({
   mobileShell = null,
   onOpenSearch,
   orchestratorPanelOpen = false,
+  onKanbanFace,
   onToggleOrchestratorPanel,
   onUserNavigate,
   onOpenCatalogFile,
@@ -1883,7 +1890,15 @@ function ProjectDashboardView({
   /* The kanban face of the desktop board (#1695). A conversation the operator
      just opened from a card still lands on the scheme, which is where its
      reader lives until the kanban carries readers of its own. */
-  const kanbanLeaf = !isMobile && desktopBoardLeaf && board.prefs.desktopBoard === "kanban" && !landedOnConversation && transientFace === null;
+  /* A conversation opened while the kanban is the chosen face opens as a
+     reader in its card, so a landing no longer trades the kanban for the
+     scheme; a view picked for one look still does. */
+  const kanbanLeaf = !isMobile && desktopBoardLeaf && board.prefs.desktopBoard === "kanban" && transientFace === null;
+  const kanbanSeat = useKanbanSeat(project);
+  useLayoutEffect(() => {
+    onKanbanFace?.(kanbanLeaf);
+  }, [kanbanLeaf, onKanbanFace]);
+  useLayoutEffect(() => () => onKanbanFace?.(false), [onKanbanFace]);
   const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "scheme", "list"] : ["kanban", "scheme"];
   /* Which conversations the phone board is showing, in the order it shows them,
      as a signature so the presence effect below compares BY VALUE — a fresh
@@ -2211,7 +2226,10 @@ function ProjectDashboardView({
                 in the right-aligned control cluster, because the panel it opens
                 is the leftmost thing on screen (PRD #976 decision 6). */}
             {onToggleOrchestratorPanel ? (
-              <OrchestratorPanelToggle open={orchestratorPanelOpen} onToggle={onToggleOrchestratorPanel} />
+              <OrchestratorPanelToggle
+                open={kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen}
+                onToggle={kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel}
+              />
             ) : null}
             <button
               type="button"
@@ -2463,7 +2481,11 @@ function ProjectDashboardView({
                 loaded={loaded}
                 catalogFailures={catalogFailures}
                 selection={board.selection}
-                onOpenConversation={openFullCatalogFile}
+                focus={highlight}
+                onConversationOpened={markPathSeen}
+                seat={(boardId) => (
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} />
+                )}
                 onOpenCatalog={() => setTransientView("list")}
                 onOpenOnBoard={() => setTransientView("scheme")}
                 viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}

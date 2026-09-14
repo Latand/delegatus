@@ -924,3 +924,88 @@ test("a RESUMED arrival still records the entry the interrupted move never wrote
   expect(log.moved).toEqual([]);
   expect(log.recorded).toEqual([["/tmp/reviewer.jsonl", "demo"]]);
 });
+
+/* ── #1695: a board with readers instead of a camera proves its own arrival ── */
+
+/** A kanban-shaped board: no camera, and an arrival read off its page. */
+function measuringBoard(bus: ReturnType<typeof createFocusHandoffBus>, readings: Array<"reader" | "visible" | null>) {
+  const moved: FocusDestination[] = [];
+  let returned = 0;
+  let reads = 0;
+  bus.setBoard({
+    project: "demo",
+    index: index("demo", { "/tmp/reviewer.jsonl": RECT }),
+    moveTo: (destination) => { moved.push(destination); return true; },
+    restoreCamera: () => false,
+    arrival: () => readings[Math.min(reads++, readings.length - 1)] ?? null,
+    returnFromHandoff: () => { returned += 1; },
+  });
+  return { moved, reads: () => reads, returned: () => returned };
+}
+
+test("an OPEN on a measuring board arrives only once its reader is observed, and says reader", async () => {
+  const { bus, log } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
+  /* The card shows up first; the reader mounts and its feed settles later. A
+     focused path is ignored here: opening a reader is not the same as having it
+     on screen with its transcript read. */
+  const board = measuringBoard(bus, [null, "visible", "visible", "reader"]);
+
+  const outcome = await runFocusTransaction(request({ intent: "open" }), bus, {
+    pollMs: 0,
+    timeoutMs: 60_000,
+    sleep: async () => {},
+    observe: () => ({ camera: null, focusedPath: "/tmp/reviewer.jsonl" }),
+  });
+
+  expect(outcome.moved).toBe(true);
+  expect(outcome.resolution).toBe("reader");
+  expect(board.reads()).toBe(4);
+  /* The board learns what to open: the intent and the conversation. */
+  expect(board.moved).toEqual([{ rect: RECT, zoom: "situate", anchorKeys: ["/tmp/reviewer.jsonl"], intent: "open", path: "/tmp/reviewer.jsonl" }]);
+  expect(log.recorded).toEqual([["/tmp/reviewer.jsonl", "demo"]]);
+});
+
+test("an OPEN whose reader never settles inside the bound closes as lost and records nothing", async () => {
+  const { bus, log } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
+  measuringBoard(bus, ["visible"]);
+  let clock = 0;
+
+  const outcome = await runFocusTransaction(request({ intent: "open" }), bus, {
+    pollMs: 1,
+    timeoutMs: 300,
+    sleep: async () => { clock += 100; },
+    now: () => clock,
+  });
+
+  expect(outcome).toEqual({ resolution: "lost", moved: false, frame: null });
+  expect(log.recorded).toEqual([]);
+});
+
+test("a SHOW on a measuring board arrives when the card is on screen and keeps the anchor's own resolution", async () => {
+  const { bus } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
+  const board = measuringBoard(bus, [null, "visible"]);
+
+  const outcome = await runFocusTransaction(request(), bus, { pollMs: 0, timeoutMs: 60_000, sleep: async () => {} });
+
+  expect(outcome.resolution).toBe("exact");
+  expect(board.moved[0]?.intent).toBe("show");
+});
+
+test("a RESUMED open whose reader is already on screen re-issues nothing", async () => {
+  const { bus } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
+  const board = measuringBoard(bus, ["reader"]);
+
+  const outcome = await runFocusTransaction(request({ intent: "open" }), bus, { ...NO_WAIT, resume: true });
+
+  expect(outcome.resolution).toBe("reader");
+  expect(board.moved).toEqual([]);
+});
+
+test("Return on a measuring board closes what its handoff opened", async () => {
+  const { bus } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
+  const board = measuringBoard(bus, ["reader"]);
+
+  await restoreFocusPoint({ mode: "scheme", camera: null, focusedPath: null }, "demo", bus, NO_WAIT);
+
+  expect(board.returned()).toBe(1);
+});

@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
-import { formatConversationHash } from "@/lib/accounts/identity";
+import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
@@ -18,12 +18,18 @@ import { buildTaskBands } from "@/components/scheme/taskBands";
 import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
+import { cleanTitle } from "@/components/utils";
 
 import { KanbanCard, MoreGlyph, statusLabel } from "./KanbanCard";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
+import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
+import { allCards, cardAnchors, cardOnScreen, conversationOwners, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
+import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
+import { ReaderPlacement, ReaderPortals, ReaderSlot, type ReaderView } from "./KanbanReaders";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
@@ -71,21 +77,45 @@ export interface KanbanBoardProps {
   catalogFailures: number;
   selection: ReadonlySet<string>;
   viewSwitch?: ReactNode;
-  onOpenConversation: (file: FileEntry) => void;
+  /** The orchestrator seat above the columns (#1695 K3), given the id of the
+      board region its skip link lands on. */
+  seat?: (boardId: string) => ReactNode;
+  /** A conversation or task the Viewer was asked to open while this board
+      shows: its card is revealed, and a conversation opens as a reader. */
+  focus?: string | null;
+  /** A reader opened: the same seen-stamp opening a conversation leaves. */
+  onConversationOpened?: (path: string) => void;
   /** The project's full conversation catalog (the List view). */
   onOpenCatalog: () => void;
   /** The scheme board, for surfaces this board does not draw yet. */
   onOpenOnBoard: () => void;
   mutationPorts?: TaskMutationPorts;
+  assignmentPorts?: AssignmentPorts;
+  /** Where open readers are remembered; this browser's storage by default. */
+  readerStorage?: Pick<Storage, "getItem" | "setItem"> | null;
 }
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const EMPTY_FLOWS: Flow[] = [];
 const EMPTY_PIPELINES: Pipeline[] = [];
 const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
+const NO_READERS: readonly OpenReader[] = [];
+
+function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 function cssEscape(value: string): string {
   return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
+/** Whether search leaves this card on the board. */
+function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
+  return model.columns[card.status].shown.some((shown) => shown.id === card.id) || model.unlinkedShown.some((shown) => shown.id === card.id);
 }
 
 function prefersReducedMotion(): boolean {
@@ -117,14 +147,19 @@ function useBands(props: KanbanBoardProps) {
 
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useLocale();
-  const { allTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversation, onOpenCatalog, onOpenOnBoard } = props;
+  const { project, allTasks, pipelines, files, loaded, catalogFailures, selection, onOpenCatalog, onOpenOnBoard, onConversationOpened } = props;
+  const assignments = props.assignmentPorts ?? browserAssignmentPorts;
+  const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
+  const [linkQuery, setLinkQuery] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [dragHint, setDragHint] = useState(false);
-  const menu = useOverlay<{ kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" }>();
+  const menu = useOverlay<
+    { kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string } | { kind: "link"; key: string }
+  >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
   /* `U` undoes only what a receipt on screen still offers: once that receipt
@@ -153,6 +188,71 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const tasksById = useRef(new Map<string, BoardTask>());
   tasksById.current = new Map(allTasks.map((task) => [task.id, task] as const));
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file] as const)), [files]);
+
+  /* ── Readers: conversations open inside cards ────────────────────────── */
+  const cards = useMemo(() => allCards(model), [model]);
+  const owners = useMemo(() => conversationOwners(cards, files), [cards, files]);
+  const anchors = useMemo(() => cardAnchors(cards, owners), [cards, owners]);
+  const readerStorage = props.readerStorage === undefined ? browserStorage() : props.readerStorage;
+  const memory = useMemo(() => new ReaderMemory(project, readerStorage), [project, readerStorage]);
+  const openReaders = useSyncExternalStore(memory.subscribe, memory.snapshot, () => NO_READERS);
+  const openReadersRef = useRef(openReaders);
+  openReadersRef.current = openReaders;
+  const [placement] = useState(() => new ReaderPlacement());
+  /* One reader at a time may take the whole window; it is the same reader,
+     moved, and goes back into its card when it leaves. */
+  const [fullReader, setFullReader] = useState<string | null>(null);
+  const toggleFull = useCallback((key: string) => setFullReader((current) => (current === key ? null : key)), []);
+  /* Escape puts it back, unless the key belongs to a field or an open menu.
+     Listened for on the document: the reader is a portal, so its key events
+     never pass through the overlay in React's tree. */
+  useEffect(() => {
+    if (!fullReader) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.("input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog']")) return;
+      setFullReader(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [fullReader]);
+  const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
+  const filesByIdentity = useMemo(() => new Map(files.map((file) => [conversationIdentity(file), file] as const)), [files]);
+  /* A conversation that has left this board's files keeps its reader mounted
+     on the file it was last seen as, so nothing typed into it is lost. */
+  const lastSeenFiles = useRef(new Map<string, FileEntry>());
+  const readerViews = useMemo<ReaderView[]>(() => openReaders.flatMap((reader) => {
+    const owner = owners.get(reader.key);
+    const file = owner?.file ?? filesByIdentity.get(reader.key) ?? filesByPath.get(reader.path) ?? lastSeenFiles.current.get(reader.key);
+    if (!file) return [];
+    const card = owner ? cardsById.get(owner.cardId) : undefined;
+    return [{
+      readerKey: reader.key,
+      file,
+      folded: reader.folded && fullReader !== reader.key,
+      full: fullReader === reader.key,
+      owner: owner && card ? { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage } : null,
+    }];
+  }), [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader]);
+  useEffect(() => {
+    for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
+  }, [readerViews]);
+  /* A conversation that moved to a new transcript keeps its reader. */
+  useEffect(() => {
+    memory.update((readers) => followPaths(readers, (key) => filesByIdentity.get(key)?.path ?? null));
+  }, [memory, filesByIdentity]);
+  const readerKeysByCard = useMemo(() => {
+    const byCard = new Map<string, string[]>();
+    for (const reader of openReaders) {
+      const owner = owners.get(reader.key);
+      if (!owner || reader.key === fullReader) continue;
+      const keys = byCard.get(owner.cardId) ?? [];
+      keys.push(reader.key);
+      byCard.set(owner.cardId, keys);
+    }
+    return new Map([...byCard].map(([cardId, keys]) => [cardId, keys.join("\n")] as const));
+  }, [openReaders, owners, fullReader]);
 
   /* ── Width → layout mode ─────────────────────────────────────────────── */
   useLayoutEffect(() => {
@@ -302,8 +402,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }],
       };
     }
-    if (open.value.kind === "tray") return null;
-    const card = cardsById.get(open.value.cardId);
+    if (open.value.kind === "tray" || open.value.kind === "link") return null;
+    if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor);
+    const value = open.value;
+    const card = cardsById.get(value.cardId);
     if (!card) return null;
     const title = card.titlePending ? t("kanban.untitled") : card.title;
     const common: KanbanMenuItem[] = [
@@ -311,7 +413,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       { type: "item", label: t("kanban.prevColumn"), kbd: "[", disabled: card.status === "inbox", onSelect: () => shift(card, -1, "pill") },
       { type: "item", label: t("kanban.nextColumn"), kbd: "]", disabled: card.status === "done", onSelect: () => shift(card, 1, "pill") },
     ];
-    if (open.value.kind === "status") {
+    if (value.kind === "status") {
       return { label: t("kanban.statusOf", { title }), items: [{ type: "head", label: t("kanban.moveTo") }, ...statusItems(card, true), ...common] };
     }
     return {
@@ -324,6 +426,64 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ],
     };
   };
+  /* ── A reader's actions: full pane, link, and Link / Unlink ───────────── */
+  const conversationName = (view: ReaderView) => cleanTitle(view.file.title ?? "", 48) || view.owner?.cardTitle || t("kanban.untitledConversation");
+  const readerMenu = (key: string, anchor: HTMLElement): { label: string; items: KanbanMenuItem[] } | null => {
+    const view = readerViews.find((candidate) => candidate.readerKey === key);
+    if (!view) return null;
+    const card = view.owner ? cardsById.get(view.owner.cardId) : undefined;
+    const task = card?.task ?? null;
+    const ref = task ? assignmentRefFor(task, view.file) : null;
+    const name = conversationName(view);
+    return {
+      label: t("kanban.readerActions"),
+      items: [
+        { type: "item", label: fullReader === key ? t("kanban.readerLeaveFull") : t("kanban.readerFull"), onSelect: () => toggleFull(key) },
+        {
+          type: "item",
+          label: t("kanban.readerCopyLink"),
+          onSelect: () => {
+            const link = `${location.origin}${location.pathname}${formatConversationHash({ conversationId: view.file.conversationId ?? undefined, path: view.file.path })}`;
+            void navigator.clipboard?.writeText(link).then(() => show(t("kanban.linkCopied", { conversation: name })), () => undefined);
+          },
+        },
+        { type: "sep" },
+        {
+          type: "item",
+          label: t("kanban.linkToTask"),
+          why: t("kanban.linkToTaskWhy"),
+          onSelect: () => {
+            setLinkQuery("");
+            queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "link", key } }));
+          },
+        },
+        {
+          type: "item",
+          label: t("kanban.unlink"),
+          why: task && !ref ? t("kanban.unlinkThroughPipeline") : t("kanban.unlinkWhy"),
+          disabled: !task || !ref,
+          onSelect: () => {
+            if (!task || !ref) return;
+            const taskTitle = card?.titlePending ? t("kanban.untitled") : card?.title ?? "";
+            void assignments.unlink(task.id, ref).then((answer) => {
+              if (answer.ok) show(t("kanban.unlinked", { conversation: name, task: taskTitle }));
+              else if (answer.status === 409) show(t("kanban.unlinkOwn", { conversation: name, task: taskTitle }), undefined, { error: true });
+              else show(t("kanban.unlinkFailed", { conversation: name, error: answer.error }), undefined, { error: true });
+            });
+          },
+        },
+      ],
+    };
+  };
+  const linkTo = (view: ReaderView, task: BoardTask) => {
+    const name = conversationName(view);
+    const taskTitle = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
+    void assignments.link(task.id, view.file.path).then((answer) => {
+      if (answer.ok) show(t("kanban.linked", { conversation: name, task: taskTitle }));
+      else show(t("kanban.linkFailed", { conversation: name, error: answer.error }), undefined, { error: true });
+    });
+  };
+
   const openStatusMenu = useCallback((card: KanbanCardModel, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "status", cardId: card.id } }), [menu]);
   const openCardMenu = useCallback((card: KanbanCardModel, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "card", cardId: card.id } }), [menu]);
   const toggleCollapsed = useCallback((id: string) => {
@@ -373,7 +533,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Pointer drag to a column ────────────────────────────────────────── */
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.pointerType === "touch" || !card.task) return;
-    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .stage-section")) return;
+    if ((event.target as HTMLElement).closest("button, input, textarea, a, summary, details, .tile, .stage-section, .reader-slot")) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -391,6 +551,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         try { element.setPointerCapture(pointerId); } catch { /* capture is best-effort */ }
         element.classList.add("dragging");
         ghost = element.cloneNode(true) as HTMLElement;
+        ghost.querySelectorAll(".reader-slot").forEach((slot) => slot.replaceChildren());
         ghost.classList.add("ghost");
         ghost.classList.remove("dragging");
         ghost.style.setProperty("--w", `${element.offsetWidth}px`);
@@ -469,12 +630,58 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [dismiss]);
 
   /* ── Opening what a card holds ───────────────────────────────────────── */
+  /* What to bring into view once React has committed: the card, and the
+     reader when one was opened. */
+  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean } | null>(null);
+  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false) => {
+    const card = cardsByIdRef.current.get(cardId);
+    if (card) {
+      setCollapsed((current) => {
+        if (!current.has(cardId)) return current;
+        const next = new Set(current);
+        next.delete(cardId);
+        return next;
+      });
+      if (query && !cardMatchesShown(modelRef.current, card)) setQuery("");
+      if (modeRef.current === "tabs") setTab(card.status);
+    }
+    pendingReveal.current = { cardId, readerKey, focusReader };
+    setRevealTick((tick) => tick + 1);
+  }, [query]);
+  const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean } = {}) => {
+    const key = conversationIdentity(file);
+    memory.update((readers) => openReader(readers, key, file.path));
+    setFocusedReader(key);
+    onConversationOpened?.(file.path);
+    const owner = ownersRef.current.get(key);
+    revealCard(owner?.cardId ?? "", key, options.focus !== false);
+  }, [memory, onConversationOpened, revealCard]);
+  const [revealTick, setRevealTick] = useState(0);
+  useLayoutEffect(() => {
+    const wanted = pendingReveal.current;
+    if (!wanted) return;
+    pendingReveal.current = null;
+    const root = rootRef.current;
+    if (!root) return;
+    const slot = wanted.readerKey ? placement.slotOf(wanted.readerKey) : null;
+    const target = slot ?? (wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null);
+    if (!target) return;
+    target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    if (slot && wanted.focusReader) slot.querySelector<HTMLElement>("[data-kanban-reader]")?.focus({ preventScroll: true });
+  }, [revealTick, placement]);
+  const ownersRef = useRef(owners);
+  ownersRef.current = owners;
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
   const openStage = useCallback((pipeline: Pipeline, stage: PipelineStage) => {
     const attempt = latestAttempt(pipeline, stage.id);
     const file = (attempt?.agentPath ? filesByPath.get(attempt.agentPath) : undefined)
       ?? (attempt?.conversationId ? files.find((entry) => entry.conversationId === attempt.conversationId) : undefined);
     if (file) {
-      onOpenConversation(file);
+      openReaderFor(file);
       return;
     }
     /* A stage conversation this board does not carry (an older attempt the
@@ -484,7 +691,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (attempt?.conversationId || attempt?.agentPath) {
       location.hash = formatConversationHash({ conversationId: attempt.conversationId ?? undefined, path: attempt.agentPath ?? "" });
     }
-  }, [files, filesByPath, onOpenConversation]);
+  }, [files, filesByPath, openReaderFor]);
+  const foldReaderFor = useCallback((key: string, folded: boolean) => memory.update((readers) => foldReader(readers, key, folded)), [memory]);
+  const closeReaderFor = useCallback((key: string) => {
+    const cardId = ownersRef.current.get(key)?.cardId;
+    setFullReader((current) => (current === key ? null : current));
+    memory.update((readers) => closeReader(readers, key));
+    if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
+  }, [memory]);
+  const openReaderMenu = useCallback((key: string, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "reader", key } }), [menu]);
+
+  /* A conversation the Viewer was asked to open lands in its reader. */
+  const focusTarget = props.focus ?? null;
+  useEffect(() => {
+    if (!focusTarget) return;
+    if (focusTarget.startsWith("task::")) {
+      const cardId = `task:${focusTarget.slice("task::".length)}`;
+      if (cardsByIdRef.current.has(cardId)) revealCard(cardId);
+      return;
+    }
+    const file = filesByPath.get(focusTarget);
+    if (!file) return;
+    if (ownersRef.current.has(conversationIdentity(file))) openReaderFor(file);
+    /* A conversation no card holds is shown where the Viewer can show it. */
+    else onOpenOnBoard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
+  }, [focusTarget]);
+
   const focusCard = useCallback((cardId: string) => {
     const card = cardsById.get(cardId);
     if (card && mode === "tabs") setTab(card.status);
@@ -539,7 +772,28 @@ export function KanbanBoard(props: KanbanBoardProps) {
       window.removeEventListener("resize", schedule);
       observer?.disconnect();
     };
-  }, [model, mode, tab, collapsed]);
+  }, [model, mode, tab, collapsed, openReaders]);
+  /* The conversation the operator is in: the reader holding keyboard focus,
+     else the one opened last, while it stays open and expanded. */
+  const [focusedReader, setFocusedReader] = useState<string | null>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const sync = () => {
+      const active = document.activeElement as HTMLElement | null;
+      const reader = typeof active?.closest === "function" ? active.closest<HTMLElement>("[data-kanban-reader]") : null;
+      if (reader && root.contains(reader)) setFocusedReader(reader.dataset.kanbanReader ?? null);
+    };
+    const later = () => queueMicrotask(sync);
+    root.addEventListener("focusin", sync);
+    root.addEventListener("focusout", later);
+    return () => {
+      root.removeEventListener("focusin", sync);
+      root.removeEventListener("focusout", later);
+    };
+  }, []);
+  const focusedView = focusedReader ? readerViews.find((view) => view.readerKey === focusedReader && !view.folded) : undefined;
+  const focusedPath = focusedView?.file.path ?? null;
   const presenceSignature = useMemo(() => {
     const paths: string[] = [];
     for (const id of visibleCards ? visibleCards.split("\n") : []) {
@@ -551,12 +805,49 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const order = presenceSignature ? presenceSignature.split("\n") : [];
     viewBus.reportSlice({
       mode: "scheme",
-      focusedPath: null,
+      focusedPath,
       selectedPaths: selectionInOrder(order, selection, { includeUnordered: true }),
       visiblePaths: order.slice(0, MAX_VISIBLE_PATHS),
       camera: null,
     });
-  }, [presenceSignature, selection]);
+  }, [presenceSignature, selection, focusedPath]);
+
+  /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
+  const handoffOpened = useRef(new Set<string>());
+  const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project), [model, anchors, project]);
+  useEffect(() => focusHandoffBus.setBoard({
+    project,
+    index: focusIndex,
+    moveTo: (destination) => {
+      const anchor = destination.anchorKeys.find((key) => anchors.has(key));
+      const cardId = anchor ? anchors.get(anchor) : undefined;
+      if (!cardId) return false;
+      const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
+      if (file) {
+        const key = conversationIdentity(file);
+        if (!openReadersRef.current.some((reader) => reader.key === key && !reader.folded)) handoffOpened.current.add(key);
+        openReaderFor(file, { focus: false });
+      } else {
+        revealCard(cardId);
+      }
+      return true;
+    },
+    restoreCamera: () => false,
+    arrival: (destination) => {
+      const root = rootRef.current;
+      if (!root) return null;
+      const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
+      if (file && readerArrived(root, placement.slotOf(conversationIdentity(file)))) return "reader";
+      const anchor = destination.anchorKeys.find((key) => anchors.has(key));
+      const cardId = anchor ? anchors.get(anchor) : undefined;
+      return cardId && cardOnScreen(root, cardId, cssEscape) ? "visible" : null;
+    },
+    returnFromHandoff: () => {
+      const opened = [...handoffOpened.current];
+      handoffOpened.current.clear();
+      if (opened.length) memory.update((readers) => opened.reduce<OpenReader[]>((current, key) => closeReader(current, key), [...readers]));
+    },
+  }), [project, focusIndex, anchors, filesByPath, openReaderFor, revealCard, memory, placement]);
 
   /* ── Show an off-board task again (existing `board` preference) ───────── */
   const showOnBoard = useCallback((task: BoardTask) => {
@@ -572,6 +863,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const filtering = query.trim().length > 0;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
+  const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
+  const linkKey = linkOpen && linkOpen.value.kind === "link" ? linkOpen.value.key : null;
+  const linkView = linkKey ? readerViews.find((view) => view.readerKey === linkKey) ?? null : null;
+  const linkOwnerTask = linkView?.owner ? cardsById.get(linkView.owner.cardId)?.task ?? null : null;
+  const linkCandidates = linkView ? allTasks
+    .filter((task) => task.id !== linkOwnerTask?.id && task.board !== "hidden")
+    .filter((task) => !linkQuery.trim() || task.text.toLowerCase().includes(linkQuery.trim().toLowerCase()))
+    .slice(0, 50) : [];
+  /* A shelf column holding an open conversation widens to reading width. */
+  const readingStatuses = new Set<TaskStatus>();
+  for (const view of readerViews) {
+    if (view.folded || !view.owner) continue;
+    const card = cardsById.get(view.owner.cardId);
+    if (card && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
+  }
+  const readingStyle = (mode === "wide" || mode === "narrow") && readingStatuses.size
+    ? ({ "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } as CSSProperties)
+    : undefined;
 
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
@@ -584,6 +893,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       pendingIds={controller}
+      reading={readingStatuses.has(status)}
+      readerKeysByCard={readerKeysByCard}
+      placement={placement}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -591,7 +903,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onCardMenu: openCardMenu,
         onKey: onCardKey,
         onPointerDown: onCardPointerDown,
-        onOpenMember: onOpenConversation,
+        onOpenMember: openReaderFor,
         onOpenStage: openStage,
         onFocusCard: focusCard,
         onOpenCatalog,
@@ -645,6 +957,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </div>
       </header>
 
+      <div className="kb-page">
+      {props.seat ? props.seat(boardId) : null}
+      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
         <div className="board-loading" role="status">{t("kanban.loading")}</div>
       ) : mode === "tabs" ? (
@@ -685,11 +1000,62 @@ export function KanbanBoard(props: KanbanBoardProps) {
           <div className="board scroll" data-board="" data-mode={mode}>{columnsView}</div>
         </div>
       ) : (
-        <div className={`board${mode === "narrow" ? " narrow" : ""}`} data-board="" data-mode={mode}>{columnsView}</div>
+        <div className={`board${mode === "narrow" ? " narrow" : ""}${readingStatuses.size ? " reading" : ""}`} data-board="" data-mode={mode} style={readingStyle}>{columnsView}</div>
       )}
+      </div>
+      </div>
+      <div ref={parkRef} className="reader-park" hidden aria-hidden="true" />
+      {fullReader && openReaders.some((reader) => reader.key === fullReader) ? (
+        <div className="reader-full" data-reader-full={fullReader}>
+          <ReaderSlot placement={placement} readerKey={fullReader} />
+        </div>
+      ) : null}
+      <ReaderPortals
+        placement={placement}
+        readers={readerViews}
+        now={props.now}
+        onFold={foldReaderFor}
+        onClose={closeReaderFor}
+        onFull={toggleFull}
+        onMenu={openReaderMenu}
+      />
 
       {openMenu && menu.open ? (
         <KanbanMenu anchor={menu.open.anchor} label={openMenu.label} items={openMenu.items} onClose={menu.close} />
+      ) : null}
+      {linkOpen && linkView ? (
+        <KanbanPopover
+          anchor={linkOpen.anchor}
+          label={t("kanban.linkPickerTitle", { conversation: conversationName(linkView) })}
+          onClose={menu.close}
+          initialFocus="input"
+          className="link-picker"
+        >
+          <div className="head">{t("kanban.linkPickerTitle", { conversation: conversationName(linkView) })}</div>
+          <label className="search">
+            <input
+              type="search"
+              placeholder={t("kanban.find")}
+              aria-label={t("kanban.find")}
+              data-link-search=""
+              value={linkQuery}
+              onChange={(event) => setLinkQuery(event.target.value)}
+            />
+          </label>
+          {linkCandidates.length ? linkCandidates.map((task) => (
+            <button
+              key={task.id}
+              type="button"
+              className="row pick"
+              data-link-task={task.id}
+              onClick={() => { menu.close(true); linkTo(linkView, task); }}
+            >
+              <span className="pill" data-status={task.status} style={{ pointerEvents: "none" }}>{statusLabel(t, task.status)}</span>
+              <span className="t"><span className="title">{task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled")}</span></span>
+            </button>
+          )) : <p className="note">{t("kanban.linkPickerEmpty")}</p>}
+          <p className="note">{t("kanban.linkPickerNote")}</p>
+        </KanbanPopover>
       ) : null}
       {trayOpen ? (
         <KanbanPopover anchor={trayOpen.anchor} label={t("kanban.hiddenTitle")} onClose={menu.close}>
@@ -718,8 +1084,11 @@ type CardHandlers = Pick<
   "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, reading, readerKeysByCard, placement, onColumnMenu, cardProps }: {
   status: TaskStatus;
+  reading: boolean;
+  readerKeysByCard: ReadonlyMap<string, string>;
+  placement: ReaderPlacement;
   model: KanbanModel;
   mode: KanbanLayoutMode;
   activeTab: TaskStatus;
@@ -741,6 +1110,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
       pending={card.task ? pendingIds.pending(card.task.id) : false}
       collapsed={collapsed.has(card.id)}
       nowMs={nowMs}
+      readerKeys={readerKeysByCard.get(card.id) ?? ""}
+      placement={placement}
       {...cardProps}
     />
   );
@@ -750,7 +1121,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
   const empty = shown.length === 0 && unlinked.length === 0;
   return (
     <section
-      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}`}
+      className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}`}
       data-status={status}
       id={`kb-col-${status}`}
       aria-labelledby={`kb-h-${status}`}
@@ -812,6 +1183,8 @@ function fly(element: HTMLElement, from: DOMRect, root: HTMLElement): void {
   else if (body && destination.top > body.bottom - 20) target = { left: destination.left, top: body.bottom - 40, width: destination.width, height: 40, offscreen: true };
   else if (body && destination.bottom < body.top + 20) target = { left: destination.left, top: body.top, width: destination.width, height: 40, offscreen: true };
   const ghost = element.cloneNode(true) as HTMLElement;
+  /* An open reader stays where it is: the flight carries the card's face. */
+  ghost.querySelectorAll(".reader-slot").forEach((slot) => slot.replaceChildren());
   ghost.classList.add("flying");
   ghost.classList.remove("flash", "landing", "moved-static");
   ghost.setAttribute("aria-hidden", "true");

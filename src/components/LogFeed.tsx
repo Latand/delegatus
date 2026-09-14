@@ -1010,7 +1010,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
         prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}>
-      <div ref={content} className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}>
+      <div
+        ref={content}
+        /* Whether this feed has settled, readable off the page: a surface that
+           proves an arrival structurally (#1695) waits for rows, or for the
+           empty state an empty transcript settles on. */
+        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : "empty"}
+        className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}
+      >
         {!file ? (
           <div className="mt-[20vh] text-center text-muted">{t("feed.pickLog")}</div>
         ) : (
