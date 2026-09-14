@@ -16,6 +16,10 @@ export type TaskColor = (typeof TASK_COLORS)[number];
 export interface TaskGroupHidden {
   at: string;
   by: "operator" | "agent";
+  /** Every identifier of the task's live admissions when it was hidden
+      (`admissionSnapshot`). A conversation whose identifiers are all absent
+      from it joined after the hide. */
+  admitted?: string[];
 }
 
 /** `linked` records membership only (#1586): the conversation belongs to the

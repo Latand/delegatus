@@ -4,6 +4,7 @@ import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
+import { admissionSnapshot } from "./groupHide";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { TASK_COLORS, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
@@ -387,7 +388,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
       if (holding === "unknown") {
         return { ok: false, status: 503, code: "TASK_HIDE_UNVERIFIED", field: "hide", error: "the orchestrator seat record could not be read, so the hide was not applied; try again" };
       }
-      patch.groupHidden = { at: now, by: options.actor ?? "operator" };
+      patch.groupHidden = { at: now, by: options.actor ?? "operator", admitted: admissionSnapshot(task.assignments) };
     } else {
       patch.groupHidden = undefined;
     }

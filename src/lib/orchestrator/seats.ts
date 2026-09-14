@@ -664,6 +664,24 @@ export function activeOrchestratorSeatsOrUnknown(): OrchestratorSeat[] | null {
   return file === null ? null : Object.values(file.seats);
 }
 
+/**
+ * One project's active and pending seats, or null when the durable store could
+ * not be established (a torn or future-schema file, an unreadable path). A
+ * missing file is a store with no seats.
+ *
+ * The per-project sibling of {@link activeOrchestratorSeatsOrUnknown}, for a
+ * refusal that must not fail open: a task group hide (#1695) is refused for the
+ * task holding the seat conversation, and "the record said nothing" is not
+ * evidence that the task holds none. {@link orchestratorSeatFor} keeps its
+ * fail-closed-for-authority reading.
+ */
+export function orchestratorSeatForOrUnknown(project: string): { active: OrchestratorSeat | null; pending: OrchestratorSeat | null } | null {
+  const file = readOrchestratorSeatFileOrNull();
+  if (file === null) return null;
+  const canonical = canonicalOrchestratorProject(project);
+  return { active: file.seats[canonical] ?? null, pending: file.pending[canonical] ?? null };
+}
+
 /** Active-seat evidence for the one-time identity migration. A missing store
  * is valid before any designation; unreadable or malformed durable evidence
  * must keep the migration marker open for a later retry. */

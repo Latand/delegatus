@@ -35,7 +35,14 @@ export async function PATCH(
     const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  /* The refusal's code and field travel with it, as they do over MCP, so a
+     protected seat, a stale revision and a bad value are told apart by code. */
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error, ...(result.code ? { code: result.code } : {}), ...(result.field ? { field: result.field } : {}) },
+      { status: result.status },
+    );
+  }
   return NextResponse.json({ ok: true, task: result.task });
 }
 

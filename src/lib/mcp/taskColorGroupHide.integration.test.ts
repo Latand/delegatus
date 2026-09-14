@@ -121,12 +121,53 @@ test("the dashboard's PATCH hides as the operator, and both surfaces refuse the 
     const before = fs.readFileSync(TASKS_FILE, "utf8");
     const refused = await patchHttp(seatTask.task.id, { hide: true, expectedProject: seatRow.project, expectedRevision: seatRow.revision });
     expect(refused.status).toBe(409);
-    expect(await refused.json()).toMatchObject({ error: expect.stringContaining("orchestrator seat") });
+    /* The HTTP refusal carries the same code and field MCP does. */
+    expect(await refused.json()).toMatchObject({ code: "TASK_HIDE_PROTECTED", field: "hide" });
+    const stale = await patchHttp(seatTask.task.id, { hide: true, expectedProject: seatRow.project, expectedRevision: plainRow.revision });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ code: "TASK_REVISION_MISMATCH", field: "expectedRevision" });
+    const badColour = await patchHttp(seatTask.task.id, { color: "ultraviolet" });
+    expect(badColour.status).toBe(400);
+    expect(await badColour.json()).toMatchObject({ code: "TASK_INVALID_FIELD", field: "color" });
     const agentRefused = await p.call("update_task", { taskId: seatTask.task.id, hide: true, expectedProject: seatRow.project, expectedRevision: seatRow.revision });
     expect(agentRefused.ok).toBe(false);
     expect(JSON.stringify(agentRefused)).toContain("TASK_HIDE_PROTECTED");
     expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(before);
   } finally { await p.close(); }
+});
+
+test("a seat record the store cannot establish refuses every hide with 503 on both surfaces and writes nothing; a missing record hides", async () => {
+  const p = await protocol();
+  const seats = statePath("orchestrator-seats.json");
+  try {
+    const project = "unknown-seat-project";
+    const created = await p.call("create_task", { project, text: "Group under an unreadable seat record" });
+    const row = () => loadTasks().find((candidate) => candidate.id === created.task.id) as TaskWithRevision;
+    const fence = () => ({ expectedProject: row().project, expectedRevision: row().revision });
+    const unreadable: Array<[string, () => void]> = [
+      ["torn", () => fs.writeFileSync(seats, '{"schemaVersion":1,"seats":{"unknown-seat-proj')],
+      ["future schema", () => fs.writeFileSync(seats, JSON.stringify({ schemaVersion: 2, seats: {}, pending: {} }))],
+      ["a directory", () => { fs.rmSync(seats, { force: true }); fs.mkdirSync(seats); }],
+    ];
+    for (const [label, write] of unreadable) {
+      fs.rmSync(seats, { recursive: true, force: true });
+      write();
+      const before = fs.readFileSync(TASKS_FILE, "utf8");
+      const http = await patchHttp(created.task.id, { hide: true, ...fence() });
+      expect({ label, status: http.status, body: await http.json() }).toMatchObject({ label, status: 503, body: { code: "TASK_HIDE_UNVERIFIED", field: "hide" } });
+      const agent = await p.call("update_task", { taskId: created.task.id, hide: true, ...fence() });
+      expect({ label, ok: agent.ok, refusal: JSON.stringify(agent).includes("TASK_HIDE_UNVERIFIED") }).toEqual({ label, ok: false, refusal: true });
+      expect({ label, unchanged: fs.readFileSync(TASKS_FILE, "utf8") === before }).toEqual({ label, unchanged: true });
+    }
+    /* No record at all: a project with no seat, and the hide applies. */
+    fs.rmSync(seats, { recursive: true, force: true });
+    const applied = await patchHttp(created.task.id, { hide: true, ...fence() });
+    expect(applied.status).toBe(200);
+    expect(row().groupHidden?.by).toBe("operator");
+  } finally {
+    fs.rmSync(seats, { recursive: true, force: true });
+    await p.close();
+  }
 });
 
 test("a task file written by a later build, with values this build does not name, still loads every row", () => {
