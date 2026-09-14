@@ -80,8 +80,8 @@ over Viewer control HTTP (`list_conversations`, `search_transcripts`,
 `send_message`, `deploy_exact_sha`) reached prod (#1683), and so did the
 pipeline tick its MCP server sends after a pipeline change, which read only
 `LLV_VIEWER_CONTROL_URL` (#1685). Prod's stable port vouches for loopback
-requests when its gateway marks the local entry trusted, so prod answered
-those calls.
+requests when its gateway marks the local entry trusted, so prod would
+answer those calls.
 
 Agent launches stay enabled on staging (operator revision of #659, comment
 of 2026-07-24): spawn, attach, migrations, pipelines and message delivery
