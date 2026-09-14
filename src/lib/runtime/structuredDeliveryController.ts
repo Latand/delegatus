@@ -23,6 +23,7 @@ import { journalVerdict, sendIsSettled } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
+import { NATIVE_INJECT_CAPABILITY } from "./codexAppServerHost";
 import {
   markStructuredDeliveryControllerReady,
   markStructuredDeliveryControllerUnavailable,
@@ -484,6 +485,9 @@ function registrySessionProjection(
     capabilities: {
       steer: structuredKind === "codex-app-server",
       structuredAttention: structuredKind !== null,
+      /* This projection is derived from the registry with no live host behind
+         it, so it has observed nothing about injection and says so (#1560). */
+      inject: false,
       imageInput: runtimeImageCapability(sessionKey.engine, false),
       runtimeSettings: runtimeSettingsCapability(sessionKey.engine),
     },
@@ -566,12 +570,19 @@ async function publishHostState(
       turn,
       provenance: "structured",
       accountId: entry.accountId,
+      writerClaim: entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null,
       parentConversationId: entry.launchProfile?.parentConversationId ?? null,
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
       capabilities: {
         steer: adopted.key.engine === "codex",
         nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
+        /* #1560: OBSERVED, never inferred. The flag comes from the running
+           executable's negotiated protocol, and a host that has not resolved it
+           advertises nothing — so the composer offers no injection action and
+           an admitted injection is refused, rather than either being delivered
+           as a steer. */
+        inject: adopted.key.engine === "codex" && state.activeFlags.includes(NATIVE_INJECT_CAPABILITY),
         structuredAttention: true,
         imageInput: runtimeImageCapability(
           adopted.key.engine,
@@ -670,6 +681,13 @@ export async function bindStructuredDeliveryQueue(
       projectTerminal: async (operationId) => {
         if (stopped || state.activeQueue !== queue) return false;
         return projectLostTerminalAcknowledgement(registry, client, operationId);
+      },
+      injectionBinding: (conversationId) => {
+        const conversation = registry.conversation(conversationId as `conversation_${string}`);
+        const generation = conversation?.generations.at(-1);
+        const claim = structuredHostClaim(registry)(conversationId);
+        if (!generation || !claim) return null;
+        return { threadId: generation.id, accountId: generation.accountId, writerClaim: claim };
       },
       transition: async (operationId, status, details) => {
         const terminal = status === "delivered" || status === "failed" || status === "uncertain";
