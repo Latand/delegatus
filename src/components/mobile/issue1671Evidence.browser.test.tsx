@@ -22,6 +22,8 @@ import { translate } from "@/lib/i18n";
  *     beside the card and inside the phone;
  *   - a lane hidden since its last round stays off the board, and a lane that
  *     parked again after its Hide is back in Needs you and in the badge;
+ *     hidden again, it stays off both once the server answers, in every
+ *     painted frame, although the server keeps a lane's first Hide instant;
  *   - Hide takes the row and the bar's count on the tap, Restore brings both
  *     back, and a hide the server refuses puts both back and says why;
  *   - Close lane takes the row on the tap and sends nothing once Restore
@@ -49,8 +51,10 @@ interface Recorded {
   catalogRequests: string[];
   pipelinePatches: Array<{ id: string; action: string }>;
   closesAnswered: string[];
+  hidesAnswered: Array<{ id: string; action: string; dismissedAt: string | null }>;
   boardMutations: Array<{ kind: string; path?: string }>;
   refuseNextPipelinePatch: boolean;
+  pipelineAnswerDelayMs: number;
 }
 
 const pause = (page: Page, ms = 300) => page.waitForTimeout(ms);
@@ -260,6 +264,55 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   check("a Close lane whose window ran out stays gone while the server answers", inFlight.first === 0 && inFlight.second === 0 && inFlight.badge === queued - 2 && inFlight.sent.join() === "lane-4,lane-5" && !inFlight.answered.includes("lane-5"));
   check("answered closes stay gone", answered.first === 0 && answered.second === 0 && answered.badge === queued - 2);
 
+  /* 5c. A lane hidden before that parked again hides again. The fixture keeps
+     a lane's first Hide instant through a later dismiss, as the engine does,
+     and holds each answer 400 ms. Every frame painted from the tap until both
+     answers have landed is sampled for the row and the count. */
+  const parkedAgain = laneRow("lane-parked-again");
+  const badgeBeforeRehide = await badge();
+  await page.evaluate(() => { (window as unknown as { evidence: Recorded }).evidence.pipelineAnswerDelayMs = 400; });
+  await swipeLeft(page, cdp, parkedAgain, viewport.width);
+  const sentBeforeRehide = (await recorded()).pipelinePatches.length;
+  await tap(page, cdp, `${parkedAgain} [data-mobile2-swipe-action="hide"]`);
+  await page.evaluate((sel) => {
+    const sampler = window as unknown as { rehideFrames: Array<{ row: boolean; badge: string | null }>; rehideSampling: boolean };
+    sampler.rehideFrames = [];
+    sampler.rehideSampling = true;
+    const sample = () => {
+      sampler.rehideFrames.push({
+        row: document.querySelector(sel) !== null,
+        badge: document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? null,
+      });
+      if (sampler.rehideSampling) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, parkedAgain);
+  await page.waitForFunction(() => (window as unknown as { evidence: Recorded }).evidence.hidesAnswered.filter((answer) => answer.id === "lane-parked-again").length >= 2, undefined, { timeout: 5_000 }).catch(() => undefined);
+  await pause(page, 600);
+  const rehideFrames = await page.evaluate(() => {
+    const sampler = window as unknown as { rehideFrames: Array<{ row: boolean; badge: string | null }>; rehideSampling: boolean };
+    sampler.rehideSampling = false;
+    return sampler.rehideFrames;
+  });
+  await page.evaluate(() => { (window as unknown as { evidence: Recorded }).evidence.pipelineAnswerDelayMs = 0; });
+  const rehideAnswers = (await recorded()).hidesAnswered.filter((answer) => answer.id === "lane-parked-again");
+  const rehide = {
+    sent: (await recorded()).pipelinePatches.slice(sentBeforeRehide).map((patch) => `${patch.id}:${patch.action}`),
+    answers: rehideAnswers,
+    answeredDismissAgeMs: rehideAnswers.at(-1)?.dismissedAt ? Date.now() - Date.parse(rehideAnswers.at(-1)!.dismissedAt!) : null,
+    frames: rehideFrames.length,
+    framesWithRow: rehideFrames.filter((frame) => frame.row).length,
+    badges: [...new Set(rehideFrames.map((frame) => frame.badge))],
+    rowAfter: await count(parkedAgain),
+    badgeBefore: badgeBeforeRehide,
+    badgeAfter: await badge(),
+  };
+  await shot("rehidden");
+  check("hiding a lane that parked again clears its old Hide, then sends the new one", rehide.sent.join() === "lane-parked-again:undismiss,lane-parked-again:dismiss");
+  check("the new Hide is stamped now, after the round that parked the lane again", rehide.answeredDismissAgeMs !== null && rehide.answeredDismissAgeMs < 60_000);
+  check("no painted frame shows the re-hidden row or its count while the answers land", rehide.frames >= 10 && rehide.framesWithRow === 0 && rehide.badges.join() === String(badgeBeforeRehide - 1));
+  check("the re-hidden lane stays off Needs you and the badge once answered", rehide.rowAfter === 0 && rehide.badgeAfter === badgeBeforeRehide - 1);
+
   /* 6. A long-press opens the actions sheet and not the lane under the finger. */
   const [pressX, pressY] = await centre(page, lane(3));
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: pressX, y: pressY }] });
@@ -365,7 +418,7 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   await page.close();
   return {
     key, viewport, scheme, queued, hideDecision, vertical, tray, hide, restored, refused, closeLane: { ...closeLane, ...closeLaneAfter },
-    closes: { successive, inFlight, answered }, longPress, conversationClose, banners, expanded, appended, pageErrors, failures,
+    closes: { successive, inFlight, answered }, rehide, longPress, conversationClose, banners, expanded, appended, pageErrors, failures,
   };
 }
 

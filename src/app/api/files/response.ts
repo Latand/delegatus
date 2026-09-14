@@ -10,10 +10,10 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
 import { pinnedIdentityEntries } from "@/lib/scanner/pinRideAlong";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
+import { conversationLineageMarkers } from "@/lib/agent/lineageMarkers";
 import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
-  supersedenceChainTail,
   type AgentRegistryEntry,
 } from "@/lib/agent/registry";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
@@ -412,8 +412,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const latest = conversation.generations.at(-1);
     file.conversationId = conversation.id;
     if (generationIndex >= 0) file.generation = generationIndex + 1;
-    if (generation && latest && generation.path !== latest.path) file.migratedTo = latest.path;
-    if (!generation && latest && conversation.continuityPaths.includes(file.path)) file.migratedTo = latest.path;
+    const lineage = conversationLineageMarkers(registrySnapshot, conversationLookup, conversation, file.path);
+    if (lineage.migratedTo) file.migratedTo = lineage.migratedTo;
     if (latest?.path === file.path && conversation.generations.length > 1) {
       const predecessor = conversation.generations.at(-2);
       file.predecessorPath = predecessor?.path;
@@ -439,27 +439,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
          with no materialized successor generation the card keeps today's
          dead-host rendering instead of hiding behind a dangling link. */
       if (conversation.supersededBy) {
-        const successorId = conversationLookup.canonicalConversationId(conversation.supersededBy.conversationId);
-        const successorGeneration = successorId !== conversation.id
-          ? registrySnapshot.conversations[successorId]?.generations.at(-1)
-          : undefined;
-        if (successorGeneration) {
-          /* Primary navigation resolves the live chain END (A→B→C opens C)
-             while the immediate edge stays the round history. A tail without a
-             materialized generation falls back to the immediate successor so
-             the affordance never points at a dangling round. */
-          const tailId = supersedenceChainTail(registrySnapshot, conversation.id);
-          const tailGeneration = tailId !== successorId
-            ? registrySnapshot.conversations[tailId]?.generations.at(-1)
-            : successorGeneration;
-          file.supersededBy = {
-            conversationId: successorId,
-            path: successorGeneration.path,
-            at: conversation.supersededBy.at,
-            reason: conversation.supersededBy.reason,
-            tailConversationId: tailGeneration ? tailId : successorId,
-            tailPath: tailGeneration ? tailGeneration.path : successorGeneration.path,
-          };
+        /* `conversationLineageMarkers` names the successor only once it has a
+           generation, and resolves the live chain end for navigation. */
+        if (lineage.supersededBy) {
+          file.supersededBy = lineage.supersededBy;
           file.activity = "idle";
           file.activityReason = "superseded";
           file.proc = "killed";

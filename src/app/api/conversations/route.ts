@@ -2,10 +2,9 @@ import { catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogS
 import { indexConversationCatalog } from "@/lib/scanner/conversationSearchIndex";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
+import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
 import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding } from "@/lib/session/titleProjection";
 import { cleanTitle } from "@/lib/title";
-
-import { overlayCatalogLineage } from "./lineage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +60,7 @@ export async function GET(request: Request): Promise<Response> {
     }
     // A superseded round or an archived predecessor says so here as it does in
     // the files response, so a list that continues the board drops it (#1671).
-    overlayCatalogLineage(page.items);
+    overlayConversationLineage(page.items);
     return Response.json(page);
   } catch (error) {
     if (error instanceof ExpiredConversationCatalogCursorError) {

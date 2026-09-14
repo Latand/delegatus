@@ -4,9 +4,10 @@ import { CircleX, EyeOff } from "lucide-react";
 
 import { X } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 
 import { patchPipeline } from "../pipelines/pipelineModel";
-import { dismissStamp, type MobileBoardRowRef } from "./mobileBoardModel";
+import { dismissStamp, pipelineHiddenFromBoard, type MobileBoardRowRef } from "./mobileBoardModel";
 import { pendingPipelineActs, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import { MobileSheet } from "./MobileSheet";
@@ -31,6 +32,25 @@ import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
  * No Mute and no Delete: the phone has neither, and a gesture is the last
  * place to invent one.
  */
+
+/**
+ * Hide a lane for the decision it waits on now (#1671). The engine keeps the
+ * instant of a lane's first Hide through every later `dismiss`, so a lane that
+ * parked again after an earlier Hide would answer a second Hide with that old
+ * instant and come straight back. Such a lane has its old Hide cleared first.
+ * Both requests carry the hidden record, so the row stays gone between them:
+ * the `undismiss` echo and the `dismiss` record apply in the same task, and no
+ * frame is painted in between. A refusal of either puts the lane back and
+ * returns why.
+ */
+async function hidePipeline(pipeline: Pipeline): Promise<string | null> {
+  const hidden = { ...pipeline, dismissedAt: dismissStamp(pipeline) };
+  if (pipeline.dismissedAt && !pipelineHiddenFromBoard(pipeline)) {
+    const fail = await patchPipeline(pipeline.id, "undismiss", undefined, hidden);
+    if (fail) return fail;
+  }
+  return patchPipeline(pipeline.id, "dismiss", undefined, hidden);
+}
 
 export interface MobileBoardRowActionPorts {
   /** Hides the card through the board's close. */
@@ -72,8 +92,7 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
           /* The optimistic record leaves the queue before the request goes:
              the row, the bar's badge and the queue sheet all read it. A refusal
              puts the record back and says why. */
-          void patchPipeline(pipeline.id, "dismiss", undefined, { ...pipeline, dismissedAt: dismissStamp(pipeline) })
-            .then((fail) => { if (fail) showReceipt(fail); });
+          void hidePipeline(pipeline).then((fail) => { if (fail) showReceipt(fail); });
           showReceipt(t("mobile2.board.pipelineHidden", { task }), {
             kind: "restore",
             run: () => {
