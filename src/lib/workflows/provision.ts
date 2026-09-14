@@ -20,6 +20,8 @@ export interface ExecResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  /** The signal that ended the process when it had no exit status. */
+  signal?: NodeJS.Signals | null;
 }
 
 export type ExecPort = (command: string, args: string[], cwd: string) => ExecResult;
@@ -27,7 +29,7 @@ export type ExecPort = (command: string, args: string[], cwd: string) => ExecRes
 export const realExec: ExecPort = (command, args, cwd) => {
   const res = spawnSync(command, args, { cwd, encoding: "utf8" });
   if (res.error) return { code: null, stdout: "", stderr: res.error.message };
-  return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+  return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "", ...(res.signal ? { signal: res.signal } : {}) };
 };
 
 export type ProvisionResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };

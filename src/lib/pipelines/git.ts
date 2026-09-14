@@ -256,7 +256,9 @@ function readRemotePipelineBranch(
     pipeline.worktreeDir,
   );
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
-  if (result.code === 124 || result.code === 137) {
+  /* `--signal=KILL` takes `timeout` down with its command, so a real expiry
+     usually ends on SIGKILL with no exit status at all (#1692). */
+  if (result.code === 124 || result.code === 137 || result.signal === "SIGKILL") {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
   }
   return failure(step, result);

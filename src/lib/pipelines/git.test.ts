@@ -601,6 +601,28 @@ test("the approval's remote head read is time-bounded and tells transport failur
   expect(answer({ code: 0, stdout: "" }).result).toEqual({ ok: false, transient: false, error: "the remote pipeline branch has no exact commit SHA" });
 });
 
+test("a real remote read that hangs is killed at the bound and reads as a network timeout (#1692)", () => {
+  /* `timeout --signal=KILL` takes itself down with the command, so the child
+     ends on a signal with no exit status. An SSH transport that never answers
+     is the incident's shape, reproduced here without a network. */
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-remote-hang-"));
+  try {
+    git(root, "init", "--initial-branch=main");
+    git(root, "config", "core.sshCommand", "sh -c 'sleep 30' fake-ssh");
+    git(root, "remote", "add", "origin", "ssh://git@example.invalid/owner/repo.git");
+    const subject = pipeline();
+    subject.worktreeDir = root;
+
+    const started = Date.now();
+    const read = currentPipelineRemoteBranchHead(subject, realExec);
+
+    expect(read).toEqual({ ok: false, transient: true, error: "checking the remote pipeline branch: git remote read timed out after 5s" });
+    expect(Date.now() - started).toBeLessThan(15_000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("publication pushes only the immutable accepted revision when the branch advances mid-publish", () => {
   const box = publishSandbox();
   try {
