@@ -15,7 +15,11 @@ import { CardInlineText, withinEdit } from "./CardInlineText";
 import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
 import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
+import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
+import { StageDraftPanel } from "./StageDraft";
+import type { StageDrafts } from "./stageDrafts";
+import type { PipelineActionKind } from "./stagesModel";
 
 /* One card of the kanban board, in the approved prototype's anatomy
    (`renderCard`): colour label, saving bar, title and tools, description,
@@ -57,16 +61,37 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
 }
 
 /** The stages whose latest own attempt's conversation is open as a reader on
-    the card: the attempt a node opens, never a lineage-adopted helper. */
-function selectedStages(pipeline: Pipeline, readerKeys: readonly string[]): Set<string> {
+    the card (the attempt a node opens, never a lineage-adopted helper), or
+    whose first message is open in a panel. */
+function selectedStages(pipeline: Pipeline, readerKeys: readonly string[], panels: readonly StagePanelLine[]): Set<string> {
   const open = new Set(readerKeys);
-  const selected = new Set<string>();
+  const selected = new Set<string>(panels.filter((panel) => panel.pipelineId === pipeline.id).map((panel) => panel.stageId));
   for (const run of pipeline.runs) {
     const attempt = latestAttempt(pipeline, run.stageId);
     const identity = attempt?.conversationId ?? attempt?.agentPath;
     if (identity && open.has(identity)) selected.add(run.stageId);
   }
   return selected;
+}
+
+/** A waiting stage's panel on the card, as the board encodes it: `pipelineId\tstageId\tfolded`. */
+interface StagePanelLine {
+  pipelineId: string;
+  stageId: string;
+  folded: boolean;
+}
+
+export const stagePanelKey = (cardId: string, pipelineId: string, stageId: string) => `${cardId}\t${pipelineId}\t${stageId}`;
+
+function parsePanels(encoded: string): StagePanelLine[] {
+  return encoded ? encoded.split("\n").map((line) => {
+    const [pipelineId = "", stageId = "", folded = "0"] = line.split("\t");
+    return { pipelineId, stageId, folded: folded === "1" };
+  }) : [];
+}
+
+function parseActing(encoded: string): Map<string, PipelineActionKind> {
+  return new Map(encoded ? encoded.split("\n").map((line) => line.split("\t") as [string, PipelineActionKind]) : []);
 }
 
 function engineClass(file: FileEntry): string {
@@ -116,7 +141,7 @@ export interface KanbanCardProps {
   onKey: (card: KanbanCardModel, event: React.KeyboardEvent<HTMLElement>) => void;
   onPointerDown: (card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => void;
   onOpenMember: (file: FileEntry) => void;
-  onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
+  onOpenStage: (pipeline: Pipeline, stage: PipelineStage, cardId: string) => void;
   onFocusCard: (cardId: string) => void;
   onOpenCatalog: () => void;
   onOpenOnBoard: () => void;
@@ -144,6 +169,17 @@ export interface KanbanCardProps {
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
   placement: ReaderPlacement;
+  /** Waiting stages open on this card, one per line (see `StagePanelLine`). */
+  stagePanels: string;
+  /** Pipeline actions this page sent and the server has not answered: `pipelineId\taction` per line. */
+  acting: string;
+  drafts: StageDrafts;
+  pipelinePorts: PipelinePorts;
+  onOpenSheet: (cardId: string, pipeline: Pipeline) => void;
+  onPipelineMenu: (cardId: string, pipeline: Pipeline, anchor: HTMLElement) => void;
+  onStagePanelFold: (panelKey: string, folded: boolean) => void;
+  onStagePanelClose: (panelKey: string) => void;
+  onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -166,7 +202,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the prototype; tiles are the conversations that run outside a pipeline. */
   const tiles = card.members.filter((member) => member.stage === null);
   const readerKeys = props.readerKeys ? props.readerKeys.split("\n") : [];
-  const reading = !collapsed && readerKeys.length > 0;
+  const panels = parsePanels(props.stagePanels);
+  const acting = parseActing(props.acting);
+  const reading = !collapsed && (readerKeys.length > 0 || panels.length > 0);
   const tileKeys = new Set(tiles.map((member) => conversationIdentity(member.file)));
   /* A stage's reader opens under the card's pipeline; a tile's reader takes
      the tile's place. */
@@ -342,14 +380,42 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           key={summary.pipeline.id}
           summary={summary}
           open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
-          selected={selectedStages(summary.pipeline, readerKeys)}
+          selected={selectedStages(summary.pipeline, readerKeys, panels)}
+          acting={acting.get(summary.pipeline.id) ?? null}
           onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
-          onOpenStage={props.onOpenStage}
+          onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
+          onOpenSheet={(pipeline) => props.onOpenSheet(card.id, pipeline)}
+          onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
         />
       )) : null}
 
-      {!collapsed && stageReaders.length ? (
+      {!collapsed && (stageReaders.length || panels.length) ? (
         <div className="readers">
+          {panels.map((panel) => {
+            const summary = card.pipelines.find((entry) => entry.pipeline.id === panel.pipelineId);
+            const stage = summary?.pipeline.stages.find((entry) => entry.id === panel.stageId);
+            if (!summary || !stage) return null;
+            const key = stagePanelKey(card.id, panel.pipelineId, panel.stageId);
+            const attempt = latestAttempt(summary.pipeline, stage.id);
+            const recorded = attempt && (attempt.agentPath || attempt.conversationId) ? { path: attempt.agentPath, conversationId: attempt.conversationId } : null;
+            return (
+              <StageDraftPanel
+                key={key}
+                panelKey={key}
+                cardTitle={title}
+                pipeline={summary.pipeline}
+                stage={stage}
+                names={stageNames(t, summary.pipeline)}
+                folded={panel.folded}
+                drafts={props.drafts}
+                ports={props.pipelinePorts}
+                onFold={(folded) => props.onStagePanelFold(key, folded)}
+                onClose={() => props.onStagePanelClose(key)}
+                onMenu={(anchor) => props.onStagePanelMenu(key, anchor)}
+                onOpenConversation={recorded ? () => props.onOpenAttempt(recorded) : null}
+              />
+            );
+          })}
           {stageReaders.map((key) => <ReaderSlot key={key} placement={props.placement} readerKey={key} />)}
         </div>
       ) : null}

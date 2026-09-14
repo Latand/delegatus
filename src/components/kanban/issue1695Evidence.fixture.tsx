@@ -21,7 +21,10 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * `?scenario=editing` (K4b) three groups start hidden, as in the prototype's
  * hidden-tray frame, a conversation is closed on the board, and the
  * orchestrator's conversation sits on a task an agent hid before the seat was
- * designated. Every
+ * designated. With `?scenario=stages` (K5b) the pipelines scenario also
+ * answers the pipeline route: reads, stage prompt overrides and the pipeline
+ * actions, with hooks for a refusal, a stage that starts during a save, and
+ * a prompt another client saves. Every
  * request the Viewer makes is answered here; nothing reaches a server, a store
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
@@ -29,8 +32,9 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
-/* K5a: the pipelines' review stages are bound to review flows with rounds. */
-const PIPELINES = SCENARIO === "pipelines";
+/* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
+const STAGES = SCENARIO === "stages";
+const PIPELINES = SCENARIO === "pipelines" || STAGES;
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -53,6 +57,19 @@ const working = (over: Record<string, unknown> = {}) => ({
 });
 
 const role = (roleId: string, engine = "claude") => ({ roleId, engine, model: engine === "claude" ? "opus" : "gpt-5.6", effort: "high", access: "read-write", promptScaffold: null });
+/* The approved prototype's stage prompts, behind the wiring token the engine substitutes. */
+const PROMPTS: Record<string, string> = {
+  "p-upload:plan": "{{task}}\n\nRead the upload path end to end and write the plan: chunk size, resume token, and what the UI must survive.",
+  "p-upload:build-api": "{{prev.output}}\n\nImplement the chunked upload endpoint with a resume token. Keep the old endpoint working until the UI switches.",
+  "p-upload:review-api": "{{prev.output}}\n\nReview the API diff against the plan. Block on anything that loses a chunk on retry.",
+  "p-upload:build-ui": "{{prev.output}}\n\nBuild the progress UI on the new endpoint. A reload must pick the upload up where it stopped.",
+  "p-upload:review-ui": "{{prev.output}}\n\nReview the UI diff. Check the reload path and the error states on a 390 px screen.",
+  "p-upload:verify": "{{prev.output}}\n\nUpload a 1.2 GB file, kill the tab at 40 %, reopen, and confirm it resumes. Fail with the exact step that broke.",
+  "p-upload:docs": "{{prev.output}}\n\nDocument the resume token and the new limits in the API guide.",
+  "p-upload:merge": "{{prev.output}}\n\nRebase on main, run the touched tests by path, and merge.",
+  "p-links:review": "{{prev.output}}\n\nCheck both anchors against the published notes before approving.",
+  "p-search:merge": "{{prev.output}}\n\nMerge once the alias swap is verified under traffic.",
+};
 function stage(id: string, roleId: string, next: string | null, over: Record<string, unknown> = {}) {
   return { id, kind: roleId === "reviewer" ? "review-loop" : "run", role: { roleId }, prompt: `Stage ${id}.`, next, onFail: null, effectiveRole: role(roleId), ...over };
 }
@@ -115,6 +132,9 @@ const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized D
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
 const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
+/* K5b: the conversation the release-notes Review gets when it starts during a save. */
+const searchRevFirst = STAGES ? add(conversation("search-rev-1", "Round 2 approved", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both anchors against the published notes", working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading the published notes" } }))) : null;
 
 const pipelines: Pipeline[] = [
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -170,6 +190,34 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "review", state: "reviewing", input: null, activatedBy: null })] : []),
 ];
+
+if (STAGES) {
+  for (const record of pipelines) {
+    for (const entry of record.stages) {
+      const prompt = PROMPTS[`${record.id}:${entry.id}`];
+      if (prompt) entry.prompt = prompt;
+    }
+  }
+  /* As the prototype's fixture has them: each attempt names the edge that
+     started it, and Review ran once per Implement attempt. */
+  type Run = { stageId: string; attempts: Array<Record<string, unknown>> };
+  const runsOf = (id: string) => (pipelines.find((entry) => entry.id === id)!.runs as unknown as Run[]);
+  const upload = runsOf("p-upload");
+  const chain = ["plan", "build-api", "review-api", "build-ui"];
+  for (const run of upload) {
+    const previous = chain[chain.indexOf(run.stageId) - 1];
+    if (previous) run.attempts[0]!.activatedBy = { stageId: previous, attempt: 1, edge: "pass" };
+  }
+  const search = runsOf("p-search");
+  const review = search.find((run) => run.stageId === "review")!;
+  review.attempts = [
+    attempt(1, "passed", searchRevFirst, { startedAt: iso(120 * MIN), activatedBy: { stageId: "implement", attempt: 1, edge: "pass" } }),
+    { ...review.attempts[0]!, n: 2, activatedBy: { stageId: "implement", attempt: 2, edge: "pass" } },
+  ];
+  const verify = search.find((run) => run.stageId === "verify")!;
+  verify.attempts[0]!.activatedBy = { stageId: "review", attempt: 1, edge: "pass" };
+  verify.attempts[1]!.activatedBy = { stageId: "review", attempt: 2, edge: "pass" };
+}
 
 /* Review flows as the store keeps them: one per bound review stage, with its rounds. */
 const reviewRole = { engine: "codex", model: "gpt-5.6", effort: "high" };
@@ -354,6 +402,23 @@ const evidence = {
   storedTask(id: string) {
     return tasks.find((entry) => entry.id === id) ?? null;
   },
+  /* K5b: the pipeline route's reads and writes, in order. */
+  pipelineReads: [] as string[],
+  pipelinePatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  pipelineAnswerDelayMs: 300,
+  /* The next pipeline write is refused with these words. */
+  refuseNextPipelinePatch: null as { status: number; error: string } | null,
+  /* The next pipeline write finds this stage started: the engine's race. */
+  startStageOnNextPatch: null as { pipelineId: string; stageId: string } | null,
+  /* Another client saves a stage's prompt; this page learns it on its next read. */
+  writeStagePromptQuietly(pipelineId: string, stageId: string, prompt: string) {
+    const record = pipelines.find((entry) => entry.id === pipelineId);
+    const target = record?.stages.find((entry) => entry.id === stageId);
+    if (target) target.prompt = prompt;
+  },
+  storedPipeline(id: string) {
+    return pipelines.find((entry) => entry.id === id) ?? null;
+  },
 };
 Object.assign(window, { evidence });
 
@@ -459,6 +524,65 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const next = { ...current, assignments: current.assignments.filter((assignment) => !matches(assignment)), revision: REV(revision++) } as BoardTask;
     tasks[index] = next;
     return json({ ok: true, task: next });
+  }
+  if (url.pathname.startsWith("/api/pipelines/")) {
+    const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+    const index = pipelines.findIndex((entry) => entry.id === id);
+    if (index < 0) return json({ error: "pipeline not found" }, 404);
+    if (method === "GET") {
+      evidence.pipelineReads.push(id);
+      return json({ ok: true, pipeline: pipelines[index] });
+    }
+    if (method === "PATCH") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      evidence.pipelinePatches.push({ id, body });
+      await new Promise((resolve) => setTimeout(resolve, evidence.pipelineAnswerDelayMs));
+      const record = structuredClone(pipelines[index]!) as Pipeline;
+      const runs = record.runs as unknown as Array<{ stageId: string; attempts: unknown[] }>;
+      const race = evidence.startStageOnNextPatch;
+      if (race && race.pipelineId === id) {
+        evidence.startStageOnNextPatch = null;
+        let run = runs.find((entry) => entry.stageId === race.stageId);
+        if (!run) runs.push(run = { stageId: race.stageId, attempts: [] });
+        run.attempts.push(attempt(run.attempts.length + 1, "running", linksReview, { startedAt: new Date().toISOString(), activatedBy: { stageId: "implement", attempt: 1, edge: "pass" } }));
+        record.cursor = { stageId: race.stageId, state: "running", input: null, activatedBy: null } as Pipeline["cursor"];
+        record.state = "running";
+        pipelines[index] = record;
+      }
+      if (evidence.refuseNextPipelinePatch) {
+        const refusal = evidence.refuseNextPipelinePatch;
+        evidence.refuseNextPipelinePatch = null;
+        return json({ error: refusal.error }, refusal.status);
+      }
+      /* The engine's preconditions for what the board sends (`patchPipeline`). */
+      const ended = record.state === "completed" || record.state === "closed";
+      if (body.action === "override-stage") {
+        if (ended) return json({ error: "pipeline is closed or completed" }, 409);
+        const target = record.stages.find((entry) => entry.id === body.stageId);
+        if (!target) return json({ error: "stage not found" }, 404);
+        if ((record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
+        if (typeof body.prompt === "string") target.prompt = body.prompt;
+      } else if (body.action === "pause") {
+        if (record.state === "draft") return json({ error: "draft pipelines can only be started, edited, or deleted" }, 409);
+        if (!ended && record.state !== "paused") {
+          record.pausedState = record.state;
+          record.state = "paused";
+        }
+      } else if (body.action === "resume") {
+        if (record.state !== "paused") return json({ error: "pipeline is not paused" }, 409);
+        record.state = (record.pausedState ?? "running") as Pipeline["state"];
+        record.pausedState = null;
+      } else if (body.action === "retry-stage" || body.action === "skip-stage") {
+        if (record.state !== "needs_decision") return json({ error: "pipeline does not have a stage awaiting a decision" }, 409);
+        record.state = "running";
+      } else if (body.action === "close") {
+        record.state = "closed";
+      } else {
+        return json({ error: "unsupported in the evidence fixture" }, 400);
+      }
+      pipelines[index] = record;
+      return json({ pipeline: record });
+    }
   }
   if (url.pathname === "/api/logs" && method === "POST") {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
