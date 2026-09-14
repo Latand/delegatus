@@ -49,13 +49,15 @@ Object.assign(globalThis, {
   addEventListener() {},
   removeEventListener() {},
 });
-/* Every read the pane makes answers "nothing here": each transcript is empty. */
+/* Every read the pane makes answers "nothing here": each transcript is empty,
+   except the paths a test marks as failing to read. */
+const failingReads = new Set<string>();
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   let body: unknown = {};
   if (url.startsWith("/api/logs")) {
-    const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string }> };
-    body = { chunks: Object.fromEntries(reqs.map((req) => [req.id, { data: "", start: 0, offset: 0, size: 0 }])) };
+    const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string; path: string }> };
+    body = { chunks: Object.fromEntries(reqs.map((req) => [req.id, failingReads.has(req.path) ? { error: "transcript read failed" } : { data: "", start: 0, offset: 0, size: 0 }])) };
   }
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }) as unknown as typeof fetch;
@@ -121,7 +123,7 @@ function task(id: string, status: TaskStatus, text: string, files: readonly File
 const idlePorts: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: AssignmentPorts; focus?: string | null }) {
+function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: AssignmentPorts; focus?: string | null; readerStorage?: Pick<Storage, "getItem" | "setItem"> }) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -146,6 +148,7 @@ function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: 
       onOpenOnBoard={() => {}}
       mutationPorts={idlePorts}
       {...(options.assignments ? { assignmentPorts: options.assignments } : {})}
+      {...(options.readerStorage ? { readerStorage: options.readerStorage } : {})}
     />,
   ));
   render();
@@ -353,8 +356,109 @@ test("an open handoff opens the reader through the board's controller, arrives o
     prototype.getBoundingClientRect = original as never;
   }
 
+  /* Another request's Return is not this one's. */
+  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_other"));
+  expect(readerIn(view.host)).toBeTruthy();
   flushSync(() => focusHandoffBus.board()!.returnFromHandoff!());
   expect(readerIn(view.host)).toBeNull();
+});
+
+const openDestination = (file: FileEntry, requestId: string) => {
+  const board = focusHandoffBus.board()!;
+  return { rect: board.index.rectFor(file.path)!, zoom: "inspect" as const, anchorKeys: [file.path], intent: "open" as const, path: file.path, requestId };
+};
+const readerByKey = (host: HTMLElement, key: string) => [...host.querySelectorAll<HTMLElement>("[data-kanban-reader]")].find((reader) => reader.dataset.kanbanReader === key) ?? null;
+
+test("Return undoes only what its own request opened: an operator's folded reader is folded again, and B's Return leaves A's reader open", async () => {
+  const mine = conversation(11);
+  const a = conversation(12);
+  const b = conversation(13);
+  const view = mount({ tasks: [task("t", "assigned", "Three conversations", [mine, a, b])], files: [mine, a, b] });
+
+  /* The operator opened and folded this one; a handoff unfolds it. */
+  click([...view.host.querySelectorAll<HTMLElement>(".tile")].find((tile) => tile.dataset.member === mine.path));
+  click(readerByKey(view.host, "conversation_fixture_11")!.querySelector("[data-reader-fold]"));
+  flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(mine, "attention_unfold")); });
+  expect(readerByKey(view.host, "conversation_fixture_11")?.dataset.folded).toBe("0");
+  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_unfold"));
+  expect(readerByKey(view.host, "conversation_fixture_11")?.dataset.folded).toBe("1");
+  expect(remembered().find((reader) => reader.key === "conversation_fixture_11")?.folded).toBe(true);
+
+  /* Handoff A ends without a Return; B's Return closes B's reader alone. */
+  flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(a, "attention_a")); });
+  flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(b, "attention_b")); });
+  expect(readerByKey(view.host, "conversation_fixture_12")).toBeTruthy();
+  expect(readerByKey(view.host, "conversation_fixture_13")).toBeTruthy();
+  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_b"));
+  expect(readerByKey(view.host, "conversation_fixture_13")).toBeNull();
+  expect(readerByKey(view.host, "conversation_fixture_12")).toBeTruthy();
+  expect(readerByKey(view.host, "conversation_fixture_11")).toBeTruthy();
+
+  /* Once the operator touches A's reader it is theirs: A's Return leaves it. */
+  click(readerByKey(view.host, "conversation_fixture_12")!.querySelector("[data-reader-fold]"));
+  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_a"));
+  expect(readerByKey(view.host, "conversation_fixture_12")?.dataset.folded).toBe("1");
+});
+
+test("a transcript that failed to read settles as an error, never as an arrival", async () => {
+  const file = conversation(14);
+  failingReads.add(file.path);
+  try {
+    const view = mount({ tasks: [task("a", "inbox", "Unreadable", [file])], files: [file] });
+    flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(file, "attention_error")); });
+    const reader = readerByKey(view.host, "conversation_fixture_14")!;
+    for (let waited = 0; waited < 4000 && reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") !== "error"; waited += 50) await tick(50);
+    expect(reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("error");
+    expect(reader.textContent).toContain("Couldn't read this conversation");
+    const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: (this: HTMLElement) => unknown };
+    const original = prototype.getBoundingClientRect;
+    prototype.getBoundingClientRect = function () { return { top: 100, bottom: 700, left: 0, right: 600, width: 600, height: 600, x: 0, y: 100 }; };
+    try {
+      /* On screen and expanded, but its feed never settled: the card is seen, the conversation is not. */
+      expect(focusHandoffBus.board()!.arrival!(openDestination(file, "attention_error"))).toBe("visible");
+    } finally {
+      prototype.getBoundingClientRect = original;
+    }
+  } finally {
+    failingReads.delete(file.path);
+  }
+});
+
+test("seventy open readers all stay mounted and remembered; a refused write keeps them open and says so", async () => {
+  const files = Array.from({ length: 70 }, (_, index) => conversation(100 + index));
+  const seeded = new Map<string, string>([[`${READER_STORAGE_PREFIX}fixture`, JSON.stringify(files.map((file) => ({ key: file.conversationId, path: file.path, folded: true })))]]);
+  const storage = { getItem: (key: string) => seeded.get(key) ?? null, setItem: (key: string, value: string) => void seeded.set(key, value) };
+  const view = mount({ tasks: [task("many", "assigned", "Seventy conversations", files)], files, readerStorage: storage });
+  await tick();
+  expect(view.host.querySelectorAll("[data-kanban-reader]")).toHaveLength(70);
+  click([...view.host.querySelectorAll<HTMLElement>("[data-reader-fold]")][0]);
+  expect((JSON.parse(seeded.get(`${READER_STORAGE_PREFIX}fixture`)!) as unknown[]).length).toBe(70);
+  view.unmount();
+
+  const refusing = { getItem: () => null, setItem: () => { throw new Error("quota exceeded"); } };
+  const second = mount({ tasks: [task("a", "assigned", "One conversation", [files[0]!])], files: [files[0]!], readerStorage: refusing });
+  click(second.host.querySelector(".tile"));
+  await tick();
+  expect(readerIn(second.host)).toBeTruthy();
+  expect([...second.host.querySelectorAll("[data-kanban-receipt].error .msg")].map((node) => node.textContent))
+    .toContain("This browser refused to store the open conversation, so it won't reopen after a reload. It stays open on this page.");
+});
+
+test("the reader header keeps its title: no PID or Stop host in it, and the full-window control stays", async () => {
+  const file = conversation(15, { proc: "running", pid: 4401, activity: "live" });
+  const view = mount({ tasks: [task("a", "assigned", "Running", [file])], files: [file] });
+  click(view.host.querySelector(".tile"));
+  const reader = readerIn(view.host)!;
+  const head = reader.querySelector(".conv-head")!;
+  expect(head.textContent).not.toContain("PID");
+  expect(head.textContent).not.toContain("Stop host");
+  expect(head.querySelector("[data-reader-full-toggle]")).toBeTruthy();
+  click(head.querySelector("[data-reader-menu]"));
+  const items = [...view.host.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? "");
+  expect(items.some((text) => text.startsWith("Open as a full pane"))).toBe(true);
+  /* Without a host this surface can stop, the menu offers none; the rendered
+     browser evidence opens the item on a live host. */
+  expect(items.some((text) => text.startsWith("Stop host"))).toBe(false);
 });
 
 test("a conversation the Viewer is asked to open while the kanban shows opens as its card's reader", async () => {

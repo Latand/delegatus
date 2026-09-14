@@ -11,11 +11,15 @@
         "present": true,
         "collapsed": false,
         "width": 1040,
-        "height": 418,
+        "height": 285,
         "centreOffset": 0,
         "dock": false,
         "conversations": 1,
-        "composerHeight": 99,
+        "composerHeight": 91,
+        "transcriptRows": 2,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 758,
         "innerHeight": 950,
@@ -27,6 +31,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 386,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -35,6 +42,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 386,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": true,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -43,6 +53,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 375,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -70,11 +83,15 @@
         "present": true,
         "collapsed": false,
         "width": 1040,
-        "height": 396,
+        "height": 270,
         "centreOffset": 0,
         "dock": false,
         "conversations": 1,
-        "composerHeight": 99,
+        "composerHeight": 91,
+        "transcriptRows": 2,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 679,
         "innerHeight": 900,
@@ -86,6 +103,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 426,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -94,6 +114,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 426,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -102,6 +125,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 408,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -134,6 +160,10 @@
         "dock": false,
         "conversations": 1,
         "composerHeight": 0,
+        "transcriptRows": 0,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 547,
         "innerHeight": 768,
@@ -145,6 +175,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 426,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -153,6 +186,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 426,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -161,6 +197,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 408,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -193,6 +232,10 @@
         "dock": false,
         "conversations": 1,
         "composerHeight": 0,
+        "transcriptRows": 0,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 442,
         "innerHeight": 720,
@@ -212,11 +255,15 @@
         "present": true,
         "collapsed": false,
         "width": 1040,
-        "height": 418,
+        "height": 285,
         "centreOffset": 0,
         "dock": false,
         "conversations": 1,
-        "composerHeight": 99,
+        "composerHeight": 91,
+        "transcriptRows": 2,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 758,
         "innerHeight": 950,
@@ -228,6 +275,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 386,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -236,6 +286,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 386,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": true,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -244,6 +297,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 375,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -271,11 +327,15 @@
         "present": true,
         "collapsed": false,
         "width": 1040,
-        "height": 396,
+        "height": 270,
         "centreOffset": 0,
         "dock": false,
         "conversations": 1,
-        "composerHeight": 99,
+        "composerHeight": 91,
+        "transcriptRows": 2,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 679,
         "innerHeight": 900,
@@ -287,6 +347,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 426,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -295,6 +358,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 426,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -303,6 +369,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 408,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -335,6 +404,10 @@
         "dock": false,
         "conversations": 1,
         "composerHeight": 0,
+        "transcriptRows": 0,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 547,
         "innerHeight": 768,
@@ -346,6 +419,9 @@
             "key": "conversation_links-impl",
             "folded": true,
             "width": 426,
+            "headText": "Builder · Repair old links in the release notes",
+            "titleClipped": false,
+            "fullToggle": null,
             "card": "task:t-links",
             "column": "assigned",
             "feed": "items"
@@ -354,6 +430,9 @@
             "key": "conversation_export-impl",
             "folded": false,
             "width": 426,
+            "headText": "Implementer: simplify the export settings",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-export",
             "column": "assigned",
             "feed": "items"
@@ -362,6 +441,9 @@
             "key": "conversation_auth-impl",
             "folded": false,
             "width": 408,
+            "headText": "Implementer: passkey sign-in",
+            "titleClipped": false,
+            "fullToggle": true,
             "card": "task:t-auth",
             "column": "blocked",
             "feed": "items"
@@ -394,6 +476,10 @@
         "dock": false,
         "conversations": 1,
         "composerHeight": 0,
+        "transcriptRows": 0,
+        "composers": {
+          "conversation_orchestrator": 1
+        },
         "pageOverflowX": 0,
         "boardFrameHeight": 442,
         "innerHeight": 720,
@@ -429,10 +515,10 @@
       "authFolded": true
     },
     "seat": {
-      "before": 418,
-      "dragged": 518,
-      "afterReload": 518,
-      "keyed": 478,
+      "before": 285,
+      "dragged": 385,
+      "afterReload": 385,
+      "keyed": 345,
       "collapsed": {
         "height": 48,
         "flag": true,
@@ -441,6 +527,10 @@
       "expanded": {
         "flag": false,
         "dock": false
+      },
+      "floor": {
+        "height": 160,
+        "composer": 40
       }
     },
     "arrival": {
@@ -496,6 +586,61 @@
         }
       ]
     },
+    "rerank": {
+      "scrolled": {
+        "top": 1632,
+        "room": 1892
+      },
+      "beforeRank": [
+        "task:t-links",
+        "task:t-upload",
+        "task:t-search",
+        "task:t-export",
+        "task:t-merge-a",
+        "task:t-verify-a",
+        "task:t-disk"
+      ],
+      "afterRank": [
+        "task:t-links",
+        "task:t-export",
+        "task:t-upload",
+        "task:t-search",
+        "task:t-merge-a",
+        "task:t-verify-a",
+        "task:t-disk"
+      ],
+      "kept": {
+        "top": 1632,
+        "sameCard": true
+      },
+      "settledTop": 1632
+    },
+    "orchestratorCard": {
+      "card": "lineage:conversation_orchestrator",
+      "column": "inbox",
+      "composers": {
+        "conversation_orchestrator": 1,
+        "conversation_search-ver-2": 1
+      }
+    },
+    "stopHost": {
+      "menuItems": [
+        "Open as a full pane",
+        "Copy conversation link",
+        "Link to another task…Nothing is sent to the agent",
+        "Unlink from this taskNothing stops. With no other task it gets an untitled task of its own",
+        "Stop host · PID 4401Stops the agent's process; the conversation and its card stay"
+      ],
+      "stopConfirm": {
+        "text": "Stop Implementer: simplify the export settings?PID 4401Yes, stopCancel",
+        "cancelFocused": true
+      }
+    },
+    "failedRead": {
+      "resolution": "lost",
+      "feed": "error",
+      "text": "Couldn't read this conversation: transcript read failed in the evidence fixture"
+    },
     "narrow": {
       "present": true,
       "collapsed": true,
@@ -505,6 +650,10 @@
       "dock": false,
       "conversations": 1,
       "composerHeight": 0,
+      "transcriptRows": 0,
+      "composers": {
+        "conversation_orchestrator": 1
+      },
       "pageOverflowX": 0,
       "boardFrameHeight": 442,
       "innerHeight": 720,

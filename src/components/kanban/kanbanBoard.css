@@ -26,7 +26,7 @@
 .kb :where(button, input):not(:where(.reader-host *, .seat *)) { font: inherit; color: inherit; }
 .kb button:not(:where(.reader-host *, .seat *)) { background: none; border: 0; padding: 0; }
 .kb :focus-visible:not(:where(.reader-host *, .seat *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
-.kb :where(.seat-head, .conv-head) :where(button), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
+.kb :where(.seat-head, .conv-head) :where(.icon-btn), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
 
 /* ── Bar ─────────────────────────────────────────────────────────────────── */
@@ -365,16 +365,25 @@
 
 .kb .seat {
   position: relative; z-index: 3; flex: 0 0 auto; width: calc(100% - 40px); max-width: 1040px; margin: 12px auto 0;
-  height: var(--seat-h, clamp(300px, 44vh, 460px));
+  height: var(--seat-h, clamp(160px, 30vh, 360px));
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   display: flex; flex-direction: column;
 }
 .kb .seat > [data-orchestrator-panel] { border-radius: inherit; overflow: hidden; background: var(--surface-card); }
 .kb .seat.folded { height: auto; }
-/* The composer keeps 240 px of transcript above it in a tall pane; the seat is
-   short on purpose, so here it keeps a smaller strip of the conversation and
-   the composer is never squeezed shut. */
-.kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 96px); }
+/* The seat is short on purpose (the agreed clamp(160px, 30vh, 360px)), so its
+   rows are the transcript, the control strip and the composer. Who holds the
+   seat and its host control ride the header; the turn's status row and the
+   live-tail marker repeat the header's state and are left out (the "back to
+   live" control still appears once the feed is scrolled up); the composer keeps 240 px of transcript
+   above it in a tall pane and a smaller strip here, never squeezed shut. */
+.kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 72px); }
+.kb .seat [data-orchestrator-conversation] :is([data-turn-status], [data-live-tail-pill]) { display: none; }
+.kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; }
+.kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }
+.kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
+.kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }
+.kb .seat-head [data-orchestrator-incumbent] { min-width: 0; }
 .kb .seat.folded [data-orchestrator-panel] > :not(.seat-head) { display: none; }
 .kb .seat-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; min-height: 46px; }
 .kb .seat:not(.folded) .seat-head { border-bottom: 1px solid var(--border-default); }
@@ -429,7 +438,6 @@
 .kb .reader .ch-dot.tone-accent { background: var(--color-accent); }
 .kb .reader .ch-dot.live { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
 .kb .reader .ch-title { min-width: 0; font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .reader .ch-host-slot { display: inline-flex; flex-shrink: 0; align-items: center; }
 .kb .reader .icon-btn.sm { width: 24px; height: 24px; }
 .kb .reader .icon-btn.sm svg { width: 14px; height: 14px; }
 .kb .reader .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
@@ -447,7 +455,6 @@
 .kb .reader .ch-tree svg { width: 11px; height: 11px; }
 .kb .reader .rlatest { text-align: left; font-size: var(--text-ui); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 24px; padding: 0 4px; border-radius: 6px; }
 .kb .reader .rlatest:hover { background: var(--surface-well); }
-@container (max-width: 430px) { .kb .reader .opt-full { display: none; } }
 
 /* A shelf column holding an open conversation widens to reading width; the
    board then scrolls sideways inside itself, never the page. */
@@ -465,3 +472,7 @@
 .kb .popover.link-picker .search input { width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-sunken); font-size: var(--text-ui); }
 .kb .popover.link-picker .search input:focus { outline: none; border-color: var(--color-accent); background: var(--surface-card); }
 .kb .popover .row.pick { width: 100%; text-align: left; }
+.kb .popover.stop-confirm { width: 300px; }
+.kb .popover .acts { display: flex; justify-content: flex-end; gap: 8px; padding: 4px 8px 6px; }
+.kb .btn.danger { background: var(--color-danger); border-color: var(--color-danger); color: #fff; }
+.kb .btn.danger:disabled { opacity: 0.6; }

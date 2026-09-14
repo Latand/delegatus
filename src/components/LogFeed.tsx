@@ -1014,8 +1014,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         ref={content}
         /* Whether this feed has settled, readable off the page: a surface that
            proves an arrival structurally (#1695) waits for rows, or for the
-           empty state an empty transcript settles on. */
-        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : "empty"}
+           empty state an empty transcript settles on. A read that failed is
+           neither: it says `error`, and nothing arrives on it. */
+        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty"}
         className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}
       >
         {!file ? (
@@ -1080,7 +1081,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <div className="mt-[14vh] text-center text-muted">
                 {tail.loading
                   ? t("common.loadingCap")
-                  : tail.size === 0
+                  : tail.error
+                    ? t("feed.readFailed", { error: tail.error })
+                    : tail.size === 0
                     ? t("feed.noOutput")
                     : feed.hiddenServiceCount
                       ? t("feed.onlyService", { count: feed.hiddenServiceCount })

@@ -94,7 +94,9 @@ const attachVerify = add(conversation("attach-verify", "Re-running the phone mat
 const compactBuild = conversation("compact-build", "Folded finished stages into one row", { mtime: now - 3 * 24 * 60 * MIN });
 const compactRev = add(conversation("compact-rev", "Approved", { mtime: now - 2 * 24 * 60 * MIN - 90 * MIN, engine: "codex", model: "gpt-5.6" }));
 const compactVer = add(conversation("compact-ver", "Board frames match at five widths", { mtime: now - 2 * 24 * 60 * MIN }));
-/* The project's orchestrator: seated above the board, never a card on it. */
+/* The project's orchestrator: seated above the board, and, as in production,
+   also a conversation on it ("Not on a task" here). Its one composer is the
+   seat's. */
 const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({ plan: { current: "Watching the search fix" } })));
 
 const pipelines: Pipeline[] = [
@@ -182,6 +184,12 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  /* The running verifier has a long transcript: its reader scrolls. */
+  if (file === searchVer2) {
+    const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
+    for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    return `${long.join("\n")}\n`;
+  }
   const lines = file === orchestrator
     ? [
       asked(8 * MIN, "Keep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback."),
@@ -203,9 +211,8 @@ const params = new URLSearchParams(location.search);
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: {
-    manual: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [],
+    manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [],
     viewMode: "scheme", desktopBoard: params.get("face") === "scheme" ? null : "kanban", taskPanelOpen: false,
-    hidden: [orchestrator.path],
   },
 } as unknown as BoardProjectStateV1;
 
@@ -216,6 +223,15 @@ const evidence = {
   /* The focus handoff this page's Viewer runs, for driving an attention
      arrival without a server behind the offer. */
   focus: { bus: focusHandoffBus, runFocusTransaction },
+  /* Transcript reads for this path fail, as a broken route would. */
+  failLogsFor: null as string | null,
+  /* A write another client made to a task, arriving on the next task read:
+     the card re-ranks within its column. */
+  touchTask(id: string) {
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index >= 0) tasks[index] = { ...tasks[index]!, updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
+    window.dispatchEvent(new Event("llv:tasks-changed"));
+  },
   /* A status another client wrote, arriving on the next task read. */
   setTaskStatus(id: string, status: TaskStatus) {
     const index = tasks.findIndex((entry) => entry.id === id);
@@ -307,6 +323,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/logs" && method === "POST") {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
+      if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
       const data = transcriptOf(req.path);
       const size = new TextEncoder().encode(data).length;
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];

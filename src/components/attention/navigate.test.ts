@@ -930,7 +930,7 @@ test("a RESUMED arrival still records the entry the interrupted move never wrote
 /** A kanban-shaped board: no camera, and an arrival read off its page. */
 function measuringBoard(bus: ReturnType<typeof createFocusHandoffBus>, readings: Array<"reader" | "visible" | null>) {
   const moved: FocusDestination[] = [];
-  let returned = 0;
+  const returned: Array<string | undefined> = [];
   let reads = 0;
   bus.setBoard({
     project: "demo",
@@ -938,7 +938,7 @@ function measuringBoard(bus: ReturnType<typeof createFocusHandoffBus>, readings:
     moveTo: (destination) => { moved.push(destination); return true; },
     restoreCamera: () => false,
     arrival: () => readings[Math.min(reads++, readings.length - 1)] ?? null,
-    returnFromHandoff: () => { returned += 1; },
+    returnFromHandoff: (requestId) => { returned.push(requestId); },
   });
   return { moved, reads: () => reads, returned: () => returned };
 }
@@ -950,7 +950,7 @@ test("an OPEN on a measuring board arrives only once its reader is observed, and
      on screen with its transcript read. */
   const board = measuringBoard(bus, [null, "visible", "visible", "reader"]);
 
-  const outcome = await runFocusTransaction(request({ intent: "open" }), bus, {
+  const outcome = await runFocusTransaction({ ...request({ intent: "open" }), id: "attention_open" }, bus, {
     pollMs: 0,
     timeoutMs: 60_000,
     sleep: async () => {},
@@ -961,7 +961,7 @@ test("an OPEN on a measuring board arrives only once its reader is observed, and
   expect(outcome.resolution).toBe("reader");
   expect(board.reads()).toBe(4);
   /* The board learns what to open: the intent and the conversation. */
-  expect(board.moved).toEqual([{ rect: RECT, zoom: "situate", anchorKeys: ["/tmp/reviewer.jsonl"], intent: "open", path: "/tmp/reviewer.jsonl" }]);
+  expect(board.moved).toEqual([{ rect: RECT, zoom: "situate", anchorKeys: ["/tmp/reviewer.jsonl"], intent: "open", path: "/tmp/reviewer.jsonl", requestId: "attention_open" }]);
   expect(log.recorded).toEqual([["/tmp/reviewer.jsonl", "demo"]]);
 });
 
@@ -1001,11 +1001,11 @@ test("a RESUMED open whose reader is already on screen re-issues nothing", async
   expect(board.moved).toEqual([]);
 });
 
-test("Return on a measuring board closes what its handoff opened", async () => {
+test("Return on a measuring board names the request it returns from, so only that handoff is undone", async () => {
   const { bus } = harness("demo", { "/tmp/reviewer.jsonl": RECT });
   const board = measuringBoard(bus, ["reader"]);
 
-  await restoreFocusPoint({ mode: "scheme", camera: null, focusedPath: null }, "demo", bus, NO_WAIT);
+  await restoreFocusPoint({ mode: "scheme", camera: null, focusedPath: null }, "demo", bus, NO_WAIT, "attention_b");
 
-  expect(board.returned()).toBe(1);
+  expect(board.returned()).toEqual(["attention_b"]);
 });

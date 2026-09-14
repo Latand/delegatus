@@ -329,7 +329,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
   const onReturn = useCallback(async (request: AttentionRequestV1) => {
     const point = request.returnPoints.find((entry) => entry.deviceId === deviceId);
     if (point) {
-      const restored = await restoreFocusPoint(point, readReturnProject(browserStorage(), deviceId, request.id), bus, timing ?? {});
+      const restored = await restoreFocusPoint(point, readReturnProject(browserStorage(), deviceId, request.id), bus, timing ?? {}, request.id);
       if (!restored) return;
     }
     const outcome = await offers.goBack(request, "control");

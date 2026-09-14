@@ -35,6 +35,7 @@ export function IncumbentHeader({
   rotating,
   opening,
   onRotate,
+  inline = false,
 }: {
   /** The status read, once it has answered. */
   incumbent: OrchestratorIncumbent | null;
@@ -53,6 +54,9 @@ export function IncumbentHeader({
       draft below opens PREFILLED rather than on the generic defaults. */
   opening: boolean;
   onRotate: () => void;
+  /** One row inside a header that already names the seat (the kanban seat,
+      #1695): no band of its own, and the predecessor link rides the row. */
+  inline?: boolean;
 }) {
   const { t } = useLocale();
   const designated = incumbent?.designated ? incumbent : null;
@@ -69,10 +73,10 @@ export function IncumbentHeader({
   return (
     <div
       data-orchestrator-incumbent
-      className="flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"
+      className={inline ? "flex min-w-0 flex-1 items-center gap-2" : "flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"}
       aria-label={t("orchPanel.incumbentAria")}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <div className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}>
         {badge ? <Badge style={badge.style}>{badge.label}</Badge> : null}
         {model ? (
           /* A product name, so sans (design system §1.1 mono rule) — the tier

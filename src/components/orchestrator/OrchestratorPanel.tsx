@@ -23,6 +23,7 @@ import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
+import { ProcessStatusControls } from "../TaskHeader";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
@@ -378,7 +379,24 @@ export function OrchestratorPanel({
             <Lock aria-hidden />
             <span>{t("orchPanel.seatStays")}</span>
           </span>
-          <span className="grow" />
+          {/* The seat is short on purpose: who holds it and its host control
+              ride this row instead of rows of their own under it. */}
+          {state.kind === "live" && !rotating && !collapsed ? (
+            <IncumbentHeader
+              inline
+              incumbent={incumbent}
+              file={file}
+              catalog={catalog}
+              predecessorConversationId={state.seat.predecessorConversationId}
+              promptVersion={state.seat.promptVersion}
+              rotating={rotating}
+              opening={rotateOpening}
+              onRotate={() => void openRotate(state.conversationId)}
+            />
+          ) : (
+            <span className="grow" />
+          )}
+          {state.kind === "live" && file && !collapsed ? <ProcessStatusControls file={file} hideChip compact /> : null}
           <button
             type="button"
             className="icon-btn"
@@ -471,16 +489,18 @@ export function OrchestratorPanel({
         </Centered>
       ) : state.kind === "live" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <IncumbentHeader
-            incumbent={incumbent}
-            file={file}
-            catalog={catalog}
-            predecessorConversationId={state.seat.predecessorConversationId}
-            promptVersion={state.seat.promptVersion}
-            rotating={rotating}
-            opening={rotateOpening}
-            onRotate={() => void openRotate(state.conversationId)}
-          />
+          {variant === "seat" ? null : (
+            <IncumbentHeader
+              incumbent={incumbent}
+              file={file}
+              catalog={catalog}
+              predecessorConversationId={state.seat.predecessorConversationId}
+              promptVersion={state.seat.promptVersion}
+              rotating={rotating}
+              opening={rotateOpening}
+              onRotate={() => void openRotate(state.conversationId)}
+            />
+          )}
           {/* The transition banner is how a designation in flight — or one that
               failed — reaches an operator who is NOT looking at the draft. With
               the rotate draft open it would say the same thing twice, once with
@@ -536,7 +556,7 @@ export function OrchestratorPanel({
               onCancel={() => setRotateFrom(null)}
             />
           ) : file ? (
-            <OrchestratorConversation file={file} projectName={projectName} />
+            <OrchestratorConversation file={file} projectName={projectName} hostControls={variant !== "seat"} />
           ) : (
             <Centered>
               {state.bindFailure ? (

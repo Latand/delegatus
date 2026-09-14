@@ -116,7 +116,7 @@ function presentAnchorKeys(target: FocusTarget | null, index: FocusFrameIndex): 
     also learns the intent and the conversation, because opening a reader is
     how it arrives; a camera frames the same rect either way. */
 function destinationFor(
-  request: Pick<AttentionRequestV1, "target" | "intent" | "zoom">,
+  request: Pick<AttentionRequestV1, "target" | "intent" | "zoom"> & { id?: string },
   resolved: ReturnType<typeof resolveFocusTarget>,
   frame: FocusFrame,
   board: NonNullable<ReturnType<FocusHandoffBus["board"]>>,
@@ -127,7 +127,12 @@ function destinationFor(
     anchorKeys: presentAnchorKeys(resolved.degraded ? null : resolved.target, board.index),
   };
   if (!board.arrival) return destination;
-  return { ...destination, intent: request.intent, path: request.target.kind === "conversation" ? request.target.path : null };
+  return {
+    ...destination,
+    intent: request.intent,
+    path: request.target.kind === "conversation" ? request.target.path : null,
+    ...(request.id ? { requestId: request.id } : {}),
+  };
 }
 
 async function boardForProject(bus: FocusHandoffBus, project: string, timing: HandoffTiming) {
@@ -160,7 +165,7 @@ async function waitForBoard(
  * its own.
  */
 export async function runFocusHandoff(
-  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom">,
+  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom"> & { id?: string },
   bus: FocusHandoffBus,
   timing: HandoffTiming = {},
 ): Promise<FocusHandoffResult> {
@@ -307,7 +312,7 @@ function cameraAtFrame(camera: FocusObservation["camera"], frame: FocusFrame): b
  * path's quiet-open record beside it.
  */
 export async function runFocusTransaction(
-  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom">,
+  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom"> & { id?: string },
   bus: FocusHandoffBus,
   options: FocusTransactionOptions = {},
 ): Promise<FocusHandoffResult> {
@@ -321,7 +326,7 @@ export async function runFocusTransaction(
 /** The move and the observed-postcondition wait, without the arrival record —
     see `runFocusTransaction`, whose one exit owns that record. */
 async function settleFocusTransaction(
-  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom">,
+  request: Pick<AttentionRequestV1, "target" | "frameAtCreation" | "intent" | "zoom"> & { id?: string },
   bus: FocusHandoffBus,
   options: FocusTransactionOptions,
 ): Promise<FocusHandoffResult> {
@@ -443,11 +448,14 @@ export async function restoreFocusPoint(
   project: string | null,
   bus: FocusHandoffBus,
   timing: HandoffTiming = {},
+  /** The request being returned from: a camera-less board undoes what that
+      request's handoff opened, and only that. */
+  requestId?: string,
 ): Promise<boolean> {
   const shell = bus.shell();
   /* A board whose handoff opened a reader closes it on the way back: that is
      the part of "where they were" a camera-less board changed. */
-  bus.board()?.returnFromHandoff?.();
+  bus.board()?.returnFromHandoff?.(requestId);
 
   /* Answered before anything else, because the steps below would otherwise put
      the operator back into the project they were being brought out of. */

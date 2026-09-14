@@ -19,20 +19,26 @@ import { kanbanLayoutMode } from "./KanbanBoard";
  * the production ones.
  *
  * Gated here, because only a laid-out page settles it:
- *   - the seat is centred, at most 1040 px wide, at its smaller default height,
- *     collapsed in a window under 800 px tall, and the side dock stays closed;
- *   - readers sit inside their cards, at most 780 px wide, and a shelf column
- *     holding one widens to reading width;
+ *   - the seat is centred, at most 1040 px wide, at the agreed default height
+ *     clamp(160px, 30vh, 360px) with at least two transcript rows and a
+ *     composer of at least 60 px, collapsed in a window under 800 px tall, the
+ *     side dock stays closed, and every conversation on the page, the
+ *     orchestrator included, has at most one composer;
+ *   - readers sit inside their cards, at most 780 px wide, keep their title and
+ *     full-window control in the header, and a shelf column holding one widens
+ *     to reading width; Stop host is in the reader's actions menu;
  *   - a draft, its caret and its focus survive the card moving to another
  *     column while the operator types, and a status move of their own;
+ *   - a reader's feed keeps its scroll position when another card passes its
+ *     card in the same column;
  *   - the full-window reader is the same reader, and goes back into its card;
  *   - readers and their folded state survive a reload;
- *   - the seat's grip resizes it and the height survives a reload; Collapse
+ *   - the seat's grip resizes it down to 160 px and the height survives a reload; Collapse
  *     keeps its conversation mounted, and the header's Orchestrator control
  *     expands it without opening the dock;
  *   - an attention `open` of an EMPTY transcript arrives as `reader`, presence
  *     names it, and Return closes it; a reader scrolled out of its column does
- *     not arrive;
+ *     not arrive, and neither does one whose transcript failed to read;
  *   - Link and Unlink go through the assignment route with their own receipts,
  *     including the refusal for a conversation's only task.
  *
@@ -57,8 +63,10 @@ type Evidence = {
   presence: Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>;
   assignments: Array<{ method: string; id: string; body: Record<string, unknown> }>;
   setTaskStatus(id: string, status: string): void;
+  touchTask(id: string): void;
+  failLogsFor: string | null;
   focus: {
-    bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(): void } | null };
+    bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(requestId?: string): void } | null };
     runFocusTransaction(request: unknown, bus: unknown, options: unknown): Promise<{ resolution: string; moved: boolean }>;
   };
 };
@@ -77,6 +85,26 @@ const seatGeometry = (page: Page) => page.evaluate(() => {
     dock: Boolean(document.querySelector("[data-orchestrator-dock]")),
     conversations: document.querySelectorAll("[data-orchestrator-conversation]").length,
     composerHeight: Math.round(seat?.querySelector("[data-orchestrator-conversation] form")?.getBoundingClientRect().height ?? 0),
+    /* Transcript rows the seat actually shows: at least 12 px of each inside its scroller. */
+    transcriptRows: (() => {
+      const scroller = seat?.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-log-feed-scroller]");
+      if (!scroller || seat?.dataset.collapsed === "1") return 0;
+      const box = scroller.getBoundingClientRect();
+      return [...scroller.querySelectorAll<HTMLElement>("[data-feed-key]")].filter((row) => {
+        const rect = row.getBoundingClientRect();
+        return Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) >= 12;
+      }).length;
+    })(),
+    /* Composer fields per conversation identity, wherever they render. */
+    composers: (() => {
+      const counts: Record<string, number> = {};
+      document.querySelectorAll<HTMLTextAreaElement>("form textarea").forEach((field) => {
+        const owner = field.closest<HTMLElement>("[data-orchestrator-conversation], [data-kanban-reader]");
+        const key = owner?.dataset.orchestratorConversation ?? owner?.dataset.kanbanReader ?? "outside";
+        counts[key] = (counts[key] ?? 0) + 1;
+      });
+      return counts;
+    })(),
     pageOverflowX: Math.max(0, pageBox.scrollWidth - pageBox.clientWidth),
     boardFrameHeight: Math.round(document.querySelector<HTMLElement>(".board-frame")!.getBoundingClientRect().height),
     innerHeight: window.innerHeight,
@@ -89,6 +117,9 @@ const readerGeometry = (page: Page) => page.evaluate(() => {
     key: reader.dataset.kanbanReader!,
     folded: reader.dataset.folded === "1",
     width: Math.round(reader.getBoundingClientRect().width),
+    headText: reader.querySelector(".conv-head .ch-row")?.textContent ?? "",
+    titleClipped: (() => { const title = reader.querySelector<HTMLElement>(".ch-title"); return title ? title.scrollWidth > title.clientWidth + 1 : null; })(),
+    fullToggle: (() => { const toggle = reader.querySelector<HTMLElement>("[data-reader-full-toggle]"); return reader.dataset.folded === "1" ? null : Boolean(toggle && toggle.getBoundingClientRect().width > 0); })(),
     card: reader.closest<HTMLElement>(".card")?.dataset.id ?? null,
     column: reader.closest<HTMLElement>(".column")?.dataset.status ?? null,
     feed: reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? null,
@@ -165,11 +196,14 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
           await boardReady(page);
           const seat = await seatGeometry(page);
           const shortWindow = viewport.height < 800;
-          const expected = Math.min(460, Math.max(300, Math.round(viewport.height * 0.44)));
+          const expected = Math.min(360, Math.max(160, Math.round(viewport.height * 0.3)));
           if (!seat.present) failures.push(`${label}: no seat`);
           if (seat.collapsed !== shortWindow) failures.push(`${label}: seat collapsed=${seat.collapsed} in a ${viewport.height} px window`);
           if (!seat.collapsed && Math.abs(seat.height - expected) > 2) failures.push(`${label}: seat ${seat.height}px tall, default ${expected}px`);
           if (!seat.collapsed && seat.composerHeight < 60) failures.push(`${label}: the seat's composer is squeezed to ${seat.composerHeight}px`);
+          if (!seat.collapsed && seat.transcriptRows < 2) failures.push(`${label}: the seat shows ${seat.transcriptRows} transcript rows`);
+          for (const [identity, count] of Object.entries(seat.composers)) if (count > 1 || identity === "outside") failures.push(`${label}: ${count} composer field(s) for ${identity}`);
+          if (!seat.collapsed && seat.composers.conversation_orchestrator !== 1) failures.push(`${label}: the orchestrator has ${seat.composers.conversation_orchestrator ?? 0} composers`);
           if (seat.width > 1040) failures.push(`${label}: seat ${seat.width}px wide`);
           if (seat.centreOffset === null || Math.abs(seat.centreOffset) > 2) failures.push(`${label}: seat off centre by ${seat.centreOffset}px`);
           if (seat.dock) failures.push(`${label}: the side dock is open beside the seat`);
@@ -187,6 +221,8 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
             for (const reader of readers.readers) {
               if (!reader.card) failures.push(`${label}: reader ${reader.key} is not inside a card`);
               if (reader.width > 780) failures.push(`${label}: reader ${reader.key} is ${reader.width}px wide`);
+              if (/PID|Stop host/.test(reader.headText)) failures.push(`${label}: reader ${reader.key} header still carries host controls`);
+              if (reader.fullToggle === false) failures.push(`${label}: reader ${reader.key} has no full-window control in its header`);
             }
             if (readers.readers.find((reader) => reader.key === "conversation_export-impl")?.feed !== "items") failures.push(`${label}: the export reader has no feed rows`);
             if (readers.readers.filter((reader) => reader.folded).length !== 1) failures.push(`${label}: expected one folded reader`);
@@ -198,6 +234,20 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
             await prototypeShot("readers=c-export-1,c-links-1:c,c-auth-1&scrollto=t-export", { width: seat.boardWidth, height: viewport.height }, scheme, `prototype-readers-${label}.png`);
             const conversation = page.locator(readerFor("conversation_export-impl"));
             await conversation.screenshot({ path: path.join(OUT, `conversation-${label}.png`) });
+            if (PROTOTYPE) {
+              const proto = await openFixture(browser, `${PROTOTYPE}/?readers=c-export-1&scrollto=t-export`, { width: seat.boardWidth, height: viewport.height }, scheme);
+              try {
+                const protoReader = proto.page.locator('section.reader.conv[data-member="c-export-1"]');
+                if (await protoReader.waitFor({ timeout: 20_000 }).then(() => true, () => false)) {
+                  await proto.page.waitForTimeout(400);
+                  await protoReader.screenshot({ path: path.join(OUT, `prototype-conversation-${label}.png`) });
+                } else {
+                  failures.push(`${label}: the prototype rendered no conversation reader`);
+                }
+              } finally {
+                await proto.context.close();
+              }
+            }
           }
           frames.push({ key: label, viewport, seat, readers, boardPrototype, pageErrors });
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
@@ -313,7 +363,18 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
       await page.click("[data-orchestrator-toggle]");
       await page.waitForTimeout(200);
       const expanded = await seatGeometry(page);
-      const seatFlow = { before: before.height, dragged: dragged.height, afterReload: afterReload.height, keyed: keyed.height, collapsed: { height: collapsed.height, flag: collapsed.collapsed, conversations: collapsed.conversations }, expanded: { flag: expanded.collapsed, dock: expanded.dock } };
+      const shrinkGrip = await page.locator("[data-seat-grip]").boundingBox();
+      if (!shrinkGrip) throw new Error("seat grip not rendered after expanding");
+      await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y + shrinkGrip.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y - 300, { steps: 6 });
+      await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y - 600, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      const floor = await seatGeometry(page);
+      await page.screenshot({ path: path.join(OUT, "flow-seat-floor.png") });
+      const seatFlow = { before: before.height, dragged: dragged.height, afterReload: afterReload.height, keyed: keyed.height, collapsed: { height: collapsed.height, flag: collapsed.collapsed, conversations: collapsed.conversations }, expanded: { flag: expanded.collapsed, dock: expanded.dock }, floor: { height: floor.height, composer: floor.composerHeight } };
+      if (Math.abs(floor.height - 160) > 1) failures.push(`seat: dragged all the way up it is ${floor.height}px, floor 160`);
       if (Math.abs(dragged.height - before.height - 100) > 3) failures.push(`seat: dragging the grip 100px changed the height by ${dragged.height - before.height}px`);
       if (Math.abs(afterReload.height - dragged.height) > 1) failures.push(`seat: height after reload ${afterReload.height}, dragged to ${dragged.height}`);
       if (Math.abs(afterReload.height - keyed.height - 40) > 1) failures.push(`seat: ArrowUp changed the height by ${afterReload.height - keyed.height}px`);
@@ -325,6 +386,7 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
       const arrival = await page.evaluate(async (target) => {
         const { bus, runFocusTransaction } = (window as unknown as { evidence: Evidence }).evidence.focus;
         const result = await runFocusTransaction({
+          id: "attention_empty",
           target: { kind: "conversation", path: target },
           frameAtCreation: { project: "atlas", rect: { x: 0, y: 0, w: 0, h: 0 }, boardRevision: null },
           intent: "open",
@@ -341,7 +403,7 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
       });
       if (arrival.resolution !== "reader" || arrival.feed !== "empty") failures.push(`arrival: the empty transcript's open settled as ${JSON.stringify(arrival)}`);
       if (presence !== PENDING_WORKER) failures.push(`arrival: presence names ${presence}`);
-      await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.focus.bus.board()?.returnFromHandoff?.());
+      await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.focus.bus.board()?.returnFromHandoff?.("attention_empty"));
       await page.waitForTimeout(200);
       const returned = await page.evaluate(() => !document.querySelector('[data-kanban-reader="conversation_pending-worker"]'));
       if (!returned) failures.push("arrival: Return left the reader the open opened");
@@ -420,6 +482,115 @@ browserTest("#1695 K3: conversations inside cards and the orchestrator above the
       if (pageErrors.length) failures.push(`flows: page errors ${pageErrors.join(" | ")}`);
     } finally {
       await context.close();
+    }
+
+    /* The same-column re-rank, the orchestrator's card, Stop host and a failed
+       read, on a fresh page whose card order is the fixture's own. */
+    const more = await openFixture(browser, base, FRAMES[0], "light");
+    try {
+      const { page } = more;
+      await boardReady(page);
+      const order = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id));
+
+      /* A reader's feed keeps its place when another card passes its card. */
+      await page.click(`${card("t-search")} [data-stage="verify"]`);
+      await waitSettled(page, "conversation_search-ver-2");
+      await page.evaluate((selector) => {
+        const reader = document.querySelector<HTMLElement>(selector)!;
+        reader.closest<HTMLElement>(".card")!.dataset.k3mark = "moved";
+        reader.scrollIntoView({ block: "center" });
+      }, readerFor("conversation_search-ver-2"));
+      await page.waitForTimeout(300);
+      /* The operator scrolls the feed up with the wheel, off its live tail. */
+      const feedBox = await page.locator(`${readerFor("conversation_search-ver-2")} [data-log-feed-scroller]`).boundingBox();
+      if (!feedBox) throw new Error("the verifier's feed is not laid out");
+      await page.mouse.move(feedBox.x + feedBox.width / 2, feedBox.y + feedBox.height / 2);
+      await page.mouse.wheel(0, -260);
+      await page.waitForTimeout(600);
+      const scrolled = await page.evaluate((selector) => {
+        const scroller = document.querySelector<HTMLElement>(`${selector} [data-log-feed-scroller]`)!;
+        return { top: scroller.scrollTop, room: scroller.scrollHeight - scroller.clientHeight };
+      }, readerFor("conversation_search-ver-2"));
+      const beforeRank = await order();
+      await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.touchTask("t-export"));
+      await page.waitForFunction(() => {
+        const ids = [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id);
+        return ids.indexOf("task:t-export") < ids.indexOf("task:t-search");
+      }, undefined, { timeout: 15_000 });
+      const afterRank = await order();
+      const kept = await page.evaluate((selector) => {
+        const reader = document.querySelector<HTMLElement>(selector)!;
+        return { top: reader.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop, sameCard: reader.closest<HTMLElement>(".card")?.dataset.k3mark === "moved" };
+      }, readerFor("conversation_search-ver-2"));
+      await page.waitForTimeout(500);
+      const settledTop = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-log-feed-scroller]`)!.scrollTop, readerFor("conversation_search-ver-2"));
+      const rerank = { scrolled, beforeRank, afterRank, kept, settledTop };
+      if (scrolled.room - scrolled.top < 40) failures.push(`rerank: the verifier's feed did not leave its tail ${JSON.stringify(scrolled)}`);
+      if (beforeRank.indexOf("task:t-export") < beforeRank.indexOf("task:t-search")) failures.push(`rerank: t-export already led t-search ${JSON.stringify(beforeRank)}`);
+      if (!kept.sameCard) failures.push("rerank: the reader's card was replaced rather than moved");
+      if (Math.abs(kept.top - scrolled.top) > 4 || Math.abs(settledTop - scrolled.top) > 4) failures.push(`rerank: feed scroll ${scrolled.top} became ${kept.top}, then ${settledTop}`);
+      await page.screenshot({ path: path.join(OUT, "flow-rerank-scroll.png") });
+      flows.rerank = rerank;
+
+      /* The orchestrator's own card: its reader shows the transcript, and the
+         seat keeps the conversation's one composer. */
+      await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
+      const orchestratorTile = page.locator('.tile[data-member="/repo/orchestrator.jsonl"]');
+      const orchestratorCard = await orchestratorTile.evaluate((tile) => ({ card: tile.closest<HTMLElement>(".card")?.dataset.id ?? null, column: tile.closest<HTMLElement>(".column")?.dataset.status ?? null }));
+      await orchestratorTile.click();
+      await waitSettled(page, "conversation_orchestrator");
+      await page.waitForTimeout(400);
+      const orchestratorComposers = (await seatGeometry(page)).composers;
+      await page.locator(readerFor("conversation_orchestrator")).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(OUT, "flow-orchestrator-card.png") });
+      if (orchestratorComposers.conversation_orchestrator !== 1) failures.push(`orchestrator card: ${JSON.stringify(orchestratorComposers)} composers with its reader open`);
+      for (const [identity, count] of Object.entries(orchestratorComposers)) if (count > 1 || identity === "outside") failures.push(`orchestrator card: ${count} composer field(s) for ${identity}`);
+      flows.orchestratorCard = { ...orchestratorCard, composers: orchestratorComposers };
+      await page.click(`${readerFor("conversation_orchestrator")} [data-reader-close]`);
+
+      /* Stop host from the reader's actions, confirmed by name, then cancelled. */
+      await page.click(`${card("t-export")} .tile >> nth=0`);
+      await waitSettled(page, "conversation_export-impl");
+      await page.click(`${readerFor("conversation_export-impl")} [data-reader-menu]`);
+      const menuItems = await page.evaluate(() => [...document.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? ""));
+      const stopItem = menuItems.find((text) => text.startsWith("Stop host"));
+      if (!stopItem?.includes("PID 4401")) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
+      let stopConfirm: unknown = null;
+      if (stopItem) {
+        await page.click('.menu [role="menuitem"]:has-text("Stop host")');
+        await page.waitForSelector(".popover.stop-confirm", { timeout: 5_000 });
+        stopConfirm = await page.evaluate(() => ({
+          text: document.querySelector(".popover.stop-confirm")?.textContent ?? "",
+          cancelFocused: document.activeElement?.hasAttribute("data-stop-cancel") ?? false,
+        }));
+        await page.screenshot({ path: path.join(OUT, "flow-stop-host-confirm.png") });
+        await page.click("[data-stop-cancel]");
+        if (!(stopConfirm as { cancelFocused: boolean }).cancelFocused) failures.push("stop host: the confirmation does not start on Cancel");
+      }
+      flows.stopHost = { menuItems, stopConfirm };
+
+      /* A transcript that fails to read never arrives. */
+      const failedArrival = await page.evaluate(async () => {
+        const evidence = (window as unknown as { evidence: Evidence }).evidence;
+        evidence.failLogsFor = "/repo/upload-plan.jsonl";
+        const result = await evidence.focus.runFocusTransaction({
+          id: "attention_failed_read",
+          target: { kind: "conversation", path: "/repo/upload-plan.jsonl" },
+          frameAtCreation: { project: "atlas", rect: { x: 0, y: 0, w: 0, h: 0 }, boardRevision: null },
+          intent: "open",
+          zoom: "inspect",
+        }, evidence.focus.bus, { timeoutMs: 3_000 });
+        const reader = document.querySelector<HTMLElement>('[data-kanban-reader="conversation_upload-plan"]');
+        const outcome = { resolution: result.resolution, feed: reader?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? null, text: reader?.querySelector("[data-feed-state]")?.textContent?.trim().slice(0, 80) ?? null };
+        evidence.failLogsFor = null;
+        return outcome;
+      });
+      await page.screenshot({ path: path.join(OUT, "flow-arrival-failed-read.png") });
+      if (failedArrival.resolution !== "lost" || failedArrival.feed !== "error") failures.push(`failed read: the open settled as ${JSON.stringify(failedArrival)}`);
+      flows.failedRead = failedArrival;
+      if (more.pageErrors.length) failures.push(`more flows: page errors ${more.pageErrors.join(" | ")}`);
+    } finally {
+      await more.context.close();
     }
 
     /* The narrowest desktop: the seat starts collapsed and nothing pushes sideways. */

@@ -5,19 +5,19 @@
  * (#1695 K3).
  *
  * A reader stays open until the operator closes it; nothing on the board closes
- * one for them and there is no cap on how many. What is remembered is the
- * conversation's stable identity (its conversation id, or its path before it
- * has one), the last path it was seen under, and whether it is folded to its
- * header. It is this screen's arrangement, so it lives in this browser's
- * storage: the shared board preference `prefs.expanded` places cards on the
- * scheme board for every device and means something else.
+ * one for them and there is no cap on how many, open or remembered. What is
+ * remembered is the conversation's stable identity (its conversation id, or its
+ * path before it has one), the last path it was seen under, and whether it is
+ * folded to its header. It is this screen's arrangement, so it lives in this
+ * browser's storage: the shared board preference `prefs.expanded` places cards
+ * on the scheme board for every device and means something else.
  *
- * The bound is for storage only: a record this long is past anything an
- * operator keeps open, and the oldest-opened readers are forgotten first.
+ * Every open identity is written. When the browser refuses the write (storage
+ * full, or private mode), the readers stay open for this page and the memory
+ * says so through `persisted`, for the board to tell the operator.
  */
 
 export const READER_STORAGE_PREFIX = "llv:kanban-readers:v1:";
-export const READER_MEMORY_LIMIT = 64;
 
 export interface OpenReader {
   /** `conversationIdentity(file)`. */
@@ -41,7 +41,7 @@ export function parseReaders(raw: string | null): OpenReader[] {
       seen.add(key);
       readers.push({ key, path, folded: folded === true });
     }
-    return readers.slice(-READER_MEMORY_LIMIT);
+    return readers;
   } catch {
     return [];
   }
@@ -54,7 +54,7 @@ export function openReader(readers: readonly OpenReader[], key: string, path: st
     if (!existing.folded && existing.path === path) return readers as OpenReader[];
     return readers.map((reader) => (reader.key === key ? { ...reader, path, folded: false } : reader));
   }
-  return [...readers, { key, path, folded: false }].slice(-READER_MEMORY_LIMIT);
+  return [...readers, { key, path, folded: false }];
 }
 
 export function foldReader(readers: readonly OpenReader[], key: string, folded: boolean): OpenReader[] {
@@ -80,6 +80,7 @@ export function followPaths(readers: readonly OpenReader[], pathOf: (key: string
 export class ReaderMemory {
   private readers: OpenReader[];
   private readonly listeners = new Set<() => void>();
+  private stored = true;
 
   constructor(private readonly project: string, private readonly storage: Pick<Storage, "getItem" | "setItem"> | null) {
     this.readers = parseReaders(this.read());
@@ -95,6 +96,9 @@ export class ReaderMemory {
 
   snapshot = (): readonly OpenReader[] => this.readers;
 
+  /** False while the last write was refused: what is open is not remembered. */
+  persisted = (): boolean => this.stored;
+
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -106,8 +110,10 @@ export class ReaderMemory {
     this.readers = next;
     try {
       this.storage?.setItem(READER_STORAGE_PREFIX + this.project, JSON.stringify(next));
+      this.stored = true;
     } catch {
-      /* private mode: the readers stay open for this page */
+      /* The readers stay open for this page; `persisted` reports the refusal. */
+      this.stored = false;
     }
     for (const listener of this.listeners) listener();
   }

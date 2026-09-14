@@ -13,9 +13,11 @@ import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardMode
 import { stageChipLabel } from "@/components/pipelines/pipelineModel";
 import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
-import { ProcessStatusControls } from "@/components/TaskHeader";
+import { useProcessKill } from "@/components/TaskHeader";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { cleanTitle, fmtAge } from "@/components/utils";
+
+import { KanbanPopover } from "./kanbanMenus";
 
 /**
  * Conversations open inside kanban cards (#1695 K3).
@@ -30,12 +32,20 @@ import { cleanTitle, fmtAge } from "@/components/utils";
  *
  * What moving a DOM node loses (focus, caret, feed scroll) is captured as the
  * old slot lets go and restored in the new one, in the same commit.
+ *
+ * A re-rank inside one column is a different move: React reorders the card
+ * itself, the slot never lets go, and the browser drops the feed's scroll
+ * position on the way. Every reader's last scroll position is therefore kept
+ * from its own scroll events, and `restoreScrolls` puts back one the move
+ * reset, on every board commit.
  */
 
 export class ReaderPlacement {
   private readonly containers = new Map<string, HTMLDivElement>();
   private readonly slots = new Map<string, HTMLElement>();
   private readonly snapshots = new Map<string, ReaderSnapshot>();
+  private readonly scrolled = new WeakMap<HTMLElement, { top: number; followed: boolean }>();
+  private readonly tracked = new WeakSet<HTMLElement>();
   private park: HTMLElement | null = null;
 
   /** The hidden place readers without a visible slot wait in. */
@@ -53,10 +63,42 @@ export class ReaderPlacement {
       container = document.createElement("div");
       container.className = "reader-host";
       container.dataset.readerKey = key;
+      this.track(container);
       this.containers.set(key, container);
       this.park?.append(container);
     }
     return container;
+  }
+
+  /** Remember each feed's position as the operator (or the feed) scrolls it. */
+  private track(container: HTMLElement): void {
+    if (this.tracked.has(container)) return;
+    this.tracked.add(container);
+    container.addEventListener("scroll", (event) => {
+      const element = event.target as HTMLElement;
+      if (!element.hasAttribute?.("data-log-feed-scroller") || element.clientHeight === 0) return;
+      this.scrolled.set(element, {
+        top: element.scrollTop,
+        followed: element.scrollHeight - element.scrollTop - element.clientHeight < 2,
+      });
+    }, true);
+  }
+
+  /**
+   * Put back a feed position a card move reset. A reset reads as a feed at
+   * the very top that was last seen elsewhere; a feed the operator scrolled to
+   * the top recorded that itself and is left alone. Runs before paint, so the
+   * reset is never seen, and before the reset's own scroll event can record it.
+   */
+  restoreScrolls(): void {
+    for (const [key, container] of this.containers) {
+      if (!this.slots.has(key)) continue;
+      container.querySelectorAll<HTMLElement>("[data-log-feed-scroller]").forEach((element) => {
+        const last = this.scrolled.get(element);
+        if (!last || element.clientHeight === 0 || element.scrollTop !== 0 || last.top < 1) return;
+        element.scrollTop = last.followed ? element.scrollHeight : last.top;
+      });
+    }
   }
 
   attach(key: string, slot: HTMLElement): void {
@@ -88,6 +130,7 @@ export class ReaderPlacement {
   adopt(key: string, container: HTMLDivElement): void {
     if (this.containers.get(key) === container) return;
     this.containers.get(key)?.remove();
+    this.track(container);
     this.containers.set(key, container);
     const place = this.slots.get(key) ?? this.park;
     if (place && container.parentNode !== place) place.append(container);
@@ -156,7 +199,14 @@ interface ReaderProps extends ReaderView {
   onFold: (key: string, folded: boolean) => void;
   onClose: (key: string) => void;
   onFull: (key: string) => void;
-  onMenu: (key: string, anchor: HTMLElement) => void;
+  onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
+}
+
+/** The host control the reader's actions menu offers, as the capability
+    matrix has it for this conversation right now. */
+export interface ReaderStop {
+  state: "enabled" | "disabled" | "hidden";
+  reason: string;
 }
 
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
@@ -165,6 +215,8 @@ interface ReaderProps extends ReaderView {
 const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, owner, now, onFold, onClose, onFull, onMenu }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
+  /* PID and Stop host live in the actions menu, so the header keeps its title. */
+  const kill = useProcessKill(file);
   const row = mobileRowState(file, now);
   const stateWord = t(`kanban.memberState.${row.key}`);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
@@ -179,7 +231,6 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         <div className="ch-row">
           <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
           <span className="ch-title" title={title}>{title}</span>
-          <span className="ch-host-slot"><ProcessStatusControls file={file} compact /></span>
           <span className="spacer" />
           <button
             type="button"
@@ -211,7 +262,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
             aria-haspopup="menu"
             aria-label={t("kanban.readerActions")}
             data-reader-menu={readerKey}
-            onClick={(event) => onMenu(readerKey, event.currentTarget)}
+            onClick={(event) => onMenu(readerKey, event.currentTarget, { state: kill.state, reason: kill.reason })}
           >
             <MoreGlyph />
           </button>
@@ -278,6 +329,38 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     />
   );
 });
+
+/**
+ * Stop host, confirmed by name (the two-step arm of #699/#700) over the same
+ * kill route and capability the pane header uses. Rendered by the board, so
+ * the popover is positioned against the window and never clipped by a reader.
+ */
+export function StopHostConfirm({ file, anchor, onClose }: { file: FileEntry; anchor: HTMLElement; onClose: (refocus: boolean) => void }) {
+  const { t } = useLocale();
+  const kill = useProcessKill(file);
+  const name = cleanTitle(file.title ?? "", 48) || t("task.confirmKillUntitled");
+  return (
+    <KanbanPopover anchor={anchor} label={t("task.confirmKillNamed", { name })} onClose={onClose} initialFocus="[data-stop-cancel]" className="stop-confirm">
+      <div className="head">{t("task.confirmKillNamed", { name })}</div>
+      {file.pid === null || file.pid === undefined ? null : <p className="note num">PID {file.pid}</p>}
+      {kill.message ? <p className="note" role="status" aria-live="polite">{kill.message}</p> : null}
+      <div className="acts">
+        <button
+          type="button"
+          className="btn danger"
+          data-stop-confirm=""
+          disabled={kill.busy || kill.state !== "enabled"}
+          onClick={async () => {
+            if (await kill.kill()) onClose(true);
+          }}
+        >
+          {kill.force ? "SIGKILL" : t("task.confirmKillYes")}
+        </button>
+        <button type="button" className="btn" data-stop-cancel="" onClick={() => onClose(true)}>{t("common.cancel")}</button>
+      </div>
+    </KanbanPopover>
+  );
+}
 
 /** Every open reader, mounted once, each into its own stable container. */
 export function ReaderPortals({ placement, readers, ...handlers }: {

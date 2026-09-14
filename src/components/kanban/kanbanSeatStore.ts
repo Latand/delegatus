@@ -14,7 +14,7 @@ import { useCallback, useSyncExternalStore } from "react";
  */
 
 export const SEAT_STORAGE_KEY = "llv:kanban-seat:v1";
-export const SEAT_MIN_HEIGHT = 200;
+export const SEAT_MIN_HEIGHT = 160;
 export const SEAT_KEY_STEP = 40;
 /** Below this window height a project the operator never set starts collapsed. */
 export const SEAT_SHORT_WINDOW = 800;

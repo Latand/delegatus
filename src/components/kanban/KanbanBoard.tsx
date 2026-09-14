@@ -29,7 +29,7 @@ import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
-import { ReaderPlacement, ReaderPortals, ReaderSlot, type ReaderView } from "./KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderStop, type ReaderView } from "./KanbanReaders";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
@@ -158,7 +158,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [dragHint, setDragHint] = useState(false);
   const menu = useOverlay<
-    { kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string } | { kind: "link"; key: string }
+    { kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -238,6 +238,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
+  /* A write this browser refused leaves every reader open on this page; the
+     operator is told once that they will not come back after a reload. */
+  const toldUnremembered = useRef(false);
+  useEffect(() => {
+    if (memory.persisted()) {
+      toldUnremembered.current = false;
+      return;
+    }
+    if (toldUnremembered.current) return;
+    toldUnremembered.current = true;
+    show(t("kanban.readersNotRemembered", { count: openReaders.length }), undefined, { error: true });
+  }, [memory, openReaders, show, t]);
   /* A conversation that moved to a new transcript keeps its reader. */
   useEffect(() => {
     memory.update((readers) => followPaths(readers, (key) => filesByIdentity.get(key)?.path ?? null));
@@ -253,6 +265,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     return new Map([...byCard].map(([cardId, keys]) => [cardId, keys.join("\n")] as const));
   }, [openReaders, owners, fullReader]);
+
+  /* A card re-ranked inside its column is moved by React, reader and all; the
+     feed positions that move reset come back before paint. */
+  useLayoutEffect(() => {
+    placement.restoreScrolls();
+  });
 
   /* ── Width → layout mode ─────────────────────────────────────────────── */
   useLayoutEffect(() => {
@@ -402,8 +420,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }],
       };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link") return null;
-    if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor);
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop") return null;
+    if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     const value = open.value;
     const card = cardsById.get(value.cardId);
     if (!card) return null;
@@ -428,7 +446,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   };
   /* ── A reader's actions: full pane, link, and Link / Unlink ───────────── */
   const conversationName = (view: ReaderView) => cleanTitle(view.file.title ?? "", 48) || view.owner?.cardTitle || t("kanban.untitledConversation");
-  const readerMenu = (key: string, anchor: HTMLElement): { label: string; items: KanbanMenuItem[] } | null => {
+  const readerMenu = (key: string, anchor: HTMLElement, stop: ReaderStop): { label: string; items: KanbanMenuItem[] } | null => {
     const view = readerViews.find((candidate) => candidate.readerKey === key);
     if (!view) return null;
     const card = view.owner ? cardsById.get(view.owner.cardId) : undefined;
@@ -472,6 +490,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
             });
           },
         },
+        ...(stop.state === "hidden" ? [] : [
+          { type: "sep" as const },
+          {
+            type: "item" as const,
+            label: view.file.pid === null || view.file.pid === undefined ? t("task.kill") : `${t("task.kill")} · PID ${view.file.pid}`,
+            why: stop.state === "disabled" ? stop.reason : t("kanban.stopHostWhy"),
+            disabled: stop.state === "disabled",
+            onSelect: () => queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "stop", key } })),
+          },
+        ]),
       ],
     };
   };
@@ -648,14 +676,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
     pendingReveal.current = { cardId, readerKey, focusReader };
     setRevealTick((tick) => tick + 1);
   }, [query]);
-  const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean } = {}) => {
+  /* What each attention request's handoff changed about a reader, so that
+     request's Return undoes exactly that: close a reader it opened, fold again
+     one it unfolded. A reader that was already open and expanded is not the
+     handoff's to touch. Any gesture of the operator's on that reader makes it
+     theirs again. */
+  const handoffOwned = useRef(new Map<string, { key: string; restore: "close" | "fold" }>());
+  const disown = useCallback((key: string) => {
+    for (const [requestId, owned] of handoffOwned.current) if (owned.key === key) handoffOwned.current.delete(requestId);
+  }, []);
+  const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean } = {}) => {
     const key = conversationIdentity(file);
+    if (!options.handoff) disown(key);
     memory.update((readers) => openReader(readers, key, file.path));
     setFocusedReader(key);
     onConversationOpened?.(file.path);
     const owner = ownersRef.current.get(key);
     revealCard(owner?.cardId ?? "", key, options.focus !== false);
-  }, [memory, onConversationOpened, revealCard]);
+  }, [memory, onConversationOpened, revealCard, disown]);
   const [revealTick, setRevealTick] = useState(0);
   useLayoutEffect(() => {
     const wanted = pendingReveal.current;
@@ -692,14 +730,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       location.hash = formatConversationHash({ conversationId: attempt.conversationId ?? undefined, path: attempt.agentPath ?? "" });
     }
   }, [files, filesByPath, openReaderFor]);
-  const foldReaderFor = useCallback((key: string, folded: boolean) => memory.update((readers) => foldReader(readers, key, folded)), [memory]);
+  const foldReaderFor = useCallback((key: string, folded: boolean) => {
+    disown(key);
+    memory.update((readers) => foldReader(readers, key, folded));
+  }, [memory, disown]);
   const closeReaderFor = useCallback((key: string) => {
+    disown(key);
     const cardId = ownersRef.current.get(key)?.cardId;
     setFullReader((current) => (current === key ? null : current));
     memory.update((readers) => closeReader(readers, key));
     if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
-  }, [memory]);
-  const openReaderMenu = useCallback((key: string, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "reader", key } }), [menu]);
+  }, [memory, disown]);
+  const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
   /* A conversation the Viewer was asked to open lands in its reader. */
   const focusTarget = props.focus ?? null;
@@ -813,7 +855,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [presenceSignature, selection, focusedPath]);
 
   /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
-  const handoffOpened = useRef(new Set<string>());
   const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project), [model, anchors, project]);
   useEffect(() => focusHandoffBus.setBoard({
     project,
@@ -825,8 +866,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file) {
         const key = conversationIdentity(file);
-        if (!openReadersRef.current.some((reader) => reader.key === key && !reader.folded)) handoffOpened.current.add(key);
-        openReaderFor(file, { focus: false });
+        const requestId = destination.requestId ?? "";
+        const before = openReadersRef.current.find((reader) => reader.key === key);
+        /* A resumed move finds the reader it already opened: ownership stays as
+           the first move recorded it. */
+        if (!handoffOwned.current.has(requestId) && (!before || before.folded)) {
+          handoffOwned.current.set(requestId, { key, restore: before ? "fold" : "close" });
+        }
+        openReaderFor(file, { focus: false, handoff: true });
       } else {
         revealCard(cardId);
       }
@@ -842,10 +889,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const cardId = anchor ? anchors.get(anchor) : undefined;
       return cardId && cardOnScreen(root, cardId, cssEscape) ? "visible" : null;
     },
-    returnFromHandoff: () => {
-      const opened = [...handoffOpened.current];
-      handoffOpened.current.clear();
-      if (opened.length) memory.update((readers) => opened.reduce<OpenReader[]>((current, key) => closeReader(current, key), [...readers]));
+    returnFromHandoff: (requestId) => {
+      const owned = handoffOwned.current.get(requestId ?? "");
+      if (!owned) return;
+      handoffOwned.current.delete(requestId ?? "");
+      if (owned.restore === "fold") memory.update((readers) => foldReader(readers, owned.key, true));
+      else {
+        setFullReader((current) => (current === owned.key ? null : current));
+        memory.update((readers) => closeReader(readers, owned.key));
+      }
     },
   }), [project, focusIndex, anchors, filesByPath, openReaderFor, revealCard, memory, placement]);
 
@@ -864,6 +916,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
+  const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
+  const stopKey = stopOpen && stopOpen.value.kind === "stop" ? stopOpen.value.key : null;
+  const stopView = stopKey ? readerViews.find((view) => view.readerKey === stopKey) ?? null : null;
   const linkKey = linkOpen && linkOpen.value.kind === "link" ? linkOpen.value.key : null;
   const linkView = linkKey ? readerViews.find((view) => view.readerKey === linkKey) ?? null : null;
   const linkOwnerTask = linkView?.owner ? cardsById.get(linkView.owner.cardId)?.task ?? null : null;
@@ -1023,6 +1078,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {openMenu && menu.open ? (
         <KanbanMenu anchor={menu.open.anchor} label={openMenu.label} items={openMenu.items} onClose={menu.close} />
       ) : null}
+      {stopOpen && stopView ? <StopHostConfirm file={stopView.file} anchor={stopOpen.anchor} onClose={menu.close} /> : null}
       {linkOpen && linkView ? (
         <KanbanPopover
           anchor={linkOpen.anchor}

@@ -39,6 +39,9 @@ export interface FocusDestination {
   intent?: "open" | "show";
   /** The conversation behind the request, when it names one. */
   path?: string | null;
+  /** The attention request this move answers, so what it opens is owned by
+      that request alone. */
+  requestId?: string;
 }
 
 /**
@@ -70,9 +73,10 @@ export interface BoardFocusController {
    * measures mounts after the move.
    */
   arrival?(destination: FocusDestination): StructuralArrival | null;
-  /** Optional: undo what this board's last handoff opened — the Return half of
-      `arrival`, for a surface whose way back is closing the reader it opened. */
-  returnFromHandoff?(): void;
+  /** Optional: undo what the handoff for `requestId` opened, and nothing any
+      other request or the operator opened — the Return half of `arrival`, for
+      a surface whose way back is closing the reader it opened. */
+  returnFromHandoff?(requestId?: string): void;
 }
 
 export interface ShellNavigator {
