@@ -25,7 +25,7 @@ import type { Workflow } from "@/lib/workflows/types";
 import { BoardHistoryControls } from "./BoardHistoryControls";
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { TaskStrip } from "./BranchPane";
-import { MobileInlineCatalog, useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
+import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
 import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
@@ -56,13 +56,15 @@ import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflo
 import { TaskPanel } from "./tasks/TaskPanel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
 import { MobileBoard, MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
+import type { MobileBoardRowRef } from "./mobile/mobileBoardModel";
+import { MobileRowActionsSheet, useMobileBoardRowActions } from "./mobile/MobileRowActions";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
-import { MobilePipelineScreen } from "./mobile/MobilePipelineScreen";
+import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
@@ -1757,6 +1759,9 @@ function ProjectDashboardView({
   const mobileTop = topScreen(mobileNavState);
   const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
   const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
+  /* A lane whose close is on its way is gone from the board already (#1671);
+     the Viewer's badge reads the same closes. */
+  const closingPipelines = useClosingPipelines();
   const mobileBoardProps = {
     files,
     pipelines: activePipelines,
@@ -1764,6 +1769,7 @@ function ProjectDashboardView({
     seatPath,
     hidden: hiddenSet,
     crowned: crownedPaths,
+    closing: closingPipelines,
     now: nowSeconds,
   };
   const mobileBoardModel = isMobile ? mobileBoardOf(mobileBoardProps) : null;
@@ -1777,6 +1783,51 @@ function ProjectDashboardView({
     mobileNav.closeSheet();
     mobileNav.push({ kind: "pipeline", id: pipeline.id });
   };
+  /* What a board row reveals under a left swipe and lists on a long-press
+     (#1671). Closing a card is the board's own close, the one ⋯ › Close card
+     sends. A close the server refuses is shed by the outbox and the row comes
+     back on its own; the paths closed from here are held until the board
+     settles, so that return also gets a receipt. */
+  const swipeClosesRef = useRef(new Map<string, string>());
+  /* Reopen from the board lifts the tombstone where the card stood and leaves
+     the operator on the board. The switchboard's open is the phone's OPEN
+     gesture — it pushes the conversation screen — so it is not used here; the
+     placement it would have chosen is remembered at the close instead. Both
+     halves read the latest render at the moment they run, as the undo keys
+     do, because a receipt outlives the render that drew the tray. */
+  const swipePlacementsRef = useRef(new Map<string, "auto" | "manual" | "expanded">());
+  const swipeCardRef = useRef<{ close: (path: string) => void; reopen: (path: string) => void } | null>(null);
+  swipeCardRef.current = {
+    close: (path) => {
+      swipePlacementsRef.current.set(
+        path,
+        prefs.expanded.includes(path) ? "expanded" : prefs.manual.includes(path) ? "manual" : autoPaths.has(path) ? "auto" : "manual",
+      );
+      closeNode(path);
+    },
+    reopen: (path) => {
+      board.restore(path, swipePlacementsRef.current.get(path) ?? "manual");
+      swipePlacementsRef.current.delete(path);
+    },
+  };
+  const mobileRowActions = useMobileBoardRowActions({
+    closeCard: (path, title) => {
+      swipeClosesRef.current.set(path, title);
+      swipeCardRef.current?.close(path);
+    },
+    reopenCard: (path) => {
+      swipeClosesRef.current.delete(path);
+      swipeCardRef.current?.reopen(path);
+    },
+  });
+  useEffect(() => {
+    if (board.sync !== "current" || swipeClosesRef.current.size === 0) return;
+    for (const [path, title] of swipeClosesRef.current) {
+      swipeClosesRef.current.delete(path);
+      if (!hiddenSet.has(path)) showReceipt(t("mobile2.board.closeNotSaved", { title }));
+    }
+  }, [board.sync, hiddenSet, t]);
+  const [rowActionsFor, setRowActionsFor] = useState<MobileBoardRowRef | null>(null);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
      both hang off that one answer. */
@@ -2023,6 +2074,16 @@ function ProjectDashboardView({
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
+    /* A board row's long-press (#1671): the same actions its swipe reveals. */
+    if (name === "row") {
+      return rowActionsFor ? (
+        <MobileRowActionsSheet
+          title={t("mobile2.board.rowActions", { title: rowActionsFor.kind === "conversation" ? rowActionsFor.row.title : rowActionsFor.row.task })}
+          actions={mobileRowActions(rowActionsFor)}
+          onClose={close}
+        />
+      ) : null;
+    }
     /* Host details (mobile v2 lane 2): the background processes with their PIDs
        and a Kill that acts on the tap, the runtime connection, and the quiet
        conversations — the one place any of it appears on the phone. */
@@ -2220,12 +2281,20 @@ function ProjectDashboardView({
               ) : mobileBoardLeaf ? (
                 <MobileBoard
                   {...mobileBoardProps}
-                  catalogCount={inlineCatalog.catalog.known ? inlineCatalog.catalog.total : undefined}
-                  catalogState={inlineCatalog.catalog.error ? "error" : inlineCatalog.catalog.loading ? "loading" : undefined}
-                  catalogExpanded={inlineCatalog.view.expanded}
-                  catalogPosition={inlineCatalog.view.position}
-                  catalog={<MobileInlineCatalog catalog={inlineCatalog.catalog} query={inlineCatalog.view.query}
-                    onQuery={inlineCatalog.setQuery} files={files} onOpen={openFullCatalogFile} />}
+                  catalog={{
+                    data: inlineCatalog.catalog,
+                    expanded: inlineCatalog.view.expanded,
+                    paging: inlineCatalog.view.paging,
+                    position: inlineCatalog.view.position,
+                    onToggle: inlineCatalog.toggle,
+                    onReach: inlineCatalog.reach,
+                  }}
+                  rowActions={mobileRowActions}
+                  onRowActions={(ref) => {
+                    setRowActionsFor(ref);
+                    mobileNav.openSheet("row");
+                  }}
+                  onOpenCatalogConversation={openFullCatalogFile}
                   seat={(
                     /* The card takes the board's full width (README §4.1): it
                        is the first CARD of the list, not the chip the strip's
@@ -2251,7 +2320,6 @@ function ProjectDashboardView({
                   onOpenConversation={openBoardRow}
                   onOpenPipeline={openMobilePipeline}
                   onOpenPipelines={() => mobileNav.push({ kind: "pipelines" })}
-                  onOpenCatalog={inlineCatalog.toggle}
                 />
               ) : projectView === "scheme" && schemeAvailable ? (
                 <MobileFocusView

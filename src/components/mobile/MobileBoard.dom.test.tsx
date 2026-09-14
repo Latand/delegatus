@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
+import { applyBoardMutations } from "@/lib/board/mutations";
 import { translate, type Locale, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
@@ -52,6 +53,7 @@ const { receipts } = await import("@/components/mobile/MobileReceipt");
 const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
 const { launchAge, statePhrase } = await import("@/components/mobile/MobileBoard");
+const { pendingPipelineActs } = await import("@/components/mobile/MobilePipelineScreen");
 const { humanizeDuration } = await import("@/components/turnDuration");
 const { formatResetClock } = await import("@/components/rateLimit");
 type MobileShellHost = NonNullable<React.ComponentProps<typeof ProjectDashboard>["mobileShell"]>;
@@ -98,13 +100,25 @@ const OVERRIDES: Record<string, unknown> = {
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    requestLog.push(`${init?.method ?? "GET"} ${url}`);
+    if (url.startsWith("/api/pipelines/") && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      pipelinePatches.push({ url, body });
+      return jsonResponse({ ok: true, pipeline: { ...decisionPipeline, dismissedAt: body.action === "dismiss" ? new Date().toISOString() : null } });
+    }
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
         const body = JSON.parse(String(init.body)) as {
           patch?: Record<string, unknown>;
           mutations?: Array<Record<string, unknown>>;
         };
+        /* A server that refuses any batch holding a close (#1671's rollback). */
+        if (boardRejectsClose && (body.mutations ?? []).some((mutation) => mutation.kind === "close")) {
+          return { ok: false, status: 400, json: async () => ({ error: "INVALID_REQUEST" }), text: async () => "" };
+        }
         for (const mutation of body.mutations ?? []) mutations.push(mutation);
+        /* The server's own reducer, so an accepted close is a close. */
+        if (body.mutations?.length) boardPrefs = { ...applyBoardMutations(boardState() as never, body.mutations as never).prefs };
         if (body.patch) boardPrefs = { ...boardPrefs, ...body.patch };
         boardRevision += 1;
       }
@@ -126,6 +140,10 @@ const OVERRIDES: Record<string, unknown> = {
 let seatAnswer: Record<string, unknown> | null = null;
 /** How many times this phone has asked for it. */
 let seatReads = 0;
+/** Every request this phone made, as `METHOD url`. */
+const requestLog: string[] = [];
+const pipelinePatches: Array<{ url: string; body: Record<string, unknown> }> = [];
+let boardRejectsClose = false;
 
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
@@ -254,6 +272,10 @@ beforeEach(() => {
   receipts.dismiss();
   seatAnswer = null;
   seatReads = 0;
+  requestLog.length = 0;
+  pipelinePatches.length = 0;
+  boardRejectsClose = false;
+  pendingPipelineActs.cancel();
   /* The seat read is cached per project for the whole module (#1149), so a
      test that seats one has to start from an unanswered cache. */
   resetOrchestratorSeatCacheForTests();
@@ -582,4 +604,141 @@ test("the phone reads the seat ONCE: the board keeps it out of the list and the 
   expect(card.getAttribute("data-mobile2-seat-shape")).toBe("seat");
   expect(card.getAttribute("data-mobile2-seat-tap")).toBe("conversation");
   expect(seatReads).toBe(1);
+});
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * #1671: what a row reveals under a left swipe                                *
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* A finger on a board row: touch pointers, the way the phone sends them. */
+const finger = (target: Element, type: string, x: number, y: number) => flushSync(() => {
+  target.dispatchEvent(new dom.PointerEvent(type, {
+    bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 7, pointerType: "touch", isPrimary: true,
+  }) as unknown as Event);
+});
+const dragRow = (row: HTMLElement, points: Array<[number, number]>) => {
+  const card = row.querySelector("[data-mobile2-swipe-card] [data-mobile2-row]")!;
+  finger(card, "pointerdown", ...points[0]!);
+  for (const point of points.slice(1)) finger(card, "pointermove", ...point);
+  finger(card, "pointerup", ...points[points.length - 1]!);
+};
+const swipeLeft = (row: HTMLElement) => dragRow(row, [[350, 30], [340, 31], [150, 32]]);
+const page = () => dom.document.body as unknown as HTMLElement;
+const receiptNow = () => q(page(), "[data-mobile2-receipt]");
+
+test("a conversation row slides left to Close card: the card leaves on the tap, nothing stops the agent, and Reopen brings it back", async () => {
+  const root = mount();
+  const card = () => q(root, `[data-mobile2-row="conversation"][data-mobile2-path="${running.path}"]`);
+  const row = () => card()!.closest("[data-mobile2-swipe-row]") as unknown as HTMLElement;
+  expect(await waitFor(() => board(root) !== null && card() !== null)).toBe(true);
+  await settle();
+  swipeLeft(row());
+  expect(row().getAttribute("data-mobile2-swipe-open")).toBe("true");
+  const actions = all(row(), "[data-mobile2-swipe-action]");
+  expect(actions.map((el) => el.getAttribute("data-mobile2-swipe-action"))).toEqual(["close"]);
+  expect(actions[0]!.getAttribute("aria-label")).toBe(`${translate("en", "mobile2.chat.menuClose")}. ${translate("en", "mobile2.board.closeCardHint")}`);
+  /* The lift that opened the tray did not open the conversation. */
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
+
+  const before = requestLog.length;
+  click(actions[0]!);
+  /* Gone on the tap, before any answer. */
+  expect(card()).toBeNull();
+  expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.chat.closed", { title: running.title }));
+  expect(await waitFor(() => mutations.some((mutation) => mutation.kind === "close" && mutation.path === running.path))).toBe(true);
+  /* The board is the only thing written: no process control, no transcript. */
+  expect(requestLog.slice(before).filter((entry) => !entry.startsWith("GET ")).every((entry) => entry.startsWith("PATCH /api/board"))).toBe(true);
+  /* An accepted close stays closed and says nothing more. */
+  await settle();
+  expect(card()).toBeNull();
+  expect(receiptNow()!.textContent).not.toContain(translate("en", "mobile2.board.closeNotSaved", { title: running.title }));
+
+  click(q(receiptNow()!, '[data-mobile2-receipt-undo="reopen"]'));
+  expect(await waitFor(() => card() !== null)).toBe(true);
+  expect(mutations.some((mutation) => mutation.kind === "restore" && mutation.path === running.path)).toBe(true);
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
+});
+
+test("a close the server refuses brings the row back, shut, and says the close was not saved", async () => {
+  boardRejectsClose = true;
+  const root = mount();
+  const card = () => q(root, `[data-mobile2-row="conversation"][data-mobile2-path="${finished.path}"]`);
+  expect(await waitFor(() => board(root) !== null && card() !== null)).toBe(true);
+  await settle();
+  swipeLeft(card()!.closest("[data-mobile2-swipe-row]") as unknown as HTMLElement);
+  click(q(root, `[data-mobile2-swipe-row="conversation:${finished.path}"] [data-mobile2-swipe-action="close"]`));
+  expect(card()).toBeNull();
+  expect(await waitFor(() => card() !== null)).toBe(true);
+  expect(await waitFor(() => receiptNow()?.textContent?.includes(translate("en", "mobile2.board.closeNotSaved", { title: finished.title })) === true)).toBe(true);
+  expect(card()!.closest("[data-mobile2-swipe-row]")!.getAttribute("data-mobile2-swipe-open")).toBeNull();
+  expect(mutations.some((mutation) => mutation.kind === "close")).toBe(false);
+});
+
+test("a queued pipeline slides left to Hide and Close lane: Hide sends the reversible dismiss, Close lane waits out its receipt", async () => {
+  const root = mount({ pipelines: [decisionPipeline] });
+  const row = () => q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`);
+  expect(await waitFor(() => board(root) !== null && row() !== null)).toBe(true);
+  await settle();
+  swipeLeft(row()!);
+  expect(row()!.getAttribute("data-mobile2-swipe-open")).toBe("true");
+  expect(all(row()!, "[data-mobile2-swipe-action]").map((el) => el.getAttribute("data-mobile2-swipe-action"))).toEqual(["hide", "closeLane"]);
+  expect(q(row()!, '[data-mobile2-swipe-action="closeLane"]')!.getAttribute("aria-label"))
+    .toBe(`${translate("en", "mobile2.board.closeLane")}. ${translate("en", "mobile2.board.closeLaneHint")}`);
+  expect(root.textContent).not.toMatch(/\b(Mute|Delete)\b/);
+
+  click(q(row()!, '[data-mobile2-swipe-action="hide"]'));
+  expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
+  expect(pipelinePatches[0]).toEqual({ url: `/api/pipelines/${decisionPipeline.id}`, body: { action: "dismiss" } });
+  expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.board.pipelineHidden", { task: decisionPipeline.task }));
+  click(q(receiptNow()!, '[data-mobile2-receipt-undo="restore"]'));
+  expect(await waitFor(() => pipelinePatches.length === 2)).toBe(true);
+  expect(pipelinePatches[1]!.body).toEqual({ action: "undismiss" });
+
+  /* Close lane: the row goes on the tap, and nothing is sent inside the window. */
+  swipeLeft(row()!);
+  click(q(row()!, '[data-mobile2-swipe-action="closeLane"]'));
+  expect(row()).toBeNull();
+  expect(receiptNow()!.textContent).toContain(translate("en", "mobile2.pipeline.archived"));
+  await settle();
+  expect(pipelinePatches).toHaveLength(2);
+  click(q(receiptNow()!, '[data-mobile2-receipt-undo="restore"]'));
+  expect(row()).not.toBeNull();
+  await settle();
+  expect(pipelinePatches).toHaveLength(2);
+
+  /* Letting the window close sends the engine's own close. */
+  swipeLeft(row()!);
+  click(q(row()!, '[data-mobile2-swipe-action="closeLane"]'));
+  flushSync(() => pendingPipelineActs.flush());
+  expect(await waitFor(() => pipelinePatches.length === 3)).toBe(true);
+  expect(pipelinePatches[2]!.body).toEqual({ action: "close" });
+});
+
+test("a vertical drag passes a row without revealing it, and a long-press lists the same actions in a sheet", async () => {
+  const root = mount({ pipelines: [decisionPipeline] });
+  const row = () => q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`)!;
+  expect(await waitFor(() => board(root) !== null && q(root, `[data-mobile2-swipe-row="pipeline:${decisionPipeline.id}"]`) !== null)).toBe(true);
+  await settle();
+  dragRow(row(), [[200, 30], [204, 60], [120, 140]]);
+  expect(row().getAttribute("data-mobile2-swipe-open")).toBeNull();
+  expect(q(row(), "[data-mobile2-swipe-card]")!.style.transform).toBe("");
+
+  const card = q(row(), '[data-mobile2-row="pipeline"]')!;
+  finger(card, "pointerdown", 200, 30);
+  await new Promise((r) => setTimeout(r, 520));
+  finger(card, "pointerup", 200, 30);
+  await settle();
+  expect(getMobileNav().getState().sheet).toBe("row");
+  const sheet = q(page(), '[data-mobile2-sheet="row"]')!;
+  expect(sheet).not.toBeNull();
+  expect(all(sheet, "[data-mobile2-row-action]").map((el) => el.getAttribute("data-mobile2-row-action"))).toEqual(["hide", "closeLane"]);
+  expect(sheet.textContent).toContain(translate("en", "mobile2.board.hidePipelineHint"));
+  expect(sheet.textContent).toContain(translate("en", "mobile2.board.closeLaneHint"));
+  /* The held press did not open the pipeline under it. */
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
+
+  click(q(sheet, '[data-mobile2-row-action="hide"]'));
+  expect(await waitFor(() => pipelinePatches.length === 1)).toBe(true);
+  expect(pipelinePatches[0]!.body).toEqual({ action: "dismiss" });
+  expect(getMobileNav().getState().sheet).toBeNull();
 });

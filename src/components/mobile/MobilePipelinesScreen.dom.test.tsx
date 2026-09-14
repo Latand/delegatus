@@ -174,6 +174,53 @@ test("a lane whose archive is still inside its receipt's window is already gone 
   expect(qa(host, "[data-mobile2-pipeline-row]").length).toBe(2);
 });
 
+test("a close the receipt has sent keeps the lane off the list until the server answers, and a second close keeps the first gone (#1671)", async () => {
+  let due: (() => void) | null = null;
+  const answers: Array<() => void> = [];
+  const acts = createPendingPipelineActs(
+    { set: (callback) => { due = callback; return 1; }, clear: () => { due = null; } },
+    () => new Promise<void>((resolve) => { answers.push(resolve); }),
+  );
+  const other = { ...parked, id: "p5", task: "Queue drain on reconnect" } as Pipeline;
+  const host = mount(<MobilePipelinesScreen pipelines={[live, parked, other]} now={NOW} onOpenPipeline={() => {}} acts={acts} />);
+  const ids = () => qa(host, "[data-mobile2-pipeline-row]").map((row) => row.getAttribute("data-mobile2-pipeline-row"));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  flushSync(() => acts.begin({ pipelineId: "p2", action: "close" }));
+  expect(ids()).toEqual(["p5", "p1"]);
+  /* The receipt's window runs out: the close goes out, and the lane stays gone
+     while the server stops its hosts. */
+  flushSync(() => (due as unknown as () => void)());
+  await settle();
+  expect(answers).toHaveLength(1);
+  expect(ids()).toEqual(["p5", "p1"]);
+
+  /* A close on another lane inside the next window: the first stays gone, and
+     the second is sent the moment a third close supersedes it. */
+  flushSync(() => acts.begin({ pipelineId: "p5", action: "close" }));
+  flushSync(() => acts.begin({ pipelineId: "p1", action: "close" }));
+  await settle();
+  expect(answers).toHaveLength(2);
+  expect(ids()).toEqual([]);
+
+  /* The server answers the first without closing it (these props never turn
+     it closed, which is what a refusal leaves): it comes back. The others are
+     still out. */
+  answers[0]!();
+  await settle();
+  expect(ids()).toEqual(["p2"]);
+});
+
+test("the pipelines list tags a lane hidden for the decision it waits on, and not one that parked again after the Hide (#1671)", () => {
+  const retried = {
+    ...parked,
+    dismissedAt: at(4_000),
+  } as Pipeline;
+  const host = mount(<MobilePipelinesScreen pipelines={[retried]} now={NOW} onOpenPipeline={() => {}} />);
+  expect(q(host, '[data-mobile2-pipeline-row="p2"]')).not.toBeNull();
+  expect(q(host, '[data-mobile2-pipeline-hidden="p2"]')).toBeNull();
+});
+
 test("the model groups by state and drops what the phone never lists", () => {
   const model = mobilePipelinesModel([live, parked, finished, draft, { ...finished, id: "p5", state: "closed" } as Pipeline]);
   expect(model.needs.map((p) => p.id)).toEqual(["p2"]);
@@ -181,6 +228,16 @@ test("the model groups by state and drops what the phone never lists", () => {
   expect(model.completed.map((p) => p.id)).toEqual(["p3"]);
   /* A hidden lane is gone even when its state has not settled yet. */
   expect(mobilePipelinesModel([{ ...live, hiddenAt: at(60) } as Pipeline]).active).toEqual([]);
+});
+
+test("a lane hidden from the board stays in the list and says so (#1671)", () => {
+  const host = mount(<MobilePipelinesScreen pipelines={[live, { ...parked, dismissedAt: at(30) } as Pipeline]} now={NOW} onOpenPipeline={() => {}} />);
+  const hidden = q(host, '[data-mobile2-pipeline-hidden="p2"]')!;
+  expect(hidden).not.toBeNull();
+  expect(hidden.textContent).toContain(translate("en", "mobile2.pipelines.hiddenTag"));
+  expect(q(hidden, '[data-mobile2-pipeline-row="p2"]')).not.toBeNull();
+  expect(mobilePipelinesModel([{ ...parked, dismissedAt: at(30) } as Pipeline]).needs.map((p) => p.id)).toEqual(["p2"]);
+  expect(q(host, '[data-mobile2-pipeline-hidden="p1"]')).toBeNull();
 });
 
 test("with nothing running the Active section says so rather than rendering an empty stack", () => {

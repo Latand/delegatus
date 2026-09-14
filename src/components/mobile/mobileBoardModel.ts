@@ -233,6 +233,12 @@ export type MobileNeedsYouItem =
   | ({ kind: "conversation" } & MobileBoardConversation)
   | ({ kind: "pipeline" } & MobileBoardPipelineRow);
 
+/** One row of the board, for what is done to it (#1671: the swipe tray and
+    the long-press sheet). */
+export type MobileBoardRowRef =
+  | { kind: "conversation"; row: MobileBoardConversation }
+  | { kind: "pipeline"; row: MobileBoardPipelineRow };
+
 export interface MobilePipelinesSummary {
   total: number;
   active: number;
@@ -246,6 +252,9 @@ export interface MobileBoardModel {
   working: MobileBoardConversation[];
   /** Capped at three rows (README §4.1); `recentTotal` is how many there are. */
   recent: MobileBoardConversation[];
+  /** The Recent rows past the cap, in the same order: what «All conversations»
+      appends first, from memory, before it asks the catalog for more (#1671). */
+  recentRest: MobileBoardConversation[];
   recentTotal: number;
   pipelines: MobilePipelinesSummary | null;
   /** The pipelines row sits above Working while any pipeline is active, so ten
@@ -298,10 +307,55 @@ export function needsDecisionPipelineRows(
   pipelines: readonly Pipeline[],
   project: string,
   now: number = Date.now() / 1000,
+  /** The lanes whose close is on its way: held by its receipt, or sent and not
+      answered yet (#1671). */
+  closing: readonly string[] = NO_IDS,
 ): MobileBoardPipelineRow[] {
   return boardPipelines(pipelines)
     .filter((pipeline) => pipeline.project === project && pipeline.state === "needs_decision")
+    /* A lane the operator hid while it waits on this decision, or is closing,
+       no longer waits on them here (#1671); the pipelines list still carries a
+       hidden one. */
+    .filter((pipeline) => !pipelineHiddenFromBoard(pipeline) && !closing.includes(pipeline.id))
     .map((pipeline) => pipelineRow(pipeline, now));
+}
+
+const NO_IDS: readonly string[] = [];
+
+/* The instants the engine stamps on a lane's rounds as it moves: a round
+   starting and ending, a launch waiting on its controller, a verdict re-read.
+   None of them changes while a lane sits parked on one decision. */
+function laneMovedAt(pipeline: Pipeline): number {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const run of pipeline.runs) {
+    for (const attempt of run.attempts) {
+      const stamps = [attempt.startedAt, attempt.completedAt, attempt.controllerWait?.startedAt, attempt.verdictRecovery?.startedAt, attempt.verdictRecovery?.lastCheckedAt];
+      for (const stamp of stamps) {
+        const at = stamp ? Date.parse(stamp) : Number.NaN;
+        if (at > latest) latest = at;
+      }
+    }
+  }
+  return latest;
+}
+
+/**
+ * Whether the operator's Hide still covers the decision this lane waits on
+ * (#1671). A Hide answers the decision the operator saw. `dismissedAt` stays on
+ * the record after the lane moves on, so once any of its rounds has started or
+ * ended since, the lane has parked again on a decision nobody hid and it is
+ * back in the queue. A lane that waits on no decision has nothing hidden.
+ */
+export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
+  if (pipeline.state !== "needs_decision" || !pipeline.dismissedAt) return false;
+  return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
+}
+
+/** The instant an optimistic Hide carries: now, or the lane's latest stamp when
+    this device's clock runs behind the server's, so the row leaves on the tap.
+    The PATCH echo replaces it with the server's own instant. */
+export function dismissStamp(pipeline: Pipeline, nowMs: number = Date.now()): string {
+  return new Date(Math.max(nowMs, laneMovedAt(pipeline))).toISOString();
 }
 
 /** A conversation the phone board may list: no background task, no subagent
@@ -324,10 +378,25 @@ export interface MobileBoardInput {
   archived?: ReadonlySet<string>;
   /** Crowned conversations wear the mark on their row. */
   crowned?: ReadonlySet<string>;
+  /** Lanes whose close is on its way: their rows are already gone. */
+  closing?: readonly string[];
   now?: number;
 }
 
 const EMPTY: ReadonlySet<string> = new Set();
+
+function boardConversation(file: FileEntry, now: number, crowned: ReadonlySet<string>): MobileBoardConversation {
+  const state = mobileRowState(file, now);
+  return {
+    file,
+    path: file.path,
+    title: cleanTitle(file.title, 90),
+    state,
+    now: state.key === "working" ? nowFragment(file) : null,
+    launchedAt: launchedAt(file),
+    crowned: crowned.has(file.path),
+  };
+}
 
 export function buildMobileBoard({
   files,
@@ -337,6 +406,7 @@ export function buildMobileBoard({
   hidden = EMPTY,
   archived = EMPTY,
   crowned = EMPTY,
+  closing = NO_IDS,
   now = Date.now() / 1000,
 }: MobileBoardInput): MobileBoardModel {
   const rows: MobileBoardConversation[] = [];
@@ -345,16 +415,7 @@ export function buildMobileBoard({
     if (file.path === seatPath) continue;
     if (hidden.has(file.path) || archived.has(file.path)) continue;
     if (!isBoardConversation(file)) continue;
-    const state = mobileRowState(file, now);
-    rows.push({
-      file,
-      path: file.path,
-      title: cleanTitle(file.title, 90),
-      state,
-      now: state.key === "working" ? nowFragment(file) : null,
-      launchedAt: launchedAt(file),
-      crowned: crowned.has(file.path),
-    });
+    rows.push(boardConversation(file, now, crowned));
   }
 
   /* The queue reads in the attention queue's OWN order — the hard-blocked
@@ -381,8 +442,8 @@ export function buildMobileBoard({
   const working = rows.filter((row) => row.state.section === "working").sort(byFreshness);
   const recentRows = rows.filter((row) => row.state.section === "recent").sort(byFreshness);
 
-  const live = boardPipelines(pipelines).filter((pipeline) => pipeline.project === project);
-  const needsPipelines = needsDecisionPipelineRows(pipelines, project, now);
+  const live = boardPipelines(pipelines).filter((pipeline) => pipeline.project === project && !closing.includes(pipeline.id));
+  const needsPipelines = needsDecisionPipelineRows(pipelines, project, now, closing);
   const active = live.filter((pipeline) => ACTIVE_PIPELINE_STATES.has(pipeline.state));
   const completed = live.filter((pipeline) => pipeline.state === "completed");
 
@@ -395,9 +456,49 @@ export function buildMobileBoard({
     needsYou,
     working,
     recent: recentRows.slice(0, RECENT_CAP),
+    recentRest: recentRows.slice(RECENT_CAP),
     recentTotal: recentRows.length,
     pipelines: live.length ? { total: live.length, active: active.length, needsDecision: needsPipelines.length, completed: completed.length } : null,
     pipelinesFirst: active.length > 0,
     attentionCount: needsYou.length,
   };
+}
+
+/**
+ * The stored catalog's rows that continue the Recent list (#1671), in the
+ * catalog's own order. «All conversations» is the same list going further
+ * down, so whatever the board already shows anywhere, the seat, a closed card,
+ * and a predecessor generation the board keeps off are dropped here, and a
+ * path two pages both carried appears once. An entry the scan still carries
+ * reads from the scan, which knows more than the catalog's lightweight row.
+ */
+export function catalogContinuation(
+  model: MobileBoardModel,
+  entries: readonly FileEntry[],
+  {
+    files,
+    seatPath = null,
+    hidden = EMPTY,
+    archived = EMPTY,
+    crowned = EMPTY,
+    now = Date.now() / 1000,
+  }: Omit<MobileBoardInput, "pipelines" | "project" | "closing">,
+): MobileBoardConversation[] {
+  const listed = new Set<string>([
+    ...model.needsYou.flatMap((item) => (item.kind === "conversation" ? [item.path] : [])),
+    ...model.working.map((row) => row.path),
+    ...model.recent.map((row) => row.path),
+    ...model.recentRest.map((row) => row.path),
+  ]);
+  if (seatPath) listed.add(seatPath);
+  const live = new Map(files.map((file) => [file.path, file] as const));
+  const rows: MobileBoardConversation[] = [];
+  for (const entry of entries) {
+    if (listed.has(entry.path) || hidden.has(entry.path) || archived.has(entry.path)) continue;
+    listed.add(entry.path);
+    const file = live.get(entry.path) ?? entry;
+    if (!isBoardConversation(file)) continue;
+    rows.push(boardConversation(file, now, crowned));
+  }
+  return rows;
 }
