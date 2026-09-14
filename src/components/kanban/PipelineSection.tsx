@@ -4,11 +4,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { attemptStateLabel, pipelineStateLabel, stageAttempts, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
-import { edgeFired, graphOrder, layoutGraph, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt } from "./pipelineGraph";
+import { attemptArrivals, edgeFired, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
 
 /* A card's pipeline, as the approved prototype draws it (`renderPipeline`,
    `graph.js`, `pastAttempts`): a header with the pipeline's state and where it
@@ -55,7 +55,7 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
   if (needs) return t("kanban.progress.needs", { stage: nameOf(needs.stage) });
   const live = chips.find((chip) => LIVE_CHIP_STATES.has(chip.state));
   if (live) {
-    const attempts = stageAttempts(pipeline, live.stage.id).length;
+    const attempts = operationalAttempts(pipeline, live.stage.id).length;
     const base = t("kanban.progress.live", { stage: nameOf(live.stage), state: attemptStateLabel(t, live.state) });
     return attempts > 1 ? t("kanban.progress.attempt", { progress: base, n: attempts }) : base;
   }
@@ -67,13 +67,9 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
 
 export const graphStateWord = (t: TFunction, state: StageChipState) => t(`kanban.graphState.${state}`);
 
-/** The pipeline states a card opens on its graph when the operator has not chosen. */
-const ACTIVE_PIPELINE = new Set(["provisioning", "running", "needs_decision", "paused"]);
-
-export function PipelineSection({ summary, workspace, open, selected, onToggle, onOpenStage }: {
+export function PipelineSection({ summary, open, selected, onToggle, onOpenStage }: {
   summary: KanbanPipeline;
-  workspace: boolean;
-  /** The operator's choice for this card, or null for the default. */
+  /** The operator's choice for this card, or null for the default: the summary. */
   open: boolean | null;
   /** Stage ids whose conversation is open on the card. */
   selected: ReadonlySet<string>;
@@ -84,9 +80,10 @@ export function PipelineSection({ summary, workspace, open, selected, onToggle, 
   const { pipeline } = summary;
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stageChipLabel(t, stage);
-  /* Prototype: an active pipeline of up to four stages opens on its graph in
-     the workspace column; everything else starts as the summary. */
-  const showGraph = open ?? (workspace && ACTIVE_PIPELINE.has(pipeline.state) && pipeline.stages.length <= 4);
+  /* Every card starts on the compact summary; the detailed graph is one toggle
+     away and stays open while the board is (#1695 binding correction 4, which
+     supersedes the prototype's graph-by-default rule for active pipelines). */
+  const showGraph = open ?? false;
   const progress = pipelineProgress(t, summary, nameOf);
   const slot = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState<number | null>(null);
@@ -150,7 +147,9 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
   const chip = (entry: (typeof summary.chips)[number], index: number, branch: boolean) => {
     const label = nameOf(entry.stage);
     const state = graphStateWord(t, entry.state);
-    const openable = stageAttempts(pipeline, entry.stage.id).some((attempt) => attempt.agentPath || attempt.conversationId);
+    /* A chip opens what a click reaches: the stage's latest own attempt's conversation. */
+    const current = latestAttempt(pipeline, entry.stage.id);
+    const openable = Boolean(current?.agentPath || current?.conversationId);
     const className = `pchip tone-${STAGE_TONE[entry.state]} st-${entry.state}${branch ? " side" : ""}${selected.has(entry.stage.id) ? " selected" : ""}`;
     const body = (
       <>
@@ -215,29 +214,32 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
   const layout = useMemo(() => layoutGraph(pipeline, available, force), [pipeline, available, force]);
   const nameOf = (id: string) => names.get(id) ?? id;
 
-  /* Live edges: attempts that were not here on the last render and name the
-     edge that activated them. The first render marks nothing. */
+  /* Live edges: the stage's own attempts that were not here on the last render
+     and name the edge that activated them. The first render marks nothing, and
+     a lineage-adopted helper never marks anything. The mark has its own timer:
+     a later change of the record neither extends nor strands it. */
   const seenAttempts = useRef<Set<string> | null>(null);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [live, setLive] = useState<ReadonlySet<string>>(new Set());
-  const attemptKeys = pipeline.runs.flatMap((run) => run.attempts.map((attempt) => `${run.stageId}#${attempt.n}`)).join("|");
+  const arrivals = attemptArrivals(pipeline);
+  const arrivalKey = arrivals.map((arrival) => arrival.key).join("|");
   useEffect(() => {
-    const current = new Set(attemptKeys ? attemptKeys.split("|") : []);
     const before = seenAttempts.current;
-    seenAttempts.current = current;
+    seenAttempts.current = new Set(arrivals.map((arrival) => arrival.key));
     if (!before) return;
-    const fresh = new Set<string>();
-    for (const run of pipeline.runs) {
-      for (const attempt of run.attempts) {
-        if (before.has(`${run.stageId}#${attempt.n}`) || !attempt.activatedBy) continue;
-        fresh.add(`${attempt.activatedBy.stageId}:${attempt.activatedBy.edge}:${run.stageId}`);
-      }
-    }
+    const fresh = new Set(arrivals.flatMap((arrival) => (!before.has(arrival.key) && arrival.edgeId ? [arrival.edgeId] : [])));
     if (!fresh.size) return;
     setLive(fresh);
-    const timer = setTimeout(() => setLive(new Set()), LIVE_EDGE_MS);
-    return () => clearTimeout(timer);
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    clearTimer.current = setTimeout(() => {
+      clearTimer.current = null;
+      setLive(new Set());
+    }, LIVE_EDGE_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the attempts the pipeline holds
-  }, [attemptKeys]);
+  }, [arrivalKey]);
+  useEffect(() => () => {
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+  }, []);
 
   const legend: Array<{ n: number; text: string }> = [];
   const labels: React.ReactNode[] = [];
@@ -305,15 +307,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const attempts = view?.attempts ?? 0;
           const detail = view?.again ? (
             <span className="pdetail">{t("kanban.graph.nextAttempt", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
-          ) : rounds.length ? rounds.map((round) => (
-            <span
-              key={round.n}
-              className={`rchip ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`}
-              title={t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })}
-            >
-              R{round.n} {round.verdict === "approved" ? "✓" : round.verdict === "changes" ? "✕" : "…"}
-            </span>
-          )) : (
+          ) : rounds.length ? <RoundChips rounds={rounds} /> : (
             <span className="pdetail">
               {attempts
                 ? stage.onFail ? t("kanban.graph.attemptRetries", { n: attempts, count: stage.onFail.maxRounds }) : t("kanban.graph.attempt", { n: attempts })
@@ -370,13 +364,38 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
   );
 }
 
+/* A node draws at most two round chips: every round while there are two or
+   fewer, else the latest and a "+N" chip naming the earlier ones. The node's
+   label names every round, and Past attempts lists each finished one. */
+const VISIBLE_ROUNDS = 2;
+
+function RoundChips({ rounds }: { rounds: readonly ReviewRound[] }) {
+  const { t } = useLocale();
+  const title = (round: ReviewRound) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) });
+  const shown = rounds.length <= VISIBLE_ROUNDS ? rounds : rounds.slice(-1);
+  const earlier = rounds.slice(0, rounds.length - shown.length);
+  return (
+    <span className="rchips">
+      {earlier.length ? (
+        <span className="rchip more" title={earlier.map(title).join("\n")} data-rounds-more={earlier.length}>+{earlier.length}</span>
+      ) : null}
+      {shown.map((round) => (
+        <span key={round.n} className={`rchip ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`} title={title(round)}>
+          R{round.n} {round.verdict === "approved" ? "✓" : round.verdict === "changes" ? "✕" : "…"}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function edgeLabel(t: TFunction, edge: GraphEdge, fired: number, branching: boolean): { short: string; long: string } | null {
   if (edge.kind === "fail") return { short: t("kanban.graph.fail"), long: t("kanban.graph.failRetry", { n: fired, max: edge.maxRounds ?? 0 }) };
   return branching ? { short: t("kanban.graph.pass"), long: t("kanban.graph.pass") } : null;
 }
 
-/** "Past attempts · N": earlier attempts and review rounds, newest first. Each
-    opens its conversation when one was kept. */
+/** "Past attempts · N": finished attempts and review rounds, newest first, then
+    the helper conversations stage agents brought in, listed as such. Each opens
+    its conversation when one was kept. */
 export function PastAttempts({ rows, names, nowMs, onOpen }: {
   rows: readonly PastAttempt[];
   /** Stage names by pipeline id, then stage id. */
@@ -385,10 +404,14 @@ export function PastAttempts({ rows, names, nowMs, onOpen }: {
   onOpen: (conversation: PastAttempt["conversation"]) => void;
 }) {
   const { t } = useLocale();
-  if (!rows.length) return null;
+  const history = rows.filter((row) => row.kind !== "helper");
+  const helpers = rows.filter((row) => row.kind === "helper");
+  if (!history.length && !helpers.length) return null;
   const labelOf = (row: PastAttempt) => {
     const stage = names.get(row.pipelineId)?.get(row.stageId) ?? row.stageId;
-    return row.kind === "round" ? t("kanban.past.round", { stage, n: row.n }) : t("kanban.past.attempt", { stage, n: row.n });
+    if (row.kind === "helper") return t("kanban.past.helper", { stage, n: row.n });
+    if (row.kind === "round") return row.ambiguous ? t("kanban.past.attemptRound", { stage, attempt: row.attempt ?? 0, n: row.n }) : t("kanban.past.round", { stage, n: row.n });
+    return t("kanban.past.attempt", { stage, n: row.n });
   };
   const stateOf = (row: PastAttempt) => {
     if (row.kind === "round") return t(`kanban.past.verdict.${row.state === "APPROVE" || row.state === "REQUEST_CHANGES" || row.state === "COMMENT" ? row.state : "open"}`);
@@ -402,31 +425,37 @@ export function PastAttempts({ rows, names, nowMs, onOpen }: {
     return "";
   };
   const age = (row: PastAttempt) => (row.atMs ? (nowMs - row.atMs < 60_000 ? t("kanban.justNow") : fmtAge(row.atMs / 1000)) : "");
-  const latest = rows[0]!;
+  const item = (row: PastAttempt) => (
+    <li key={row.key} data-past={row.key} data-past-kind={row.kind}>
+      <span className="lbl">{labelOf(row)}</span>
+      <span className={`verdict ${tone(row)}`}>{stateOf(row)}</span>
+      <span className="when">{age(row)}</span>
+      {row.conversation.path || row.conversation.conversationId ? (
+        <button type="button" className="hopen" aria-label={t("kanban.past.openAria", { label: labelOf(row) })} onClick={() => onOpen(row.conversation)}>
+          {t("kanban.past.open")}
+        </button>
+      ) : (
+        <span className="hnone">{t("kanban.past.none")}</span>
+      )}
+    </li>
+  );
+  const latest = history[0] ?? null;
   return (
-    <details className="history" data-past-attempts={rows.length}>
-      <summary aria-label={t("kanban.past.aria", { count: rows.length, label: labelOf(latest), state: stateOf(latest) })}>
+    <details className="history" data-past-attempts={history.length} data-helper-conversations={helpers.length}>
+      <summary aria-label={latest ? t("kanban.past.aria", { count: history.length, label: labelOf(latest), state: stateOf(latest) }) : t("kanban.past.helpersHead", { count: helpers.length })}>
         <ChevronRight />
-        <span className="hl">{t("kanban.past.head", { count: rows.length })}</span>
-        <span className="lbl">{t("kanban.past.last", { label: labelOf(latest), state: stateOf(latest), age: age(latest) })}</span>
+        <span className="hl">{latest ? t("kanban.past.head", { count: history.length }) : t("kanban.past.helpersHead", { count: helpers.length })}</span>
+        {latest ? <span className="lbl">{t("kanban.past.last", { label: labelOf(latest), state: stateOf(latest), age: age(latest) })}</span> : null}
       </summary>
       <p className="hnote">{t("kanban.past.note")}</p>
-      <ul>
-        {rows.map((row) => (
-          <li key={row.key} data-past={row.key}>
-            <span className="lbl">{labelOf(row)}</span>
-            <span className={`verdict ${tone(row)}`}>{stateOf(row)}</span>
-            <span className="when">{age(row)}</span>
-            {row.conversation.path || row.conversation.conversationId ? (
-              <button type="button" className="hopen" aria-label={t("kanban.past.openAria", { label: labelOf(row) })} onClick={() => onOpen(row.conversation)}>
-                {t("kanban.past.open")}
-              </button>
-            ) : (
-              <span className="hnone">{t("kanban.past.none")}</span>
-            )}
-          </li>
-        ))}
-      </ul>
+      {history.length ? <ul>{history.map(item)}</ul> : null}
+      {helpers.length ? (
+        <>
+          <p className="hsub">{t("kanban.past.helpersHead", { count: helpers.length })}</p>
+          <p className="hnote">{t("kanban.past.helpersNote")}</p>
+          <ul data-helpers="">{helpers.map(item)}</ul>
+        </>
+      ) : null}
     </details>
   );
 }

@@ -6,6 +6,14 @@
     "1680": 1432
   },
   "frames": {
+    "summary-default-light": {
+      "production": {
+        "compact": true,
+        "nodes": 0,
+        "pressed": "false",
+        "chips": 4
+      }
+    },
     "graph-branch-retry-light": {
       "production": {
         "dir": "TB",
@@ -124,6 +132,14 @@
           "pass",
           "fail · retry 1 of 2"
         ]
+      }
+    },
+    "summary-default-dark": {
+      "production": {
+        "compact": true,
+        "nodes": 0,
+        "pressed": "false",
+        "chips": 4
       }
     },
     "graph-branch-retry-dark": {
@@ -302,29 +318,72 @@
         "labels": []
       }
     },
-    "shelf-summary": {
+    "five-rounds": {
       "production": {
-        "open": false,
+        "dir": "LR",
+        "right": 1025,
+        "bottom": 547,
         "chips": [
-          "Builder",
-          "Reviewer",
-          "branch: Architect"
-        ],
-        "loops": [
-          "↺ Builder fails → Architect · 1/1"
+          {
+            "text": "+4",
+            "right": 977,
+            "top": 514,
+            "bottom": 530
+          },
+          {
+            "text": "R5 ✓",
+            "right": 1014,
+            "top": 514,
+            "bottom": 530
+          }
         ]
       }
+    },
+    "failed-latest": {
+      "production": [
+        {
+          "kind": "attempt",
+          "label": "Builder · attempt 1",
+          "verdict": "failed"
+        }
+      ]
     },
     "history-open": {
       "production": [
         {
+          "kind": "round",
+          "label": "Reviewer · round 1",
+          "verdict": "approved",
+          "open": true
+        },
+        {
+          "kind": "attempt",
           "label": "Builder · attempt 1",
           "verdict": "passed",
           "open": true
         },
         {
+          "kind": "attempt",
+          "label": "Builder · attempt 2",
+          "verdict": "passed",
+          "open": true
+        },
+        {
+          "kind": "attempt",
+          "label": "Reviewer · attempt 1",
+          "verdict": "passed",
+          "open": true
+        },
+        {
+          "kind": "attempt",
           "label": "Verifier · attempt 1",
           "verdict": "failed",
+          "open": true
+        },
+        {
+          "kind": "helper",
+          "label": "Builder · helper conversation 1",
+          "verdict": "passed",
           "open": true
         }
       ]
@@ -463,22 +522,22 @@
     }
   },
   "flows": {
-    "pastOpen": "conversation_search-impl-1",
+    "helperOpen": "conversation_search-helper",
     "toggleAndNode": {
+      "node": {
+        "pressed": "true",
+        "reader": "conversation_search-impl-2"
+      },
       "summary": {
         "nodes": 0,
         "chips": 4
-      },
-      "node": {
-        "pressed": "true",
-        "reader": "conversation_search-ver-2"
       }
     },
     "liveEdge": {
       "before": 0,
-      "arrivedMs": 35,
+      "afterHelper": 0,
       "label": "fail · retry 2 of 2",
-      "cleared": true
+      "clearedAfterMs": 2393
     }
   },
   "failures": []

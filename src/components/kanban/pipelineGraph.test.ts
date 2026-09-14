@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 
-import { edgeFired, graphOrder, graphTopology, layoutGraph, pastAttempts, routeEdge, stageViews } from "./pipelineGraph";
+import { attemptArrivals, edgeFired, graphOrder, graphTopology, layoutGraph, pastAttempts, routeEdge, stageViews } from "./pipelineGraph";
 
 /* The kanban stage graph's pure half (#1695 K5a) over invented pipeline
    records shaped like the store's: stages with `next`/`onFail`, runs of
@@ -105,31 +105,72 @@ test("an edge's fired count comes from the attempts it activated; a stage an ups
   expect(stageViews(resumed).get("verify")).toMatchObject({ state: "running", again: false, attempts: 2 });
 });
 
-test("review rounds are the bound flow's rounds; Past attempts are the superseded attempts and earlier rounds, newest first, with their conversations", () => {
-  const flow = {
-    id: "flow-review",
+test("review rounds are the bound flow's rounds; Past attempts list every finished attempt and every settled round, and leave out work under way", () => {
+  const firstReview = {
+    id: "flow-review-1",
     rounds: [
-      { n: 1, verdict: "REQUEST_CHANGES", reviewerPath: "/fixture/round-1.jsonl", reviewerConversationId: "conversation_round_1", startedAt: "2026-09-14T10:25:00.000Z" },
-      { n: 2, verdict: "APPROVE", reviewerPath: "/fixture/round-2.jsonl", reviewerConversationId: null, startedAt: "2026-09-14T10:50:00.000Z" },
-      { n: 3, verdict: null, reviewerPath: null, reviewerConversationId: null, startedAt: "2026-09-14T11:10:00.000Z" },
+      { n: 1, verdict: "REQUEST_CHANGES", reviewerPath: "/fixture/r1-1.jsonl", reviewerConversationId: "conversation_r1_1", startedAt: "2026-09-14T10:25:00.000Z" },
+      { n: 2, verdict: null, reviewerPath: null, reviewerConversationId: null, startedAt: "2026-09-14T10:35:00.000Z" },
+    ],
+  } as unknown as Flow;
+  const secondReview = {
+    id: "flow-review-2",
+    rounds: [
+      { n: 1, verdict: "APPROVE", reviewerPath: "/fixture/r2-1.jsonl", reviewerConversationId: null, startedAt: "2026-09-14T11:25:00.000Z" },
+      { n: 2, verdict: null, reviewerPath: null, reviewerConversationId: null, startedAt: "2026-09-14T11:35:00.000Z" },
     ],
   } as unknown as Flow;
   const record = pipeline(retryStages, [
-    { stageId: "implement", attempts: [attempt(1, "failed", "2026-09-14T10:00:00.000Z", { completedAt: "2026-09-14T10:10:00.000Z", verdict: { status: "fail" } }), attempt(2, "passed", "2026-09-14T11:00:00.000Z")] },
-    { stageId: "review", attempts: [attempt(1, "reviewing", "2026-09-14T10:20:00.000Z", { flowId: "flow-review" })] },
+    { stageId: "implement", attempts: [attempt(1, "failed", "2026-09-14T10:00:00.000Z", { completedAt: "2026-09-14T10:10:00.000Z", verdict: { status: "fail" } }), attempt(2, "passed", "2026-09-14T11:00:00.000Z", { completedAt: "2026-09-14T11:10:00.000Z" })] },
+    { stageId: "review", attempts: [attempt(1, "failed", "2026-09-14T10:20:00.000Z", { flowId: "flow-review-1", completedAt: "2026-09-14T10:40:00.000Z" }), attempt(2, "reviewing", "2026-09-14T11:20:00.000Z", { flowId: "flow-review-2" })] },
   ], { stageId: "review", state: "reviewing", input: null, activatedBy: null });
-  const flows = new Map([[flow.id, flow]]);
-  expect(stageViews(record, flows).get("review")!.rounds).toEqual([{ n: 1, verdict: "changes" }, { n: 2, verdict: "approved" }, { n: 3, verdict: "open" }]);
+  const flows = new Map([[firstReview.id, firstReview], [secondReview.id, secondReview]]);
+  expect(stageViews(record, flows).get("review")!.rounds).toEqual([{ n: 1, verdict: "approved" }, { n: 2, verdict: "open" }]);
   expect(stageViews(record, flows).get("implement")!.rounds).toEqual([]);
   const past = pastAttempts([record], flows);
-  expect(past.map((row) => [row.kind, row.stageId, row.n, row.state, row.verdict])).toEqual([
-    ["round", "review", 2, "APPROVE", null],
-    ["round", "review", 1, "REQUEST_CHANGES", null],
-    ["attempt", "implement", 1, "failed", "fail"],
+  expect(past.map((row) => [row.kind, row.stageId, row.attempt, row.n, row.state, row.ambiguous])).toEqual([
+    ["round", "review", 2, 1, "APPROVE", true],
+    ["attempt", "implement", null, 2, "passed", false],
+    ["attempt", "review", null, 1, "failed", false],
+    ["round", "review", 1, 2, "open", true],
+    ["round", "review", 1, 1, "REQUEST_CHANGES", true],
+    ["attempt", "implement", null, 1, "failed", false],
   ]);
-  expect(past[1]!.conversation).toEqual({ path: "/fixture/round-1.jsonl", conversationId: "conversation_round_1" });
-  expect(past[2]!.conversation.path).toBe("/fixture/1-2026-09-14T10:00:00.000Z.jsonl");
-  /* The latest attempt of every stage and the latest round are the graph's, never history. */
-  expect(past.some((row) => row.kind === "attempt" && row.stageId === "implement" && row.n === 2)).toBe(false);
-  expect(past.some((row) => row.kind === "round" && row.n === 3)).toBe(false);
+  /* The reviewing attempt and its open round are work under way, listed nowhere. */
+  expect(past.some((row) => row.kind === "attempt" && row.stageId === "review" && row.n === 2)).toBe(false);
+  expect(past.some((row) => row.kind === "round" && row.attempt === 2 && row.n === 2)).toBe(false);
+  expect(past.find((row) => row.kind === "round" && row.attempt === 1 && row.n === 1)!.conversation).toEqual({ path: "/fixture/r1-1.jsonl", conversationId: "conversation_r1_1" });
+  expect(new Set(past.map((row) => row.key)).size).toBe(past.length);
+
+  /* A stage whose latest attempt failed and waits for nothing: that attempt is history. */
+  const parked = pipeline([stage("build", "builder", null)], [{ stageId: "build", attempts: [attempt(1, "failed", "2026-09-14T09:00:00.000Z")] }], null, "needs_decision");
+  expect(pastAttempts([parked], new Map()).map((row) => [row.kind, row.n, row.state])).toEqual([["attempt", 1, "failed"]]);
+  /* One that asks for a decision is still the stage's current work. */
+  const deciding = pipeline([stage("build", "builder", null)], [{ stageId: "build", attempts: [attempt(1, "needs_decision", "2026-09-14T09:00:00.000Z")] }], null, "needs_decision");
+  expect(pastAttempts([deciding], new Map())).toEqual([]);
+});
+
+test("a lineage-adopted helper attempt is evidence: it spends no retry, is not the latest or counted attempt, marks no edge, and is listed as a helper conversation", () => {
+  const helper = attempt(3, "passed", "2026-09-14T11:30:00.000Z", {
+    historical: true,
+    conversationId: "conversation_helper",
+    agentPath: "/fixture/helper.jsonl",
+    /* The engine copies the source attempt's provenance onto the adopted record. */
+    activatedBy: { stageId: "verify", attempt: 1, edge: "fail" },
+  });
+  const record = pipeline(retryStages, [
+    { stageId: "implement", attempts: [attempt(1, "passed", "2026-09-14T10:00:00.000Z"), attempt(2, "running", "2026-09-14T11:00:00.000Z", { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }), helper] },
+    { stageId: "review", attempts: [attempt(1, "passed", "2026-09-14T10:20:00.000Z")] },
+    { stageId: "verify", attempts: [attempt(1, "failed", "2026-09-14T10:40:00.000Z")] },
+  ], { stageId: "implement", state: "running", input: null, activatedBy: null });
+  /* The engine's own budget (stageFailEdgeRoundsUsed) is 1: one retry left of 2. */
+  expect(edgeFired(record, { from: "verify", to: "implement", kind: "fail" })).toBe(1);
+  const view = stageViews(record).get("implement")!;
+  expect(view.attempts).toBe(2);
+  expect(view.attempt?.n).toBe(2);
+  expect(view.state).toBe("running");
+  expect(attemptArrivals(record).map((arrival) => arrival.key)).toEqual(["implement#1", "implement#2", "review#1", "verify#1"]);
+  const past = pastAttempts([record], new Map());
+  expect(past.filter((row) => row.stageId === "implement").map((row) => [row.kind, row.n])).toEqual([["helper", 1], ["attempt", 1]]);
+  expect(past.find((row) => row.kind === "helper")!.conversation).toEqual({ path: "/fixture/helper.jsonl", conversationId: "conversation_helper" });
 });

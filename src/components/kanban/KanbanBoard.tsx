@@ -217,8 +217,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [receipts]);
 
   const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
-  /* Review stages read their rounds from the flows the board carries. */
-  const allFlows = useMemo(() => (props.reviewGroups?.length ? [...props.flows, ...props.reviewGroups] : props.flows), [props.flows, props.reviewGroups]);
   /* Which cards show a pipeline's graph or its summary, as the operator chose. */
   const [graphChoices, setGraphChoices] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const toggleGraph = useCallback((cardId: string, pipelineId: string, open: boolean) => {
@@ -282,8 +280,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: allFlows, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, allFlows, statuses, seatRefs, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, seatRefs, query, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();

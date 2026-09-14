@@ -5,7 +5,7 @@ import { groupHideState, seatAssignment, type GroupHideState, type GroupResurfac
 import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
-import { latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import { taskTitle } from "@/components/tasks/taskModel";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
@@ -224,18 +224,18 @@ export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<str
     /* The embedded review flow's own round count, as the flow projection
        records it on the attempt; a stage with no review flow has none. */
     const rounds = stage.kind === "review-loop"
-      ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.reviewFlowSync?.roundCount ?? 0), 0)
+      ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.historical ? 0 : attempt.reviewFlowSync?.roundCount ?? 0), 0)
       : 0;
     return { stage, state: views.get(id)?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id) };
   });
-  const attempts = pipeline.runs.flatMap((run) => run.attempts);
   const loops: KanbanLoop[] = [];
   for (const stage of pipeline.stages) {
     const edge = stage.onFail;
     if (!edge?.to) continue;
     const to = byId.get(edge.to);
     if (!to) continue;
-    const fired = attempts.filter((attempt) => attempt.activatedBy?.stageId === stage.id && attempt.activatedBy.edge === "fail").length;
+    /* The engine's spent budget: the target's own attempts this fail edge activated. */
+    const fired = stageFailEdgeRoundsUsed(pipeline, stage);
     loops.push({ from: stage, to, fired, max: edge.maxRounds });
   }
   const waiting = pipeline.stages.filter((stage) => latestAttempt(pipeline, stage.id) === null).length;

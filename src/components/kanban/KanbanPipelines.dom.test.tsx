@@ -154,11 +154,34 @@ const click = (element: Element | null | undefined) => {
   flushSync(() => (element as HTMLElement).click());
 };
 
-test("an active pipeline on a workspace card shows its stage graph: nodes with their state, pass edges, the fail edge back with how often it fired, and review rounds", async () => {
+const toggle = (host: HTMLElement) => card(host).querySelector<HTMLElement>("[data-graph-toggle]");
+const helperAttempt = (n: number, file: FileEntry, startedAgo: number) => attempt(n, "passed", file, startedAgo, { historical: true, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } });
+
+test("every card starts on the compact summary, the active Assigned card included; the toggle opens the graph, pressed, and the choice outlives a re-render", async () => {
+  const { host, render } = mount([searchPipeline()]);
+  await tick();
+  const section = () => card(host).querySelector(".stage-section")!;
+  expect(section().classList.contains("compact")).toBe(true);
+  expect(card(host).querySelector(".pnode")).toBeNull();
+  expect(toggle(host)?.getAttribute("aria-pressed")).toBe("false");
+  expect([...card(host).querySelectorAll(".psummary .pchip")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
+  expect(card(host).querySelector(".ploop")?.textContent).toContain("1/2");
+  click(toggle(host));
+  await tick();
+  expect(section().classList.contains("open")).toBe(true);
+  expect(toggle(host)?.getAttribute("aria-pressed")).toBe("true");
+  expect(card(host).querySelectorAll(".pnode")).toHaveLength(4);
+  render([searchPipeline()]);
+  await tick();
+  expect(card(host).querySelectorAll(".pnode")).toHaveLength(4);
+});
+
+test("the opened graph shows each stage's state, the pass edges, the fail edge back with its spent budget, and review rounds", async () => {
   const { host } = mount([searchPipeline()]);
   await tick();
+  click(toggle(host));
+  await tick();
   const section = card(host).querySelector(".stage-section")!;
-  expect(section.classList.contains("open")).toBe(true);
   const nodes = [...section.querySelectorAll<HTMLElement>(".pnode")];
   expect(nodes.map((node) => node.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   expect(nodes.map((node) => node.querySelector(".pstate")?.textContent)).toEqual(["passed", "passed", "running", "waiting"]);
@@ -173,47 +196,111 @@ test("an active pipeline on a workspace card shows its stage graph: nodes with t
   expect([...section.querySelectorAll(".pelabel")].map((label) => label.textContent)).toEqual(["pass", "fail · retry 1 of 2"]);
 });
 
-test("the graph toggles to the one-line summary and back, and a node opens its stage's conversation inside the card, marked selected", async () => {
-  const { host } = mount([searchPipeline()]);
-  await tick();
-  click(card(host).querySelector("[data-graph-toggle]"));
-  expect(card(host).querySelector(".pnode")).toBeNull();
-  expect([...card(host).querySelectorAll(".psummary .pchip")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
-  expect(card(host).querySelector(".ploop")?.textContent).toContain("1/2");
-  click(card(host).querySelector("[data-graph-toggle]"));
-  await tick();
-  click(card(host).querySelector('.pnode[data-stage="verify"]'));
-  await tick();
-  expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_verify-2");
-  expect(card(host).querySelector('.pnode[data-stage="verify"]')?.getAttribute("aria-pressed")).toBe("true");
-  expect(card(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("false");
+test("with a helper conversation adopted last on Implement, the graph keeps the engine's budget and attempt count, and the node a click opens is the one marked", async () => {
+  const helper = conversation("implement-helper");
+  files.push(helper);
+  try {
+    const record = searchPipeline();
+    record.runs[0]!.attempts.push(helperAttempt(3, helper, 3000) as never);
+    const { host } = mount([record]);
+    await tick();
+    /* The summary's loop chip reads the same budget. */
+    expect(card(host).querySelector(".ploop")?.textContent).toContain("· 1/2");
+    click(toggle(host));
+    await tick();
+    expect([...card(host).querySelectorAll(".pelabel")].map((label) => label.textContent)).toEqual(["pass", "fail · retry 1 of 2"]);
+    expect(card(host).querySelector('.pnode[data-stage="implement"] .pdetail')?.textContent).toBe("attempt 2");
+    click(card(host).querySelector('.pnode[data-stage="implement"]'));
+    await tick();
+    expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_implement-2");
+    expect(card(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
+    /* The helper stays reachable, listed as what it is. */
+    const helpers = [...card(host).querySelectorAll('details.history [data-past-kind="helper"] .lbl')].map((node) => node.textContent);
+    expect(helpers).toEqual(["Builder · helper conversation 1"]);
+    expect(card(host).querySelector("details.history .hsub")?.textContent).toBe("Helper conversations · 1");
+  } finally {
+    files.pop();
+  }
 });
 
-test("a shelf card starts on the summary; Past attempts lists the superseded attempts newest first and opens the one it names", async () => {
+test("Past attempts lists every finished attempt and settled round, the latest ones too, and leaves out the running attempt; a row opens its conversation", async () => {
   const { host } = mount([searchPipeline()], "blocked");
   await tick();
-  expect(card(host).querySelector(".stage-section")?.classList.contains("compact")).toBe(true);
   const past = card(host).querySelector<HTMLDetailsElement>("details.history")!;
-  expect(past.querySelector(".hl")?.textContent).toBe("Past attempts · 2");
-  expect([...past.querySelectorAll("li .lbl")].map((node) => node.textContent)).toEqual(["Verifier · attempt 1", "Builder · attempt 1"]);
-  expect([...past.querySelectorAll("li .verdict")].map((node) => node.textContent)).toEqual(["failed", "passed"]);
-  click(past.querySelectorAll("li .hopen")[0]);
+  const labels = [...past.querySelectorAll('[data-past-kind] .lbl')].map((node) => node.textContent);
+  expect(labels.sort()).toEqual(["Builder · attempt 1", "Builder · attempt 2", "Reviewer · attempt 1", "Reviewer · round 1", "Verifier · attempt 1"]);
+  expect(past.querySelector(".hl")?.textContent).toBe("Past attempts · 5");
+  expect(labels).not.toContain("Verifier · attempt 2");
+  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verifier · attempt 1")!;
+  expect(verify.querySelector(".verdict")?.textContent).toBe("failed");
+  click(verify.querySelector(".hopen"));
   await tick();
   expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_verify-1");
 });
 
-test("an edge is marked live only when a new attempt arrives through it, and the mark does not come from a plain re-render", async () => {
+test("an edge is marked live only when the stage's own new attempt arrives through it, a helper adoption marks nothing, and the mark clears on time through later changes", async () => {
   const { host, render } = mount([searchPipeline()]);
   await tick();
-  expect(card(host).querySelector(".pedge.live")).toBeNull();
+  click(toggle(host));
+  await tick();
   render([searchPipeline()]);
   await tick();
   expect(card(host).querySelector(".pedge.live")).toBeNull();
-  /* Implement runs a third time, activated by Verify failing. */
-  const next = searchPipeline();
-  next.runs[0]!.attempts.push(attempt(3, "running", conversation("implement-3"), 10, { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }) as never);
-  render([next]);
+
+  /* A helper adopted with the fail edge's provenance copied onto it. */
+  const adopted = searchPipeline();
+  adopted.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never);
+  render([adopted]);
+  await tick();
+  expect(card(host).querySelector(".pedge.live")).toBeNull();
+
+  /* Implement's own third attempt, activated by Verify failing. */
+  const retried = searchPipeline();
+  retried.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never, attempt(4, "running", conversation("implement-4"), 10, { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }) as never);
+  render([retried]);
   await tick();
   expect(card(host).querySelector(".pedge.live")?.getAttribute("data-edge")).toBe("verify:fail:implement");
-  expect(card(host).querySelector('.pelabel.live')?.textContent).toBe("fail · retry 2 of 2");
+  expect(card(host).querySelector(".pelabel.live")?.textContent).toBe("fail · retry 2 of 2");
+
+  /* Within the window the record changes again with nothing attributed. */
+  await tick(400);
+  const later = searchPipeline();
+  later.runs[0]!.attempts.push(helperAttempt(3, conversation("implement-helper"), 900) as never, attempt(4, "running", conversation("implement-4"), 10, { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } }) as never);
+  later.runs[1]!.attempts.push(attempt(2, "running", conversation("review-2"), 5) as never);
+  render([later]);
+  await tick();
+  expect(card(host).querySelector(".pedge.live")).toBeTruthy();
+  await tick(2_300);
+  expect(card(host).querySelector(".pedge.live")).toBeNull();
+});
+
+test("a review stage with five rounds draws the latest round and a count of the earlier ones, and names every round in its label", async () => {
+  const record = searchPipeline();
+  const manyRounds = [{ id: "flow-review", rounds: ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"].map((verdict, index) => ({ n: index + 1, verdict, reviewerPath: null, reviewerConversationId: null, startedAt: iso(3500 - index * 60) })) }] as unknown as Flow[];
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  flushSync(() => root.render(
+    <KanbanBoard project="fixture" groups={[]} manual={[]} files={files} flows={manyRounds} pipelines={[record]} tasks={[]}
+      allTasks={[task("t-search", "assigned", "Restore search results after the index rebuild")]} drafts={[]} now={NOW} loaded catalogFailures={0}
+      selection={new Set()} onOpenCatalog={() => {}} onOpenOnBoard={() => {}} seatRefs={null} mutationPorts={idlePorts} />,
+  ));
+  await tick();
+  click(toggle(host));
+  await tick();
+  const review = card(host).querySelector<HTMLElement>('.pnode[data-stage="review"]')!;
+  expect([...review.querySelectorAll(".rchip")].map((chip) => chip.textContent)).toEqual(["+4", "R5 ✓"]);
+  expect(review.querySelector(".rchip.more")?.getAttribute("title")?.split("\n")).toEqual(["Round 1: changes requested", "Round 2: changes requested", "Round 3: changes requested", "Round 4: changes requested"]);
+  expect(review.getAttribute("aria-label")).toContain("Round 1: changes requested, Round 2: changes requested, Round 3: changes requested, Round 4: changes requested, Round 5: approved");
+});
+
+test("a summary chip is a control only when the stage's latest own attempt has a conversation to open: not while that attempt is still spawning", async () => {
+  const record = searchPipeline();
+  record.runs[2]!.attempts.push(attempt(3, "spawning", null, 1, { activatedBy: { stageId: "review", attempt: 1, edge: "pass" } }) as never);
+  const { host } = mount([record]);
+  await tick();
+  const chip = (stage: string) => card(host).querySelector<HTMLElement>(`.psummary [data-stage="${stage}"]`)!;
+  expect(chip("verify").tagName).toBe("SPAN");
+  expect(chip("implement").tagName).toBe("BUTTON");
 });

@@ -1,6 +1,6 @@
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
-import { latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { LIVE_ATTEMPT_STATES, latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /**
  * The stage graph a kanban card draws for its pipeline (#1695 K5a), ported from
@@ -11,7 +11,13 @@ import { latestAttempt, stageAttempts, stageChipState, type StageChipState } fro
  * rounds are the bound flow's own rounds. Nothing here is a counter the board
  * keeps.
  *
- * Pure: no DOM, no React. `PipelineGraph.tsx` draws what this returns.
+ * One rule for which attempts count, the engine's: a lineage-adopted
+ * (`historical`) attempt is evidence a stage agent brought in, never the stage's
+ * own work. It does not spend a retry, is not the latest attempt, is not counted
+ * as an attempt and never marks an edge travelled. Its conversation stays
+ * reachable, listed as a helper conversation.
+ *
+ * Pure: no DOM, no React. `PipelineSection.tsx` draws what this returns.
  */
 
 export type GraphTone = "idle" | "active" | "review" | "ok" | "bad" | "needs";
@@ -47,9 +53,26 @@ export function graphEdges(pipeline: Pick<Pipeline, "stages">): GraphEdge[] {
   return edges;
 }
 
-/** How many times an edge fired: attempts of its target that it activated. */
+/** A stage's own attempts, in order: every attempt that is not lineage-adopted evidence. */
+export function operationalAttempts(pipeline: Pipeline, stageId: string): PipelineStageAttempt[] {
+  return stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
+}
+
+/** How many times an edge fired: the stage's own attempts of its target that it
+    activated. For a fail edge this is the engine's spent retry budget. */
 export function edgeFired(pipeline: Pipeline, edge: Pick<GraphEdge, "from" | "to" | "kind">): number {
-  return stageAttempts(pipeline, edge.to).filter((attempt) => attempt.activatedBy?.stageId === edge.from && attempt.activatedBy.edge === edge.kind).length;
+  return operationalAttempts(pipeline, edge.to).filter((attempt) => attempt.activatedBy?.stageId === edge.from && attempt.activatedBy.edge === edge.kind).length;
+}
+
+/** The attempts that should mark an edge live when they first appear: the
+    stage's own attempts, each keyed once, with the edge that activated it. */
+export function attemptArrivals(pipeline: Pipeline): Array<{ key: string; edgeId: string | null }> {
+  return pipeline.runs.flatMap((run) => run.attempts
+    .filter((attempt) => !attempt.historical)
+    .map((attempt) => ({
+      key: `${run.stageId}#${attempt.n}`,
+      edgeId: attempt.activatedBy ? `${attempt.activatedBy.stageId}:${attempt.activatedBy.edge}:${run.stageId}` : null,
+    })));
 }
 
 export interface ReviewRound {
@@ -107,7 +130,7 @@ export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Fl
   for (const stage of pipeline.stages) {
     const attempt = latestAttempt(pipeline, stage.id);
     const state = stageChipState(pipeline, stage);
-    const attempts = stageAttempts(pipeline, stage.id).length;
+    const attempts = operationalAttempts(pipeline, stage.id).length;
     const rounds = stage.kind === "review-loop" ? roundsOf(attempt, flowsById) : [];
     const mine = startedMs(attempt);
     const newerUpstream = attempt && !LIVE_CHIPS.has(state) && Number.isFinite(mine)
@@ -338,9 +361,15 @@ export interface PastAttempt {
   key: string;
   pipelineId: string;
   stageId: string;
-  /** "attempt": a superseded attempt of a stage; "round": an earlier review round. */
-  kind: "attempt" | "round";
+  /** "attempt": a finished attempt of the stage; "round": a finished review round
+      of one of its attempts; "helper": a conversation a stage agent brought in. */
+  kind: "attempt" | "round" | "helper";
   n: number;
+  /** For a round: the attempt whose review flow it belongs to. */
+  attempt: number | null;
+  /** For a round: whether the stage has rounds under more than one attempt, so
+      the label must name the attempt. */
+  ambiguous: boolean;
   /** The attempt's state, or the round's verdict. */
   state: string;
   verdict: string | null;
@@ -348,11 +377,15 @@ export interface PastAttempt {
   conversation: { path: string | null; conversationId: string | null };
 }
 
+/** Work still under way: the stage is not done with it. */
+const ACTIVE_ATTEMPT = (state: string) => LIVE_ATTEMPT_STATES.has(state as never) || state === "needs_decision";
+
 /**
- * What happened before the current work of a card's pipelines: every attempt a
- * later attempt of the same stage superseded, and every review round before a
- * review stage's latest one. Newest first. The current attempts and rounds are
- * the graph's; nothing appears in both.
+ * What a card's pipelines have finished, newest first: every attempt that ended
+ * (the latest one too, once it ended), every review round that reached a
+ * verdict or belongs to an attempt that ended, and the helper conversations
+ * stage agents brought in. Work under way is left out: the latest attempt while
+ * it runs or waits on a decision, and its open round. Nothing is listed twice.
  */
 export function pastAttempts(pipelines: readonly Pipeline[], flowsById: ReadonlyMap<string, Flow>): PastAttempt[] {
   const rows: PastAttempt[] = [];
@@ -362,35 +395,62 @@ export function pastAttempts(pipelines: readonly Pipeline[], flowsById: Readonly
   };
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
-      const attempts = stageAttempts(pipeline, stage.id);
-      for (const attempt of attempts.slice(0, -1)) {
+      const own = operationalAttempts(pipeline, stage.id);
+      const latest = own.at(-1) ?? null;
+      const reviewAttempts = stage.kind === "review-loop"
+        ? own.filter((attempt) => attempt.flowId && (flowsById.get(attempt.flowId)?.rounds.length ?? 0) > 0)
+        : [];
+      for (const attempt of own) {
+        const active = attempt === latest && ACTIVE_ATTEMPT(attempt.state);
+        if (!active) {
+          rows.push({
+            key: `${pipeline.id}:${stage.id}:attempt:${attempt.n}`,
+            pipelineId: pipeline.id,
+            stageId: stage.id,
+            kind: "attempt",
+            n: attempt.n,
+            attempt: null,
+            ambiguous: false,
+            state: attempt.state,
+            verdict: attempt.verdict?.status ?? null,
+            atMs: ms(attempt.completedAt ?? attempt.startedAt),
+            conversation: { path: attempt.agentPath, conversationId: attempt.conversationId },
+          });
+        }
+        const flow = stage.kind === "review-loop" && attempt.flowId ? flowsById.get(attempt.flowId) : undefined;
+        for (const round of flow?.rounds ?? []) {
+          if (active && round.verdict === null) continue;
+          rows.push({
+            key: `${pipeline.id}:${stage.id}:attempt:${attempt.n}:round:${round.n}`,
+            pipelineId: pipeline.id,
+            stageId: stage.id,
+            kind: "round",
+            n: round.n,
+            attempt: attempt.n,
+            ambiguous: reviewAttempts.length > 1,
+            state: round.verdict ?? "open",
+            verdict: null,
+            atMs: ms(round.startedAt),
+            conversation: { path: round.reviewerPath, conversationId: round.reviewerConversationId ?? null },
+          });
+        }
+      }
+      stageAttempts(pipeline, stage.id).filter((attempt) => attempt.historical).forEach((helper, index) => {
         rows.push({
-          key: `${pipeline.id}:${stage.id}:attempt:${attempt.n}`,
+          key: `${pipeline.id}:${stage.id}:helper:${helper.n}`,
           pipelineId: pipeline.id,
           stageId: stage.id,
-          kind: "attempt",
-          n: attempt.n,
-          state: attempt.state,
-          verdict: attempt.verdict?.status ?? null,
-          atMs: ms(attempt.completedAt ?? attempt.startedAt),
-          conversation: { path: attempt.agentPath, conversationId: attempt.conversationId },
+          kind: "helper",
+          /* Numbered among the stage's helper conversations, never as an attempt. */
+          n: index + 1,
+          attempt: null,
+          ambiguous: false,
+          state: helper.state,
+          verdict: helper.verdict?.status ?? null,
+          atMs: ms(helper.completedAt ?? helper.startedAt),
+          conversation: { path: helper.agentPath, conversationId: helper.conversationId },
         });
-      }
-      const latest = attempts.at(-1) ?? null;
-      const flow = stage.kind === "review-loop" && latest?.flowId ? flowsById.get(latest.flowId) : undefined;
-      for (const round of flow?.rounds.slice(0, -1) ?? []) {
-        rows.push({
-          key: `${pipeline.id}:${stage.id}:round:${round.n}`,
-          pipelineId: pipeline.id,
-          stageId: stage.id,
-          kind: "round",
-          n: round.n,
-          state: round.verdict ?? "open",
-          verdict: null,
-          atMs: ms(round.startedAt),
-          conversation: { path: round.reviewerPath, conversationId: round.reviewerConversationId ?? null },
-        });
-      }
+      });
     }
   }
   return rows.sort((a, b) => b.atMs - a.atMs || a.key.localeCompare(b.key));

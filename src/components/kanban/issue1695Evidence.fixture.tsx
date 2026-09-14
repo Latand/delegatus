@@ -111,12 +111,21 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
+/* K5a: a helper conversation the search builder brought in, and a review that took five rounds. */
+const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
+const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
+const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
 
 const pipelines: Pipeline[] = [
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
     [
-      { stageId: "implement", attempts: [attempt(1, "passed", searchImpl1), attempt(2, "passed", searchImpl2, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })] },
+      { stageId: "implement", attempts: [
+        attempt(1, "passed", searchImpl1),
+        attempt(2, "passed", searchImpl2, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }),
+        /* Lineage-adopted: the engine copies the source attempt's provenance onto it. */
+        ...(searchHelper ? [attempt(3, "passed", searchHelper, { historical: true, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" }, startedAt: iso(55 * MIN) })] : []),
+      ] },
       { stageId: "review", attempts: [attempt(1, "passed", searchRev, { ...flowOf("flow-search-review"), reviewFlowSync: { generation: "g1", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
       { stageId: "verify", attempts: [attempt(1, "failed", searchVer1), attempt(2, "running", searchVer2, { activatedBy: { stageId: "review", attempt: 1, edge: "pass" } })] },
     ],
@@ -153,6 +162,13 @@ const pipelines: Pipeline[] = [
       { stageId: "verify", attempts: [attempt(1, "passed", compactVer)] },
     ],
     null),
+  ...(roundsBuild && roundsReview ? [pipeline("p-rounds", "Rework the retry banner until review passes", "t-rounds", "running",
+    [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+    [
+      { stageId: "build", attempts: [attempt(1, "passed", roundsBuild, { startedAt: iso(4 * 60 * MIN) })] },
+      { stageId: "review", attempts: [attempt(1, "reviewing", roundsReview, { flowId: "flow-rounds-review", startedAt: iso(3 * 60 * MIN) })] },
+    ],
+    { stageId: "review", state: "reviewing", input: null, activatedBy: null })] : []),
 ];
 
 /* Review flows as the store keeps them: one per bound review stage, with its rounds. */
@@ -172,6 +188,7 @@ const flows = PIPELINES ? [
   reviewFlow("flow-search-review", searchImpl2, searchRev, ["APPROVE"], 45 * MIN),
   reviewFlow("flow-upload-review-api", uploadApi, uploadRevApi, ["REQUEST_CHANGES", "APPROVE"], 5 * 60 * MIN),
   reviewFlow("flow-compact-review", compactBuild, compactRev, ["APPROVE"], 2 * 24 * 60 * MIN),
+  reviewFlow("flow-rounds-review", roundsBuild!, roundsReview!, ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 3 * 60 * MIN),
 ] : [];
 
 let revision = 1;
@@ -203,6 +220,7 @@ const tasks: BoardTask[] = [
   task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN),
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
+  ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -328,7 +346,8 @@ const evidence = {
     let run = record.runs.find((entry) => entry.stageId === stageId);
     if (!run) record.runs.push(run = { stageId, attempts: [] });
     run.attempts.push(attempt(run.attempts.length + 1, "running", null, over));
-    record.cursor = { stageId, state: "running", input: null, activatedBy: over.activatedBy ?? null };
+    /* A lineage-adopted attempt is evidence; it never moves the cursor. */
+    if (!over.historical) record.cursor = { stageId, state: "running", input: null, activatedBy: over.activatedBy ?? null };
     window.dispatchEvent(new Event("llv:pipelines-changed"));
   },
   /* The stored row, as the fixture's server holds it. */

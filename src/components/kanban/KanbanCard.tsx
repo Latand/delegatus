@@ -9,7 +9,7 @@ import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { cleanTitle, fmtAge } from "@/components/utils";
-import { stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit } from "./CardInlineText";
 import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
@@ -56,12 +56,13 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
   return t(`kanban.status.${status}`);
 }
 
-/** The stages whose latest attempt's conversation is open as a reader on the card. */
+/** The stages whose latest own attempt's conversation is open as a reader on
+    the card: the attempt a node opens, never a lineage-adopted helper. */
 function selectedStages(pipeline: Pipeline, readerKeys: readonly string[]): Set<string> {
   const open = new Set(readerKeys);
   const selected = new Set<string>();
   for (const run of pipeline.runs) {
-    const attempt = run.attempts.at(-1);
+    const attempt = latestAttempt(pipeline, run.stageId);
     const identity = attempt?.conversationId ?? attempt?.agentPath;
     if (identity && open.has(identity)) selected.add(run.stageId);
   }
@@ -340,7 +341,6 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <PipelineSection
           key={summary.pipeline.id}
           summary={summary}
-          workspace={workspace}
           open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
           selected={selectedStages(summary.pipeline, readerKeys)}
           onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}

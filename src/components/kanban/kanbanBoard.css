@@ -594,7 +594,9 @@
 .kb .pnode.tone-idle .pstate { color: var(--color-muted); }
 .kb .pnode .pdetail { font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: auto; }
 .kb .pnode .rchip { font-size: var(--text-caption); font-weight: 700; height: 16px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; background: var(--surface-well); color: var(--color-muted); }
-.kb .pnode .rchip:first-of-type { margin-left: auto; }
+.kb .pnode .rchips { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; flex-shrink: 1; overflow: hidden; white-space: nowrap; }
+.kb .pnode .rchip { white-space: nowrap; flex-shrink: 0; }
+.kb .pnode .rchip.more { background: var(--surface-well); color: var(--color-muted); }
 .kb .pnode .rchip.ok { color: var(--color-success); background: var(--color-success-soft); }
 .kb .pnode .rchip.bad { color: var(--color-danger); background: var(--color-danger-soft); }
 .kb .pnode.pulse .pdot { animation: kb-node-pulse 1.6s var(--ease-standard) infinite; }
@@ -626,6 +628,7 @@
 .kb .card .history .hopen { font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 0 6px; min-height: 22px; border-radius: 4px; }
 .kb .card .history .hopen:hover { background: var(--color-accent-soft); }
 .kb .card .history .hnone { font-size: var(--text-caption); color: var(--color-muted); }
+.kb .card .history .hsub { margin: 4px 0 0 16px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
