@@ -90,7 +90,14 @@ function newestUserContent(body: Record<string, unknown>): { images: string[]; t
   return { images, texts };
 }
 
-export async function startNativeCodexRuntime(directory: string, binary: string): Promise<NativeCodexRuntime> {
+/** `writerClaimOwner` registers the host under a writer claim, as a runtime host
+ * that owns it would, so the published session names that claim. Context
+ * injection freezes it at admission and refuses a session without one. */
+export async function startNativeCodexRuntime(
+  directory: string,
+  binary: string,
+  options: { writerClaimOwner?: string } = {},
+): Promise<NativeCodexRuntime> {
   isolateComposerPayloadRuntime(directory);
   const stateDirectory = process.env.LLV_STATE_DIR!;
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -213,9 +220,13 @@ plugins = false
     host: null,
     structuredHost: codexHostColumns(await host.health(), 0),
     claimEpoch: 0,
-    claimOwner: null,
+    claimOwner: options.writerClaimOwner ?? null,
     pendingAction: null,
   });
+  if (options.writerClaimOwner) {
+    const owner = options.writerClaimOwner;
+    host.setWriterFence(() => registry.ownsStructuredHostClaim(key, owner, 0));
+  }
 
   const journal = new RuntimeJournal(path.join(stateDirectory, "runtime-events.sqlite"), { structuredHosts: true });
   const socketPath = path.join(directory, "rt.sock");
@@ -282,6 +293,7 @@ plugins = false
       });
       const operation = /^\/api\/runtime\/operations\/([^/]+)$/.exec(url.pathname);
       if (url.pathname === "/api/runtime/send" && request.method === "POST") return handleRuntimeCommand(next, "send", commandDependencies);
+      if (url.pathname === "/api/runtime/inject" && request.method === "POST") return handleRuntimeCommand(next, "inject", commandDependencies);
       if (operation && request.method === "POST") return handleRuntimeRetry(next, decodeURIComponent(operation[1]!), retryDependencies);
       if (url.pathname === "/api/runtime/queue") return handleNativeQueue(next, queueDependencies);
       if (operation && request.method === "GET") return handleRuntimeOperationQuery(decodeURIComponent(operation[1]!), queryDependencies);
