@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Task board — status columns prototype</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!-- The bench appears only with ?bench=1: scheme, width, latency, failure
+     and the two simulations (an agent editing a card you are editing; a hidden
+     task asking for a decision). Without it the app fills the window. -->
+<div id="bench" hidden></div>
+<div id="frame"><div id="app" data-ready="0"></div></div>
+<div class="receipts" id="receipts" role="status" aria-live="polite"></div>
+<script src="fixture.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
