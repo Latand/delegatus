@@ -1765,10 +1765,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const outboxKeys = useRef<Set<string>>(new Set());
   /* Intake ids of staged documents an Add to context request is carrying and
      has not been answered for (#1560). Their chips stay in the tray until the
-     answer, so a second Add to context and the queue-first submit (Send, Enter,
-     Alt+Enter, steer, dictation) refuse while one of them is still there: Codex
-     does not deduplicate injections, and an Enter would carry the same bytes
-     into an interrupting send. */
+     answer, so a second Add to context, the queue-first submit (Send, Enter,
+     steer, dictation) and Codex's queue hand-off (Alt+Enter, Queue for Codex)
+     refuse while one of them is still there: Codex does not deduplicate
+     injections, and an Enter would carry the same bytes into an interrupting
+     send. */
   const injectingFileIds = useRef<Set<string>>(new Set());
   const refuseWhileInjecting = (files: readonly PendingFile[]): boolean => {
     if (!files.some((file) => injectingFileIds.current.has(file.id))) return false;
@@ -3236,6 +3237,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       return;
     }
     if (!requestedText && !requestedImages.length && !requestedFiles.length) return;
+    /* The hand-off carries and clears the whole tray, so a document an
+       unanswered Add to context is carrying would be queued a second time, or
+       gone if the injection is refused (#1560). */
+    if (refuseWhileInjecting(requestedFiles)) return;
     if (voiceSending || reconcilingSend) return;
     if (effectiveSendBlockedReason) {
       setStatus({ kind: "err", text: effectiveSendBlockedReason });
@@ -3504,6 +3509,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
    * action's whole promise is that it does not touch the running turn.
    */
   const injectContext = () => {
+    /* A send or queue hand-off still saving to IndexedDB holds its draft and
+       documents in the tray until the save commits (#1647); injecting them now
+       would carry the same document into both operations. */
+    if (composerSubmissionSaving(cardId)) return;
     const requestedText = textRef.current.trim();
     if (!structuredSession?.session.capabilities?.inject) {
       setStatus({ kind: "err", text: t("inject.unsupported") });

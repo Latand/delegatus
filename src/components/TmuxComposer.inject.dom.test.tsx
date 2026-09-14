@@ -1,12 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { composerSubmissionSaving } from "@/lib/composerSubmissionPayloads";
 import type { NativeQueueDependencies } from "@/hooks/useNativeQueue";
 import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 
@@ -79,6 +81,13 @@ Object.assign(globalThis, {
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
   matches: false, media: query, addEventListener() {}, removeEventListener() {},
 });
+
+/* A send or queue hand-off that carries a document keeps the complete
+   submission in IndexedDB before it reaches the wire (#1647), so the
+   documents these tests stage need the same process-local store the other
+   attachment suites use. */
+const composerStorage = installComposerStorageForTests();
+afterAll(() => composerStorage.uninstall());
 
 const CARD = "conv-inject";
 const realFetch = globalThis.fetch;
@@ -217,6 +226,7 @@ afterEach(() => {
   sessionStorage.clear();
   resetRetainedQueueAdmissionsForTests();
   resetOutboxForTests();
+  composerStorage.reset();
 });
 
 /** Per-test fields of the conversation the board actually observed. */
@@ -263,6 +273,17 @@ const settle = async (run: () => void) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
+
+/** A submission that carries a document saves it to IndexedDB before the wire,
+    which takes more than one turn; waits, bounded, for what it reaches. */
+async function settleUntil(reached: () => boolean, run: () => void = () => {}): Promise<void> {
+  await act(async () => {
+    run();
+    for (let turnIndex = 0; turnIndex < 50 && !reached(); turnIndex += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
+}
 
 /** React's delegated keydown is not delivered by a bare dispatch in happy-dom,
     so the handler is invoked the way a keypress would reach it. */
@@ -589,10 +610,158 @@ test("a refused injection leaves its document staged and sendable, beside docume
   expect(host.textContent).toContain("later.md");
 
   /* Nothing is held any more: the next send carries both documents, once. */
-  await settle(() => press(textarea(host), "Enter"));
-  await settle(() => {});
+  await settleUntil(() => sends.length > 0, () => press(textarea(host), "Enter"));
   expect(sends).toHaveLength(1);
   expect((sends[0]!.files as { name: string }[]).map((entry) => entry.name)).toEqual(["design-notes.md", "later.md"]);
   expect(carrying("design-notes.md")).toHaveLength(2);
   root.unmount();
+});
+
+/* #1652 × #1560: the queue hand-off and the durable save are the two
+   submissions the attachment work added, and each can meet a pending Add to
+   context. Neither may carry a document twice. */
+
+test("Alt+Enter cannot hand Codex's queue a document that is on its way into the context", async () => {
+  turn = "running";
+  holdInjection = true;
+  injectAnswer = { ok: false, status: 409, error: "the injection was refused" };
+  const { host, root } = await mount();
+  await type(host, "read the notes");
+  await stageFile(host, "design-notes.md", "# notes\n");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+  expect(carrying("design-notes.md")).toHaveLength(1);
+
+  /* The chip is still in the tray while the injection is unanswered. The queue
+     hand-off would take it along and clear it, so a refusal would find the
+     document gone and an acceptance would find it queued a second time. */
+  await type(host, "queue this for later");
+  await settle(() => press(textarea(host), "Enter", { altKey: true }));
+  await settle(() => {});
+  expect(queueWrites).toEqual([]);
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  expect(textarea(host).value).toBe("queue this for later");
+  expect(host.textContent).toContain("design-notes.md");
+
+  /* Refused: the document never left, so it is still staged and the fence
+     lifts — the queue hand-off now carries it, once. */
+  await settle(() => releaseInjection?.());
+  expect(host.textContent).toContain("design-notes.md");
+  await settleUntil(() => queueWrites.length > 0, () => press(textarea(host), "Enter", { altKey: true }));
+  expect(queueWrites).toHaveLength(1);
+  expect(queueWrites[0]!.files).toMatchObject([{ name: "design-notes.md" }]);
+  expect(carrying("design-notes.md")).toHaveLength(2);
+  root.unmount();
+});
+
+test("the send menu's Queue for Codex refuses a document an unanswered Add to context is carrying", async () => {
+  turn = "running";
+  holdInjection = true;
+  const { host, root } = await mount();
+  await type(host, "read the notes");
+  await stageFile(host, "design-notes.md", "# notes\n");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+
+  await type(host, "queue this for later");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Queue for Codex")!.click());
+  await settle(() => {});
+  expect(queueWrites).toEqual([]);
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  expect(textarea(host).value).toBe("queue this for later");
+
+  /* Accepted: the document left with the injection, and the queued words go
+     on their own. */
+  await settle(() => releaseInjection?.());
+  expect(host.textContent).not.toContain("design-notes.md");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Queue for Codex")!.click());
+  await settle(() => {});
+  expect(queueWrites).toHaveLength(1);
+  expect(queueWrites[0]!.files).toBeUndefined();
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  root.unmount();
+});
+
+/** Holds every IndexedDB lock acquisition, which is where an ordinary send
+    keeps its complete submission before the wire, until `release`. */
+function holdComposerPayloadLocks(): { release: () => void; restore: () => void } {
+  const navigator = globalThis.navigator as unknown as { locks: { request: (name: string, callback: (lock: unknown) => unknown) => Promise<unknown> } };
+  const locks = navigator.locks;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: { request: (name: string, callback: (lock: unknown) => unknown) => gate.then(() => locks.request(name, callback)) },
+  });
+  return { release, restore: () => Object.defineProperty(navigator, "locks", { configurable: true, value: locks }) };
+}
+
+test("Add to context sends nothing while an ordinary send is still saving the same document", async () => {
+  turn = "running";
+  const held = holdComposerPayloadLocks();
+  try {
+    const { host, root } = await mount();
+    await type(host, "read the notes");
+    await stageFile(host, "design-notes.md", "# notes\n");
+    await settle(() => press(textarea(host), "Enter"));
+    await settle(() => {});
+    /* The save holds the draft and its document until it commits. */
+    expect(composerSubmissionSaving(CARD)).toBe(true);
+    expect(host.textContent).toContain("design-notes.md");
+    expect(textarea(host).value).toBe("read the notes");
+
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    await settle(() => {});
+    expect(injections).toEqual([]);
+    expect(textarea(host).value).toBe("read the notes");
+
+    await settleUntil(() => sends.length > 0, held.release);
+    expect(sends).toHaveLength(1);
+    expect(injections).toEqual([]);
+    expect(carrying("design-notes.md")).toHaveLength(1);
+    root.unmount();
+  } finally {
+    held.restore();
+  }
+});
+
+test("Add to context sends nothing while a large queue hand-off is still saving the same document", async () => {
+  turn = "running";
+  /* Large enough that the hand-off's envelope goes to IndexedDB, whose save
+     begins with the authored digest. Holding the digest holds the save. */
+  const body = "x".repeat(300_000);
+  const subtle = globalThis.crypto.subtle;
+  const digest = subtle.digest.bind(subtle);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    value: (...args: Parameters<SubtleCrypto["digest"]>) => gate.then(() => digest(...args)),
+  });
+  try {
+    const { host, root } = await mount();
+    await type(host, "read the notes later");
+    await stageFile(host, "large-notes.md", body);
+    await settle(() => press(textarea(host), "Enter", { altKey: true }));
+    await settle(() => {});
+    expect(composerSubmissionSaving(CARD)).toBe(true);
+    expect(host.textContent).toContain("large-notes.md");
+
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    await settle(() => {});
+    expect(injections).toEqual([]);
+    expect(textarea(host).value).toBe("read the notes later");
+
+    await settleUntil(() => queueWrites.length > 0, release);
+    expect(queueWrites).toHaveLength(1);
+    expect(injections).toEqual([]);
+    expect(carrying("large-notes.md")).toHaveLength(1);
+    root.unmount();
+  } finally {
+    delete (subtle as unknown as { digest?: unknown }).digest;
+  }
 });
