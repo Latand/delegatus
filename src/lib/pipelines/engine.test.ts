@@ -4963,7 +4963,8 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
     if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
       return { code: 0, stdout: `${repairHead}\n`, stderr: "" };
     }
-    if (command === "git" && args[0] === "ls-remote") {
+    /* The approval's remote read is time-bounded (#1692). */
+    if (command === "timeout" && args.includes("ls-remote")) {
       return { code: 0, stdout: `${staleRemoteHead}\trefs/heads/${pipeline.branch}\n`, stderr: "" };
     }
     return baseExec(command, args, cwd);
@@ -4979,6 +4980,155 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
     reviewHeadSha: repairHead,
     state: "needs_decision",
   });
+});
+
+const SSH_CONNECT_TIMEOUT = "ssh: connect to host example.invalid port 22: Connection timed out\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+
+/** A two-stage pipeline whose review flow approved `ORIGIN_MAIN_SHA`, with the
+    remote read after approval answering whatever `remote` holds. Every remote
+    read, bounded or not, is counted, and the flow, spawn and send calls made
+    before approval are the baseline nothing after it may add to (#1692). */
+async function approvedReviewAwaitingRemote(h: ReturnType<typeof harness>) {
+  await create(h.ports, [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  flow.rounds.push({ n: 1, reviewHeadSha: ORIGIN_MAIN_SHA, launchId: "review-launch", sessionId: "review-session", reviewerPath: "/codex/reviewer.jsonl", reviewerConversationId: "conversation_reviewer" } as never);
+  flow.state = "approved";
+  const control = { remote: { code: 128 as number | null, stdout: "", stderr: SSH_CONNECT_TIMEOUT }, reads: 0 };
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "ls-remote") {
+      control.reads += 1;
+      return { ...control.remote };
+    }
+    return baseExec(command, args, cwd);
+  };
+  const effects = () => h.calls.filter((call) => /^(flow:|flow-patch:|flow-close:|spawn:)/.test(call));
+  return { flow, control, effects, baseline: effects() };
+}
+
+test("an approval whose remote head read times out retries on its own and settles the reviewed head without touching the flow (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toStartWith("approved review flow waiting for the remote pipeline head: checking the remote pipeline branch: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(waiting.stateDetail).toContain("; retry at ");
+  expect(waiting.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, remoteHeadWait: { rounds: 1 } });
+  expect(control.reads).toBe(1);
+
+  /* Not yet due: no second read. */
+  await tickPipelines([], h.ports);
+  expect(control.reads).toBe(1);
+  expect(loadPipelines()[0]!.state).toBe("running");
+
+  h.advanceWallClock(60_000);
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${waiting.branch}\n`, stderr: "" };
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.stateDetail).toBeNull();
+  expect(completed.runs[1]!.attempts).toHaveLength(1);
+  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", error: null, flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA });
+  expect(completed.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
+  expect(completed.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
+  expect(effects()).toEqual(baseline);
+});
+
+test("a remote that comes back at a different head after a timeout parks on the mismatch and approves nothing (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+  const divergedRemote = "d".repeat(40);
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  h.advanceWallClock(60_000);
+  control.remote = { code: 0, stdout: `${divergedRemote}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${ORIGIN_MAIN_SHA}, remote pipeline head is ${divergedRemote}`);
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
+  expect(effects()).toEqual(baseline);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
+});
+
+test("a remote that refuses the login parks at once, with no automatic retry (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+  control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists." };
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toStartWith("approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: git@example.invalid: Permission denied (publickey).");
+  expect(parked.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
+  expect(control.reads).toBe(1);
+
+  h.advanceWallClock(60 * 60_000);
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(control.reads).toBe(1);
+  expect(effects()).toEqual(baseline);
+});
+
+test("a remote that never answers parks after a bounded wait that counts its retries, and stays parked (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+
+  for (let tick = 0; tick < 40 && loadPipelines()[0]!.state === "running"; tick += 1) {
+    await tickPipelines([], h.ports);
+    h.advanceWallClock(61_000);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toMatch(/^approved review flow could not verify the remote pipeline head after \d+ automatic retries over \d+s: checking the remote pipeline branch: ssh: connect to host example\.invalid port 22: Connection timed out/);
+  const reads = control.reads;
+  expect(reads).toBeGreaterThan(2);
+  expect(reads).toBeLessThanOrEqual(15);
+
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
+  h.advanceWallClock(60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
+  expect(control.reads).toBe(reads);
+  expect(effects()).toEqual(baseline);
+});
+
+test("a pipeline an older build parked on a remote-head timeout resumes once and settles the approved head (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+  control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey)." };
+  await tickPipelines([], h.ports);
+  /* The record exactly as the build without a retry left it: parked on the
+     transport failure, no wait booked. */
+  const legacy = `approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: ${SSH_CONNECT_TIMEOUT}`;
+  const stored = loadPipelines()[0]!;
+  stored.stateDetail = legacy;
+  stored.runs[1]!.attempts[0]!.error = legacy;
+  savePipelines([stored]);
+
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${stored.branch}\n`, stderr: "" };
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs[1]!.attempts).toHaveLength(1);
+  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA });
+  expect(effects()).toEqual(baseline);
 });
 
 test("an approval parks when the clean head advances during final settlement (#526)", async () => {

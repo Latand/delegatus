@@ -205,15 +205,33 @@ export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha };
 }
 
+export type PipelineRemoteHeadResult =
+  | { ok: true; sha: string }
+  | { ok: false; error: string; transient: boolean };
+
+/* Checked first: an SSH login the server refused can also print "Connection
+   closed by …", and that is a credential problem no retry fixes. */
+const REMOTE_READ_REFUSED = /permission denied|authentication failed|host key verification failed|could not read (username|password)|repository not found|does not appear to be a git repository|returned error: 40[134]/i;
+const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failure in name resolution|connection refused|connection reset|connection closed by|network is unreachable|no route to host|failed to connect to|returned error: 5\d\d/i;
+
+/** Whether a failed remote read is one the network failed (#1692): it says
+    nothing about the branch, so asking again is sound. A refused login, a
+    missing repository and anything unrecognized are not. */
+export function remoteReadFailureIsTransient(error: string): boolean {
+  return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
+}
+
 /** Reads the authoritative remote pipeline branch without relying on a stale
-    tracking ref. Approval fences use this alongside the clean local HEAD. */
-export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
-  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
-  const remote = exec("git", ["ls-remote", "--heads", "origin", `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
-  if (remote.code !== 0) return failure("checking the remote pipeline branch", remote);
-  const sha = remote.stdout.trim().split(/\s+/)[0] ?? "";
-  if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA" };
-  return { ok: true, sha };
+    tracking ref. Approval fences use this alongside the clean local HEAD. The
+    read is time-bounded like the publication read: an unbounded `ls-remote`
+    waited out a two-minute SSH connect timeout while holding the pipeline
+    mutation (#1692). */
+export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
+  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
+  const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
+  if (!remote.ok) return { ok: false, error: remote.error, transient: remoteReadFailureIsTransient(remote.error) };
+  if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
+  return { ok: true, sha: remote.sha };
 }
 
 export type PipelinePublishResult =

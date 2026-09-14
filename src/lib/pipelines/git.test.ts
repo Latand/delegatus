@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { commitPipelineStage, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import type { Pipeline } from "./types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
@@ -559,6 +559,46 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
     `timeout --signal=KILL 5s git ls-remote --heads origin refs/heads/${pipeline().branch}`,
   ]);
   expect(calls.some((call) => call.startsWith("sleep "))).toBe(false);
+});
+
+test("the approval's remote head read is time-bounded and tells transport failures from the rest (#1692)", () => {
+  const head = "a".repeat(40);
+  const answer = (result: { code: number | null; stdout?: string; stderr?: string }) => {
+    const calls: string[] = [];
+    const exec: ExecPort = (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      if (command === "timeout") return { code: result.code, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+      return { code: 128, stdout: "", stderr: "remote read must be bounded" };
+    };
+    return { result: currentPipelineRemoteBranchHead(pipeline(), exec), calls };
+  };
+  const unreachable = "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+
+  const answered = answer({ code: 0, stdout: `${head}\trefs/heads/${pipeline().branch}\n` });
+  expect(answered.result).toEqual({ ok: true, sha: head });
+  expect(answered.calls).toEqual([`timeout --signal=KILL 5s git ls-remote --heads origin refs/heads/${pipeline().branch}`]);
+
+  expect(answer({ code: 124 }).result).toEqual({
+    ok: false,
+    transient: true,
+    error: "checking the remote pipeline branch: git remote read timed out after 5s",
+  });
+  for (const stderr of [
+    `ssh: connect to host example.invalid port 22: Connection timed out\r\n${unreachable}`,
+    `ssh: Could not resolve hostname example.invalid: Temporary failure in name resolution\r\n${unreachable}`,
+    "fatal: unable to access 'https://example.invalid/owner/repo.git/': Failed to connect to example.invalid port 443: Connection refused",
+  ]) {
+    expect(answer({ code: 128, stderr }).result).toMatchObject({ ok: false, transient: true });
+  }
+  for (const stderr of [
+    `git@example.invalid: Permission denied (publickey).\r\n${unreachable}`,
+    `Connection closed by 192.0.2.1 port 22\r\nHost key verification failed.\r\n${unreachable}`,
+    "remote: Repository not found.\nfatal: repository 'https://example.invalid/owner/repo.git/' not found",
+    "fatal: 'origin' does not appear to be a git repository",
+  ]) {
+    expect(answer({ code: 128, stderr }).result).toMatchObject({ ok: false, transient: false });
+  }
+  expect(answer({ code: 0, stdout: "" }).result).toEqual({ ok: false, transient: false, error: "the remote pipeline branch has no exact commit SHA" });
 });
 
 test("publication pushes only the immutable accepted revision when the branch advances mid-publish", () => {

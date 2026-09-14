@@ -46,7 +46,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, remoteReadFailureIsTransient, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -71,6 +71,7 @@ import type {
   EffectivePipelineRole,
   PatchPipelineRequest,
   Pipeline,
+  PipelineBoundedWait,
   PipelineRoleId,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
@@ -1126,6 +1127,10 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
     admission attempts the spawn layer makes before it records the failure. */
 const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+/** A remote the network failed after an approved review is asked again on this
+    budget (#1692). Every read may hold the tick for its full five-second
+    timeout, so the backoff starts at fifteen seconds rather than one. */
+const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, retryMaxMs: 60_000 };
 /** Retired launches an attempt keeps; the host budget cannot mint more than
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
@@ -2768,12 +2773,7 @@ async function tickReviewStage(
     return;
   }
   if (attempt.state === "committing") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
-    commitPassedStage(pipeline, stage, attempt, ports);
+    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
   const implementer = latestPassedRun(pipeline, stage.id);
@@ -2922,11 +2922,7 @@ async function tickReviewStage(
     pipeline.stateDetail = null;
   }
   if (flow.state === "approved") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
+    if (!approvedReviewHeadHolds(pipeline, attempt, ports)) return;
     attempt.output = `Review loop approved after ${flow.rounds.length} round(s).`;
     attempt.verdict = { status: "pass", confidence: 1 };
     attempt.state = "committing";
@@ -3061,21 +3057,76 @@ const RECONCILABLE_BOUND_FLOW_ERRORS = [
   "embedded review flow record disappeared",
 ] as const;
 
-function reviewHeadFenceError(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+const APPROVED_REMOTE_HEAD_UNVERIFIED = "approved review flow could not verify the remote pipeline head";
+const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the remote pipeline head: ";
+
+/** The exact-head fence an approved review must hold before its stage settles
+    (#526, #533). `park` is a verdict; `retry` is a remote read the network
+    failed, which says nothing about the head either way (#1692). */
+function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): { park: string } | { retry: string } | null {
   if (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha) {
-    return `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}`;
+    return { park: `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}` };
   }
   const currentHead = currentPipelineBranchHead(pipeline, ports.exec);
-  if (!currentHead.ok) return `approved review flow could not verify the current pipeline head: ${currentHead.error}`;
+  if (!currentHead.ok) return { park: `approved review flow could not verify the current pipeline head: ${currentHead.error}` };
   if (attempt.reviewHeadSha !== currentHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}` };
   }
   const remoteHead = currentPipelineRemoteBranchHead(pipeline, ports.exec);
-  if (!remoteHead.ok) return `approved review flow could not verify the remote pipeline head: ${remoteHead.error}`;
+  if (!remoteHead.ok) return remoteHead.transient ? { retry: remoteHead.error } : { park: `${APPROVED_REMOTE_HEAD_UNVERIFIED}: ${remoteHead.error}` };
   if (attempt.reviewHeadSha !== remoteHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}` };
   }
   return null;
+}
+
+/**
+ * True when an approved review may settle this tick (#1692).
+ *
+ * A remote read the network failed books a bounded wait instead of parking.
+ * Nothing else moves: the attempt keeps its state, the flow is not touched,
+ * no reviewer launches and nothing is sent. The next due tick checks the
+ * clean local head and the remote head against the reviewed SHA from scratch,
+ * so a remote that comes back at another head parks on the mismatch like any
+ * other. Every other fence failure parks at once, and so does a wait whose
+ * budget is spent, with the retries it made.
+ */
+function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  const now = ports.now();
+  const wait = attempt.remoteHeadWait;
+  if (wait && unixMs(wait.retryAfter) > unixMs(now)) return false;
+  const fence = reviewHeadFence(pipeline, attempt, ports);
+  if (!fence) {
+    delete attempt.remoteHeadWait;
+    return true;
+  }
+  if ("park" in fence) {
+    park(pipeline, fence.park, attempt);
+    return false;
+  }
+  const next = nextBoundedWait(wait, now, now, APPROVED_REMOTE_HEAD_WAIT);
+  if (!next) {
+    const seconds = Math.round(Math.max(0, unixMs(now) - unixMs(wait!.startedAt)) / 1_000);
+    park(pipeline, `${APPROVED_REMOTE_HEAD_UNVERIFIED} after ${wait!.rounds} automatic retries over ${seconds}s: ${fence.retry}`, attempt);
+    return false;
+  }
+  attempt.remoteHeadWait = next.wait;
+  attempt.error = null;
+  pipeline.stateDetail = `${APPROVED_REMOTE_HEAD_WAIT_PREFIX}${fence.retry}; retry at ${next.wait.retryAfter}`;
+  ports.scheduleTick?.(next.delayMs);
+  return false;
+}
+
+/** A park a build before #1692 left on a remote read the network failed: the
+    flow is still approved and no wait was ever booked. It resumes once, into
+    the bounded wait; a park that wait ended keeps its wait and stays put. */
+function parkedOnUnretriedRemoteHeadRead(attempt: PipelineStageAttempt | null | undefined, flow: Flow | null): boolean {
+  const prefix = `${APPROVED_REMOTE_HEAD_UNVERIFIED}: `;
+  return flow?.state === "approved"
+    && !!attempt
+    && !attempt.remoteHeadWait
+    && !!attempt.error?.startsWith(prefix)
+    && remoteReadFailureIsTransient(attempt.error.slice(prefix.length));
 }
 
 function terminalReviewFlowError(flow: Flow): string | null {
@@ -3138,7 +3189,7 @@ function reconcileBoundReviewFlow(pipeline: Pipeline, ports: PipelinePorts, pers
   let flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
   if (
     !attemptError
-    || !RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix))
+    || !(RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix)) || parkedOnUnretriedRemoteHeadRead(attempt, flow))
     || !flow
     || !RECONCILABLE_REVIEW_FLOW_STATES.has(flow.state)
   ) return false;
@@ -3415,30 +3466,40 @@ function bookControllerWaitRound(
   ports: PipelinePorts,
   budget: { budgetMs: number; retryMaxMs: number } = { budgetMs: SPAWN_CONTROLLER_WAIT_BUDGET_MS, retryMaxMs: SPAWN_CONTROLLER_RETRY_MAX_MS },
 ): "waiting" | "exhausted" {
+  const next = nextBoundedWait(attempt.controllerWait, since, now, budget);
+  if (!next) return "exhausted";
+  attempt.controllerWait = next.wait;
+  ports.scheduleTick?.(next.delayMs);
+  return "waiting";
+}
+
+/** One more round of a bounded wait, or null once its budget is spent. The
+    backoff doubles from `retryBaseMs` (one second unless given) up to its cap,
+    and never past what is left of the budget. */
+function nextBoundedWait(
+  wait: PipelineBoundedWait | undefined,
+  since: string,
+  now: string,
+  budget: { budgetMs: number; retryMaxMs: number; retryBaseMs?: number },
+): { wait: PipelineBoundedWait; delayMs: number } | null {
   const nowMs = unixMs(now);
-  const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
+  const current = wait ?? { startedAt: since, rounds: 0, retryAfter: since };
   /* One wait keeps the largest budget any of its rounds asked for (review
      round 2): a busy-lock sighting a minute into a runtime-host outage must
      not cut the host's ten minutes down to the lock's thirty seconds. */
-  const budgetMs = Math.max(wait.budgetMs ?? 0, budget.budgetMs);
-  const retryMaxMs = Math.max(wait.retryMaxMs ?? 0, budget.retryMaxMs);
-  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
-  if (remainingMs <= 0) return "exhausted";
+  const budgetMs = Math.max(current.budgetMs ?? 0, budget.budgetMs);
+  const retryMaxMs = Math.max(current.retryMaxMs ?? 0, budget.retryMaxMs);
+  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(current.startedAt));
+  if (remainingMs <= 0) return null;
   const delayMs = Math.min(
     retryMaxMs,
-    SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
+    (budget.retryBaseMs ?? SPAWN_HANDSHAKE_RETRY_DELAY_MS) * (2 ** current.rounds),
     remainingMs,
   );
-  attempt.controllerWait = {
-    ...wait,
-    startedAt: wait.startedAt,
-    rounds: wait.rounds + 1,
-    retryAfter: new Date(nowMs + delayMs).toISOString(),
-    budgetMs,
-    retryMaxMs,
+  return {
+    wait: { ...current, rounds: current.rounds + 1, retryAfter: new Date(nowMs + delayMs).toISOString(), budgetMs, retryMaxMs },
+    delayMs,
   };
-  ports.scheduleTick?.(delayMs);
-  return "waiting";
 }
 
 function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, failure: string): string {

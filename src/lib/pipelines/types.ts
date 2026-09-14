@@ -135,6 +135,18 @@ export type PipelineVerdictRecovery = {
   messageTs: number | null;
 };
 
+export type PipelineBoundedWait = {
+  startedAt: string;
+  rounds: number;
+  retryAfter: string;
+  /** The largest budget any round of this wait asked for, and its backoff
+      cap (#1678): a later round of a cheaper class keeps the wait's budget.
+      Absent on waits persisted before these fields existed, which then read
+      as the round's own class. */
+  budgetMs?: number;
+  retryMaxMs?: number;
+};
+
 export type PipelineStageAttempt = {
   n: number;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -181,17 +193,14 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: {
-    startedAt: string;
-    rounds: number;
-    retryAfter: string;
-    /** The largest budget any round of this wait asked for, and its backoff
-        cap (#1678): a later round of a cheaper class keeps the wait's budget.
-        Absent on waits persisted before these fields existed, which then read
-        as the round's own class. */
-    budgetMs?: number;
-    retryMaxMs?: number;
-  };
+  controllerWait?: PipelineBoundedWait;
+  /** Bounded wait for the remote pipeline branch after an approved review
+      whose final remote read the network failed (#1692). Same shape and
+      arithmetic as `controllerWait`, kept apart because that wait ends the
+      moment a reviewer launch is under way, which an approved flow always is.
+      Left in place when the budget runs out, so the park it ends in is never
+      mistaken for one an older build left behind. */
+  remoteHeadWait?: PipelineBoundedWait;
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
