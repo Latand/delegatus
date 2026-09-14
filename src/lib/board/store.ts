@@ -56,7 +56,8 @@ function projectState(value: unknown): value is BoardProjectStateV1 {
     (state.pathAliases === undefined || aliases(state.pathAliases)) &&
     (state.keyRevisions === undefined || keyRevisions(state.keyRevisions)) &&
     (state.keyRevisionFloor === undefined || (Number.isInteger(state.keyRevisionFloor) && state.keyRevisionFloor! >= 0)) &&
-    (prefs!.viewMode === null || prefs!.viewMode === "scheme" || prefs!.viewMode === "list") && typeof prefs!.taskPanelOpen === "boolean";
+    (prefs!.viewMode === null || prefs!.viewMode === "scheme" || prefs!.viewMode === "list") &&
+    (prefs!.desktopBoard === undefined || prefs!.desktopBoard === null || prefs!.desktopBoard === "kanban") && typeof prefs!.taskPanelOpen === "boolean";
 }
 
 /** Union of acknowledgement maps, newest stamp per conversation identity. */
@@ -432,6 +433,7 @@ function mergedBoards(states: readonly BoardProjectStateV1[]): BoardProjectState
   );
   const roles = new Map<string, "manual" | "hidden" | "expanded">();
   let viewMode: BoardProjectStateV1["prefs"]["viewMode"] = null;
+  let desktopBoard: BoardProjectStateV1["prefs"]["desktopBoard"] = null;
   let taskPanelOpen = false;
   let normalizedAliases: Record<string, string> = aliases;
   for (const state of ordered) {
@@ -444,6 +446,7 @@ function mergedBoards(states: readonly BoardProjectStateV1[]): BoardProjectState
       }
     }
     viewMode = normalized.prefs.viewMode;
+    desktopBoard = normalized.prefs.desktopBoard ?? null;
     taskPanelOpen = normalized.prefs.taskPanelOpen;
   }
   const prefs = {
@@ -462,6 +465,7 @@ function mergedBoards(states: readonly BoardProjectStateV1[]): BoardProjectState
        together must not un-see an outcome one of them had already seen. */
     seenAt: mergeSeenAt(ordered.map((state) => state.prefs.seenAt)),
     viewMode,
+    ...(desktopBoard ? { desktopBoard } : {}),
     taskPanelOpen,
   };
   for (const [pathname, role] of roles) prefs[role].push(pathname);

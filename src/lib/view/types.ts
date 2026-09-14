@@ -166,6 +166,11 @@ export interface BoardProjectStateV1 {
         reader of a duration, uses its own env-tuned constant. */
     idleCollapseMinutes?: number | null;
     viewMode: "scheme" | "list" | null;
+    /* The desktop board face while the kanban board (#1695) rolls out. Optional
+       on purpose: a board file written by a build that has it still loads in a
+       build that does not, because the stored-board validator ignores unknown
+       prefs keys. The phone reads `viewMode` alone and never this. */
+    desktopBoard?: "kanban" | null;
     taskPanelOpen: boolean;
   };
 }

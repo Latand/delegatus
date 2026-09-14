@@ -15,7 +15,7 @@ export type BoardMutationV1 =
      source's, so adopting a fork that never drew a card cannot un-pin the
      survivor. */
   | { kind: "remap-paths"; pairs: Array<{ from: string; to: string }>; targetPlacementAuthoritative?: boolean }
-  | { kind: "set-presentation"; viewMode?: "scheme" | "list" | null; taskPanelOpen?: boolean; idleCollapseMinutes?: number | null }
+  | { kind: "set-presentation"; viewMode?: "scheme" | "list" | null; desktopBoard?: "kanban" | null; taskPanelOpen?: boolean; idleCollapseMinutes?: number | null }
   /* Crown favorites (issue #185): `id` is a durable conversation identity
      (`conversationId` when the backend supplies one, else the transcript path),
      kept apart from the path-keyed membership lists so it never passes through
@@ -253,6 +253,7 @@ export function applyBoardMutations(board: BoardProjectStateV1, mutations: reado
         prefs: {
           ...next.prefs,
           ...(mutation.viewMode === undefined ? {} : { viewMode: mutation.viewMode }),
+          ...(mutation.desktopBoard === undefined ? {} : { desktopBoard: mutation.desktopBoard }),
           ...(mutation.taskPanelOpen === undefined ? {} : { taskPanelOpen: mutation.taskPanelOpen }),
           ...(mutation.idleCollapseMinutes === undefined ? {} : { idleCollapseMinutes: mutation.idleCollapseMinutes }),
         },

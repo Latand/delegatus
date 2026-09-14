@@ -1,0 +1,1356 @@
+{
+  "prototypeCompared": true,
+  "frames": [
+    {
+      "key": "1680x950-light",
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "production": {
+        "boardWidth": 1432,
+        "mode": "wide",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 264,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 300,
+            "width": 552,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 868,
+            "width": 264,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1148,
+            "width": 264,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 212
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1432,
+        "mode": "wide",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 264,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 300,
+            "width": 552,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 868,
+            "width": 264,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1148,
+            "width": 264,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 212
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 552,
+          "prototype": 552,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1600x900-light",
+      "viewport": {
+        "width": 1600,
+        "height": 900
+      },
+      "production": {
+        "boardWidth": 1352,
+        "mode": "narrow",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 220,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 256,
+            "width": 604,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 876,
+            "width": 220,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1112,
+            "width": 220,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 168
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1352,
+        "mode": "narrow",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 220,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 256,
+            "width": 604,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 876,
+            "width": 220,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1112,
+            "width": 220,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 168
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 604,
+          "prototype": 604,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1440x900-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "production": {
+        "boardWidth": 1192,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1192,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 480,
+          "prototype": 480,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1024x768-light",
+      "viewport": {
+        "width": 1024,
+        "height": 768
+      },
+      "production": {
+        "boardWidth": 776,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 776,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 480,
+          "prototype": 480,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "960x720-light",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 712,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 688,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    },
+    {
+      "key": "700x720-light",
+      "viewport": {
+        "width": 700,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 452,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 428,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 22,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    },
+    {
+      "key": "1680x950-dark",
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "production": {
+        "boardWidth": 1432,
+        "mode": "wide",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 264,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 300,
+            "width": 552,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 868,
+            "width": 264,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1148,
+            "width": 264,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 212
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1432,
+        "mode": "wide",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 264,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 300,
+            "width": 552,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 868,
+            "width": 264,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1148,
+            "width": 264,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 212
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 552,
+          "prototype": 552,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 264,
+          "prototype": 264,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1600x900-dark",
+      "viewport": {
+        "width": 1600,
+        "height": 900
+      },
+      "production": {
+        "boardWidth": 1352,
+        "mode": "narrow",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 220,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 256,
+            "width": 604,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 876,
+            "width": 220,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1112,
+            "width": 220,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 168
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1352,
+        "mode": "narrow",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 20,
+            "width": 220,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 256,
+            "width": 604,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 876,
+            "width": 220,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1112,
+            "width": 220,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 168
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 604,
+          "prototype": 604,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 220,
+          "prototype": 220,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1440x900-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "production": {
+        "boardWidth": 1192,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 1192,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 480,
+          "prototype": 480,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "1024x768-dark",
+      "viewport": {
+        "width": 1024,
+        "height": 768
+      },
+      "production": {
+        "boardWidth": 776,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": {
+        "boardWidth": 776,
+        "mode": "scroll",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": 0,
+            "width": 280,
+            "visible": true,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 292,
+            "width": 480,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": 784,
+            "width": 280,
+            "visible": true,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": 1076,
+            "width": 280,
+            "visible": true,
+            "count": "5"
+          }
+        ],
+        "tablist": false,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 228
+        },
+        "hiddenCount": null,
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "deltas": [
+        {
+          "status": "inbox",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "assigned",
+          "production": 480,
+          "prototype": 480,
+          "delta": 0
+        },
+        {
+          "status": "blocked",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        },
+        {
+          "status": "done",
+          "production": 280,
+          "prototype": 280,
+          "delta": 0
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "960x720-dark",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 712,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 688,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 0,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    },
+    {
+      "key": "700x720-dark",
+      "viewport": {
+        "width": 700,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 452,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 428,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 22,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    }
+  ],
+  "flows": {
+    "move": {
+      "landedAt": {
+        "column": "done",
+        "pending": "1",
+        "receipts": [
+          "Moved «Disk space: find what Docker, worktrees and te…» to Done"
+        ]
+      },
+      "settled": {
+        "column": "done",
+        "patches": [
+          {
+            "id": "t-disk",
+            "status": "done",
+            "expectedProject": "atlas",
+            "guarded": true
+          }
+        ]
+      }
+    },
+    "refused": {
+      "onClick": "blocked",
+      "afterAnswer": "assigned",
+      "receipts": [
+        "Moved «Disk space: find what Docker, worktrees and te…» to Done",
+        "Couldn't save the status of «Verify delivery recovery across transcript bou…»: refused by the evidence fixture"
+      ]
+    },
+    "keyboard": {
+      "column": "assigned",
+      "focused": "task:t-onboarding"
+    },
+    "find": "1 of 7",
+    "tabs": {
+      "kanbanBefore": false,
+      "written": [
+        {
+          "kind": "reconcile-roots",
+          "roots": [],
+          "removeManual": []
+        },
+        {
+          "kind": "reconcile-roots",
+          "roots": [
+            "/repo/attach-verify.jsonl",
+            "/repo/export-impl.jsonl",
+            "/repo/search-ver-2.jsonl",
+            "/repo/upload-ui.jsonl",
+            "/repo/pending-worker.jsonl",
+            "/repo/links-impl.jsonl",
+            "/repo/export-explore.jsonl",
+            "/repo/auth-impl.jsonl"
+          ],
+          "removeManual": []
+        },
+        {
+          "kind": "set-presentation",
+          "desktopBoard": "kanban",
+          "viewMode": "scheme"
+        }
+      ],
+      "back": [
+        {
+          "kind": "reconcile-roots",
+          "roots": [],
+          "removeManual": []
+        },
+        {
+          "kind": "reconcile-roots",
+          "roots": [
+            "/repo/attach-verify.jsonl",
+            "/repo/export-impl.jsonl",
+            "/repo/search-ver-2.jsonl",
+            "/repo/upload-ui.jsonl",
+            "/repo/pending-worker.jsonl",
+            "/repo/links-impl.jsonl",
+            "/repo/export-explore.jsonl",
+            "/repo/auth-impl.jsonl"
+          ],
+          "removeManual": []
+        },
+        {
+          "kind": "set-presentation",
+          "desktopBoard": "kanban",
+          "viewMode": "scheme"
+        },
+        {
+          "kind": "set-presentation",
+          "desktopBoard": null,
+          "viewMode": "scheme"
+        }
+      ]
+    },
+    "phone": {
+      "kanbanMounted": false
+    }
+  },
+  "failures": []
+}

@@ -5,6 +5,9 @@
    legacy `--color-*` aliases — every component now names a role directly. */
 @import "../styles/tokens.css";
 
+/* The kanban desktop board (#1695): its rules are scoped under `.kb`. */
+@import "../components/kanban/kanbanBoard.css";
+
 body {
   background: var(--color-canvas);
   color: var(--color-primary);
