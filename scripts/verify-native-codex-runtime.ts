@@ -75,6 +75,23 @@ const injectionFiles = [
   "src/components/TmuxComposer.injectReceipts.dom.test.tsx",
 ];
 
+/* #1652's attachment retention, which ships beside injection (#1689): the
+   retained queue admissions, the queue route's files, every inbox writer under
+   one key, the admitted retry over a real journal, and the composer's
+   reconciliation and pending-image suites. Each installs its own globals, so
+   each runs in its own process like the injection files. */
+const attachmentFiles = [
+  "src/components/retainedQueueAdmissions.dom.test.ts",
+  "src/lib/runtime/nativeQueueHttp.files.test.ts",
+  "src/lib/runtime/inboxWriters.integration.test.ts",
+  "src/lib/runtime/composerPayloadRetry.integration.test.ts",
+  "src/lib/inboxFiles.test.ts",
+  "src/components/TmuxComposer.test.ts",
+  "src/components/TmuxComposer.reconciliation.dom.test.tsx",
+  "src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx",
+  "src/components/TmuxComposer.pendingImages.dom.test.tsx",
+];
+
 /**
  * The browser half, run in its own process.
  *
@@ -93,8 +110,8 @@ const domFiles = [
   "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
   "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
 ];
-for (const file of [...files, ...domFiles, ...injectionFiles]) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
-for (const batch of [files, domFiles, ...injectionFiles.map(file => [file])]) {
+for (const file of [...files, ...domFiles, ...injectionFiles, ...attachmentFiles]) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
+for (const batch of [files, domFiles, ...[...injectionFiles, ...attachmentFiles].map(file => [file])]) {
   const result = spawnSync(process.execPath, ["test", ...batch], { env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
