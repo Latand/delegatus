@@ -6,7 +6,7 @@ import { X } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
 
 import { patchPipeline } from "../pipelines/pipelineModel";
-import type { MobileBoardRowRef } from "./mobileBoardModel";
+import { dismissStamp, type MobileBoardRowRef } from "./mobileBoardModel";
 import { pendingPipelineActs, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import { MobileSheet } from "./MobileSheet";
@@ -72,7 +72,7 @@ export function useMobileBoardRowActions({ closeCard, reopenCard, acts = pending
           /* The optimistic record leaves the queue before the request goes:
              the row, the bar's badge and the queue sheet all read it. A refusal
              puts the record back and says why. */
-          void patchPipeline(pipeline.id, "dismiss", undefined, { ...pipeline, dismissedAt: new Date().toISOString() })
+          void patchPipeline(pipeline.id, "dismiss", undefined, { ...pipeline, dismissedAt: dismissStamp(pipeline) })
             .then((fail) => { if (fail) showReceipt(fail); });
           showReceipt(t("mobile2.board.pipelineHidden", { task }), {
             kind: "restore",

@@ -20,14 +20,18 @@ import { translate } from "@/lib/i18n";
  *   - a vertical drag that starts on a row scrolls the board and opens nothing;
  *   - a horizontal drag reveals a tray whose buttons are at least 44 px, sit
  *     beside the card and inside the phone;
+ *   - a lane hidden since its last round stays off the board, and a lane that
+ *     parked again after its Hide is back in Needs you and in the badge;
  *   - Hide takes the row and the bar's count on the tap, Restore brings both
  *     back, and a hide the server refuses puts both back and says why;
  *   - Close lane takes the row on the tap and sends nothing once Restore
- *     cancelled it;
+ *     cancelled it; a close that has gone out keeps its row gone until the
+ *     server answers, and a second close inside the window keeps the first gone;
  *   - a long-press opens the actions sheet and not the lane under the finger;
  *   - a conversation's Close writes only the board, and Reopen round-trips;
  *   - «All conversations» appends the feed's rows first with no request, then
- *     project pages, in identical rows, with no search field and no repeats.
+ *     project pages, in identical rows, with no search field, no repeats and
+ *     no superseded round.
  *
  * Measurements go to `evidence/issue-1671/geometry.json`; frames to
  * `.artifacts/issue-1671/`, which is not committed.
@@ -44,6 +48,7 @@ interface Rect { x: number; y: number; width: number; height: number }
 interface Recorded {
   catalogRequests: string[];
   pipelinePatches: Array<{ id: string; action: string }>;
+  closesAnswered: string[];
   boardMutations: Array<{ kind: string; path?: string }>;
   refuseNextPipelinePatch: boolean;
 }
@@ -84,12 +89,24 @@ async function tap(page: Page, cdp: CDPSession, selector: string): Promise<void>
   if (!box) throw new Error(`nothing to tap at ${selector}`);
   await touch(cdp, [[box.x + box.width / 2, box.y + box.height / 2]]);
 }
-const tapInView = async (page: Page, cdp: CDPSession, selector: string) => touch(cdp, [await centre(page, selector)]);
 
 async function swipeLeft(page: Page, cdp: CDPSession, selector: string, width: number): Promise<void> {
   const [, y] = await centre(page, selector);
   await touch(cdp, along([width - 40, y], [width - 250, y + 3]));
   await pause(page, 350);
+}
+
+/* The target's rect once two reads 120 ms apart agree: nothing above it is
+   still arriving, so a tap measured now lands where it was measured. */
+async function stableRect(page: Page, selector: string): Promise<Rect> {
+  let last = await rectOf(page, selector);
+  for (let i = 0; i < 25; i += 1) {
+    await pause(page, 120);
+    const next = await rectOf(page, selector);
+    if (last && next && Math.abs(next.y - last.y) < 0.5 && Math.abs(next.height - last.height) < 0.5) return next;
+    last = next;
+  }
+  throw new Error(`${selector} never stopped moving`);
 }
 
 async function run(context: BrowserContext, base: string, viewport: { width: number; height: number }, scheme: "light" | "dark") {
@@ -112,6 +129,19 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   await pause(page, 800);
   const queued = await badge();
   await shot("board");
+
+  /* 0. A Hide covers the decision it saw: the lane hidden since its last round
+     stays off the board, the lane that parked again after its Hide is back,
+     and the badge counts every lane Needs you lists. */
+  const laneRow = (id: string) => `[data-mobile2-board] [data-mobile2-swipe-row="pipeline:${id}"]`;
+  const hideDecision = {
+    stillHidden: await count(laneRow("lane-hidden")),
+    parkedAgain: await count(laneRow("lane-parked-again")),
+    listedLanes: await count('[data-mobile2-board] [data-mobile2-swipe-row^="pipeline:"]'),
+  };
+  check("a lane hidden since its last round stays off the board", hideDecision.stillHidden === 0);
+  check("a lane that parked again after its Hide is back in Needs you", hideDecision.parkedAgain === 1);
+  check("the badge counts every lane Needs you lists", hideDecision.listedLanes === queued);
 
   /* 1. A vertical drag that starts on a row scrolls the board and opens nothing. */
   const startY = viewport.height - 220;
@@ -205,6 +235,31 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   check("Close lane's receipt says the lane closed", closeLane.receipt.includes(translate("en", "mobile2.pipeline.archived")));
   check("a cancelled Close lane sends nothing", closeLaneAfter.sent === 0 && closeLaneAfter.badge === queued);
 
+  /* 5b. A Close lane that has gone out stays gone until the server answers it,
+     and a second Close lane inside the first one's window keeps the first gone.
+     The fixture answers a close after 2.5 s, as a close stopping hosts does. */
+  const sentBeforeCloses = (await recorded()).pipelinePatches.length;
+  const closesSent = async () => (await recorded()).pipelinePatches.slice(sentBeforeCloses).map((patch) => patch.id);
+  const closes = async () => ({ first: await count(lane(4)), second: await count(lane(5)), badge: await badge() });
+  await swipeLeft(page, cdp, lane(4), viewport.width);
+  await tap(page, cdp, `${lane(4)} [data-mobile2-swipe-action="closeLane"]`);
+  await pause(page, 150);
+  await swipeLeft(page, cdp, lane(5), viewport.width);
+  await tap(page, cdp, `${lane(5)} [data-mobile2-swipe-action="closeLane"]`);
+  const secondTapAt = Date.now();
+  await pause(page, 150);
+  const successive = { ...(await closes()), sent: await closesSent() };
+  /* Past the second receipt's window, while its close is still out. */
+  await pause(page, 4_300);
+  const inFlight = { ...(await closes()), sinceSecondTapMs: Date.now() - secondTapAt, sent: await closesSent(), answered: [...(await recorded()).closesAnswered] };
+  await shot("close-in-flight");
+  await page.waitForFunction(() => (window as unknown as { evidence: Recorded }).evidence.closesAnswered.length >= 2, undefined, { timeout: 10_000 });
+  await pause(page, 300);
+  const answered = { ...(await closes()), answered: [...(await recorded()).closesAnswered] };
+  check("a second Close lane inside the window keeps the first lane gone while its close is out", successive.first === 0 && successive.second === 0 && successive.badge === queued - 2 && successive.sent.join() === "lane-4");
+  check("a Close lane whose window ran out stays gone while the server answers", inFlight.first === 0 && inFlight.second === 0 && inFlight.badge === queued - 2 && inFlight.sent.join() === "lane-4,lane-5" && !inFlight.answered.includes("lane-5"));
+  check("answered closes stay gone", answered.first === 0 && answered.second === 0 && answered.badge === queued - 2);
+
   /* 6. A long-press opens the actions sheet and not the lane under the finger. */
   const [pressX, pressY] = await centre(page, lane(3));
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: pressX, y: pressY }] });
@@ -248,9 +303,18 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   check("Close card takes the row on the tap", conversationClose.rowGone);
   check("Reopen brings the conversation back to the board", conversationClose.reopened && conversationClose.boardScreen === 1);
 
-  /* 8. «All conversations» appends the same rows: the feed's first, then pages. */
-  await tapInView(page, cdp, '[data-mobile2-row="catalog"]');
-  await pause(page, 450);
+  /* 8. «All conversations» appends the same rows: the feed's first, then pages.
+     The tap waits for the list above the row to stop moving: a banner that
+     arrived between measuring and touching once moved the row out from under
+     the finger, and the tap expanded nothing. */
+  const toggle = '[data-mobile2-row="catalog"]';
+  await page.evaluate((sel) => document.querySelector(sel)?.scrollIntoView({ block: "center" }), toggle);
+  const toggleBox = await stableRect(page, toggle);
+  const banners = await count("[data-mobile2-banner]");
+  await touch(cdp, [[toggleBox.x + toggleBox.width / 2, toggleBox.y + toggleBox.height / 2]]);
+  await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-expanded") === "true", toggle, { timeout: 5_000 }).catch(() => undefined);
+  await pause(page, 250);
+  check("no banner stands over the list when the catalog row is tapped", banners === 0);
   const rowsSelector = '[data-mobile2-board] [data-mobile2-row="conversation"][data-catalog-path]';
   const expanded = await page.evaluate((sel) => ({
     rows: document.querySelectorAll(sel).length,
@@ -258,8 +322,16 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
     toggle: document.querySelector('[data-mobile2-row="catalog"]')?.textContent ?? "",
   }), rowsSelector);
   await shot("expanded");
-  await page.evaluate(() => { const scroller = document.querySelector("[data-mobile2-board]") as HTMLElement; scroller.scrollTop = scroller.scrollHeight; });
-  await page.waitForFunction((sel) => [...document.querySelectorAll<HTMLElement>(sel)].filter((row) => row.dataset.catalogPath?.startsWith("/repo/history-")).length >= 20, rowsSelector, { timeout: 10_000 });
+  /* The reader keeps scrolling: a page lands below the fold, and the next one
+     loads only once the list's end is in reach again. The first page carries
+     the superseded round, which gets no row, so twenty stored rows take two
+     pages. A list that stops loading fails the checks below. */
+  const scrolledStoredRows = () => page.evaluate((sel) => {
+    const scroller = document.querySelector("[data-mobile2-board]") as HTMLElement;
+    scroller.scrollTop = scroller.scrollHeight;
+    return [...document.querySelectorAll<HTMLElement>(sel)].filter((row) => row.dataset.catalogPath?.startsWith("/repo/history-")).length;
+  }, rowsSelector);
+  for (let i = 0; i < 50 && (await scrolledStoredRows()) < 20; i += 1) await pause(page, 200);
   await pause(page, 500);
   const appended = await page.evaluate((sel) => {
     const rows = [...document.querySelectorAll<HTMLElement>(sel)];
@@ -269,6 +341,7 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
       rows: rows.length,
       unique: new Set(paths).size,
       stored: paths.filter((item) => item.startsWith("/repo/history-")).length,
+      superseded: paths.includes("/repo/superseded-round.jsonl"),
       rowStyles: new Set(rows.map((row) => row.className)).size,
       heights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
       requests: (window as unknown as { evidence: Recorded }).evidence.catalogRequests,
@@ -281,6 +354,7 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   check("expanding appends the feed's thirty rows with no request", expanded.rows === 30 && expanded.requests === 0);
   check("the expanded row reads Show fewer", expanded.toggle.includes(translate("en", "mobile2.board.showFewer")));
   check("catalog pages append below the feed's rows", appended.stored >= 20);
+  check("a superseded round the stored catalog lists gets no row", !appended.superseded);
   check("no row appears twice", appended.unique === appended.rows);
   check("every appended row is the same row", appended.rowStyles === 1 && appended.heights.length === 1);
   check("catalog requests are this project's pages with no query",appended.requests.length > 0 && appended.requests.every((query) => query.includes("project=atlas") && query.includes("limit=20") && !/[?&]q=/.test(query)));
@@ -289,7 +363,10 @@ async function run(context: BrowserContext, base: string, viewport: { width: num
   check("no page errors", pageErrors.length === 0);
 
   await page.close();
-  return { key, viewport, scheme, queued, vertical, tray, hide, restored, refused, closeLane: { ...closeLane, ...closeLaneAfter }, longPress, conversationClose, expanded, appended, pageErrors, failures };
+  return {
+    key, viewport, scheme, queued, hideDecision, vertical, tray, hide, restored, refused, closeLane: { ...closeLane, ...closeLaneAfter },
+    closes: { successive, inFlight, answered }, longPress, conversationClose, banners, expanded, appended, pageErrors, failures,
+  };
 }
 
 const TASK_0 = "Fast conversation switching";

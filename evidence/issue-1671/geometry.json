@@ -6,10 +6,15 @@
       "height": 844
     },
     "scheme": "light",
-    "queued": 10,
+    "queued": 11,
+    "hideDecision": {
+      "stillHidden": 0,
+      "parkedAgain": 1,
+      "listedLanes": 11
+    },
     "vertical": {
       "startedOn": "pipeline:lane-7",
-      "scrollTop": 394,
+      "scrollTop": 385,
       "openRows": 0
     },
     "tray": {
@@ -39,7 +44,7 @@
     },
     "hide": {
       "rowGone": true,
-      "badge": 9,
+      "badge": 10,
       "receipt": "Hid «Fast conversation switching»Restore",
       "receiptBox": {
         "x": 12,
@@ -61,7 +66,7 @@
       ]
     },
     "restored": {
-      "badge": 10,
+      "badge": 11,
       "patches": [
         {
           "id": "lane-0",
@@ -75,15 +80,47 @@
     },
     "refused": {
       "rowGone": true,
-      "badge": 9,
-      "badgeAfter": 10,
+      "badge": 10,
+      "badgeAfter": 11,
       "receipt": "refused by the evidence fixture"
     },
     "closeLane": {
       "rowGone": true,
-      "badge": 10,
+      "badge": 11,
       "receipt": "Lane closedRestore",
       "sent": 0
+    },
+    "closes": {
+      "successive": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sent": [
+          "lane-4"
+        ]
+      },
+      "inFlight": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sinceSecondTapMs": 4457,
+        "sent": [
+          "lane-4",
+          "lane-5"
+        ],
+        "answered": [
+          "lane-4"
+        ]
+      },
+      "answered": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "answered": [
+          "lane-4",
+          "lane-5"
+        ]
+      }
     },
     "longPress": {
       "sheet": true,
@@ -113,23 +150,27 @@
         "close",
         "restore"
       ],
-      "pipelineWrites": 0
+      "pipelineWrites": 2
     },
+    "banners": 0,
     "expanded": {
       "rows": 30,
       "requests": 0,
       "toggle": "Show fewerStored entries load as you scroll"
     },
     "appended": {
-      "rows": 50,
-      "unique": 50,
-      "stored": 20,
+      "rows": 75,
+      "unique": 75,
+      "stored": 45,
+      "superseded": false,
       "rowStyles": 1,
       "heights": [
         56
       ],
       "requests": [
-        "?limit=20&project=atlas"
+        "?limit=20&project=atlas",
+        "?limit=20&project=atlas&cursor=20",
+        "?limit=20&project=atlas&cursor=40"
       ],
       "searchFields": 0,
       "pageOverflow": false,
@@ -145,10 +186,15 @@
       "height": 844
     },
     "scheme": "dark",
-    "queued": 10,
+    "queued": 11,
+    "hideDecision": {
+      "stillHidden": 0,
+      "parkedAgain": 1,
+      "listedLanes": 11
+    },
     "vertical": {
       "startedOn": "pipeline:lane-7",
-      "scrollTop": 397,
+      "scrollTop": 393,
       "openRows": 0
     },
     "tray": {
@@ -178,7 +224,7 @@
     },
     "hide": {
       "rowGone": true,
-      "badge": 9,
+      "badge": 10,
       "receipt": "Hid «Fast conversation switching»Restore",
       "receiptBox": {
         "x": 12,
@@ -200,7 +246,7 @@
       ]
     },
     "restored": {
-      "badge": 10,
+      "badge": 11,
       "patches": [
         {
           "id": "lane-0",
@@ -214,15 +260,47 @@
     },
     "refused": {
       "rowGone": true,
-      "badge": 9,
-      "badgeAfter": 10,
+      "badge": 10,
+      "badgeAfter": 11,
       "receipt": "refused by the evidence fixture"
     },
     "closeLane": {
       "rowGone": true,
-      "badge": 10,
+      "badge": 11,
       "receipt": "Lane closedRestore",
       "sent": 0
+    },
+    "closes": {
+      "successive": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sent": [
+          "lane-4"
+        ]
+      },
+      "inFlight": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sinceSecondTapMs": 4455,
+        "sent": [
+          "lane-4",
+          "lane-5"
+        ],
+        "answered": [
+          "lane-4"
+        ]
+      },
+      "answered": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "answered": [
+          "lane-4",
+          "lane-5"
+        ]
+      }
     },
     "longPress": {
       "sheet": true,
@@ -252,23 +330,27 @@
         "close",
         "restore"
       ],
-      "pipelineWrites": 0
+      "pipelineWrites": 2
     },
+    "banners": 0,
     "expanded": {
       "rows": 30,
       "requests": 0,
       "toggle": "Show fewerStored entries load as you scroll"
     },
     "appended": {
-      "rows": 50,
-      "unique": 50,
-      "stored": 20,
+      "rows": 75,
+      "unique": 75,
+      "stored": 45,
+      "superseded": false,
       "rowStyles": 1,
       "heights": [
         56
       ],
       "requests": [
-        "?limit=20&project=atlas"
+        "?limit=20&project=atlas",
+        "?limit=20&project=atlas&cursor=20",
+        "?limit=20&project=atlas&cursor=40"
       ],
       "searchFields": 0,
       "pageOverflow": false,
@@ -284,10 +366,15 @@
       "height": 932
     },
     "scheme": "light",
-    "queued": 10,
+    "queued": 11,
+    "hideDecision": {
+      "stillHidden": 0,
+      "parkedAgain": 1,
+      "listedLanes": 11
+    },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 383,
+      "scrollTop": 393,
       "openRows": 0
     },
     "tray": {
@@ -317,7 +404,7 @@
     },
     "hide": {
       "rowGone": true,
-      "badge": 9,
+      "badge": 10,
       "receipt": "Hid «Fast conversation switching»Restore",
       "receiptBox": {
         "x": 12,
@@ -339,7 +426,7 @@
       ]
     },
     "restored": {
-      "badge": 10,
+      "badge": 11,
       "patches": [
         {
           "id": "lane-0",
@@ -353,15 +440,47 @@
     },
     "refused": {
       "rowGone": true,
-      "badge": 9,
-      "badgeAfter": 10,
+      "badge": 10,
+      "badgeAfter": 11,
       "receipt": "refused by the evidence fixture"
     },
     "closeLane": {
       "rowGone": true,
-      "badge": 10,
+      "badge": 11,
       "receipt": "Lane closedRestore",
       "sent": 0
+    },
+    "closes": {
+      "successive": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sent": [
+          "lane-4"
+        ]
+      },
+      "inFlight": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sinceSecondTapMs": 4455,
+        "sent": [
+          "lane-4",
+          "lane-5"
+        ],
+        "answered": [
+          "lane-4"
+        ]
+      },
+      "answered": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "answered": [
+          "lane-4",
+          "lane-5"
+        ]
+      }
     },
     "longPress": {
       "sheet": true,
@@ -391,23 +510,27 @@
         "close",
         "restore"
       ],
-      "pipelineWrites": 0
+      "pipelineWrites": 2
     },
+    "banners": 0,
     "expanded": {
       "rows": 30,
       "requests": 0,
       "toggle": "Show fewerStored entries load as you scroll"
     },
     "appended": {
-      "rows": 50,
-      "unique": 50,
-      "stored": 20,
+      "rows": 75,
+      "unique": 75,
+      "stored": 45,
+      "superseded": false,
       "rowStyles": 1,
       "heights": [
         56
       ],
       "requests": [
-        "?limit=20&project=atlas"
+        "?limit=20&project=atlas",
+        "?limit=20&project=atlas&cursor=20",
+        "?limit=20&project=atlas&cursor=40"
       ],
       "searchFields": 0,
       "pageOverflow": false,
@@ -423,10 +546,15 @@
       "height": 932
     },
     "scheme": "dark",
-    "queued": 10,
+    "queued": 11,
+    "hideDecision": {
+      "stillHidden": 0,
+      "parkedAgain": 1,
+      "listedLanes": 11
+    },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 383,
+      "scrollTop": 389,
       "openRows": 0
     },
     "tray": {
@@ -456,7 +584,7 @@
     },
     "hide": {
       "rowGone": true,
-      "badge": 9,
+      "badge": 10,
       "receipt": "Hid «Fast conversation switching»Restore",
       "receiptBox": {
         "x": 12,
@@ -478,7 +606,7 @@
       ]
     },
     "restored": {
-      "badge": 10,
+      "badge": 11,
       "patches": [
         {
           "id": "lane-0",
@@ -492,15 +620,47 @@
     },
     "refused": {
       "rowGone": true,
-      "badge": 9,
-      "badgeAfter": 10,
+      "badge": 10,
+      "badgeAfter": 11,
       "receipt": "refused by the evidence fixture"
     },
     "closeLane": {
       "rowGone": true,
-      "badge": 10,
+      "badge": 11,
       "receipt": "Lane closedRestore",
       "sent": 0
+    },
+    "closes": {
+      "successive": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sent": [
+          "lane-4"
+        ]
+      },
+      "inFlight": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "sinceSecondTapMs": 4455,
+        "sent": [
+          "lane-4",
+          "lane-5"
+        ],
+        "answered": [
+          "lane-4"
+        ]
+      },
+      "answered": {
+        "first": 0,
+        "second": 0,
+        "badge": 9,
+        "answered": [
+          "lane-4",
+          "lane-5"
+        ]
+      }
     },
     "longPress": {
       "sheet": true,
@@ -530,23 +690,27 @@
         "close",
         "restore"
       ],
-      "pipelineWrites": 0
+      "pipelineWrites": 2
     },
+    "banners": 0,
     "expanded": {
       "rows": 30,
       "requests": 0,
       "toggle": "Show fewerStored entries load as you scroll"
     },
     "appended": {
-      "rows": 50,
-      "unique": 50,
-      "stored": 20,
+      "rows": 75,
+      "unique": 75,
+      "stored": 45,
+      "superseded": false,
       "rowStyles": 1,
       "heights": [
         56
       ],
       "requests": [
-        "?limit=20&project=atlas"
+        "?limit=20&project=atlas",
+        "?limit=20&project=atlas&cursor=20",
+        "?limit=20&project=atlas&cursor=40"
       ],
       "searchFields": 0,
       "pageOverflow": false,

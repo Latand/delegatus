@@ -64,7 +64,7 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
-import { MobilePipelineScreen, usePendingPipelineAct } from "./mobile/MobilePipelineScreen";
+import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
@@ -1759,10 +1759,9 @@ function ProjectDashboardView({
   const mobileTop = topScreen(mobileNavState);
   const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
   const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
-  /* A lane whose close its receipt still holds is gone from the board already
-     (#1671); the Viewer's badge reads the same held act. */
-  const heldPipelineAct = usePendingPipelineAct();
-  const archivingPipeline = heldPipelineAct?.action === "close" ? heldPipelineAct.pipelineId : null;
+  /* A lane whose close is on its way is gone from the board already (#1671);
+     the Viewer's badge reads the same closes. */
+  const closingPipelines = useClosingPipelines();
   const mobileBoardProps = {
     files,
     pipelines: activePipelines,
@@ -1770,7 +1769,7 @@ function ProjectDashboardView({
     seatPath,
     hidden: hiddenSet,
     crowned: crownedPaths,
-    archiving: archivingPipeline,
+    closing: closingPipelines,
     now: nowSeconds,
   };
   const mobileBoardModel = isMobile ? mobileBoardOf(mobileBoardProps) : null;

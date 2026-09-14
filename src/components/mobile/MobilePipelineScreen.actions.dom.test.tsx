@@ -307,7 +307,7 @@ test("a second held act sends the first rather than dropping it", () => {
   let due: (() => void) | null = null;
   const acts = createPendingPipelineActs(
     { set: (callback) => { due = callback; return 1; }, clear: () => { due = null; } },
-    (act) => sent.push(`${act.pipelineId}:${act.action}`),
+    (act) => { sent.push(`${act.pipelineId}:${act.action}`); },
   );
   acts.begin({ pipelineId: "p2", action: "skip-stage" });
   expect(sent).toEqual([]);

@@ -101,6 +101,8 @@ const emptyBoard = (): BoardProjectStateV1 => ({
 });
 let board = emptyBoard();
 let pipelineReply: ((body: Record<string, unknown>) => Promise<Response>) | null = null;
+/* What the file scan serves: a test the server closes a lane in moves it here. */
+let served: Pipeline[] = PIPELINES;
 const pipelinePatches: Array<Record<string, unknown>> = [];
 const originalFetch = globalThis.fetch;
 
@@ -110,7 +112,7 @@ function stubFetch(): void {
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/files")) {
       return Response.json({
-        files: [finished], projectCatalog: [{ project: PROJECT, conversations: 1 }], flows: [], pipelines: PIPELINES,
+        files: [finished], projectCatalog: [{ project: PROJECT, conversations: 1 }], flows: [], pipelines: served,
         workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
       });
     }
@@ -128,7 +130,7 @@ function stubFetch(): void {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       pipelinePatches.push(body);
       if (pipelineReply) return pipelineReply(body);
-      return Response.json({ ok: true, pipeline: PIPELINES.find((pipeline) => url.endsWith(pipeline.id)) });
+      return Response.json({ ok: true, pipeline: served.find((pipeline) => url.endsWith(pipeline.id)) });
     }
     return new Response("not found", { status: 404 });
   }) as unknown as typeof fetch;
@@ -144,6 +146,7 @@ beforeEach(() => {
   dom.document.body.replaceChildren();
   board = emptyBoard();
   pipelineReply = null;
+  served = PIPELINES;
   pipelinePatches.length = 0;
   pendingPipelineActs.cancel();
   receipts.dismiss();
@@ -243,4 +246,51 @@ test("phone: Close lane leaves the board and the badge on the tap, sends nothing
   expect(badge(host)).toBe("2");
   await act(async () => { await Bun.sleep(40); });
   expect(pipelinePatches).toEqual([]);
+});
+
+test("phone: a Close lane that has gone out stays off the board and the badge until it is answered, a second one keeps the first gone, and a refused one comes back saying why", async () => {
+  const host = await mountViewer();
+  await until(() => row(host, "p-a") !== null && row(host, "p-b") !== null);
+  expect(badge(host)).toBe("2");
+  const answers: Array<(response: Response) => void> = [];
+  pipelineReply = () => new Promise<Response>((resolve) => { answers.push(resolve); });
+
+  act(() => swipeLeft(row(host, "p-a")!));
+  act(() => trayButton(host, "p-a", "closeLane").click());
+  /* A second Close lane inside the first one's window sends the first. */
+  act(() => swipeLeft(row(host, "p-b")!));
+  act(() => trayButton(host, "p-b", "closeLane").click());
+  await until(() => answers.length === 1);
+  expect(pipelinePatches).toEqual([{ action: "close" }]);
+  expect(row(host, "p-a")).toBeNull();
+  expect(row(host, "p-b")).toBeNull();
+  expect([null, "0"]).toContain(badge(host));
+
+  /* The second window runs out: that close goes out too, and neither lane
+     comes back while the server stops their hosts. */
+  act(() => pendingPipelineActs.flush());
+  await until(() => answers.length === 2);
+  await act(async () => { await Bun.sleep(40); });
+  expect(row(host, "p-a")).toBeNull();
+  expect(row(host, "p-b")).toBeNull();
+  expect([null, "0"]).toContain(badge(host));
+
+  /* The server closes the first: its echo and the next scan both say closed. */
+  served = served.map((pipeline) => (pipeline.id === "p-a" ? { ...pipeline, state: "closed", closedAt: iso(0) } as Pipeline : pipeline));
+  await act(async () => {
+    answers[0]!(Response.json({ ok: true, pipeline: served.find((pipeline) => pipeline.id === "p-a") }));
+    await Bun.sleep(40);
+  });
+  expect(row(host, "p-a")).toBeNull();
+  expect(row(host, "p-b")).toBeNull();
+
+  /* It refuses the second: that lane comes back, and the receipt says why. */
+  await act(async () => {
+    answers[1]!(new Response(JSON.stringify({ error: "the lane is still publishing" }), { status: 409 }));
+    await Bun.sleep(40);
+  });
+  await until(() => row(host, "p-b") !== null);
+  expect(row(host, "p-a")).toBeNull();
+  expect(badge(host)).toBe("1");
+  expect(receiptText()).toContain("the lane is still publishing");
 });

@@ -1,7 +1,7 @@
 /*
  * The page `issue1671Evidence.browser.test.tsx` drives: the real Viewer over an
  * invented phone board — ten lanes waiting on a decision, one running
- * conversation, thirty finished ones and a 45-entry stored catalog — answered
+ * conversation, thirty finished ones and a 46-entry stored catalog — answered
  * by an in-page fetch double. Board writes go through the product's own
  * reducer, and every write is recorded on `window.evidence`, so the driver
  * reads what a gesture really sent. All data is invented.
@@ -11,12 +11,15 @@ import { createRoot } from "react-dom/client";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const PROJECT = "atlas";
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
+/* A real close spends seconds stopping the lane's hosts before it answers. */
+const CLOSE_ANSWER_MS = 2_500;
 
 function conversation(path: string, title: string, over: Record<string, unknown> = {}): FileEntry {
   return {
@@ -34,21 +37,33 @@ const TASKS = [
   "Board zoom keeps the focused card",
 ];
 
-const pipelines = TASKS.map((task, i) => ({
-  id: `lane-${i}`, task, taskIds: [], project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-lane-${i}`, branch: `lane/${i}`,
-  baseBranch: "main", baseRef: "main", lastPassedCommit: "",
-  stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
-  runs: [{
-    stageId: "review",
-    attempts: [{
-      n: 1 + (i % 3), state: "failed", completedAt: iso(3_600 * (i + 1)),
-      verdict: { status: "fail", findings: Array.from({ length: 1 + (i % 4) }, (_, n) => `finding ${n + 1}`) },
-    }],
-  }],
-  cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
-  state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
-  createdAt: iso(7_200 * (i + 1)), closedAt: null,
-})) as unknown as Pipeline[];
+function lane(id: string, task: string, attempts: unknown[], over: Record<string, unknown> = {}): Pipeline {
+  return {
+    id, task, taskIds: [], project: PROJECT, repoDir: "/repo", worktreeDir: `/repo-${id}`, branch: `lane/${id}`,
+    baseBranch: "main", baseRef: "main", lastPassedCommit: "",
+    stages: [{ id: "implement", kind: "run" }, { id: "review", kind: "review-loop" }],
+    runs: [{ stageId: "review", attempts }],
+    cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
+    state: "needs_decision", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    createdAt: iso(7_200), closedAt: null,
+    ...over,
+  } as unknown as Pipeline;
+}
+
+const failedRound = (n: number, startedAgo: number, completedAgo: number, findings = 1) => ({
+  n, state: "failed", startedAt: iso(startedAgo), completedAt: iso(completedAgo),
+  verdict: { status: "fail", findings: Array.from({ length: findings }, (_, i) => `finding ${i + 1}`) },
+});
+
+const pipelines = [
+  ...TASKS.map((task, i) => lane(`lane-${i}`, task, [failedRound(1 + (i % 3), 3_600 * (i + 1) + 600, 3_600 * (i + 1), 1 + (i % 4))], { createdAt: iso(7_200 * (i + 1)) })),
+  /* A Hide covers the decision it saw (#1671): this lane was hidden after the
+     round that parked it and has not moved since, so it stays off the board. */
+  lane("lane-hidden", "Seat tick accounting survives a restart", [failedRound(1, 6_000, 5_400)], { dismissedAt: iso(4_800) }),
+  /* ...and this one was hidden, retried, and parked again on a round that
+     started after the Hide: a decision nobody hid, back in Needs you. */
+  lane("lane-parked-again", "Board bands keep their order", [failedRound(1, 9_000, 8_400), failedRound(2, 3_000, 2_400)], { dismissedAt: iso(7_800) }),
+];
 
 const files: FileEntry[] = [
   conversation("/repo/running.jsonl", "Rebuild the board status projection", {
@@ -62,6 +77,12 @@ const files: FileEntry[] = [
   )),
 ];
 const catalog = Array.from({ length: 45 }, (_, i) => conversation(`/repo/history-${i}.jsonl`, `Stored conversation ${i + 1}`, { mtime: now - 90_000 - i * 3_600 }));
+/* A superseded round only the stored catalog still lists, as the conversations
+   route marks it (#1671): the board never shows it. */
+catalog.splice(5, 0, conversation("/repo/superseded-round.jsonl", "Superseded review round", {
+  mtime: now - 95_000,
+  supersededBy: { conversationId: "conversation_history-5", path: "/repo/history-5.jsonl", at: iso(94_000), reason: "stage-retry" },
+}));
 
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
@@ -71,6 +92,7 @@ let board = {
 const evidence = {
   catalogRequests: [] as string[],
   pipelinePatches: [] as Array<{ id: string; action: string }>,
+  closesAnswered: [] as string[],
   boardMutations: [] as BoardMutationV1[],
   refuseNextPipelinePatch: false,
 };
@@ -91,6 +113,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
     });
   }
+  /* The fixture has no runtime plane, and says so the way a Viewer without one
+     does. Left unanswered, the bus escalated to «Runtime degraded» part-way
+     through a run, and the banner moved the list under a measured tap. */
+  if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (url.pathname === "/api/board") {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
@@ -117,12 +143,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       return json({ error: "refused by the evidence fixture" }, 409);
     }
-    const lane = pipelines.find((pipeline) => pipeline.id === id);
-    if (!lane) return json({ error: "pipeline not found" }, 404);
-    if (body.action === "dismiss") lane.dismissedAt = new Date().toISOString();
-    if (body.action === "undismiss") lane.dismissedAt = null;
-    if (body.action === "close") Object.assign(lane, { state: "closed", closedAt: new Date().toISOString(), hiddenAt: new Date().toISOString() });
-    return json({ ok: true, pipeline: lane });
+    const found = pipelines.find((pipeline) => pipeline.id === id);
+    if (!found) return json({ error: "pipeline not found" }, 404);
+    if (body.action === "dismiss") found.dismissedAt = new Date().toISOString();
+    if (body.action === "undismiss") found.dismissedAt = null;
+    if (body.action === "close") {
+      await new Promise((resolve) => setTimeout(resolve, CLOSE_ANSWER_MS));
+      Object.assign(found, { state: "closed", closedAt: new Date().toISOString(), hiddenAt: new Date().toISOString() });
+      evidence.closesAnswered.push(id);
+    }
+    return json({ ok: true, pipeline: found });
   }
   return json({}, 404);
 }) as typeof fetch;

@@ -333,8 +333,8 @@ export interface MobileBoardData {
   hidden?: ReadonlySet<string>;
   archived?: ReadonlySet<string>;
   crowned?: ReadonlySet<string>;
-  /** A lane whose close is still held by its receipt; its row is already gone. */
-  archiving?: string | null;
+  /** Lanes whose close is on its way; their rows are already gone. */
+  closing?: readonly string[];
   /** Epoch seconds; the dashboard's ticking clock keeps the ages honest. */
   now?: number;
 }
@@ -377,7 +377,7 @@ export function mobileBoardOf(props: MobileBoardData): MobileBoardModel {
     hidden: props.hidden,
     archived: props.archived,
     crowned: props.crowned,
-    archiving: props.archiving,
+    closing: props.closing,
     now: props.now,
   });
 }
