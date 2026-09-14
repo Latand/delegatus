@@ -5,7 +5,7 @@ import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
-import type { AssignmentRef, BoardTask, TaskAttachment, TaskAssignment, TaskBoardVisibility, TaskSource, TaskStatus } from "./types";
+import { TASK_COLORS, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 export const TASK_TEXT_LIMIT = 6000;
 /**
@@ -70,6 +70,25 @@ export interface PatchTaskInput {
   dueAt?: unknown;
   dueTz?: unknown;
   board?: unknown;
+  /** One of `TASK_COLORS`, or "none" to clear the label. */
+  color?: unknown;
+  /** `true` hides the task's whole group from the kanban board, `false` shows
+      it again. Requires the revision fence. */
+  hide?: unknown;
+}
+
+/** What a hide asks of the caller that can see the orchestrator seats: whether
+    this task holds the project's seat conversation. `unknown` when the seat
+    record cannot be read, which refuses the hide rather than guessing. */
+export type SeatHolding = "holds" | "free" | "unknown";
+
+export interface PatchTaskOptions {
+  requirePlacementGuards?: boolean;
+  hasBoardMembers?: (task: BoardTask) => boolean;
+  /** Who is writing: the operator's dashboard or an agent's tool call. */
+  actor?: TaskGroupHidden["by"];
+  /** Required for `hide: true`; without it the hide is refused. */
+  seatHolding?: (task: BoardTask) => SeatHolding;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -127,6 +146,10 @@ function normalizePos(value: unknown): { x: number; y: number } | null {
 
 function normalizeStatus(value: unknown): TaskStatus | null {
   return value === "inbox" || value === "assigned" || value === "blocked" || value === "done" ? value : null;
+}
+
+function normalizeColor(value: unknown): TaskColor | "none" | null {
+  return value === "none" || (typeof value === "string" && (TASK_COLORS as readonly string[]).includes(value)) ? value as TaskColor | "none" : null;
 }
 
 function normalizeBoardVisibility(value: unknown): TaskBoardVisibility | null {
@@ -278,11 +301,14 @@ export function createTask(
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
 }
 
-export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: { requirePlacementGuards?: boolean; hasBoardMembers?: (task: BoardTask) => boolean } = {}): TaskCommandResult {
+export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInput, now = isoNow(), options: PatchTaskOptions = {}): TaskCommandResult {
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const task = existing[index]!;
-  const guardRequired = options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement"));
+  /* A group hide is fenced on both surfaces: it is decided against the group
+     the caller saw, and a group that changed since is the caller's to re-read. */
+  const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
+    || Object.hasOwn(input, "hide");
   if (guardRequired || Object.hasOwn(input, "expectedProject") || Object.hasOwn(input, "expectedRevision")) {
     for (const field of ["expectedProject", "expectedRevision"] as const) {
       if (typeof input[field] !== "string" || !input[field].trim()) {
@@ -342,6 +368,28 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     patch.board = board;
   }
+  if (Object.hasOwn(input, "color")) {
+    const color = normalizeColor(input.color);
+    if (!color) return { ok: false, error: `color must be one of none, ${TASK_COLORS.join(", ")}`, status: 400, code: "TASK_INVALID_FIELD", field: "color" };
+    patch.color = color === "none" ? undefined : color;
+  }
+  /* Hiding a group writes the hide and nothing else: no assignment, runtime,
+     pipeline, flow, delivery or process state is touched, by design. */
+  if (Object.hasOwn(input, "hide")) {
+    if (input.hide !== true && input.hide !== false) return { ok: false, error: "hide must be true or false", status: 400, code: "TASK_INVALID_FIELD", field: "hide" };
+    if (input.hide) {
+      const holding = options.seatHolding ? options.seatHolding(task) : "unknown";
+      if (holding === "holds") {
+        return { ok: false, status: 409, code: "TASK_HIDE_PROTECTED", field: "hide", error: "this task holds the project's orchestrator seat conversation, which stays on the board; it cannot be hidden" };
+      }
+      if (holding === "unknown") {
+        return { ok: false, status: 503, code: "TASK_HIDE_UNVERIFIED", field: "hide", error: "the orchestrator seat record could not be read, so the hide was not applied; try again" };
+      }
+      patch.groupHidden = { at: now, by: options.actor ?? "operator" };
+    } else {
+      patch.groupHidden = undefined;
+    }
+  }
   if (Object.hasOwn(input, "placement")) {
     const placement = normalizePlacement(input.placement);
     if (!placement) return { ok: false, error: "invalid placement", status: 400 };
@@ -373,6 +421,8 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueTz;
   }
   if (updated.placement === "unplaced") delete updated.pos;
+  if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
+  if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
   const tasks = existing.slice();
   tasks[index] = updated;
   return { ok: true, tasks, task: updated };

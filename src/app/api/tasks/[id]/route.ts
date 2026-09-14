@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { deleteTask, patchTask, type PatchTaskInput } from "@/lib/tasks/commands";
+import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -29,7 +30,9 @@ export async function PATCH(
 
   const { id } = await ctx.params;
   const result = mutateTasks((tasks) => {
-    const outcome = patchTask(tasks, id, body);
+    /* The dashboard is the operator; a group hide is refused for the task
+       holding the project's orchestrator seat. */
+    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHolding });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });

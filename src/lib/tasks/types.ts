@@ -4,6 +4,20 @@ export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
     written explicitly so a restore is durable and readable in the state file. */
 export type TaskBoardVisibility = "shown" | "hidden";
 
+/** A task's colour label (#1695). The name is what the board says; the hue is
+    presentation. Absent is "none", which is also how a label is cleared. */
+export const TASK_COLORS = ["coral", "amber", "lime", "teal", "sky", "violet", "pink", "slate"] as const;
+export type TaskColor = (typeof TASK_COLORS)[number];
+
+/** A whole task group taken off the kanban board (#1695), with who took it
+    and when. Nothing about the task, its conversations or its pipelines
+    changes: the board leaves the group out until something newer than `at`
+    needs the operator (`groupHide.ts`). */
+export interface TaskGroupHidden {
+  at: string;
+  by: "operator" | "agent";
+}
+
 /** `linked` records membership only (#1586): the conversation belongs to the
     task, nothing was delivered or handed off. */
 export type AssignmentState = "delivered" | "failed" | "spawning" | "handoff" | "linked";
@@ -122,6 +136,11 @@ export interface BoardTask {
       whatever this says (`boardVisibility`). The task itself is never deleted
       or archived and never leaves the task list. */
   board?: TaskBoardVisibility;
+  /** Colour label; absent means none. */
+  color?: TaskColor;
+  /** Set while the task's group is hidden from the kanban board. Unlike
+      `board`, it holds whatever the group contains. */
+  groupHidden?: TaskGroupHidden;
   createdAt: string;
   updatedAt: string; // bumped by every PATCH
 }
