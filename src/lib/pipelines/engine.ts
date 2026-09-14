@@ -156,6 +156,11 @@ export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId"
 export type PipelineSpawnReceipt = PipelineStageSpawn & {
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   error?: string | null;
+  /** A session identity was staged for this launch, so an engine host was
+      started and may have run its first turn before the receipt failed
+      (#1678). Independent of the identity fence that withholds `sessionId`
+      and `transcript` from an unpublished receipt. */
+  staged?: boolean;
 };
 
 export interface PipelinePorts {
@@ -232,7 +237,7 @@ export interface PipelinePorts {
   conversationIdForPath(pathname: string): string | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
   createFlow(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string }>;
-  patchFlow(id: string, action: "advance" | "pause" | "resume", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
+  patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
     error?: string;
@@ -466,7 +471,13 @@ async function spawnPipelineAgent(
   const spec = { ...specBase, launchProfile };
   const client = runtimeHostClient();
   const unavailable = supervisedRuntimeHostUnavailableReason("pipeline structured runtime host");
-  if (!client) throw new Error(unavailable);
+  if (!client) {
+    /* Nothing was dispatched, and the receipt has to say so itself (#1678):
+       the engine re-dispatches only on the receipt's own terminal verdict,
+       exactly as the spawn layer records one after its transport fails. */
+    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    throw new Error(unavailable);
+  }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
   try {
     response = await spawnStructuredConversation({
@@ -968,6 +979,7 @@ export function defaultPipelinePorts(
         paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null,
         accountId: receipt.accountId,
         error: receipt.error,
+        staged: receipt.key !== null,
       };
     },
     claimSpawnRetry: (launchId, claimId) => {
@@ -1107,6 +1119,16 @@ const SPAWN_HANDSHAKE_RETRY_DELAY_MS = 1_000;
     real time inside `spawnAgent`, and that time is part of the wait. */
 const SPAWN_CONTROLLER_WAIT_BUDGET_MS = 30_000;
 const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
+/** A runtime host whose RPCs time out comes back in minutes, not seconds: the
+    7eef4743 prototype's outage ran four and a half (#1678). A stage whose
+    launch receipt proves nothing was dispatched rides it out on this budget
+    with a slower backoff, because every round burns a real reservation and the
+    admission attempts the spawn layer makes before it records the failure. */
+const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
+const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+/** Retired launches an attempt keeps; the host budget cannot mint more than
+    sixteen, so the cap only guards the record against a future longer budget. */
+const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
@@ -1714,6 +1736,58 @@ const TERMINAL_REVIEW_FLOW_STATES: ReadonlySet<Flow["state"]> = new Set([
 ]);
 const REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX = "review flow host claim retry: ";
 const REVIEW_FLOW_RELAY_RETRY_PREFIX = "review flow relay retry: ";
+const REVIEW_FLOW_SCAN_WAIT_PREFIX = "review flow waiting for its implementer transcript to be scanned; retry at ";
+/** The flow engine's own pause wording when the controller's completed scan
+    snapshot does not list the implementer transcript (flows/engine.ts). */
+const MISSING_IMPLEMENTER_TRANSCRIPT = "implementer transcript is missing";
+
+/**
+ * Rides out a review flow that paused because the controller's completed scan
+ * snapshot did not list the implementer transcript yet (#1678). The pipeline
+ * itself settled that implementer from its transcript artifact, ahead of the
+ * scanner, and the ordinary snapshot refresh runs minutes apart; the flow
+ * engine pauses on the stale snapshot and a paused flow is never ticked again,
+ * so without this the stage parked on the first sighting and only an
+ * operator's flow resume could free it (pipeline 4d6f4fc1, 2026-09-13).
+ *
+ * The evidence required before any resume is the registry naming the
+ * implementer conversation's transcript: a conversation the Viewer does not
+ * know is not a scan lag and parks as before. Only a flow paused in
+ * `spawning` is resumed, the one phase the live run showed and the only one
+ * in which the round has not launched: the attempt's controller wait ends on
+ * launch evidence, so a pause in a later phase would end the wait on every
+ * resume and never reach exhaustion. The resume is booked on the same bounded
+ * wall-clock wait the host-unavailable spawn uses, so a transcript the scan
+ * never lists ends in a truthful park that counts the resumes.
+ */
+function deferUnscannedImplementerTranscript(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  implementer: PipelineStageAttempt,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "paused" || flow.pausedState !== "spawning" || flow.stateDetail !== MISSING_IMPLEMENTER_TRANSCRIPT) {
+    return "not-applicable";
+  }
+  const registered = implementer.conversationId !== null && ports.pathForConversation(implementer.conversationId) !== null;
+  if (!registered) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const resumed = ports.patchFlow(flow.id, "resume");
+  if (resumed.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_SCAN_WAIT_PREFIX}${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
+}
 
 function reviewFlowRetryDetail(flow: Flow): string | null {
   if (flow.state !== "relaying" || !flow.stateDetail?.includes("retrying automatically")) return null;
@@ -2156,6 +2230,10 @@ async function tickRunStage(
        (structuredSpawn's publishHost), so an attempt issued now burns a real
        engine launch before it can fail. */
     if (publication === "rebinding") {
+      /* This wait precedes any spawn call of this engine, so it records the
+         count here: a fresh attempt starts at zero, and a later activation
+         cannot mistake the wait for one an earlier engine left mid-spawn. */
+      attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
         syncControllerWaitStateDetail(pipeline, attempt, null);
         persist();
@@ -2217,14 +2295,26 @@ async function tickRunStage(
          The activation leaves the loop for the wall-clock wait below rather
          than sleeping here, so it costs the pipelines phase nothing. */
       let controllerFailure: string | null = null;
-      /* Rounds already booked by earlier ticks of this same activation. The
-         retry index continues across them, so every attempt keeps a distinct
-         launch identity even though the wait now spans ticks (#1056). */
-      const priorControllerRounds = attempt.controllerWait?.rounds ?? 0;
+      /* The failed receipt behind `controllerFailure` when the spawn had
+         already reserved a launch; retired once a further round is booked. */
+      let failedReceipt: PipelineSpawnReceipt | null = null;
       while (true) {
         spawnAttempt += 1;
+        /* Every spawn call of this attempt consumes one client attempt id,
+           the immediate handshake retries inside one tick and the rounds of
+           a wait that spans ticks alike (#1056, review round 2), so the retry
+           index counts spawn calls. The count is persisted before the call:
+           a restart that interrupts the call still finds it counted, so the
+           retry that follows the interrupted launch's retirement cannot
+           replay its id. An attempt persisted before the count existed starts
+           past every id the earlier engine could have spent. */
+        const retryIndex = Math.max(
+          attempt.spawnCalls ?? uncountedSpawnCallFloor(attempt),
+          attempt.retiredLaunches?.length ?? 0,
+        );
+        attempt.spawnCalls = retryIndex + 1;
+        persist();
         try {
-          const retryIndex = priorControllerRounds + spawnAttempt - 1;
           spawned = await ports.spawnAgent({
             ...spawnInput,
             clientAttemptId: retryIndex === 0
@@ -2249,11 +2339,19 @@ async function tickRunStage(
              other transient keeps the two immediate handshake retries (#1056),
              which stay well inside the controller's phase deadline. */
           const accountMutationContention = isAccountMutationContention(message);
-          /* A busy account error is retryable only before the registry can
-             publish a launch claim. Once a callback supplied an id, its fate
-             is unknown and the existing receipt recovery must own it. */
-          if (accountMutationContention && attempt.launchId !== null) throw error;
-          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention) {
+          const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
+          /* A busy account or an unreachable runtime host is retryable before
+             the registry publishes a launch claim. Once a callback supplied an
+             id, the receipt alone knows the launch's fate (#1678): `failed` is
+             the spawn layer's own retry-safe verdict and the launch is retired
+             below; anything else parks, and the existing receipt recovery
+             adopts a launch that settles after all. */
+          if ((accountMutationContention || hostUnavailable) && attempt.launchId !== null) {
+            const receipt = ports.spawnReceipt(attempt.launchId);
+            if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
+            failedReceipt = receipt;
+          }
+          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable) {
             controllerFailure = message;
             break;
           }
@@ -2269,6 +2367,18 @@ async function tickRunStage(
            spent inside spawnAgent counts against the budget rather than being
            invisible to it. */
         const failedAt = ports.now();
+        if (failedReceipt) {
+          /* Claimed under the identity retry-stage uses, so a later manual
+             retry of the same launch is idempotent; a claim that finds the
+             receipt settled after all parks, and the completed-receipt
+             reconcile adopts the launch on the next tick. */
+          const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
+          if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+          if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
+          if (deferred === "settled") throw new Error(controllerFailure);
+          persist();
+          return;
+        }
         if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
@@ -2315,6 +2425,25 @@ async function tickRunStage(
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
       attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
+      /* A launch the spawn layer ended `failed` for a transient reason gets
+         the same bounded wait the live activation gets (#1678). The budget
+         starts at this process's first sighting: the interrupted activation's
+         own clock includes the restart, which would spend the budget before a
+         single retry. A wait persisted from before the restart keeps its own
+         start, so its exhaustion still counts every round. */
+      if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
+        const now = ports.now();
+        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
+        if (deferred === "waiting") return;
+        if (deferred === "exhausted") {
+          park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
+          return;
+        }
+        if (deferred === "unsafe") {
+          park(pipeline, stagedLaunchRetryRefusal(receipt.error), attempt);
+          return;
+        }
+      }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
         park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
@@ -2738,10 +2867,20 @@ async function tickReviewStage(
     return;
   }
   if (flow.state === "paused") {
+    const deferred = deferUnscannedImplementerTranscript(pipeline, stage, attempt, flow, implementer, ports);
+    if (deferred === "waiting") return;
     const phase = flow.pausedState && flow.pausedState !== "paused" ? flow.pausedState : "unknown phase";
-    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}`, attempt);
+    const exhausted = deferred === "exhausted"
+      ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic resumes over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+      : "";
+    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}${exhausted}`, attempt);
     return;
   }
+  /* The bounded wait booked by the scan resume above or the launch retry
+     below ends only once the round shows a launch under way or the flow has
+     moved past spawning; a round still waiting to launch keeps the budget it
+     already spent, so repeated stalls cannot restart it. */
+  if (attempt.controllerWait && reviewerLaunchUnderway(flow)) delete attempt.controllerWait;
   /* Advance appends round 1 synchronously, so waiting_ready with zero rounds
      means the advance never landed (crash between persisting flowId and the
      patch) — without a re-issue the flow waits forever for a ready marker a
@@ -2766,12 +2905,19 @@ async function tickReviewStage(
     attempt.reviewHeadSha = capturedReviewHead;
     persist();
   }
+  /* Before the status line is reconciled below: a launch retry whose backoff
+     has not fallen due keeps its "deferred; retry at" detail on the board
+     (review round 2), and the flow's needs_decision is not terminal for it. */
+  const deferredLaunch = deferContendedReviewerLaunch(pipeline, stage, attempt, flow, ports);
+  if (deferredLaunch === "waiting") return;
   const retryDetail = reviewFlowRetryDetail(flow);
   if (retryDetail) {
     pipeline.stateDetail = retryDetail;
   } else if (
     pipeline.stateDetail?.startsWith(REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX)
     || pipeline.stateDetail?.startsWith(REVIEW_FLOW_RELAY_RETRY_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_SCAN_WAIT_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_LAUNCH_WAIT_PREFIX)
   ) {
     pipeline.stateDetail = null;
   }
@@ -2789,8 +2935,64 @@ async function tickReviewStage(
     commitPassedStage(pipeline, stage, attempt, ports);
   } else {
     const terminalError = terminalReviewFlowError(flow);
-    if (terminalError) park(pipeline, terminalError, attempt);
+    if (terminalError) {
+      const exhausted = deferredLaunch === "exhausted"
+        ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic launch retries over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+        : "";
+      park(pipeline, `${terminalError}${exhausted}`, attempt);
+    }
   }
+}
+
+const REVIEW_FLOW_LAUNCH_WAIT_PREFIX = "review flow reviewer launch deferred: ";
+
+/** True once the flow's current round has begun a launch (a launch id, a
+    spawn start, a reviewer transcript or session) or the flow has moved past
+    `spawning`; false while the round is still waiting to launch. */
+function reviewerLaunchUnderway(flow: Flow): boolean {
+  if (flow.state !== "spawning" && flow.state !== "needs_decision" && flow.state !== "paused") return true;
+  const round = flow.rounds.at(-1);
+  return Boolean(round?.spawnStartedAt || round?.launchId || round?.reviewerPath || round?.sessionId);
+}
+
+/**
+ * Retries a reviewer launch the flow engine ended on a busy account mutation
+ * lock (#1678, the class of #1433 on the flow side). The flow terminalizes
+ * the round as `needs_decision` the moment `prepareReviewerLaunch` meets the
+ * lock, and the pipeline parked on that terminal state; pipeline 4d6f4fc1 hit
+ * it twice in a row on 2026-09-13, each time before any launch was reserved.
+ *
+ * Evidence before any retry: the round never started a launch
+ * (`spawnStartedAt`, `launchId`, `reviewerPath` and `sessionId` all unset), so
+ * a fresh round cannot duplicate a reviewer. The retry is the flow's own
+ * `retry-round`, booked on the same bounded wait a busy run-stage spawn gets;
+ * exhaustion parks with the flow's terminal detail and the retries counted.
+ */
+function deferContendedReviewerLaunch(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "needs_decision" || !isAccountMutationContention(flow.stateDetail ?? "")) return "not-applicable";
+  const round = flow.rounds.at(-1);
+  if (!round || round.spawnStartedAt || round.launchId || round.reviewerPath || round.sessionId) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const reason = controllerFailureReason(flow.stateDetail ?? "");
+  const retried = ports.patchFlow(flow.id, "retry-round");
+  if (retried.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_LAUNCH_WAIT_PREFIX}${reason}; retry at ${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
 }
 
 async function tickPipeline(
@@ -3077,8 +3279,78 @@ function isAccountMutationContention(failure: string): boolean {
   return failure.startsWith("account mutation is busy");
 }
 
+/** The pipeline spawn adapter's wording for every socket-level runtime-host
+    failure (`supervisedRuntimeHostUnavailableReason`), and the spawn layer's
+    own wording on the receipt it fails for the same reason. The ownership
+    refusal "structured host ownership is unavailable" is a different sentence
+    and a different class, and stays out. */
+function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
+  return failure.includes("runtime host is unavailable");
+}
+
+/**
+ * Retires a launch whose receipt settled `failed` and books the bounded wait
+ * before the same attempt reserves a fresh one (#1678). The receipt is the only
+ * authority consulted: it is the spawn layer's own retry-safe verdict, written
+ * after its admission attempts and its dead-host projection, so the engine
+ * never re-dispatches a launch whose fate it merely failed to observe.
+ *
+ * The claim uses the identity `retry-stage` uses for the same launch, so an
+ * operator retry that reaches the receipt later is idempotent rather than
+ * refused. `settled` means the receipt completed between the read and the
+ * claim: that launch is alive, nothing is retired, and the caller parks so the
+ * completed-receipt reconcile adopts it.
+ *
+ * `unsafe` is a failed receipt that had staged a session identity for a
+ * read-write stage: the spawn layer can fail a receipt after the engine host
+ * started and ran its first turn (a transport failure while marking the
+ * first message delivered), and the host is killed on that path, but the
+ * worktree may hold its partial edits. `retry-stage` resets the worktree
+ * before it re-dispatches; this path does not, so it refuses and the park
+ * says which action to take. A read-only stage has nothing to reset.
+ */
+function deferRetiredLaunchRetry(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  receipt: PipelineSpawnReceipt,
+  since: string,
+  now: string,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "settled" | "unsafe" {
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") return "unsafe";
+  const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
+  if (claim !== "claimed") return "settled";
+  const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
+  if (bookControllerWaitRound(attempt, since, now, ports, isRuntimeHostUnavailableSpawnFailure(failure)
+    ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
+    : undefined) === "exhausted") return "exhausted";
+  const retired = attempt.retiredLaunches ?? [];
+  retired.push({
+    launchId: receipt.launchId,
+    conversationId: attempt.conversationId ?? receipt.conversationId ?? null,
+    error: failure,
+    retiredAt: now,
+  });
+  attempt.retiredLaunches = retired.slice(-RETIRED_LAUNCH_LIMIT);
+  attempt.launchId = null;
+  attempt.conversationId = null;
+  attempt.sessionId = null;
+  attempt.agentPath = null;
+  attempt.paneId = null;
+  attempt.state = "pending";
+  attempt.error = null;
+  setCursorState(pipeline, stage.id, "pending");
+  syncControllerWaitStateDetail(pipeline, attempt, failure);
+  return "waiting";
+}
+
 function controllerFailureReason(failure: string): string {
   return failure.replace(/; retry shortly$/, "");
+}
+
+function stagedLaunchRetryRefusal(failure: string): string {
+  return `${controllerFailureReason(failure)}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`;
 }
 
 function syncControllerWaitStateDetail(
@@ -3087,7 +3359,7 @@ function syncControllerWaitStateDetail(
   failure: string | null,
 ): void {
   const retryAfter = attempt.controllerWait?.retryAfter;
-  if (failure !== null && isAccountMutationContention(failure) && retryAfter !== undefined) {
+  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure)) && retryAfter !== undefined) {
     pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
   } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
     pipeline.stateDetail = null;
@@ -3097,6 +3369,7 @@ function syncControllerWaitStateDetail(
 function isTransientStructuredSpawnFailure(failure: string): boolean {
   return isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
+    || isRuntimeHostUnavailableSpawnFailure(failure)
     || failure.includes("structured initial message")
     || failure.includes("runtime host request timed out");
 }
@@ -3106,6 +3379,19 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function controllerWaitElapsedMs(attempt: PipelineStageAttempt, nowMs: number): number {
   const startedAt = attempt.controllerWait?.startedAt;
   return startedAt ? Math.max(0, nowMs - unixMs(startedAt)) : 0;
+}
+
+/**
+ * The first retry index past every client attempt id an engine without the
+ * persisted call count could have spent (#1678 review 3). That engine numbered
+ * a call `rounds + call - 1` inside an activation of up to
+ * SPAWN_HANDSHAKE_MAX_ATTEMPTS calls, and recorded only the rounds, so the
+ * bound is all it left behind. An attempt with no wait, launch or retired
+ * launch has made no call and keeps its base id.
+ */
+function uncountedSpawnCallFloor(attempt: PipelineStageAttempt): number {
+  if (!attempt.controllerWait && !attempt.launchId && !attempt.retiredLaunches?.length) return 0;
+  return (attempt.controllerWait?.rounds ?? 0) + SPAWN_HANDSHAKE_MAX_ATTEMPTS;
 }
 
 /**
@@ -3127,20 +3413,29 @@ function bookControllerWaitRound(
   since: string,
   now: string,
   ports: PipelinePorts,
+  budget: { budgetMs: number; retryMaxMs: number } = { budgetMs: SPAWN_CONTROLLER_WAIT_BUDGET_MS, retryMaxMs: SPAWN_CONTROLLER_RETRY_MAX_MS },
 ): "waiting" | "exhausted" {
   const nowMs = unixMs(now);
   const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
-  const remainingMs = SPAWN_CONTROLLER_WAIT_BUDGET_MS - Math.max(0, nowMs - unixMs(wait.startedAt));
+  /* One wait keeps the largest budget any of its rounds asked for (review
+     round 2): a busy-lock sighting a minute into a runtime-host outage must
+     not cut the host's ten minutes down to the lock's thirty seconds. */
+  const budgetMs = Math.max(wait.budgetMs ?? 0, budget.budgetMs);
+  const retryMaxMs = Math.max(wait.retryMaxMs ?? 0, budget.retryMaxMs);
+  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
   if (remainingMs <= 0) return "exhausted";
   const delayMs = Math.min(
-    SPAWN_CONTROLLER_RETRY_MAX_MS,
+    retryMaxMs,
     SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
     remainingMs,
   );
   attempt.controllerWait = {
+    ...wait,
     startedAt: wait.startedAt,
     rounds: wait.rounds + 1,
     retryAfter: new Date(nowMs + delayMs).toISOString(),
+    budgetMs,
+    retryMaxMs,
   };
   ports.scheduleTick?.(delayMs);
   return "waiting";
@@ -4663,6 +4958,16 @@ export async function patchPipeline(
           target.account = requested;
         }
       }
+    } else if (req.action === "dismiss" || req.action === "undismiss") {
+      /* #1671: the phone board's Hide. It only says whether the lane stands in
+         the board's queue; nothing about the lane itself moves, so no host is
+         touched and the controller is not woken. A draft is never on the board
+         and a closed lane is gone from it already, so neither has a row to
+         hide or bring back. */
+      if (pipeline.state === "draft" || pipeline.state === "closed") {
+        return { error: `a ${pipeline.state} pipeline has no board row to ${req.action === "dismiss" ? "hide" : "show"}`, status: 409 };
+      }
+      pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
     } else if (req.action === "delete") {
       if (pipeline.state !== "draft") return { error: "only draft pipelines can be deleted", status: 409 };
       discardDraft(pipeline, ports);

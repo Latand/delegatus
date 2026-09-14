@@ -72,6 +72,20 @@ export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
     every effect drain remains proportional to work that can still run. */
 export const RUNTIME_PENDING_EFFECT_STALE_MS = 60 * 60 * 1_000;
 
+/** How many terminal receipts may be held past the compaction anchor while
+    their projection is unacknowledged (#1612).
+ *
+ * A terminal receipt whose acknowledgement was lost is the ONLY remaining proof
+ * that its message was delivered, so compaction must not take it while the
+ * durable delivery record still needs it. That obligation cannot be unbounded:
+ * a Viewer that never acknowledges — one that crashed, one released before this
+ * protocol existed — would otherwise pin the operations table for ever. The
+ * cap is the bound, applied to the OLDEST retained receipts first, because the
+ * newest are the ones a live repair can still consume. Sized far above any
+ * realistic outstanding set: production carries single digits of unprojected
+ * terminal receipts at a time, and each row is a receipt, not a transcript. */
+export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
+
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
 type EventRow = {
@@ -248,6 +262,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     attentionIds: strings(payload.attentionIds),
     recentReceipts: receipts(payload.recentReceipts),
     accountId: typeof payload.accountId === "string" ? payload.accountId : null,
+    ...(typeof payload.writerClaim === "string" || payload.writerClaim === null ? { writerClaim: payload.writerClaim } : {}),
     parentConversationId: typeof payload.parentConversationId === "string" ? payload.parentConversationId : null,
     flowId: typeof payload.flowId === "string" ? payload.flowId : null,
     workflowId: typeof payload.workflowId === "string" ? payload.workflowId : null,
@@ -257,6 +272,10 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       steer: capabilities.steer === true,
       structuredAttention: capabilities.structuredAttention === true,
       nativeQueue: capabilities.nativeQueue === true,
+      /* #1560. Fail-closed like every other observed capability: a projection
+         that predates the field, or one whose publisher said nothing, reads as
+         no injection rather than as an unverified yes. */
+      inject: capabilities.inject === true,
       ...(capabilities.runtimeSettings && typeof capabilities.runtimeSettings === "object" ? { runtimeSettings: {
         perTurnModel: record(capabilities.runtimeSettings).perTurnModel === true,
         perTurnEffort: record(capabilities.runtimeSettings).perTurnEffort === true,
@@ -269,6 +288,8 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",
       queueCapability: record(payload.diagnostics).queueCapability === "supported" ? "supported" as const
         : record(payload.diagnostics).queueCapability === "unsupported" ? "unsupported" as const : "unknown" as const,
+      injectCapability: record(payload.diagnostics).injectCapability === "supported" ? "supported" as const
+        : record(payload.diagnostics).injectCapability === "unsupported" ? "unsupported" as const : "unknown" as const,
       version: typeof record(payload.diagnostics).version === "string" ? String(record(payload.diagnostics).version).slice(0, 80) : null,
       nativeQueue: record(payload.diagnostics).nativeQueue === true,
       authRecovery: record(payload.diagnostics).authRecovery === "started" ? "started" as const
@@ -368,6 +389,7 @@ export class RuntimeJournal {
     `);
     this.migrateOperationIdempotencyScope();
     this.migrateOperationOrphanedSince();
+    this.migrateOperationProjectionPending();
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
     for (const row of this.db.query<EventRow, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
@@ -465,6 +487,7 @@ export class RuntimeJournal {
         : {
             ...command,
             operationId,
+            ...(command.kind === "inject" ? { binding: this.injectionBindingAtAdmission(command.conversationId) } : {}),
             ...(this.structuredHosts
               && (command.kind === "send" || command.kind === "steer")
               && typeof receipt.turnId === "string"
@@ -792,7 +815,14 @@ export class RuntimeJournal {
       const committed = { ...next, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committed, event.seq);
       if (completing) this.appendCompletionConsequences(command, committed, operationId);
-      this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ? WHERE operation_id = ?").run(stableJson(committed), event.seq, operationId);
+      /* The retention obligation is taken in the same transaction that commits
+         the outcome (#1612), because the failure it exists for is the answer to
+         THIS call never reaching its caller: a marker written afterwards, from
+         the caller, is lost by exactly the event it is meant to survive.
+         COALESCE, so a later transition can never silently release an
+         obligation an earlier one took. */
+      this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
+        .run(stableJson(committed), event.seq, completing && options.awaitProjection === true ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
       if (killBoundary) {
         this.db.query(`
@@ -1464,7 +1494,40 @@ export class RuntimeJournal {
     });
   }
 
-  compact(maxEvents = this.maxEvents): void {
+  /** Releases the retention taken by {@link transitionOperation} under
+      `awaitProjection`, for receipts whose outcome now lives in the durable
+      delivery record (#1612).
+   *
+   * Idempotent and self-limiting: an id with no obligation, an id compacted
+   * away, and an id acknowledged twice are all the same no-op, so a caller that
+   * cannot tell whether its previous acknowledgement arrived may simply send it
+   * again. It moves nothing else — not the receipt, not its status, not its
+   * time — so nothing about the delivery evidence depends on who called it. */
+  acknowledgeTerminalProjection(operationIds: readonly string[]): number {
+    this.assertHealthy();
+    if (operationIds.length === 0) return 0;
+    if (operationIds.length > RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT) {
+      throw new Error("runtime projection acknowledgement batch is too large");
+    }
+    if (operationIds.some((operationId) => typeof operationId !== "string" || !operationId)) {
+      throw new Error("runtime projection acknowledgement id is invalid");
+    }
+    return this.db.query(
+      `UPDATE operations SET projection_pending = NULL
+       WHERE projection_pending IS NOT NULL AND operation_id IN (${operationIds.map(() => "?").join(", ")})`,
+    ).run(...operationIds).changes;
+  }
+
+  /** The receipts compaction is holding for an unacknowledged projection, newest
+      first — the exact set the cap below is applied to. */
+  unprojectedTerminalOperationIds(limit = RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT): string[] {
+    this.assertHealthy();
+    return this.db.query<{ operation_id: string }, [number]>(
+      "SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?",
+    ).all(Math.max(0, limit)).map((row) => row.operation_id);
+  }
+
+  compact(maxEvents = this.maxEvents, unprojectedReceiptLimit = RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT): void {
     this.assertHealthy();
     const count = Number(this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM events").get()?.count ?? 0);
     if (count <= maxEvents) return;
@@ -1476,13 +1539,33 @@ export class RuntimeJournal {
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
       this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
-      /* A native entry that is not yet settled is still answered through its
-         add (and any unresolved mutation) operation after that effect stops
-         being pending, so those ids are held for as long as the entry needs
-         them (#1664). */
-      this.db.query(`DELETE FROM operations WHERE event_seq <= ?
-        AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')
-        AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)`).run(anchor.seq);
+      /* Three reasons an operation outlives the anchor: an effect still owed
+         execution, a native queue entry that is still answered through the
+         operation (#1664), and a terminal receipt still owed a projection
+         (#1612). Only the last is capped, and the cap keeps the NEWEST
+         obligations, so a Viewer that stopped acknowledging cannot pin the
+         table indefinitely while a live repair keeps the receipts it can
+         still consume. */
+      const released = Number(this.db.query<{ count: number }, [number, number]>(
+        `SELECT COUNT(*) AS count FROM operations
+         WHERE event_seq <= ? AND projection_pending IS NOT NULL
+           AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
+           AND operation_id NOT IN (
+             SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
+           )`,
+      ).get(anchor.seq, Math.max(0, unprojectedReceiptLimit))?.count ?? 0);
+      this.db.query(
+        `DELETE FROM operations
+         WHERE event_seq <= ?
+           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')
+           AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
+           AND operation_id NOT IN (
+             SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
+           )`,
+      ).run(anchor.seq, Math.max(0, unprojectedReceiptLimit));
+      if (released > 0) {
+        console.error(`[runtime journal] compaction released ${released} unacknowledged terminal receipt(s) over the ${unprojectedReceiptLimit} retention cap`);
+      }
       this.db.exec("DELETE FROM delivery_operation_actions WHERE operation_id NOT IN (SELECT operation_id FROM operations)");
       this.db.query("DELETE FROM entities WHERE kind = 'operation' AND checkpoint_seq <= ?").run(anchor.seq);
       this.metaSet("anchor_seq", String(anchor.seq));
@@ -1651,6 +1734,15 @@ export class RuntimeJournal {
       if (!command.text.trim() && !command.images?.length) throw new Error("message content is required");
       if (!command.contentDigest) throw new Error("message content digest is required");
     }
+    /* Injection carries text and only text, and the refusal is repeated here
+       because the journal is reachable from more than one admitting surface —
+       an image that slipped past a route must not become a durable operation
+       nobody can execute. */
+    if (command.kind === "inject") {
+      if (!command.text.trim()) throw new Error("injected context text is required");
+      if (!command.contentDigest) throw new Error("message content digest is required");
+      if (command.images?.length) throw new Error("injected context cannot carry images");
+    }
     if (command.kind === "answer" && !command.attentionId.trim()) throw new Error("attentionId is required");
     if ((command.kind === "kill" || command.kind === "compact" || (command.kind === "reconfigure" && command.sessionKey))
       && ((!command.sessionKey || (command.sessionKey.engine !== "codex" && command.sessionKey.engine !== "claude"))
@@ -1665,6 +1757,19 @@ export class RuntimeJournal {
 
   private normalizeOperation(command: RuntimeOperationCommand): RuntimeOperationCommand {
     if (command.kind === "native-queue") return parseRuntimeCommand("native-queue", command);
+    if (command.kind === "inject") {
+      const normalized = parseRuntimeCommand("inject", command);
+      /* The parser recomputes the digest from the text it accepted. Comparing
+         it to what the caller claimed is what binds one durable key to one
+         payload: without this, a replay under the same operation id could
+         arrive with different text and be admitted as if nothing changed. */
+      if (command.contentDigest
+        && normalized.kind === "inject"
+        && command.contentDigest !== normalized.contentDigest) {
+        throw new Error("message content digest mismatch");
+      }
+      return normalized;
+    }
     if (command.kind !== "send" && command.kind !== "steer" && command.kind !== "spawn") return command;
     const rawImages = command.images ?? [];
     const images = parseStructuredImageRefs(rawImages, 16);
@@ -1751,6 +1856,34 @@ export class RuntimeJournal {
         status = "queued";
         queuePosition = this.queuedSendCount(command.conversationId) + 1;
         turnId = null;
+      }
+    /* #1560: native injection is admitted on its own terms and never on a
+       send's. It has no policy to interpret, it never becomes a native-queue
+       add, and its whole reason to exist is that it does not start or interrupt
+       a turn — so `running` is a perfectly good state to be admitted against,
+       which is the opposite of what the send branch below concludes. The
+       capability is required AT ADMISSION so the operator is refused now rather
+       than holding an operation that fails later, and there is deliberately no
+       degradation to steering: an engine that cannot inject says so. */
+    } else if (command.kind === "inject") {
+      if (!session || session.host !== "hosted") {
+        status = "rejected";
+        reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
+      } else if (!session.writerClaim) {
+        status = "rejected";
+        reason = "stale-generation";
+      } else if (!session.capabilities.inject) {
+        status = "rejected";
+        reason = "unsupported-injection";
+      /* Unlike an ordinary send, an explicit `null` here IS a fence: it is the
+         caller saying "only into an idle thread", which is the one way to ask
+         for the history placement and be sure of getting it. */
+      } else if (command.turnId !== undefined && command.turnId !== session.activeTurnId) {
+        status = "rejected";
+        reason = "stale-turn";
+      } else {
+        status = "queued";
+        turnId = session.activeTurnId;
       }
     } else if (command.kind === "send" || command.kind === "steer") {
       if (!session || session.host !== "hosted") {
@@ -1855,7 +1988,14 @@ export class RuntimeJournal {
       turnId,
       queuePosition,
       reason,
-      text: command.kind === "send" || command.kind === "steer" ? command.text.slice(0, 240) : null,
+      /* #1560: an injection carries the operator's own words, so its receipt
+         carries them too. Without this every inject receipt has `text: null`,
+         and the composer surfaces that render a receipt all require text — so a
+         failed, refused or unverified injection would be invisible, which is
+         exactly the outcome this operation exists to report honestly. */
+      text: command.kind === "send" || command.kind === "steer" || command.kind === "inject"
+        ? command.text.slice(0, 240)
+        : null,
       ...(command.kind === "send" || command.kind === "steer" ? { imageCount: command.images?.length ?? 0 } : {}),
       ...((command.kind === "send" || command.kind === "steer") && command.runtime ? { runtime: command.runtime } : {}),
       at: admittedAt,
@@ -1866,6 +2006,12 @@ export class RuntimeJournal {
       admittedAt,
       revision,
     };
+  }
+
+  private injectionBindingAtAdmission(conversationId: string) {
+    const session = this.entity<RuntimeSession>("session", conversationId);
+    if (!session?.writerClaim) return null;
+    return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
   }
 
   private queuedSendCount(conversationId: string): number {
@@ -2559,6 +2705,14 @@ export class RuntimeJournal {
   private migrateOperationOrphanedSince(): void {
     const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(operations)").all().map((row) => row.name));
     if (!columns.has("orphaned_since")) this.db.exec("ALTER TABLE operations ADD COLUMN orphaned_since INTEGER");
+  }
+
+  /** #1612. Null on every existing row, which reads as "owed nothing": a
+      journal written before this column keeps exactly its previous retention,
+      and only transitions that ask for projection retention set it. */
+  private migrateOperationProjectionPending(): void {
+    const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(operations)").all().map((row) => row.name));
+    if (!columns.has("projection_pending")) this.db.exec("ALTER TABLE operations ADD COLUMN projection_pending INTEGER");
   }
 
   private migrateLegacyEvents(): void {

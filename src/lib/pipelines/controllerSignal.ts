@@ -1,3 +1,5 @@
+import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
+
 type PipelineTick = () => Promise<void>;
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -10,17 +12,25 @@ const signalHost = globalThis as typeof globalThis & {
   __llvPipelineSignal?: PipelineSignalState;
 };
 
+/** The tick a process without an in-process controller sends after it changes
+    a pipeline — the Viewer MCP server, the runtime host. It resolves its Viewer
+    and credential the way every other Viewer control request does (#1685):
+    agents are launched without LLV_VIEWER_CONTROL_URL, so reading only that
+    sent a staging agent's tick to the production port, and a Viewer with a
+    token refused the bare request unless a trusted local entry vouched for it. */
 export async function requestRemotePipelineTick(
   fetcher: Fetcher = fetch,
   env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
-  const baseUrl = env.LLV_VIEWER_CONTROL_URL?.trim() || "http://127.0.0.1:8898";
+  const baseUrl = viewerControlOrigin(env);
+  const credential = viewerControlToken(env, baseUrl);
   const response = await fetcher(new URL("/api/pipelines/tick", baseUrl), {
     method: "POST",
     headers: {
       "content-type": "application/json",
       origin: baseUrl,
       "sec-fetch-site": "same-origin",
+      ...(credential ? { authorization: `Bearer ${credential}` } : {}),
     },
     body: "{}",
   });

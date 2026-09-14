@@ -13,6 +13,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
 const { gatherSeatTickInput: gatherProduction, repoDirForProject, runtimeWakeState, seatTickProjects, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
+const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
 const { statePath } = await import("@/lib/configDir");
 const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, ports) => {
@@ -27,6 +28,7 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
 const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";
+import type { SeatTickJournalReceipt } from "./seatTickSources";
 import type { SeatTickSources } from "./seatTickSources";
 const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit } = await import("./seatTick");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
@@ -1365,14 +1367,38 @@ function found(current: SendReceipt): OriginalSendEvidence {
   return { kind: "found", operationId: current.operationId, deliveryId: "delivery-1", receipt: current, reservationState: "assigned", current: { readable: true, value: current } };
 }
 
-async function classify(evidence: OriginalSendEvidence, over: { settle?: SendReceipt | null; runtime?: "retained" | "landed" | "dropped" | "unknown" | "uncertain"; wake?: SeatTickOutstandingWake } = {}) {
+/** The journal's receipt for the state a case wants the runtime to answer. */
+const JOURNAL_FOR: Record<"retained" | "landed" | "dropped" | "unknown" | "uncertain", SeatTickJournalReceipt | null> = {
+  retained: { status: "queued", reason: null },
+  landed: { status: "delivered", reason: null },
+  dropped: { status: "rejected", reason: "conversation is not hosted" },
+  uncertain: { status: "uncertain", reason: null },
+  unknown: null,
+};
+
+async function classify(evidence: OriginalSendEvidence, over: { settle?: SendReceipt | null; runtime?: keyof typeof JOURNAL_FOR | "unreachable" | SeatTickJournalReceipt; wake?: SeatTickOutstandingWake; readOnly?: boolean; rearm?: "refused" } = {}) {
   const calls: string[] = [];
-  const state = await wakeStateFromRecord(over.wake ?? WAKE, {
+  const observation = await wakeStateFromRecord(over.wake ?? WAKE, {
     lookup: async () => { calls.push("lookup"); return evidence; },
-    settle: async () => { calls.push("settle"); return over.settle ?? null; },
-    runtime: async () => { calls.push("runtime"); return over.runtime ?? "unknown"; },
+    ...(over.readOnly ? {} : {
+      settle: async () => { calls.push("settle"); return over.settle ?? null; },
+      /* The record as it reads after the journal's verdict is written onto it. */
+      settleFromJournal: async (target, journalReceipt) => {
+        calls.push(`record:${target.operationId}`);
+        if (over.rearm === "refused") return null;
+        return journalReceipt.status === "delivered"
+          ? receipt({ state: "delivered", resend: "not-needed" })
+          : receipt({ state: "failed", reason: journalReceipt.reason, resend: "safe", duplicateRisk: false });
+      },
+    }),
+    journal: async () => {
+      calls.push("journal");
+      if (over.runtime === "unreachable") throw new Error("runtime host request timed out");
+      if (over.runtime && typeof over.runtime === "object") return over.runtime;
+      return JOURNAL_FOR[over.runtime ?? "unknown"];
+    },
   });
-  return { state, calls };
+  return { state: observation.state, calls, evidence: observation.evidence };
 }
 
 test("a delivered record lands, a fenced loss drops, and an unverified failure is uncertain (#1465)", async () => {
@@ -1383,9 +1409,40 @@ test("a delivered record lands, a fenced loss drops, and an unverified failure i
   expect((await classify(found(receipt({ state: "failed", resend: null })))).state).toBe("uncertain");
 });
 
+/* A record ended without proof is asked about once more, of the journal, under
+   the operation the record names — and only the journal's own terminal
+   verdicts change the answer. Silence, an unreachable host, an open status
+   and an unverified ending all leave the record's `uncertain` standing. */
+test("an unverified record yields to the journal's own terminal verdict, and to nothing weaker", async () => {
+  const unverified = found(receipt({ state: "failed", reason: "delivery was accepted and the delivery journal holds no record of it", resend: "verify-first", duplicateRisk: true, settledAt: new Date(NOW).toISOString() }));
+  expect(await classify(unverified, { runtime: "landed" })).toMatchObject({ state: "landed", calls: ["lookup", "journal", "record:op-wake-1"], evidence: { recorded: "delivered" } });
+  expect(await classify(unverified, { runtime: "dropped" })).toMatchObject({ state: "dropped", evidence: { recorded: "lost", record: { resend: "safe" } } });
+  expect((await classify(unverified, { runtime: { status: "failed", reason: "delivery-discarded" } })).state).toBe("dropped");
+  /* A record that will not take the verdict changes nothing: the release
+     rests on the journal, and the replacement is a new message anyway. */
+  expect(await classify(unverified, { runtime: "dropped", rearm: "refused" })).toMatchObject({ state: "dropped", evidence: { recorded: "refused", record: { resend: "verify-first" } } });
+  /* An inert read reports what the journal proves and writes nothing. */
+  expect(await classify(unverified, { runtime: "dropped", readOnly: true })).toMatchObject({ state: "dropped", calls: ["lookup", "journal"] });
+  /* The settlement's own `failed` on an old host is its unverified ending. */
+  expect((await classify(unverified, { runtime: { status: "failed", reason: SEND_UNVERIFIED_REASON } })).state).toBe("uncertain");
+  expect((await classify(unverified, { runtime: "uncertain" })).state).toBe("uncertain");
+  expect((await classify(unverified, { runtime: { status: "interrupted", reason: null } })).state).toBe("uncertain");
+  /* An open status is the journal still holding it. */
+  expect((await classify(unverified, { runtime: "retained" })).state).toBe("retained");
+  const silent = await classify(unverified, { runtime: "unknown" });
+  expect(silent).toMatchObject({ state: "uncertain", evidence: { operationId: "op-wake-1", journal: "no-record", record: { state: "failed", resend: "verify-first" } } });
+  expect(silent.evidence!.record!.reason).toContain("holds no record");
+  const unreachable = await classify(unverified, { runtime: "unreachable" });
+  expect(unreachable).toMatchObject({ state: "uncertain", evidence: { journal: "unreachable" } });
+});
+
+test("a read with no settlement port is inert: an in-flight record is reported retained and nothing is ended", async () => {
+  expect(await classify(found(receipt({})), { readOnly: true })).toMatchObject({ state: "retained", calls: ["lookup"], evidence: { record: { state: "in-flight" }, journal: "unasked" } });
+});
+
 test("an in-flight record is ended by the tick's own settlement, and classified by its answer (#1465)", async () => {
   const still = await classify(found(receipt({})), { settle: receipt({}) });
-  expect(still).toEqual({ state: "retained", calls: ["lookup", "settle"] });
+  expect(still).toMatchObject({ state: "retained", calls: ["lookup", "settle"] });
   expect((await classify(found(receipt({})), { settle: receipt({ state: "delivered", resend: "not-needed" }) })).state).toBe("landed");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "safe" }) })).state).toBe("dropped");
   expect((await classify(found(receipt({})), { settle: receipt({ state: "failed", resend: "verify-first" }) })).state).toBe("uncertain");
@@ -1395,14 +1452,16 @@ test("an in-flight record is ended by the tick's own settlement, and classified 
 test("a record the journal could not be read for is unknown, whatever the durable projection says (#1465)", async () => {
   const current = receipt({});
   const unreadable: OriginalSendEvidence = { kind: "found", operationId: current.operationId, deliveryId: "delivery-1", receipt: current, reservationState: "assigned", current: { readable: false, reason: "runtime host is unavailable" } };
-  expect(await classify(unreadable)).toEqual({ state: "unknown", calls: ["lookup"] });
+  expect(await classify(unreadable)).toMatchObject({ state: "unknown", calls: ["lookup"], evidence: { journal: "unreachable" } });
 });
 
 test("absence under the key asks the runtime when there is an operation to ask about, and is unknown otherwise (#1465)", async () => {
-  expect(await classify({ kind: "absent" }, { runtime: "retained" })).toEqual({ state: "retained", calls: ["lookup", "runtime"] });
-  expect(await classify({ kind: "absent" }, { runtime: "dropped" })).toEqual({ state: "dropped", calls: ["lookup", "runtime"] });
+  expect(await classify({ kind: "absent" }, { runtime: "retained" })).toMatchObject({ state: "retained", calls: ["lookup", "journal"] });
+  expect(await classify({ kind: "absent" }, { runtime: "dropped" })).toMatchObject({ state: "dropped", calls: ["lookup", "journal"] });
+  expect(await classify({ kind: "absent" }, { runtime: "unknown" })).toMatchObject({ state: "unknown", evidence: { operationId: "op-wake-1", record: null, journal: "no-record" } });
+  expect(await classify({ kind: "absent" }, { runtime: "unreachable" })).toMatchObject({ state: "unknown", evidence: { journal: "unreachable" } });
   /* No record and no operation: the layer affirms it never held it (#1465). */
-  expect(await classify({ kind: "absent" }, { wake: { ...WAKE, operationId: null } })).toEqual({ state: "absent", calls: ["lookup"] });
+  expect(await classify({ kind: "absent" }, { wake: { ...WAKE, operationId: null } })).toMatchObject({ state: "absent", calls: ["lookup"] });
 });
 
 test("ambiguity, an unresolved target, an unreadable record and a contradictory one are all unknown (#1465)", async () => {

@@ -9,6 +9,7 @@ import {
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
+import { admittedMessageTextForms } from "./admittedMessageText";
 import { structuredContentDigest } from "./structuredContent";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import {
@@ -160,8 +161,11 @@ export type SendResendGuidance =
 export interface SendReceipt {
   operationId: string;
   /** What was accepted under this id. Read from the durable record, so it
-      survives the journal that admitted it. */
-  kind: "send" | "steer";
+      survives the journal that admitted it. `inject` (#1560) is here for the
+      same reason the others are: a caller asking what became of an operation
+      must be told which operation it was, and an injection settled as if it
+      were a send would invite a resend that the engine does not deduplicate. */
+  kind: "send" | "steer" | "inject";
   conversationId: string | null;
   /** The idempotency key the send was admitted under, when the record kept it. */
   clientMessageId: string | null;
@@ -669,7 +673,10 @@ export interface OriginalSendBinding {
   conversationId: string;
   /** The exact `clientMessageId` the send route was handed. */
   clientMessageId: string;
-  /** Original text, when the caller has already verified its argument digest. */
+  /** Original text, when the caller has already verified its argument digest.
+      Supplied EXACTLY as the caller sent it: the lookup matches it against the
+      forms admission stores (see {@link admittedMessageTextForms}), so a route
+      that trimmed on the way in is not mistaken for a changed payload. */
   text?: string;
 }
 
@@ -714,11 +721,17 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
       || reservation.command.operationId !== operationId))) return { kind: "contradictory" };
   const receipt = sendReceiptFor(file, operationId);
   if (!receipt) return { kind: "absent" };
+  /* The caller's argument is compared against the forms ADMISSION can have
+     stored it in, not against itself (#1609): the send route trims before it
+     reserves, so measuring the raw argument against the trimmed record turned
+     a delivered send into a payload conflict its caller could never clear.
+     Anything differing by more than surrounding whitespace still contradicts. */
   if (binding.text !== undefined) {
-    const expected = structuredContentDigest({ text: binding.text, images: [] });
-    if ((reservation?.text && reservation.text !== binding.text)
-      || (reservation?.contentDigest && reservation.contentDigest !== expected)
-      || (owner?.contentDigest && owner.contentDigest !== expected)) return { kind: "contradictory" };
+    const admitted = admittedMessageTextForms(binding.text);
+    const expected = new Set(admitted.map((text) => structuredContentDigest({ text, images: [] })));
+    if ((reservation?.text && !admitted.includes(reservation.text))
+      || (reservation?.contentDigest && !expected.has(reservation.contentDigest))
+      || (owner?.contentDigest && !expected.has(owner.contentDigest))) return { kind: "contradictory" };
   }
   return { kind: "found", operationId, deliveryId: reservation ? deliveryId : null, receipt, reservationState: reservation?.state ?? null };
 }

@@ -166,6 +166,15 @@ function normalizeSourceGap(value: unknown): SeatTickSourceGap | null {
   return { gap, since, lastAttemptAt, attempts, reported: raw.reported === true };
 }
 
+/** The released-attempt marker (#1672), or null for a row from before it. */
+function normalizeReleasedWake(value: unknown): SeatTickProjectState["releasedWake"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const clientMessageId = typeof raw.clientMessageId === "string" && raw.clientMessageId.length > 0 && raw.clientMessageId.length <= 1_000 ? raw.clientMessageId : null;
+  const releasedAt = isoOrNull(raw.releasedAt);
+  return clientMessageId && releasedAt ? { clientMessageId, releasedAt } : null;
+}
+
 function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   const empty = emptySeatTickState();
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
@@ -193,6 +202,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     eventsThrough: eventsThrough(raw, legacy),
     outstandingWake: normalizeOutstandingWake(raw.outstandingWake),
     retiredWakes: normalizeRetiredWakes(raw.retiredWakes),
+    releasedWake: normalizeReleasedWake(raw.releasedWake),
     pullRequestGap: normalizeSourceGap(raw.pullRequestGap),
     /* No legacy row ever carried a children run: the source and its row are
        both #1465, and the SQLite store is the only place they have lived. */
@@ -264,6 +274,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
     retiredWakes: row.retiredWakes ?? [],
+    releasedWake: row.releasedWake ?? null,
     pullRequestGap: row.pullRequestGap,
     childrenGap: row.childrenGap,
     harvestedChildren: row.harvestedChildren,
@@ -271,9 +282,12 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   };
 }
 
+function accountingFilename(filePath: string): string {
+  return filePath === seatTickStatePath() ? path.join(path.dirname(filePath), "state.sqlite") : `${filePath}.sqlite`;
+}
+
 function accountingFor(project: string, filePath: string): SeatTickAccounting {
-  const filename = filePath === seatTickStatePath() ? path.join(path.dirname(filePath), "state.sqlite") : `${filePath}.sqlite`;
-  const accounting = new SeatTickAccounting(filename, project);
+  const accounting = new SeatTickAccounting(accountingFilename(filePath), project);
   accounting.migrateLegacy(filePath, (raw, version) => normalizeRow(raw, version !== 2));
   return accounting;
 }
@@ -282,9 +296,24 @@ export function readSeatTickState(project: string, filePath = seatTickStatePath(
   return accountingFor(project, filePath).readState();
 }
 
+/**
+ * The row as it stands, for a reader that must leave the store as it found it
+ * (#1672). {@link readSeatTickState} is a check's read: it imports a legacy
+ * row and mints the project's accounting row when there is none, which is
+ * right for the tick and wrong for a diagnostic surface that can be asked
+ * about any name. This answers from the accounting row when one exists, from
+ * the legacy file when only that has the project, and empty otherwise — and
+ * writes no row in any of the three cases.
+ */
+export function peekSeatTickState(project: string, filePath = seatTickStatePath()): SeatTickProjectState {
+  const accounting = new SeatTickAccounting(accountingFilename(filePath), project);
+  if (accounting.row()) return accounting.readState();
+  return readFile(filePath).projects[project] ?? emptySeatTickState();
+}
+
 export function readSeatTickStateFile(filePath = seatTickStatePath()): Record<string, SeatTickProjectState> {
   for (const project of Object.keys(readFile(filePath).projects)) accountingFor(project, filePath);
-  const filename = filePath === seatTickStatePath() ? path.join(path.dirname(filePath), "state.sqlite") : `${filePath}.sqlite`;
+  const filename = accountingFilename(filePath);
   const accounting = new SeatTickAccounting(filename, "");
   return Object.fromEntries(accounting.collection.snapshot().flatMap((row) => row.kind === "project"
     ? [[row.project, { ...row.state, accounting: { filename, revision: row.revision, gap: row.gap } }]] : []));

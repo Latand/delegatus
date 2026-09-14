@@ -691,7 +691,10 @@ export class SeatTickAccounting {
         tx.delete(outcome.readyKey);
       }
       const current = disposition === "landed" ? seatTickWakeCommit(row.state, wake.commit, Date.parse(state.lastWakeAt!)) : row.state;
-      row.state = { ...current, accounting: undefined, harvestedChildren: [], outstandingWake: null };
+      /* A release carries the marker the next wake's identity is derived from
+         (#1672); a landing has already cleared it in the commit. */
+      row.state = { ...current, accounting: undefined, harvestedChildren: [], outstandingWake: null,
+        releasedWake: disposition === "landed" ? null : state.releasedWake ?? null };
       return true;
     });
   }

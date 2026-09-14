@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
 import { useConversationCatalog, type ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { useLocale } from "@/lib/i18n";
-import type { FileEntry } from "@/lib/types";
+
+/*
+ * «All conversations» on the phone board (#1530, reshaped by #1671): the
+ * Recent list going further down, in the board's own rows. The board appends
+ * the feed's Recent rows past the three first — already in memory, no request
+ * — and only once the operator has scrolled past them does this read the
+ * project's stored catalog, twenty entries a page, always scoped to the
+ * project. The rows are the board's; what lives here is the per-project state
+ * that outlives Home being covered, the scroll anchor, and the quiet tail.
+ */
 
 export interface CatalogPosition {
   path: string | null;
@@ -13,7 +21,8 @@ export interface CatalogPosition {
 }
 interface ProjectCatalogView {
   expanded: boolean;
-  query: string;
+  /** The catalog's chain has been asked for: the feed's rows ran out. */
+  paging: boolean;
   position: CatalogPosition;
 }
 
@@ -21,18 +30,25 @@ interface ProjectCatalogView {
 export function useMobileInlineCatalog(project: string, enabled: boolean) {
   const views = useRef(new Map<string, ProjectCatalogView>());
   const [, render] = useState(0);
-  if (!views.current.has(project)) views.current.set(project, { expanded: false, query: "", position: { path: null, offset: 0, scrollTop: 0 } });
+  if (!views.current.has(project)) views.current.set(project, { expanded: false, paging: false, position: { path: null, offset: 0, scrollTop: 0 } });
   const view = views.current.get(project)!;
   const change = (patch: Partial<ProjectCatalogView>) => {
     views.current.set(project, { ...view, ...patch });
     render((n) => n + 1);
   };
   const catalog = useConversationCatalog({
-    project: view.query.trim() ? undefined : project,
-    query: view.query, enabled: enabled && view.expanded, pageSize: 20, scopeKey: project,
+    project, enabled: enabled && view.expanded && view.paging, pageSize: 20, scopeKey: project,
   });
-  return { view, catalog, toggle: () => change({ expanded: !view.expanded }),
-    setQuery: (query: string) => change({ query, position: { path: null, offset: 0, scrollTop: 0 } }) };
+  return {
+    view,
+    catalog,
+    toggle: () => change({ expanded: !view.expanded }),
+    /* The end of the list came into view: start the chain, or read its next page. */
+    reach: () => {
+      if (view.paging) catalog.loadMore();
+      else change({ paging: true });
+    },
+  };
 }
 
 export function captureCatalogPosition(root: HTMLElement, position: CatalogPosition) {
@@ -50,56 +66,55 @@ export function restoreCatalogPosition(root: HTMLElement, position: CatalogPosit
   if (row) root.scrollTop += row.getBoundingClientRect().top - root.getBoundingClientRect().top - position.offset;
 }
 
-export function MobileInlineCatalog({ catalog, query, onQuery, files, onOpen }: {
+const LINE = "px-3 py-2.5 text-center text-label text-muted";
+const RETRY = "min-h-11 w-full rounded-[12px] bg-quiet px-3 text-ui font-semibold text-accent ring-1 ring-inset ring-border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+/**
+ * The end of the list: a quiet line for loading, failure, an expired snapshot
+ * and the end, a 44 px row to retry, and the sentinel that asks for more when
+ * it scrolls into view.
+ */
+export function MobileCatalogTail({ catalog, paging, rows, onReach }: {
   catalog: ConversationCatalogData;
-  query: string;
-  onQuery: (query: string) => void;
-  files: readonly FileEntry[];
-  onOpen: (file: FileEntry) => void;
+  paging: boolean;
+  /** Rows the list shows past the first three. */
+  rows: number;
+  onReach: () => void;
 }) {
   const { t } = useLocale();
   const sentinel = useRef<HTMLDivElement>(null);
+  const reach = useRef(onReach);
+  reach.current = onReach;
+  /* Nothing to ask for while a page is in flight, after a failure (its row
+     retries), or once the chain has ended. */
+  const settled = paging && (catalog.loading || catalog.error || (catalog.known && !catalog.nextCursor));
   useEffect(() => {
     const node = sentinel.current;
-    if (!node || catalog.loading || catalog.error || !catalog.nextCursor) return;
+    if (!node || settled || typeof IntersectionObserver === "undefined") return;
+    /* A fresh observer reports at once when the sentinel is already in view, so
+       a page that added nothing new (every entry already listed above) reads
+       the next one without waiting for another scroll. */
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) catalog.loadMore();
-    }, { root: node.closest("[data-mobile2-board]"), rootMargin: "0px 0px 120px 0px" });
+      if (entries.some((entry) => entry.isIntersecting)) reach.current();
+    }, { root: node.closest("[data-mobile2-board]"), rootMargin: "0px 0px 240px 0px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [catalog.loading, catalog.error, catalog.nextCursor, catalog.loadMore]);
-  const live = new Map(files.map((file) => [file.path, file]));
+  }, [settled, paging, catalog.nextCursor, catalog.items.length]);
   return (
-    <section data-mobile-inline-catalog className="flex min-w-0 flex-col gap-1.5">
-      <p className="px-1 text-label text-muted">{t("mobile.catalog.hint")}</p>
-      <input type="search" value={query} onChange={(event) => onQuery(event.target.value)}
-        aria-label={t("switch.search")} placeholder={t("switch.search")}
-        className="min-h-11 w-full min-w-0 rounded-[12px] border border-border bg-card px-3 text-body text-primary" />
-      <button type="button" onClick={catalog.refresh} disabled={catalog.loading}
-        className="min-h-11 rounded-[12px] bg-quiet px-3 text-label text-secondary disabled:opacity-60">{t("mobile.catalog.refresh")}</button>
-      {catalog.items.map((entry) => {
-        const file = live.get(entry.path) ?? entry;
-        return <button type="button" key={entry.path} data-catalog-path={entry.path}
-          onClick={() => onOpen(file)}
-          className="flex min-h-14 w-full min-w-0 items-center gap-2.5 rounded-[12px] bg-card px-3 py-2 text-left shadow-1 active:bg-sunken">
-          <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${file.activity === "live" ? "bg-success" : "bg-strong"}`} />
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="line-clamp-2 break-words text-body font-semibold text-primary [overflow-wrap:anywhere]">{file.title || file.name}</span>
-            <span className="truncate text-label text-muted">{file.engine}{query.trim() ? ` · ${file.project}` : ""}</span>
-          </span>
-          <ChevronRight aria-hidden className="h-[18px] w-[18px] shrink-0 text-muted" />
-        </button>;
-      })}
-      {catalog.loading ? <p role="status" className="p-3 text-label text-muted">{t("common.loading")}</p> : null}
-      {catalog.error && !catalog.loading ? <div role="status" className="text-label text-danger">
-        <p>{t(catalog.expired ? "mobile.catalog.expired" : "list.failed")}</p>
-        <button type="button" onClick={catalog.retry} className="min-h-11 w-full rounded-[12px] bg-card px-3">
-          {t(catalog.expired ? "mobile.catalog.refresh" : "list.retry")}
-        </button>
-      </div> : null}
-      {!catalog.loading && !catalog.error && catalog.known && !catalog.nextCursor
-        ? <p role="status" className="p-3 text-label text-muted">{t(catalog.items.length ? "mobile.catalog.end" : "common.nothingFound")}</p> : null}
+    <div data-mobile-inline-catalog className="flex min-w-0 flex-col gap-1.5">
+      {paging && catalog.loading ? <p role="status" className={LINE}>{t("common.loading")}</p> : null}
+      {paging && catalog.error && !catalog.loading ? (
+        <div role="status" className="flex flex-col gap-1.5">
+          <p className={LINE}>{t(catalog.expired ? "mobile.catalog.expired" : "list.failed")}</p>
+          <button type="button" data-mobile2-catalog-retry={catalog.expired ? "reload" : "retry"} className={RETRY} onClick={catalog.retry}>
+            {t(catalog.expired ? "mobile2.board.catalogReload" : "list.retry")}
+          </button>
+        </div>
+      ) : null}
+      {paging && !catalog.loading && !catalog.error && catalog.known && !catalog.nextCursor
+        ? <p role="status" className={LINE}>{t(rows ? "mobile.catalog.end" : "common.nothingFound")}</p>
+        : null}
       <div ref={sentinel} data-catalog-sentinel className="h-px" />
-    </section>
+    </div>
   );
 }

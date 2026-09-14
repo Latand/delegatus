@@ -30,6 +30,7 @@ import {
   repoDirForProject,
   seatTickProjects,
   type SeatTickSources,
+  type SeatTickWakeEvidence,
   type SeatTickWakeState,
 } from "./seatTickSources";
 import { SEAT_TICK_RETIRED_WAKE_LIMIT } from "./types";
@@ -343,7 +344,10 @@ function verdictDetail(verdict: SeatTickVerdict): string | null {
  * - What the wake SAYS — the seat epoch, the reasons, the state fingerprint
  *   they were raised against — so a wake that never landed is re-raised at the
  *   next check under the same key and replays instead of stacking a second
- *   copy of a message the seat may still receive.
+ *   copy of a message the seat may still receive. A wake RELEASED as proven
+ *   never executed is the one exception, and the reverse: its key is spent in
+ *   the layers that refused it, so its replacement folds it in and is a new
+ *   message to them (see {@link releasedWakeIdentity}).
  * - WHICH wake it is — the stamp of the last delivered one, which only a
  *   landed send advances. Without it the hourly wake on an unchanged board
  *   would carry the previous hour's key and be swallowed as a replay: silence
@@ -357,13 +361,32 @@ function wakeClientMessageId(
   project: string,
   seatEpoch: number,
   verdict: SeatTickVerdict,
-  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null },
+  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; releasedWake?: SeatTickProjectState["releasedWake"] },
 ): string {
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
     : "proposal";
   return `seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${context.fingerprint}`
-    + wakePromptIdentity(context.monitorPrompt);
+    + wakePromptIdentity(context.monitorPrompt)
+    + releasedWakeIdentity(context.releasedWake ?? null);
+}
+
+/**
+ * The released attempt's share of the next wake's identity (#1672).
+ *
+ * A wake released as proven never executed leaves its key bound in the
+ * runtime journal to the operation the journal refused, and the delivery
+ * record re-arms that same operation for the same key. The wake raised in its
+ * place carries the same obligations and, with nothing landed, the same stamp
+ * and fingerprint — so without this it would be the same key, and the journal
+ * would answer it by replaying the refusal, check after check, delivering
+ * nothing. Folding the released key in makes the replacement a new message to
+ * both layers, and keeps it one: the marker stands until a landing moves the
+ * stamp, so an unlanded replacement still replays under its own key.
+ */
+function releasedWakeIdentity(released: SeatTickProjectState["releasedWake"]): string {
+  if (!released) return "";
+  return `:after-${crypto.createHash("sha256").update(released.clientMessageId).digest("hex").slice(0, 16)}`;
 }
 
 /**
@@ -395,6 +418,98 @@ function wakePromptIdentity(monitorPrompt: string | null): string {
 }
 
 const REVOKED_WAKE_REASON = "the seat tick revoked a wake raised for a seat that has since been replaced";
+
+/** What the holder answered about an attempt, with the evidence it showed. A
+    holder that could not answer at all is `unreadable`, with why. */
+interface WakeObservation {
+  observed: SeatTickWakeState | "unreadable";
+  evidence: SeatTickWakeEvidence | null;
+  reason: string;
+}
+
+/** Ask the holder, and never let its failure take the check down: a holder
+    that cannot answer is not evidence either way, so the attempt stays
+    outstanding and the next check asks again. */
+async function observeWake(sources: SeatTickSources, wake: SeatTickOutstandingWake): Promise<WakeObservation> {
+  try {
+    const answer = await sources.wakeState(wake);
+    return typeof answer === "string"
+      ? { observed: answer, evidence: null, reason: "" }
+      : { observed: answer.state, evidence: answer.evidence, reason: "" };
+  } catch (error) {
+    return { observed: "unreadable", evidence: null, reason: redactMonitorText(error instanceof Error ? error.message : "unknown error") };
+  }
+}
+
+/** Bounded prose for a reason the delivery layer wrote. */
+const REASON_LIMIT = 200;
+
+/**
+ * The evidence behind a holder's answer, in one clause an operator can check:
+ * the operation the record holds under the key, what the record says of it,
+ * and what the runtime journal answered. Null when the answer showed none.
+ */
+function evidenceSummary(evidence: SeatTickWakeEvidence | null): string | null {
+  if (!evidence) return null;
+  const parts: string[] = [];
+  if (evidence.record) {
+    const record = evidence.record;
+    const ending = record.state === "delivered" ? "delivered"
+      : record.state === "in-flight" ? "in flight"
+        : record.resend === "safe" ? "failed, proven lost" : "failed, unverified";
+    parts.push(`delivery record: ${ending}${record.reason ? ` — ${redactBounded(record.reason, REASON_LIMIT)}` : ""}`);
+  } else {
+    parts.push("delivery record: nothing under the key");
+  }
+  parts.push(evidence.operationId ? `operation ${evidence.operationId}` : "no operation named");
+  const journal = evidence.journal;
+  parts.push(journal === "no-record" ? "runtime journal holds no record of it"
+    : journal === "unreachable" ? "runtime journal unreachable"
+      : journal === "unasked" ? "runtime journal not asked"
+        : `runtime journal: ${journal.status}${journal.reason ? ` — ${redactBounded(journal.reason, REASON_LIMIT)}` : ""}`);
+  if (evidence.recorded === "lost") parts.push("the delivery record was settled lost on the journal's own verdict");
+  if (evidence.recorded === "delivered") parts.push("the delivery record was settled delivered on the journal's own verdict");
+  if (evidence.recorded === "refused") parts.push("the delivery record could not take the journal's verdict and keeps its own answer; the release rests on the journal alone");
+  return parts.join("; ");
+}
+
+/** The holder's last word for a card or a journal line. */
+function holderAnswer(observation: WakeObservation): string {
+  if (observation.observed === "unreadable") return `could not be read${observation.reason ? ` (${observation.reason})` : ""}`;
+  const summary = evidenceSummary(observation.evidence);
+  return `answered "${observation.observed}"${summary ? ` (${summary})` : ""}`;
+}
+
+/** A settlement's own detail, with the evidence it rests on beside it. */
+function withEvidence(detail: string, observation: WakeObservation): string {
+  const summary = evidenceSummary(observation.evidence);
+  return summary ? `${detail}; ${summary}` : detail;
+}
+
+/**
+ * What ends a kept attempt, one exit per line. An attempt fenced for days is
+ * a fence an operator has to be able to reason about, so every exit the tick
+ * will take on its own is named — and, when the journal holds no record of
+ * the operation, it says plainly that an operator discard cannot reach it
+ * either. Read by the card that carries the attempt and by the diagnostic
+ * surface, so the two never disagree about what would end it.
+ */
+export function seatTickAttemptExits(evidence: SeatTickWakeEvidence | null): string[] {
+  const exits = [
+    "the delivery record or the runtime journal reporting the operation delivered, which credits the plan the wake was raised on",
+    "the journal reporting it rejected or failed before actuation, or the record proving it lost, which releases the key and lets the next check raise the wake again",
+    "the seat being superseded by a different conversation at a higher epoch, which retires the attempt and lets the successor's own wake go out",
+    "age alone ends nothing",
+  ];
+  if (evidence?.journal === "no-record" && evidence.operationId) {
+    exits.push(`the runtime journal holds no record under operation ${evidence.operationId}, so an operator discard of that operation cannot reach it; supersession is the one exit left that needs no new evidence`);
+  }
+  return exits;
+}
+
+function keptAttemptExits(evidence: SeatTickWakeEvidence | null): string {
+  return ` What ends it: ${seatTickAttemptExits(evidence).join("; ")}.`;
+}
 
 /**
  * Positive proof that the seat an attempt was addressed to has been replaced
@@ -468,14 +583,8 @@ async function reconcileRetiredWakes(context: {
   if (!entries.length) return state;
   for (const entry of entries) {
     const wake = entry.wake;
-    let observed: SeatTickWakeState | "unreadable";
-    let reason = "";
-    try {
-      observed = await context.sources.wakeState(wake);
-    } catch (error) {
-      observed = "unreadable";
-      reason = redactMonitorText(error instanceof Error ? error.message : "unknown error");
-    }
+    const observation = await observeWake(context.sources, wake);
+    const observed = observation.observed;
     let settlement: RetiredSettlement | null = null;
     /* The divergence named at the outstanding path's own `landed` branch: there
        a landing commits even when the seat has been replaced, here it credits
@@ -492,7 +601,7 @@ async function reconcileRetiredWakes(context: {
     } else if (observed === "retained") {
       let withdrawal: Awaited<ReturnType<SeatTickSources["withdrawWake"]>>;
       try { withdrawal = await context.sources.withdrawWake(wake, REVOKED_WAKE_REASON); }
-      catch (error) { withdrawal = "unknown"; reason = redactMonitorText(error instanceof Error ? error.message : "unknown error"); }
+      catch { withdrawal = "unknown"; }
       if (withdrawal === "withdrawn") {
         settlement = { verdict: "revoked", outcome: "withdrawn",
           detail: "a wake retired to a superseded seat was taken out of the queue holding it before it could reach that seat" };
@@ -520,9 +629,8 @@ async function reconcileRetiredWakes(context: {
       const preparedAt = Date.parse(wake.preparedAt ?? entry.retiredAt);
       const overdue = Number.isFinite(preparedAt) && context.now - preparedAt >= context.wakeIntervalMs;
       if (overdue || observed === "uncertain") {
-        const answer = observed === "unreadable" ? `could not be read${reason ? ` (${reason})` : ""}` : `answered "${observed}"`;
         const detail = `A wake prepared ${(wake.preparedAt ?? entry.retiredAt).slice(0, 16).replace("T", " ")} UTC for seat epoch ${wake.seatEpoch},`
-          + ` which epoch ${entry.supersededBy.seatEpoch} has since replaced, is still unresolved under its original key; the layer holding it last ${answer}.`
+          + ` which epoch ${entry.supersededBy.seatEpoch} has since replaced, is still unresolved under its original key; the layer holding it last ${holderAnswer(observation)}.`
           + " The attempt is never re-sent and nothing it named is credited, and it no longer holds back this project's wakes."
           + ` Check the delivery record under its client message id ${wake.clientMessageId}`;
         try {
@@ -555,7 +663,7 @@ async function reconcileRetiredWakes(context: {
       deferred: 0,
       eventsThrough: state.eventsThrough ?? 0,
       delivery: { clientMessageId: wake.clientMessageId, outcome: settlement.outcome },
-      detail: settlement.detail,
+      detail: withEvidence(settlement.detail, observation),
     });
   }
   return state;
@@ -623,17 +731,12 @@ async function reconcileOutstandingWake(context: {
     || context.seat.conversationId !== wake.conversationId
     || context.seat.seatEpoch !== wake.seatEpoch;
 
-  let observed: SeatTickWakeState | "unreadable";
-  let reason = "";
-  try {
-    observed = await context.sources.wakeState(wake);
-  } catch (error) {
-    /* A holder that cannot answer must not take the check down with it, and it
-       is not evidence either way: the wake stays outstanding, so the next check
-       asks again rather than crediting or discarding it on a failed read. */
-    observed = "unreadable";
-    reason = redactMonitorText(error instanceof Error ? error.message : "unknown error");
-  }
+  /* A holder that cannot answer must not take the check down with it, and it
+     is not evidence either way: the wake stays outstanding, so the next check
+     asks again rather than crediting or discarding it on a failed read. */
+  const observation = await observeWake(context.sources, wake);
+  const observed = observation.observed;
+  let reason = observation.reason;
   let settlement: WakeSettlement | null = null;
   let redispatched: string | null = null;
   /* A landing is asked about before a replacement, so a wake that reaches a
@@ -760,12 +863,12 @@ async function reconcileOutstandingWake(context: {
     }
   }
   if (kept && (overdue || observed === "uncertain")) {
-    const answer = observed === "unreadable" ? `could not be read${reason ? ` (${reason})` : ""}` : `answered "${observed}"`;
     const detail = `A wake prepared ${wake.preparedAt!.slice(0, 16).replace("T", " ")} UTC for ${replaced ? "a seat that has since been replaced" : "this seat"}`
-      + ` is still unresolved under its original key; the layer holding it last ${answer}${redispatched ? `, and a re-dispatch under the same key answered "${redispatched}"` : ""}.`
+      + ` is still unresolved under its original key; the layer holding it last ${holderAnswer(observation)}${redispatched ? `, and a re-dispatch under the same key answered "${redispatched}"` : ""}.`
       + (retired
         ? " The attempt is kept under that seat, never re-sent and crediting nothing, and it no longer holds back this project's wakes."
-        : " The tick keeps the attempt and dispatches no replacement wake for this project until it lands or the delivery record proves it never actuated.")
+        : " The tick keeps the attempt and dispatches no replacement wake for this project until it lands or the delivery record proves it never actuated."
+          + keptAttemptExits(observation.evidence))
       + ` Check the seat's conversation for the wake and the delivery record under its client message id ${wake.clientMessageId}`;
     try {
       context.ensureCard(context.project, { ref: seatTickWakeUnresolvedRef(wake.clientMessageId), kind: "wake-unresolved", instance: wake.clientMessageId, detail }, context.at);
@@ -778,7 +881,9 @@ async function reconcileOutstandingWake(context: {
   const next: SeatTickProjectState = settlement.row === "commit"
     ? seatTickWakeCommit(state, wake.commit, context.now)
     : settlement.row === "clear"
-      ? { ...state, outstandingWake: null }
+      /* Released, and remembered as such: the key stays bound in the layers
+         that refused it, so the wake raised in its place must not be it. */
+      ? { ...state, outstandingWake: null, releasedWake: { clientMessageId: wake.clientMessageId, releasedAt: context.at } }
       : state;
 
   context.appendRecord({
@@ -794,9 +899,9 @@ async function reconcileOutstandingWake(context: {
     deferred: 0,
     eventsThrough: next.eventsThrough ?? 0,
     delivery: { clientMessageId: wake.clientMessageId, outcome: settlement.outcome },
-    detail: retired
+    detail: withEvidence(retired
       ? `${settlement.detail}; the attempt is retired to seat epoch ${wake.seatEpoch}, which epoch ${superseded!.seatEpoch} has replaced: it keeps its original key, is never re-sent, credits nothing whatever becomes of it, and no longer withholds this project's wakes`
-      : settlement.detail,
+      : settlement.detail, observation),
   });
   if (retired) return state;
   if (settlement.row === "keep") return next;
@@ -950,6 +1055,7 @@ async function check(
     const clientMessageId = wakeClientMessageId(input.project, input.seat.seatEpoch, verdict, {
       fingerprint: input.changeFingerprint,
       lastWakeAt: input.state.lastWakeAt,
+      releasedWake: input.state.releasedWake ?? null,
       /* The same row the message below reads its prompt from, read once: the
          identity and the text have to move together or they are exactly the
          disagreement this key exists to prevent. */

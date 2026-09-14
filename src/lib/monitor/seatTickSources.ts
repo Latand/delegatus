@@ -23,14 +23,21 @@ import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/sto
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
+import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment } from "@/lib/runtime/deploymentLedger";
 import {
+  journalVerdict,
   resolveOriginalSend,
   resolveSendReceipt,
+  sendReceiptFor,
+  SEND_UNVERIFIED_REASON,
   type OriginalSendBinding,
   type OriginalSendEvidence,
   type SendReceipt,
+  type SendReceiptState,
+  type SendResendGuidance,
 } from "@/lib/runtime/sendSettlement";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
@@ -147,12 +154,57 @@ function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state
   return found ? { id: found.id, state: found.state } : null;
 }
 
+/** The runtime journal's receipt for one operation, as far as the tick reads
+    it: the status the drain left it in, and the reason written beside it. */
+export interface SeatTickJournalReceipt {
+  status: RuntimeReceiptStatus;
+  reason: string | null;
+}
+
 /**
- * The runtime host's own verdict on the operation carrying this wake.
- *
- * `currentRetryLeaf` follows a retried send to the operation that is actually
- * live, because a retry leaves the parent terminal and the leaf is the one the
- * drain will deliver.
+ * What the tick knows about a wake beside its verdict, kept so the verdict can
+ * be argued with: which operation the delivery record holds under the wake's
+ * key, what that record says of it, and what the runtime journal answered when
+ * it was asked. A wake that has been fenced for two days is only as useful as
+ * the evidence someone can check against it.
+ */
+export interface SeatTickWakeEvidence {
+  /** The operation the record holds under the key, or the one the wake itself
+      names. Null when neither names one. */
+  operationId: string | null;
+  /** The durable delivery record's own answer, when it holds one. */
+  record: { state: SendReceiptState; reason: string | null; resend: SendResendGuidance | null; settledAt: string | null } | null;
+  /** The runtime journal's receipt when it was asked; `no-record` when it was
+      asked and holds nothing under the operation; `unreachable` when the ask
+      itself failed; `unasked` when nothing called for asking it. */
+  journal: SeatTickJournalReceipt | "no-record" | "unreachable" | "unasked";
+  /** What this read wrote onto the delivery record from the journal's own
+      terminal verdict: `lost` settles the old reservation as proven never
+      executed, `delivered` records the arrival the record never learned of,
+      and `refused` is a record that could not take the verdict — compacted
+      to its owner row, or absorbing — so the release rests on the journal
+      alone. The wake raised in a released attempt's place is a new message
+      to both layers either way (#1672). Absent when nothing was written. */
+  recorded?: "delivered" | "lost" | "refused";
+}
+
+/** A holder's answer with the evidence it rests on. A bare
+    {@link SeatTickWakeState} is the same answer with no evidence to show. */
+export interface SeatTickWakeObservation {
+  state: SeatTickWakeState;
+  evidence: SeatTickWakeEvidence | null;
+}
+
+/** One operation's receipt off the runtime journal, following a retried send
+    to the leaf the drain actually holds. Null is the journal holding no record
+    under the id. Throws when the host cannot be asked. */
+export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
+  const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+}
+
+/**
+ * What one journal receipt proves about the wake.
  *
  * An operation the host has no record of is `unknown` (#1465), never a drop:
  * absence is an observation about the journal, and a journal that was rotated,
@@ -160,15 +212,53 @@ function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state
  * durable delivery record is what proves a loss, and {@link wakeStateFromRecord}
  * asks it first. `interrupted` and the terminal-but-unverified `uncertain` are
  * exactly that — a send ended without proof either way.
+ *
+ * `failed` and `rejected` are the journal's own proof of non-execution: the
+ * delivery queue writes them only where the send never reached the engine,
+ * and writes `uncertain` wherever it may have. One `failed` is not that proof
+ * — the settlement writes it, carrying its unverified reason, on a runtime
+ * host too old to accept the word `uncertain` — so it reads as the unverified
+ * ending it is.
  */
-export async function runtimeWakeState(operationId: string, client: RuntimeHostClient): Promise<SeatTickWakeState> {
-  const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  if (!current) return "unknown";
-  const status = current.receipt.status;
+export function journalWakeState(receipt: SeatTickJournalReceipt | null): SeatTickWakeState {
+  if (!receipt) return "unknown";
+  const status = receipt.status;
   if (RUNTIME_QUEUED.has(status) || RUNTIME_IN_FLIGHT.has(status)) return "retained";
   if (RUNTIME_LANDED.has(status)) return "landed";
+  if (status === "failed" && receipt.reason === SEND_UNVERIFIED_REASON) return "uncertain";
   if (status === "failed" || status === "rejected") return "dropped";
   return "uncertain";
+}
+
+/** The runtime host's own verdict on the operation carrying this wake: the
+    receipt, classified. */
+export async function runtimeWakeState(operationId: string, client: RuntimeHostClient): Promise<SeatTickWakeState> {
+  return journalWakeState(await journalReceipt(operationId, client));
+}
+
+/** The send a journal verdict is written back onto. */
+export interface WakeRecordTarget {
+  conversationId: string;
+  operationId: string;
+  /** The reservation's own id while the record still holds it; null once it
+      has been compacted down to the owner row, which nothing can re-arm. */
+  deliveryId: string | null;
+}
+
+export interface WakeRecordPorts {
+  lookup: (binding: OriginalSendBinding) => Promise<OriginalSendEvidence>;
+  /** Ends an in-flight send of the tick's own, or reports it still in flight.
+      Absent, the read is inert: an in-flight send is reported retained and
+      nothing is ended — the shape a diagnostic read takes. */
+  settle?: (operationId: string) => Promise<SendReceipt | null>;
+  /** The runtime journal's receipt under an operation id, or null when it
+      holds none. May throw when the host cannot be asked. */
+  journal: (operationId: string) => Promise<SeatTickJournalReceipt | null>;
+  /** Writes the journal's own terminal verdict onto a record the settlement
+      ended without one, and answers with the record as it then reads — or
+      null when nothing could be written. Absent, the read is inert and the
+      journal's verdict is reported as what it proves. */
+  settleFromJournal?: (target: WakeRecordTarget, receipt: SeatTickJournalReceipt) => Promise<SendReceipt | null>;
 }
 
 /**
@@ -185,37 +275,76 @@ export async function runtimeWakeState(operationId: string, client: RuntimeHostC
  * end it — and that answer is classified the same way; inside the settlement
  * window it comes back unchanged, which is `retained`.
  *
+ * A record ended WITHOUT proof is not the last word either. The settlement
+ * writes `unverified` from whatever it could see at its deadline — a journal
+ * with no record yet, a host it could not reach, an executor already in
+ * flight — and the tick recorded the send without any operation handle, so
+ * until now nothing ever asked the journal about the operation the record
+ * names. It is asked here, and only its own terminal verdicts count
+ * ({@link journalWakeState}): `delivered` credits the wake, `rejected` and a
+ * genuine `failed` release it, and everything else — `uncertain`, an open
+ * status, no record, an unreachable host — leaves the record's answer
+ * standing. Absence and silence are never read as non-execution.
+ *
  * Absence under the key is not a loss either. A wake the record never held
  * but the runtime queued (a legacy row, a mirror that was compacted) is asked
  * of the runtime; with nothing to ask, the answer is `absent` and the wake
  * stays outstanding under its key.
  */
-export async function wakeStateFromRecord(
-  wake: SeatTickOutstandingWake,
-  ports: {
-    lookup: (binding: OriginalSendBinding) => Promise<OriginalSendEvidence>;
-    /** Ends an in-flight send of the tick's own, or reports it still in flight. */
-    settle: (operationId: string) => Promise<SendReceipt | null>;
-    runtime: (operationId: string) => Promise<SeatTickWakeState>;
-  },
-): Promise<SeatTickWakeState> {
+export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: WakeRecordPorts): Promise<SeatTickWakeObservation> {
+  const asked = async (operationId: string): Promise<SeatTickJournalReceipt | "no-record" | "unreachable"> => {
+    try {
+      return (await ports.journal(operationId)) ?? "no-record";
+    } catch {
+      return "unreachable";
+    }
+  };
   const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
-  if (evidence.kind === "absent") return wake.operationId ? ports.runtime(wake.operationId) : "absent";
-  if (evidence.kind !== "found") return "unknown";
-  if (!evidence.current.readable) return "unknown";
-  const current = evidence.current.value;
-  if (current.state !== "in-flight") return receiptWakeState(current);
-  const settled = await ports.settle(evidence.operationId);
-  if (!settled) return "unknown";
-  return settled.state === "in-flight" ? "retained" : receiptWakeState(settled);
-}
-
-function receiptWakeState(receipt: SendReceipt): SeatTickWakeState {
-  if (receipt.state === "delivered") return "landed";
-  if (receipt.state === "in-flight") return "retained";
-  /* `safe` is the fenced, proven non-delivery and the only failure that
-     licenses raising the wake again; everything else ended without proof. */
-  return receipt.resend === "safe" ? "dropped" : "uncertain";
+  if (evidence.kind === "absent") {
+    if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
+    const journal = await asked(wake.operationId);
+    const state = typeof journal === "string" ? "unknown" : journalWakeState(journal);
+    return { state, evidence: { operationId: wake.operationId, record: null, journal } };
+  }
+  if (evidence.kind !== "found") return { state: "unknown", evidence: { operationId: wake.operationId, record: null, journal: "unasked" } };
+  const withRecord = (receipt: SendReceipt, journal: SeatTickWakeEvidence["journal"]): SeatTickWakeEvidence => ({
+    operationId: evidence.operationId,
+    record: { state: receipt.state, reason: receipt.reason, resend: receipt.resend, settledAt: receipt.settledAt },
+    journal,
+  });
+  if (!evidence.current.readable) return { state: "unknown", evidence: withRecord(evidence.receipt, "unreachable") };
+  let current = evidence.current.value;
+  if (current.state === "in-flight") {
+    if (!ports.settle) return { state: "retained", evidence: withRecord(current, "unasked") };
+    const settled = await ports.settle(evidence.operationId);
+    if (!settled) return { state: "unknown", evidence: withRecord(current, "unasked") };
+    if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
+    current = settled;
+  }
+  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  /* `safe` is the fenced, proven non-delivery and the only failure the record
+     alone can license raising the wake again on. */
+  if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
+  const journal = await asked(evidence.operationId);
+  if (typeof journal === "string") return { state: "uncertain", evidence: withRecord(current, journal) };
+  const proven = journalWakeState(journal);
+  if (proven !== "landed" && proven !== "dropped") {
+    return { state: proven === "unknown" ? "uncertain" : proven, evidence: withRecord(current, journal) };
+  }
+  if (!ports.settleFromJournal) return { state: proven, evidence: withRecord(current, journal) };
+  /* The journal's verdict goes onto the record before it is acted on, so the
+     record and the journal stop disagreeing about a send whose fate the
+     journal has decided. The release does not depend on the write taking:
+     the wake raised in a released attempt's place is a new message under a
+     new key (#1672), so a record that cannot take the verdict — compacted to
+     its owner row, or absorbing — changes nothing about it. It is said on the
+     evidence, and the journal's own proof is what the release rests on. */
+  const written = await ports.settleFromJournal({ conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
+  if (proven === "landed") {
+    return { state: "landed", evidence: { ...withRecord(written ?? current, journal), ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+  }
+  if (written?.resend === "safe") return { state: "dropped", evidence: { ...withRecord(written, journal), recorded: "lost" } };
+  return { state: "dropped", evidence: { ...withRecord(written ?? current, journal), recorded: "refused" } };
 }
 
 /**
@@ -290,8 +419,10 @@ export interface SeatTickSources {
       the two facts this reason must never confuse. */
   openPullRequests: (options: { cwd: string; limit: number }) => Promise<OpenPullRequestsResult>;
   /** Whether the layer holding a retained wake still has it, and whether the
-      seat ever got it. The tick's stamps move on this answer and nothing else. */
-  wakeState: (wake: SeatTickOutstandingWake) => Promise<SeatTickWakeState>;
+      seat ever got it. The tick's stamps move on this answer and nothing else.
+      The production answer carries its evidence; a bare state is the same
+      answer with none to show. */
+  wakeState: (wake: SeatTickOutstandingWake) => Promise<SeatTickWakeState | SeatTickWakeObservation>;
   /** The durable delivery record under a key the tick bound before a send
       (#1465), for the send whose outcome never came back at all. Read-only.
       Absent means the production lookup over the process registry. */
@@ -300,6 +431,57 @@ export interface SeatTickSources {
       that has been replaced. The reason is stored where the payload is. */
   withdrawWake: (wake: SeatTickOutstandingWake, reason: string) => Promise<SeatTickWithdrawal>;
   now: () => number;
+}
+
+/**
+ * The production ports behind {@link wakeStateFromRecord}: the durable delivery
+ * record, the tick's own settlement, and the runtime journal over the host
+ * socket. `end: false` leaves the settlement out, which makes the read inert —
+ * what a diagnostic surface may do, and what a check may not.
+ */
+export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
+  return {
+    lookup: (binding) => resolveOriginalSend(binding),
+    ...(options.end ? { settle: (operationId: string) => resolveSendReceipt(operationId), settleFromJournal: (target, receipt) => settleRecordFromJournal(agentRegistry(), target, receipt) } : {}),
+    journal: async (operationId) => {
+      const client = runtimeHostClient();
+      if (!client) throw new Error("runtime host socket is unavailable");
+      return journalReceipt(operationId, client);
+    },
+  };
+}
+
+/**
+ * The journal's terminal verdict, written onto the delivery record the way the
+ * settlement and the controller's startup reconcile write it — through the
+ * repository's one classifier of what a status proves — and only where it
+ * proves something: an unverified verdict adds nothing to a record that
+ * already says so. A `delivered` is projected under the operation, which the
+ * record accepts over a failed reservation; a `lost` goes onto the reservation
+ * itself, because that is the row the same-key replay re-arms from, and a
+ * reservation already compacted away cannot be re-armed at all.
+ */
+export async function settleRecordFromJournal(
+  registry: ReturnType<typeof agentRegistry>,
+  target: WakeRecordTarget,
+  receipt: SeatTickJournalReceipt,
+): Promise<SendReceipt | null> {
+  const verdict = journalVerdict(receipt.status, receipt.reason);
+  /* Only what {@link journalWakeState} would act on: the settlement's own
+     unverified `failed` classifies as lost here and is not one. */
+  if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
+  try {
+    if (verdict.state === "delivered") {
+      registry.recordDeliveryOutcomeForOperation(target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered");
+    } else if (target.deliveryId) {
+      registry.recordDeliveryOutcome(target.deliveryId, "failed", receipt.reason ?? verdict.reason, "lost");
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -335,14 +517,7 @@ export function defaultSeatTickSources(): SeatTickSources {
        host — the registry row beside it is a mirror, and settling a mirror stops
        nothing. A send parked behind an account migration never reached a host at
        all, and there the registry reservation IS the retention. */
-    wakeState: async (wake) => wakeStateFromRecord(wake, {
-      lookup: (binding) => resolveOriginalSend(binding),
-      settle: (operationId) => resolveSendReceipt(operationId),
-      runtime: async (operationId) => {
-        const client = runtimeHostClient();
-        return client ? runtimeWakeState(operationId, client) : "unknown";
-      },
-    }),
+    wakeState: async (wake) => wakeStateFromRecord(wake, wakeRecordPorts({ end: true })),
     originalSend: (binding) => resolveOriginalSend(binding),
     withdrawWake: async (wake, reason) => {
       if (wake.operationId) {

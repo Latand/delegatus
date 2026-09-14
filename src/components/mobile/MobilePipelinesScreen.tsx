@@ -1,5 +1,6 @@
 "use client";
 
+import { EyeOff } from "lucide-react";
 import { useState } from "react";
 
 import { ChevronDown, ChevronRight } from "@/components/icons";
@@ -7,8 +8,9 @@ import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { MobilePipelineRow } from "../pipelines/PipelineStrip";
+import { pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { MobileBarTitle, MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
-import { pendingPipelineActs, usePendingPipelineAct, type PendingPipelineActs } from "./MobilePipelineScreen";
+import { pendingPipelineActs, useClosingPipelines, type PendingPipelineActs } from "./MobilePipelineScreen";
 
 /*
  * The pipelines list on the phone (issue #1439, lane 7; docs/design/mobile-v2/
@@ -19,8 +21,9 @@ import { pendingPipelineActs, usePendingPipelineAct, type PendingPipelineActs } 
  *
  * A draft never appears: it is edited where it is written, and the board's own
  * pipelines summary drops it too. A closed lane is gone by definition, and a
- * lane whose archive is still inside its receipt's window is treated as gone
- * already — the receipt says «Archived», so the row must not still be here.
+ * lane whose close is on its way — still inside its receipt's window, or sent
+ * and not yet answered — is treated as gone already: the receipt says
+ * «Archived», so the row must not still be here.
  */
 
 export interface MobilePipelinesModel {
@@ -33,11 +36,11 @@ const ACTIVE_STATES: ReadonlySet<Pipeline["state"]> = new Set(["running", "provi
 
 /** The three sections, from the pipelines the board already scoped to this
     project. Pure, so the list and anything that has to agree with it read one
-    answer. `archiving` is the id whose close is still held by its receipt. */
-export function mobilePipelinesModel(pipelines: readonly Pipeline[], archiving?: string | null): MobilePipelinesModel {
+    answer. `closing` names the lanes whose close is on its way. */
+export function mobilePipelinesModel(pipelines: readonly Pipeline[], closing: readonly string[] = []): MobilePipelinesModel {
   const model: MobilePipelinesModel = { needs: [], active: [], completed: [] };
   for (const pipeline of pipelines) {
-    if (pipeline.id === archiving) continue;
+    if (closing.includes(pipeline.id)) continue;
     if (pipeline.state === "draft" || pipeline.state === "closed" || pipeline.hiddenAt) continue;
     if (pipeline.state === "needs_decision") model.needs.push(pipeline);
     else if (ACTIVE_STATES.has(pipeline.state)) model.active.push(pipeline);
@@ -60,14 +63,27 @@ export interface MobilePipelinesScreenProps {
 export function MobilePipelinesScreen({ pipelines, now, host, renderSheet, onOpenPipeline, acts = pendingPipelineActs }: MobilePipelinesScreenProps) {
   const { t } = useLocale();
   const [showCompleted, setShowCompleted] = useState(false);
-  const pending = usePendingPipelineAct(acts);
-  /* An archive still inside its receipt's window has not been sent, but the
-     operator has been told it happened: the row goes now, not in four seconds. */
-  const archiving = pending?.action === "close" ? pending.pipelineId : null;
-  const model = mobilePipelinesModel(pipelines, archiving);
-  const row = (pipeline: Pipeline, quiet?: boolean) => (
-    <MobilePipelineRow key={pipeline.id} pipeline={pipeline} now={now} quiet={quiet} onOpen={onOpenPipeline} />
-  );
+  /* The operator is told a close happened the moment they take it: the row
+     goes on the tap, not when the receipt's four seconds run out, and stays
+     gone until the server has answered the close. */
+  const closing = useClosingPipelines(acts);
+  const model = mobilePipelinesModel(pipelines, closing);
+  const row = (pipeline: Pipeline, quiet?: boolean) => {
+    const card = <MobilePipelineRow key={pipeline.id} pipeline={pipeline} now={now} quiet={quiet} onOpen={onOpenPipeline} />;
+    if (!pipelineHiddenFromBoard(pipeline)) return card;
+    /* A lane hidden from the board while it waits on this decision (#1671)
+       stays here, where it is found again, and says so; its screen offers
+       «Show on board». */
+    return (
+      <div key={pipeline.id} data-mobile2-pipeline-hidden={pipeline.id} className="flex flex-col gap-1">
+        {card}
+        <span className="flex items-center gap-1 px-3 text-caption text-muted">
+          <EyeOff className="h-3 w-3 shrink-0" aria-hidden />
+          {t("mobile2.pipelines.hiddenTag")}
+        </span>
+      </div>
+    );
+  };
   return (
     <MobileShell
       screen="pipelines"

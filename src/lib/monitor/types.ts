@@ -706,6 +706,18 @@ export interface SeatTickProjectState {
       credit nothing; they are still asked after, still taken back where that
       is still possible, and still carried on the board. */
   retiredWakes: SeatTickRetiredWake[];
+  /**
+   * The last attempt a check released as proven never executed (#1672), or
+   * null. Its key is bound in the runtime journal to the operation the journal
+   * refused, and the delivery layer re-arms it under that same operation, so
+   * a wake raised again under the same key can only replay the refusal — once
+   * per check, for ever. The wake raised in its place therefore carries this
+   * key folded into its own identity, which is a new key to the journal and a
+   * new reservation to the record. Cleared by the landing that ends it; a
+   * wake that never lands keeps replaying under the new key, as any unlanded
+   * wake does.
+   */
+  releasedWake: { clientMessageId: string; releasedAt: string } | null;
   /** The pull-request source's unbroken run of failures (#1298), or null while
       it is answering. Cleared by an answer and by nothing else. */
   pullRequestGap: SeatTickSourceGap | null;
@@ -909,6 +921,7 @@ export function emptySeatTickState(): SeatTickProjectState {
     eventsThrough: null,
     outstandingWake: null,
     retiredWakes: [],
+    releasedWake: null,
     pullRequestGap: null,
     childrenGap: null,
     harvestedChildren: [],

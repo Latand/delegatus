@@ -30,6 +30,9 @@ export interface StagingStatePaths {
   stateDir: string;
   runtimeSocket: string;
   runtimeJournal: string;
+  /** The staging release target: names the staging Viewer, its endpoint and
+      the MCP runtime staged for its revision (#1683). */
+  releaseTarget: string;
 }
 
 /** Every mutable staging path hangs off the one staging state dir. */
@@ -38,12 +41,36 @@ export function stagingStatePaths(stateDir: string): StagingStatePaths {
     stateDir,
     runtimeSocket: path.join(stateDir, "runtime-host.sock"),
     runtimeJournal: path.join(stateDir, "runtime-events.sqlite"),
+    releaseTarget: path.join(stateDir, "viewer-release.json"),
   };
 }
 
 export function stagingImageName(revision: string): string {
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("staging image revision must be a full commit SHA");
   return `agent-log-viewer:staging-${revision.slice(0, 12)}`;
+}
+
+/** The image build for a staging revision. The build arg sets the container
+    user's passwd home, which ssh reads for `~/.ssh/known_hosts`; the HOME
+    variable alone never reaches it, so without the arg the staging Viewer
+    fails host-key verification and cannot publish a pipeline branch (#1683).
+    Production candidate builds pass the same arg. */
+export function stagingImageBuildArgs(input: {
+  revision: string;
+  image: string;
+  sourceDir: string;
+  runtimeHome: string | undefined;
+}): string[] {
+  const runtimeHome = input.runtimeHome?.trim();
+  if (!runtimeHome || !path.isAbsolute(runtimeHome)) {
+    throw new Error("staging image build requires the Viewer Compose service HOME as an absolute path");
+  }
+  return [
+    "docker", "build", "--pull",
+    "--build-arg", `LLV_RUNTIME_HOME=${runtimeHome}`,
+    "--label", `dev.live-log-viewer.revision=${input.revision}`,
+    "-t", input.image, input.sourceDir,
+  ];
 }
 
 export interface StagingContainerContext {
@@ -73,11 +100,17 @@ function assertIsolatedStateDir(context: StagingContainerContext): void {
   }
 }
 
-/* Shared shape for both staging containers: prod release/deployment env is
-   stripped (LLV_VIEWER_DEPLOY_TARGET names prod's viewer-release.json and
-   LLV_VIEWER_PORT the prod front port), and every state-bearing knob is
-   repinned into the staging state dir. */
+/* Shared shape for both staging containers: every state-bearing and
+   release-bearing knob is repinned into the staging state dir and port. The
+   compose snapshot names prod's viewer-release.json, prod's journal and the
+   prod front port; stripping the release pair (#659) was not enough, because
+   the Viewer MCP server an agent runs falls back to 127.0.0.1:8898 when it has
+   no port, so a staging stage agent's control calls reached production (#1683).
+   The structured hosts forward exactly LLV_STATE_DIR, LLV_VIEWER_DEPLOY_TARGET
+   and LLV_VIEWER_PORT to the agents they launch, which is what makes these the
+   values that decide where an agent's Viewer tools land. */
 function stagingEnvironment(context: StagingContainerContext): Record<string, string> {
+  const port = context.port ?? STAGING_FRONT_PORT;
   const snapshot = withoutWakatimeCredential({
     ...context.service.environment,
     [AGENT_REGISTRY_SQLITE_ENV]: viewerRegistryBackendMode(context.service),
@@ -85,6 +118,10 @@ function stagingEnvironment(context: StagingContainerContext): Record<string, st
     LLV_STATE_DIR: context.paths.stateDir,
     LLV_RUNTIME_EVENTS: "1",
     LLV_RUNTIME_HOST_SOCKET: context.paths.runtimeSocket,
+    LLV_RUNTIME_JOURNAL: context.paths.runtimeJournal,
+    LLV_VIEWER_DEPLOY_TARGET: context.paths.releaseTarget,
+    LLV_VIEWER_PORT: String(port),
+    LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${port}`,
     LLV_LEGACY_TMUX_EXTERNAL: context.tmux.legacyTmuxExternal,
     TMUX_TMPDIR: context.tmux.tmuxTmpdir,
     /* The manager's default cwd must name a checkout the HOST can see. Inside the
@@ -95,10 +132,30 @@ function stagingEnvironment(context: StagingContainerContext): Record<string, st
       ? { LLV_ORCHESTRATOR_CWD: process.env.LLV_ORCHESTRATOR_CWD.trim() }
       : {}),
   });
-  delete snapshot.LLV_VIEWER_DEPLOY_TARGET;
-  delete snapshot.LLV_VIEWER_PORT;
   return Object.fromEntries(Object.entries(snapshot)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+/* The names a structured host forwards from its own environment to the agent it
+   launches that the Viewer MCP launcher reads to pick its release and control
+   endpoint (the child allowlists in claudeStreamBrokerHost and
+   codexAppServerHost). HOME and XDG_CONFIG_HOME locate the operator key. */
+const AGENT_VIEWER_MCP_ENV = [
+  "HOME",
+  "XDG_CONFIG_HOME",
+  "LLV_STATE_DIR",
+  "LLV_VIEWER_DEPLOY_TARGET",
+  "LLV_VIEWER_PORT",
+] as const;
+
+/** The environment a stage agent launched by these staging containers hands its
+    Viewer MCP server. Deploy verification resolves the control endpoint from
+    exactly this, the way the agent's MCP server does. */
+export function stagingAgentViewerMcpEnvironment(context: StagingContainerContext): Record<string, string> {
+  const environment = stagingEnvironment(context);
+  return Object.fromEntries(AGENT_VIEWER_MCP_ENV.flatMap((name) => (
+    environment[name] === undefined ? [] : [[name, environment[name]]]
+  )));
 }
 
 function stagingDockerArgs(
@@ -153,7 +210,6 @@ export function stagingViewerDockerArgs(context: StagingContainerContext): strin
 export function stagingRuntimeHostDockerArgs(context: StagingContainerContext): string[] {
   const environment: Record<string, string> = {
     ...stagingEnvironment(context),
-    LLV_RUNTIME_JOURNAL: context.paths.runtimeJournal,
     LLV_VIEWER_DEPLOYMENTS: "0",
     LLV_RUNTIME_LEGACY_SCHEDULER: "0",
   };

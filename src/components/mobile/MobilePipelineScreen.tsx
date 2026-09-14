@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
+import { Check, CircleX, Eye, Pause, Play, RefreshCw, Settings2, SkipForward } from "lucide-react";
 
 import { ChevronRight, Loader2, X } from "@/components/icons";
 import { useState, useSyncExternalStore } from "react";
@@ -30,6 +30,7 @@ import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
 import { VerdictFindings } from "../pipelines/VerdictPopover";
 import type { StageSlot } from "../scheme/layout";
 import { humanizeDuration } from "../turnDuration";
+import { pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { RECEIPT_MS, showReceipt, type ReceiptTimers } from "./MobileReceipt";
 import { MobileSheet } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
@@ -84,6 +85,10 @@ export interface PendingPipelineAct {
 
 export interface PendingPipelineActs {
   getState(): PendingPipelineAct | null;
+  /** Every lane whose close the operator took and the server has not answered:
+      the one the receipt holds, then each whose PATCH is still out (#1671).
+      The same array until that set changes, so a render may read it. */
+  getClosing(): readonly string[];
   subscribe(listener: () => void): () => void;
   /** Hold `act` for the receipt's window. A second act sends the first. */
   begin(act: PendingPipelineAct): void;
@@ -104,27 +109,51 @@ async function sendPipelineAct(act: PendingPipelineAct): Promise<void> {
   if (fail) showReceipt(fail);
 }
 
+const NO_CLOSING: readonly string[] = [];
+
 export function createPendingPipelineActs(
   timers: ReceiptTimers = REAL_TIMERS,
-  send: (act: PendingPipelineAct) => void = (act) => void sendPipelineAct(act),
+  send: (act: PendingPipelineAct) => PromiseLike<void> | void = sendPipelineAct,
   windowMs: number = RECEIPT_MS,
 ): PendingPipelineActs {
   let current: PendingPipelineAct | null = null;
   let handle: unknown = null;
+  /* A close that has gone out keeps its lane gone until it is answered: a real
+     close spends seconds stopping hosts, and a row that came back meanwhile
+     would read as the close undone (#1671). When a close succeeds,
+     `patchPipeline` has applied the closed echo before this settles; a refused
+     one brings the lane back beside the receipt that says why. */
+  const sending = new Map<string, number>();
+  let closing = NO_CLOSING;
   const listeners = new Set<() => void>();
-  const set = (next: PendingPipelineAct | null): void => {
-    current = next;
+  const publish = (): void => {
+    const next = [...new Set([...(current?.action === "close" ? [current.pipelineId] : []), ...sending.keys()])];
+    const same = next.length === closing.length && next.every((id, index) => closing[index] === id);
+    if (!same) closing = next.length ? next : NO_CLOSING;
     for (const listener of listeners) listener();
+  };
+  const dispatch = (act: PendingPipelineAct): void => {
+    const answer = send(act);
+    if (act.action !== "close" || !answer) return;
+    sending.set(act.pipelineId, (sending.get(act.pipelineId) ?? 0) + 1);
+    const settle = (): void => {
+      const left = (sending.get(act.pipelineId) ?? 1) - 1;
+      if (left > 0) sending.set(act.pipelineId, left);
+      else sending.delete(act.pipelineId);
+      publish();
+    };
+    answer.then(settle, settle);
   };
   const take = (): PendingPipelineAct | null => {
     if (handle !== null) timers.clear(handle);
     handle = null;
     const taken = current;
-    if (taken) set(null);
+    current = null;
     return taken;
   };
   return {
     getState: () => current,
+    getClosing: () => closing,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -133,23 +162,26 @@ export function createPendingPipelineActs(
     },
     begin(act) {
       const superseded = take();
-      if (superseded) send(superseded);
-      set(act);
+      if (superseded) dispatch(superseded);
+      current = act;
       handle = timers.set(() => {
         handle = null;
         const settled = current;
-        if (settled) {
-          set(null);
-          send(settled);
-        }
+        if (!settled) return;
+        current = null;
+        dispatch(settled);
+        publish();
       }, windowMs);
+      publish();
     },
     cancel() {
-      take();
+      if (take()) publish();
     },
     flush() {
       const settled = take();
-      if (settled) send(settled);
+      if (!settled) return;
+      dispatch(settled);
+      publish();
     },
   };
 }
@@ -159,6 +191,11 @@ export const pendingPipelineActs: PendingPipelineActs = createPendingPipelineAct
 
 export function usePendingPipelineAct(store: PendingPipelineActs = pendingPipelineActs): PendingPipelineAct | null {
   return useSyncExternalStore(store.subscribe, store.getState, () => null);
+}
+
+/** The lanes whose close is on its way, for every surface that lists lanes. */
+export function useClosingPipelines(store: PendingPipelineActs = pendingPipelineActs): readonly string[] {
+  return useSyncExternalStore(store.subscribe, store.getClosing, () => NO_CLOSING);
 }
 
 /* ────────────────────────────────────────────────────────────────────────── *
@@ -232,7 +269,9 @@ const ACTION_ICON = {
   retry: RefreshCw,
   pause: Pause,
   resume: Play,
-  archive: Archive,
+  /* Labelled «Close lane» (#1671): the button names what it does, which is
+     stop the lane's agents. */
+  archive: CircleX,
 } as const;
 
 const STAGE_MARK = "grid h-6 w-6 shrink-0 place-items-center rounded-full text-caption font-bold tabular-nums";
@@ -393,6 +432,15 @@ export function MobilePipelineScreen({
       showReceipt(fail ?? t(ACTION_RECEIPT[spec.key]));
     });
   };
+  /* A lane hidden from the board's queue (#1671) comes back from its own
+     screen; the optimistic record puts it back in the queue on the tap. A lane
+     that has parked again since its Hide is in the queue already. */
+  const showOnBoard = (): void => {
+    void patchPipeline(pipeline.id, "undismiss", undefined, { ...pipeline, dismissedAt: null }).then((fail) => {
+      showReceipt(fail ?? t("mobile2.pipeline.shownOnBoard"));
+    });
+  };
+  const dismissed = pipelineHiddenFromBoard(pipeline);
 
   const title = (
     <span className="flex min-w-0 flex-1 flex-col">
@@ -447,6 +495,21 @@ export function MobilePipelineScreen({
         ) : null}
 
         <ActionRow pipeline={pipeline} held={held} onRun={run} />
+        {dismissed ? (
+          <div className="px-3">
+            <button
+              type="button"
+              data-mobile2-pipeline-action="showOnBoard"
+              data-mobile2-pipeline-patch="undismiss"
+              disabled={held}
+              className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-[8px] bg-card px-3 text-body font-semibold text-secondary shadow-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+              onClick={showOnBoard}
+            >
+              <Eye className="h-4 w-4 shrink-0" aria-hidden />
+              {t("mobile2.pipeline.showOnBoard")}
+            </button>
+          </div>
+        ) : null}
 
         <Section label={t("mobile2.pipeline.stages")} count={pipeline.stages.length} id="stages" />
         <div data-mobile2-stages className="mx-3 flex flex-col divide-y divide-border overflow-hidden rounded-[12px] bg-card shadow-1">
