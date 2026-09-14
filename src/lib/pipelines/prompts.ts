@@ -1,6 +1,8 @@
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
 
+const RELAY_PLACEHOLDER = "{{prev.output}}";
+
 function replaceAll(source: string, token: string, value: string): string {
   return source.split(token).join(value);
 }
@@ -12,9 +14,18 @@ export function renderStagePrompt(
   previousOutput: string,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
-  body = replaceAll(body, "{{prev.output}}", previousOutput);
+  body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
   let roleScaffold = role.promptScaffold ? replaceAll(role.promptScaffold, "{{task}}", pipeline.task) : null;
-  if (roleScaffold) roleScaffold = replaceAll(roleScaffold, "{{prev.output}}", previousOutput);
+  if (roleScaffold) roleScaffold = replaceAll(roleScaffold, RELAY_PLACEHOLDER, previousOutput);
+  /* The controller persists the predecessor's output on the attempt whether or
+     not the author placed the placeholder (#1678): a prompt that never names it
+     used to render nothing, and the stage truthfully reported a missing input.
+     A prompt or scaffold that places the relay keeps sole control of where. */
+  const relayPlaced = stage.prompt.includes(RELAY_PLACEHOLDER) || (role.promptScaffold?.includes(RELAY_PLACEHOLDER) ?? false);
+  const relayed = previousOutput.trim();
+  const relaySection = !relayPlaced && relayed
+    ? ["", "Previous stage output (relayed by the controller; the prompt above did not place {{prev.output}}):", relayed]
+    : [];
   const declaredOutputs = stage.outputs?.length ? stage.outputs.map((output) => `\`${output}\``).join(", ") : null;
   const access = role.access === "read-only"
     ? declaredOutputs
@@ -32,6 +43,7 @@ export function renderStagePrompt(
     : [];
   return [
     body.trim(),
+    ...relaySection,
     "",
     "Pinned task:",
     pipeline.task,
