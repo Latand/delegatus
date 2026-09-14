@@ -1,6 +1,6 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { groupHideState, type GroupHideState, type GroupResurfaceReason } from "@/lib/tasks/groupHide";
+import { groupHideState, seatAssignment, type GroupHideState, type GroupResurfaceReason, type SeatRefs } from "@/lib/tasks/groupHide";
 import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
@@ -102,6 +102,9 @@ export interface KanbanCard {
   color: TaskColor | null;
   /** Whether the task's group is hidden, and why a hidden one came back. */
   hide: GroupHideState;
+  /** The task holds the project's orchestrator seat conversation, active or
+      pending: it stays on the board, and the server refuses to hide it. */
+  holdsSeat: boolean;
 }
 
 export interface KanbanColumn {
@@ -145,6 +148,9 @@ export interface KanbanModelInput {
   files?: readonly FileEntry[];
   /** Optimistic statuses of tasks with a write in flight. */
   statusOverrides?: ReadonlyMap<string, TaskStatus>;
+  /** The project's orchestrator seat as the board last read it; null or absent
+      while it is unknown. */
+  seat?: SeatRefs | null;
   query?: string;
   /** Epoch seconds. */
   now: number;
@@ -332,8 +338,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     const status: TaskStatus = overridden ?? task?.status ?? "inbox";
     const hide: GroupHideState = task
-      ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline) })
+      ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
+    const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     const title = band.title;
     const description = task ? descriptionOf(task.text) : "";
@@ -367,6 +374,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
         .toLowerCase(),
       color,
       hide,
+      holdsSeat,
     };
   });
 

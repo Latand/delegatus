@@ -256,26 +256,42 @@ test("a conversation with no recorded task is a card of its own under Not on a t
 });
 
 test("a hidden group leaves its column for the hidden list, a resurfaced one comes back with its reason, and no task is lost", () => {
-  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2)];
+  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2), file(3), file(4), file(5)];
   const hiddenAt = "2026-09-14T12:00:00.000Z";
+  const snapshot = (paths: readonly string[]) => paths.flatMap((path) => [path, `conversation_fixture_${path.match(/(\d+)/)![1]}`]).sort();
   const tasks = [
-    task("t1", "assigned", [files[0]!.path], { groupHidden: { at: hiddenAt, by: "operator" } }),
-    task("t2", "done", [files[1]!.path], { groupHidden: { at: hiddenAt, by: "agent" }, color: "sky" }),
+    task("t1", "assigned", [files[0]!.path], { groupHidden: { at: hiddenAt, by: "operator", admitted: snapshot([files[0]!.path]) } }),
+    task("t2", "done", [files[1]!.path], { groupHidden: { at: hiddenAt, by: "agent", admitted: snapshot([files[1]!.path]) }, color: "sky" }),
     task("t3", "inbox", [], { color: "ultraviolet" as never }),
+    /* Hidden before the seat was designated on its conversation. */
+    task("t4", "assigned", [files[2]!.path], { groupHidden: { at: hiddenAt, by: "operator", admitted: snapshot([files[2]!.path]) } }),
+    /* A conversation joined after the hide: its admission is not in the snapshot. */
+    task("t5", "blocked", [files[3]!.path, files[4]!.path], { groupHidden: { at: hiddenAt, by: "operator", admitted: snapshot([files[3]!.path]) } }),
   ];
+  const seat = { conversationIds: ["conversation_fixture_3"], paths: [] };
   const built = layout(files);
-  const bands = buildTaskBands(built, { tasks, projection: projectTaskWorkflows(tasks, [], [], files, "fixture"), untitled: "Untitled", reviewFlow: "Review" });
-  const model = buildKanbanModel({ bands, tasks, pipelines: [], projection: projectTaskWorkflows(tasks, [], [], files, "fixture"), files, now: NOW });
-  /* t1's conversation asked for a decision after the hide: back on the board. */
-  expect(model.columns.assigned.cards.map((card) => card.task?.id)).toEqual(["t1"]);
-  expect(model.resurfaced.map((entry) => [entry.card.task?.id, entry.reason.kind])).toEqual([["t1", "decision"]]);
+  const projection = projectTaskWorkflows(tasks, [], [], files, "fixture");
+  const bands = buildTaskBands(built, { tasks, projection, untitled: "Untitled", reviewFlow: "Review" });
+  const model = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat, now: NOW });
+  /* t1's conversation asked for a decision after the hide; t4 holds the seat;
+     t5 admitted a conversation the hide never covered. All three are back. */
+  expect(model.columns.assigned.cards.map((card) => card.task?.id).sort()).toEqual(["t1", "t4"]);
+  expect(model.columns.blocked.cards.map((card) => card.task?.id)).toEqual(["t5"]);
+  expect(model.resurfaced.map((entry) => [entry.card.task?.id, entry.reason.kind]).sort()).toEqual([["t1", "decision"], ["t4", "seat"], ["t5", "admitted"]]);
+  expect(model.columns.assigned.cards.find((card) => card.task?.id === "t4")?.holdsSeat).toBe(true);
+  expect(model.columns.assigned.cards.find((card) => card.task?.id === "t1")?.holdsSeat).toBe(false);
   /* t2 stays hidden, with its colour, and is counted once. */
   expect(model.columns.done.cards).toHaveLength(0);
   expect(model.hiddenGroups.map((card) => [card.task?.id, card.color])).toEqual([["t2", "sky"]]);
+  /* Without a seat read the same group is hidden again: the board never
+     guesses a seat it has not read. */
+  const unknownSeat = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: null, now: NOW });
+  expect(unknownSeat.hiddenGroups.map((card) => card.task?.id).sort()).toEqual(["t2", "t4"]);
   /* A colour this build does not know draws no label. */
-  const t3 = [...model.columns.inbox.cards, ...model.offBoard.map(() => null)].find((card) => card?.task?.id === "t3");
-  expect(t3 === undefined || t3?.color === null).toBe(true);
+  expect(model.columns.inbox.cards.find((card) => card.task?.id === "t3")?.color ?? null).toBeNull();
   /* Every task: in a column, hidden, or off the board, exactly once. */
   const placed = [...KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.map((card) => card.task!.id)), ...model.hiddenGroups.map((card) => card.task!.id), ...model.offBoard.map((row) => row.id)];
-  expect(placed.sort()).toEqual(["t1", "t2", "t3"]);
+  expect(placed.sort()).toEqual(["t1", "t2", "t3", "t4", "t5"]);
+  /* A hidden group's working agents still count in the header; its decision does not. */
+  expect(model.totals.onBoard).toBe(4);
 });

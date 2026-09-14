@@ -387,3 +387,48 @@ test("a status move and an edit of the same task queue: the edit is guarded by t
   server.patches[1]!.answer.resolve({ ok: true, task: withFields(task("a", "assigned", 3), { color: "sky" }) });
   expect((await recolour).kind).toBe("saved");
 });
+
+test("hiding a group that came back is a new hide: it is written, and the old hide on a poll does not settle it", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const old = withFields(task("a", "assigned", 1), { groupHidden: { at: "2026-09-14T09:00:00.000Z", by: "operator", admitted: [] } });
+  /* Without `replaces`, a row that has a hide already shows it: nothing to write. */
+  expect(await mutations.edit(old, { field: "hide", value: true })).toEqual({ kind: "noop", field: "hide" });
+  const done = mutations.edit(old, { field: "hide", value: true, replaces: "2026-09-14T09:00:00.000Z" });
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  await flush();
+  expect(server.patches[0]!.body).toEqual({ hide: true, expectedProject: "fixture", expectedRevision: REV(1) });
+  const rehidden = withFields(task("a", "assigned", 2), { groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator", admitted: [] } });
+  server.patches[0]!.answer.resolve({ ok: true, task: rehidden });
+  expect((await done).kind).toBe("saved");
+  /* A poll still carrying the old hide keeps the new one on screen. */
+  mutations.reconcile([old]);
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  mutations.reconcile([rehidden]);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("a bulk hide shows every card at once and writes them one task at a time", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const rows = [task("a", "done", 1), task("b", "done", 1), task("c", "done", 1)];
+  let previous: Promise<unknown> = Promise.resolve();
+  const outcomes = rows.map((row) => {
+    const outcome = mutations.edit(row, { field: "hide", value: true }, { after: previous });
+    previous = outcome;
+    return outcome;
+  });
+  expect([...mutations.edits().keys()]).toEqual(["a", "b", "c"]);
+  await flush();
+  expect(server.patches.map((patch) => patch.id)).toEqual(["a"]);
+  /* A refusal of one task does not stop the rest. */
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, code: "TASK_HIDE_PROTECTED", error: "holds the seat" });
+  await flush();
+  expect(server.patches.map((patch) => patch.id)).toEqual(["a", "b"]);
+  server.patches[1]!.answer.resolve({ ok: true, task: withFields(task("b", "done", 2), { groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" } }) });
+  await flush();
+  expect(server.patches.map((patch) => patch.id)).toEqual(["a", "b", "c"]);
+  server.patches[2]!.answer.resolve({ ok: true, task: withFields(task("c", "done", 2), { groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" } }) });
+  expect((await Promise.all(outcomes)).map((outcome) => outcome.kind)).toEqual(["failed", "saved", "saved"]);
+  expect([...mutations.edits().keys()]).toEqual(["b", "c"]);
+});

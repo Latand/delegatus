@@ -1558,6 +1558,11 @@ function ProjectDashboardView({
     }
     pendingFocusRef.current = file.path;
   };
+  /* The kanban board's Hidden tray restores a closed conversation where an
+     explicit open would place it, without opening or focusing anything. */
+  const restoreClosedConversation = (file: FileEntry) => {
+    board.restore(file.path, isChildConversation(file) ? "expanded" : autoPaths.has(file.path) ? "auto" : "manual");
+  };
   /* Open a folded tray member read-only (#142 §1.4): reveal it as an ephemeral
      node for inspection without touching durable board membership — folding
      stays intact, so the P4 look never un-docks the child. */
@@ -2483,6 +2488,9 @@ function ProjectDashboardView({
                 selection={board.selection}
                 focus={highlight}
                 onConversationOpened={markPathSeen}
+                projectCwd={projectCwd}
+                closedPaths={board.prefs.hidden}
+                onRestoreConversation={restoreClosedConversation}
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} />
                 )}

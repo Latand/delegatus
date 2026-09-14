@@ -214,8 +214,6 @@ export interface KanbanCardProps {
   failedEdit: { field: "title" | "description"; draft: string; message: string } | null;
   /** Text an agent wrote to the field being edited, offered beside the draft. */
   incomingEdit: { field: "title" | "description"; value: string } | null;
-  /** The card holds the project's orchestrator seat conversation: it stays. */
-  protectedSeat: boolean;
   onStartEdit: (card: KanbanCardModel, field: "title" | "description") => void;
   onEditDraft: (cardId: string, draft: string) => void;
   onCommitEdit: (cardId: string) => void;
@@ -238,7 +236,10 @@ function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
 }
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
-  const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit, protectedSeat } = props;
+  const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
+  /* The card holding the orchestrator's conversation stays on the board. */
+  const protectedSeat = card.holdsSeat;
+  const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
   const { t } = useLocale();
   const workspace = status === "assigned";
   const title = card.titlePending ? t("kanban.untitled") : card.title;
@@ -389,10 +390,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           <button type="button" onClick={() => props.onKeepMine(card.id)}>{t("kanban.keepMine")}</button>
         </div>
       ) : null}
-      {card.task && card.hide.resurfaced ? (
-        <div className="notice info resurfaced" role="status" data-resurfaced={card.hide.resurfaced.kind}>
-          <span className="msg">{t("kanban.resurfacedLine", { reason: resurfaceText(t, card.hide.resurfaced) })}</span>
-          <button type="button" onClick={() => props.onHide(card)}>{t("kanban.hideAgain")}</button>
+      {!collapsed && resurfaced ? (
+        <div className="notice info resurfaced" role="status" data-resurfaced={resurfaced.kind}>
+          <span className="msg">{t("kanban.resurfacedLine", { reason: resurfaceText(t, resurfaced) })}</span>
+          {protectedSeat ? null : <button type="button" onClick={() => props.onHide(card)}>{t("kanban.hideAgain")}</button>}
         </div>
       ) : null}
 

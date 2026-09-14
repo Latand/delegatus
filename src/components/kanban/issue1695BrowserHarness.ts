@@ -9,14 +9,16 @@ import postcss from "postcss";
    served with the production stylesheet on an ephemeral loopback port. */
 
 export async function serveEvidenceFixture(outDir: string): Promise<{ base: string; stop: () => void }> {
-  const build = await Bun.build({
-    entrypoints: [path.resolve("src/components/kanban/issue1695Evidence.fixture.tsx")],
-    target: "browser",
-    outdir: path.join(outDir, "bundle"),
-    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
-  });
-  if (!build.success) throw new Error(build.logs.join("\n"));
-  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  /* Bundled by a separate `bun build`: inside the `bun test` process,
+     `Bun.build` resolves the `@/` alias for some module graphs and not for
+     others, and the fixture's graph is one of the others. */
+  const bundle = path.join(outDir, "bundle");
+  const build = Bun.spawnSync([
+    process.execPath, "build", path.resolve("src/components/kanban/issue1695Evidence.fixture.tsx"),
+    "--target=browser", `--outdir=${bundle}`, "--define", 'process.env.NODE_ENV="production"', "--define", "process.env={}",
+  ], { stdout: "pipe", stderr: "pipe" });
+  if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
+  const entry = path.join(bundle, "issue1695Evidence.fixture.js");
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
   const server = Bun.serve({
     hostname: "127.0.0.1",

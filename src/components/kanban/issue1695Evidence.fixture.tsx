@@ -5,6 +5,7 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -16,12 +17,18 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * the same tasks in the same columns, the branch-retry-review pipeline, the
  * eight-stage chain, the simple chain parked on a decision, a forward fail
  * branch, and plain conversation members; the project's orchestrator seat and
- * short transcripts for its conversations, one of them empty (K3). Every
+ * short transcripts for its conversations, one of them empty (K3). With
+ * `?scenario=editing` (K4b) three groups start hidden, as in the prototype's
+ * hidden-tray frame, a conversation is closed on the board, and the
+ * orchestrator's conversation sits on a task an agent hid before the seat was
+ * designated. Every
  * request the Viewer makes is answered here; nothing reaches a server, a store
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
 
 const PROJECT = "atlas";
+const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const EDITING = SCENARIO === "editing";
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
@@ -98,6 +105,9 @@ const compactVer = add(conversation("compact-ver", "Board frames match at five w
    also a conversation on it ("Not on a task" here). Its one composer is the
    seat's. */
 const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", working({ plan: { current: "Watching the search fix" } })));
+/* K4b: the merge task's implementer, and a spike closed on the board. */
+const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
+const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
 
 const pipelines: Pipeline[] = [
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -172,6 +182,21 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
 ];
+if (EDITING) {
+  const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
+  const hide = (id: string, by: "operator" | "agent", secondsAgo: number) => {
+    const row = tasks[at(id)]!;
+    tasks[at(id)] = { ...row, groupHidden: { at: iso(secondsAgo), by, admitted: admissionSnapshot(row.assignments) } } as BoardTask;
+  };
+  const merge = tasks[at("t-merge-a")]!;
+  tasks[at("t-merge-a")] = { ...merge, assignments: [{ path: mergeImpl!.path, conversationId: mergeImpl!.conversationId, panePid: null, state: "delivered", error: null, at: iso(26 * 60 * MIN) }] } as BoardTask;
+  hide("t-merge-a", "operator", 3 * 60 * MIN);
+  hide("t-verify-a", "agent", 5 * 60 * MIN);
+  hide("t-compact", "operator", 20 * 60 * MIN);
+  /* Hidden by an agent before this conversation took the seat: the seat keeps it on the board. */
+  tasks.push(task("t-seat", "assigned", "Coordinate the atlas release", "What the orchestrator is steering this week.", 30 * MIN, [orchestrator]));
+  hide("t-seat", "agent", 10 * 60 * MIN);
+}
 
 /* Short transcripts in the Claude line format, so every reader has a feed. */
 const line = (secondsAgo: number, body: Record<string, unknown>) => JSON.stringify({ timestamp: iso(secondsAgo), ...body });
@@ -211,7 +236,7 @@ const params = new URLSearchParams(location.search);
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: {
-    manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [],
+    manual: [], hidden: oldSpike ? [oldSpike.path] : [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [],
     viewMode: "scheme", desktopBoard: params.get("face") === "scheme" ? null : "kanban", taskPanelOpen: false,
   },
 } as unknown as BoardProjectStateV1;
@@ -241,6 +266,28 @@ const evidence = {
   boardMutations: [] as BoardMutationV1[],
   refuseNextTaskPatch: false,
   taskAnswerDelayMs: 400,
+  /* When each task write reached the fixture and when it was answered. */
+  taskWrites: [] as Array<{ id: string; startedAt: number; answeredAt: number }>,
+  /* An agent renames a task: the new title arrives on the next task read. */
+  agentWritesTitle(id: string, title: string) {
+    const index = tasks.findIndex((entry) => entry.id === id);
+    if (index < 0) return;
+    const row = tasks[index]!;
+    const newline = row.text.search(/\r?\n/);
+    tasks[index] = { ...row, text: newline < 0 ? title : title + row.text.slice(newline), updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
+    window.dispatchEvent(new Event("llv:tasks-changed"));
+  },
+  /* A conversation starts waiting on the operator, arriving on the next read. */
+  askDecision(pathname: string) {
+    const index = files.findIndex((entry) => entry.path === pathname);
+    if (index < 0) return;
+    files[index] = { ...files[index]!, mtime: Math.floor(Date.now() / 1000), waitingInput: { since: Math.floor(Date.now() / 1000) } } as FileEntry;
+    window.dispatchEvent(new Event("llv:tasks-changed"));
+  },
+  /* The stored row, as the fixture's server holds it. */
+  storedTask(id: string) {
+    return tasks.find((entry) => entry.id === id) ?? null;
+  },
 };
 Object.assign(window, { evidence });
 
@@ -286,7 +333,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskPatches.push({ id, body });
+    const write = { id, startedAt: performance.now(), answeredAt: 0 };
+    evidence.taskWrites.push(write);
     await new Promise((resolve) => setTimeout(resolve, evidence.taskAnswerDelayMs));
+    write.answeredAt = performance.now();
     if (evidence.refuseNextTaskPatch) {
       evidence.refuseNextTaskPatch = false;
       return json({ error: "refused by the evidence fixture" }, 500);
@@ -294,8 +344,30 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const index = tasks.findIndex((entry) => entry.id === id);
     if (index < 0) return json({ error: "task not found" }, 404);
     const current = tasks[index] as BoardTask & { revision: string };
-    if (body.expectedRevision !== undefined && body.expectedRevision !== current.revision) return json({ error: "expectedRevision is stale" }, 409);
-    const next = { ...current, ...(body.status ? { status: body.status } : {}), ...(body.board ? { board: body.board } : {}), updatedAt: new Date().toISOString(), revision: REV(revision++) } as unknown as BoardTask;
+    if (body.expectedRevision !== undefined && body.expectedRevision !== current.revision) return json({ error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH", field: "expectedRevision" }, 409);
+    /* The route's rules for the fields the board writes (#1695 K4a). */
+    const next = { ...current } as BoardTask & Record<string, unknown>;
+    if (body.status) next.status = body.status as TaskStatus;
+    if (body.board) next.board = body.board as BoardTask["board"];
+    if (typeof body.text === "string") {
+      next.text = body.text;
+      if (current.origin?.refinement === "pending") next.origin = { ...current.origin, refinement: "titled" };
+    }
+    if (body.color !== undefined) {
+      if (body.color === "none") delete next.color;
+      else next.color = body.color as BoardTask["color"];
+    }
+    if (body.hide === true) {
+      if (current.assignments.some((row) => row.conversationId === orchestrator.conversationId)) {
+        return json({ error: "this task holds the project's orchestrator seat conversation, which stays on the board; it cannot be hidden", code: "TASK_HIDE_PROTECTED", field: "hide" }, 409);
+      }
+      next.groupHidden = { at: new Date().toISOString(), by: "operator", admitted: admissionSnapshot(current.assignments) };
+    } else if (body.hide === false) {
+      delete next.groupHidden;
+    }
+    const presentationOnly = Object.keys(body).every((key) => key === "color" || key === "hide" || key === "expectedProject" || key === "expectedRevision");
+    next.updatedAt = presentationOnly ? current.updatedAt : new Date().toISOString();
+    next.revision = REV(revision++);
     tasks[index] = next;
     return json({ ok: true, task: next });
   }

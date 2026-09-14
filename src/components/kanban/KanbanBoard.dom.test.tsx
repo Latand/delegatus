@@ -75,6 +75,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
       selection={new Set()}
       onOpenCatalog={() => {}}
       onOpenOnBoard={() => {}}
+      seatRefs={null}
       mutationPorts={ports}
     />,
   ));

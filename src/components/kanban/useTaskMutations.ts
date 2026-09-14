@@ -48,7 +48,9 @@ export type PatchResult = { ok: true; task: BoardTask } | { ok: false; status: n
 
 export type TaskFieldChange =
   | { field: "color"; value: TaskColor | null }
-  | { field: "hide"; value: boolean }
+  /* `replaces` names the stored hide (its `at`) of a group that came back to
+     the board: hiding it again is a new hide, even though the row has one. */
+  | { field: "hide"; value: boolean; replaces?: string | null }
   | { field: "text"; value: string };
 
 export type TaskField = TaskFieldChange["field"];
@@ -84,6 +86,8 @@ interface Override {
 
 interface FieldOverride {
   value: unknown;
+  /** The latest change this override shows. */
+  change: TaskFieldChange;
   pending: number;
   baseRevision: string | null;
   confirmedRevision: string | null;
@@ -94,6 +98,14 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "color") return task.color ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
   return task.text;
+}
+
+/** Whether a stored row already shows `change`. */
+export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
+  if (change.field === "color") return (task.color ?? null) === change.value;
+  if (change.field === "text") return task.text === change.value;
+  if (!change.value) return !task.groupHidden;
+  return Boolean(task.groupHidden) && task.groupHidden!.at !== (change.replaces ?? null);
 }
 
 /** The edits a board shows ahead of the poll, per task. */
@@ -174,7 +186,7 @@ export class TaskStatusMutations {
       for (const [field, override] of fields) {
         if (override.pending > 0) continue;
         const caughtUp = !row
-          || fieldValue(row, field) === override.value
+          || rowHolds(row, override.change)
           || (revision !== null && revision === override.confirmedRevision)
           || (revision !== null && revision !== override.baseRevision && revision !== override.confirmedRevision);
         if (caughtUp) {
@@ -187,22 +199,27 @@ export class TaskStatusMutations {
     if (changed) this.emit();
   }
 
-  /** Edit one field of `task`. Resolves once the server has answered. */
-  edit(task: BoardTask, change: TaskFieldChange): Promise<FieldEditOutcome> {
+  /** Edit one field of `task`. Resolves once the server has answered. The
+      board shows the edit at once; with `after`, the write itself waits for
+      that promise to settle, so a bulk edit reaches the server one task at a
+      time while every card already shows it. */
+  edit(task: BoardTask, change: TaskFieldChange, options: { after?: Promise<unknown> } = {}): Promise<FieldEditOutcome> {
     const id = task.id;
     const fields = this.fieldOverrides.get(id) ?? new Map<TaskField, FieldOverride>();
     const current = fields.get(change.field);
     const from = current ? current.value : fieldValue(task, change.field);
-    if (from === change.value && !current?.pending) return Promise.resolve({ kind: "noop", field: change.field });
-    const override: FieldOverride = current ?? { value: change.value, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
+    const shown = current ? current.value === change.value && !(change.field === "hide" && change.replaces) : rowHolds(task, change);
+    if (shown && !current?.pending) return Promise.resolve({ kind: "noop", field: change.field });
+    const override: FieldOverride = current ?? { value: change.value, change, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
     override.value = change.value;
+    override.change = change;
     override.pending += 1;
     fields.set(change.field, override);
     this.fieldOverrides.set(id, fields);
     this.emit();
 
-    const previous = this.chains.get(id) ?? Promise.resolve();
-    const run = previous.then(() => this.writeField(task, change, from), () => this.writeField(task, change, from));
+    const settled = (promise: Promise<unknown> | undefined) => (promise ?? Promise.resolve()).then(() => undefined, () => undefined);
+    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then(() => this.writeField(task, change, from));
     this.chains.set(id, run);
     void run.finally(() => {
       if (this.chains.get(id) === run) this.chains.delete(id);
@@ -264,7 +281,7 @@ export class TaskStatusMutations {
     if (!stored) return failed(404, "task not found");
     this.remember(stored);
     const storedValue = fieldValue(stored, field);
-    if (storedValue === change.value) {
+    if (rowHolds(stored, change)) {
       this.settleField(id, field, change.value, revisionOf(stored), true);
       this.ports.changed();
       return { kind: "settled", field, task: stored };

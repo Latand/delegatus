@@ -72,7 +72,7 @@ export function CardInlineText({ field, draft, onDraft, onCommit, onCancel }: {
     "data-card-editor": field,
   };
   return (
-    <div ref={wrap} className={`editor ${field}`}>
+    <div ref={wrap} className="editor" data-editor-field={field}>
       {isTitle ? (
         <input {...common} type="text" className="edit title-edit" aria-label={t("kanban.editTitleAria")} maxLength={200} placeholder={t("kanban.editTitlePlaceholder")} />
       ) : (

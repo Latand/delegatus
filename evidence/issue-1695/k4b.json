@@ -1,0 +1,406 @@
+{
+  "prototypeCompared": true,
+  "boardWidth": 1192,
+  "frames": {
+    "card-menu-light": {
+      "production": {
+        "width": 298,
+        "swatches": [
+          "No colour",
+          "Coral",
+          "Amber",
+          "Lime",
+          "Teal",
+          "Sky",
+          "Violet",
+          "Pink",
+          "Slate"
+        ],
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        },
+        "checked": "none",
+        "items": [
+          {
+            "label": "Collapse card",
+            "kbd": null,
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Rename",
+            "kbd": "Enter",
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Edit description",
+            "kbd": "E",
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Hide from board",
+            "kbd": "H",
+            "why": "1 agent keeps working. History stays.",
+            "disabled": false
+          }
+        ]
+      },
+      "prototype": {
+        "width": 298,
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        }
+      }
+    },
+    "hidden-tray-light": {
+      "production": {
+        "width": 360,
+        "count": "5",
+        "sections": [
+          "Hidden groups",
+          "Empty tasks off the board",
+          "Closed conversations"
+        ],
+        "groups": [
+          {
+            "id": "t-merge-a",
+            "meta": "1 conversation · Hidden by you · 3h ago"
+          },
+          {
+            "id": "t-verify-a",
+            "meta": "0 conversations · Hidden by an agent · 5h ago"
+          },
+          {
+            "id": "t-compact",
+            "meta": "3 conversations · Hidden by you · 20h ago"
+          }
+        ],
+        "empty": [
+          "t-old"
+        ],
+        "closed": [
+          "Spike: a virtualized Done column"
+        ],
+        "rowHeight": 49
+      },
+      "prototype": {
+        "width": 360,
+        "rowHeight": 49
+      }
+    },
+    "card-menu-dark": {
+      "production": {
+        "width": 298,
+        "swatches": [
+          "No colour",
+          "Coral",
+          "Amber",
+          "Lime",
+          "Teal",
+          "Sky",
+          "Violet",
+          "Pink",
+          "Slate"
+        ],
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        },
+        "checked": "none",
+        "items": [
+          {
+            "label": "Collapse card",
+            "kbd": null,
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Rename",
+            "kbd": "Enter",
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Edit description",
+            "kbd": "E",
+            "why": null,
+            "disabled": false
+          },
+          {
+            "label": "Hide from board",
+            "kbd": "H",
+            "why": "1 agent keeps working. History stays.",
+            "disabled": false
+          }
+        ]
+      },
+      "prototype": {
+        "width": 298,
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        }
+      }
+    },
+    "hidden-tray-dark": {
+      "production": {
+        "width": 360,
+        "count": "5",
+        "sections": [
+          "Hidden groups",
+          "Empty tasks off the board",
+          "Closed conversations"
+        ],
+        "groups": [
+          {
+            "id": "t-merge-a",
+            "meta": "1 conversation · Hidden by you · 3h ago"
+          },
+          {
+            "id": "t-verify-a",
+            "meta": "0 conversations · Hidden by an agent · 5h ago"
+          },
+          {
+            "id": "t-compact",
+            "meta": "3 conversations · Hidden by you · 20h ago"
+          }
+        ],
+        "empty": [
+          "t-old"
+        ],
+        "closed": [
+          "Spike: a virtualized Done column"
+        ],
+        "rowHeight": 49
+      },
+      "prototype": {
+        "width": 360,
+        "rowHeight": 49
+      }
+    },
+    "editing-title": {
+      "production": {
+        "focused": true,
+        "value": "Restore search results after the index rebuild",
+        "height": 22,
+        "hint": "Enter saves · Esc cancels",
+        "cardBefore": {
+          "width": 454,
+          "height": 256
+        },
+        "cardDuring": {
+          "width": 454,
+          "height": 276
+        }
+      },
+      "prototype": {
+        "height": 22
+      }
+    },
+    "editing-description": {
+      "production": {
+        "focused": true,
+        "value": "Fold the eleven toggles into three sensible presets and one advanced disclosure.",
+        "height": 38,
+        "hint": "⌘/Ctrl+Enter saves · Esc cancels"
+      },
+      "prototype": {
+        "height": 38
+      }
+    },
+    "column-menu-done": {
+      "production": [
+        {
+          "label": "Hide finished tasks (3)",
+          "why": "Keeps 1 task whose agent is still working.",
+          "disabled": false
+        },
+        {
+          "label": "Show hidden tasks (5)",
+          "why": null,
+          "disabled": false
+        }
+      ]
+    }
+  },
+  "geometry": {
+    "swatchWidth": {
+      "production": 24,
+      "prototype": 24,
+      "delta": 0
+    },
+    "swatchHeight": {
+      "production": 32,
+      "prototype": 32,
+      "delta": 0
+    },
+    "trayWidth": {
+      "production": 360,
+      "prototype": 360,
+      "delta": 0
+    },
+    "titleEditorHeight": {
+      "production": 22,
+      "prototype": 22,
+      "delta": 0
+    }
+  },
+  "flows": {
+    "hide": {
+      "countBefore": "5",
+      "onClick": {
+        "column": null,
+        "count": "6",
+        "receipts": [
+          "Hidden «Restore search results after the index rebuild» · 1 agent keeps working"
+        ],
+        "focused": "task:t-export"
+      },
+      "written": {
+        "patches": [
+          {
+            "id": "t-search",
+            "hide": true,
+            "guarded": true
+          }
+        ],
+        "stored": true
+      },
+      "undone": {
+        "column": "assigned",
+        "stored": false
+      }
+    },
+    "bulkHide": {
+      "left": [
+        "task:t-attach"
+      ],
+      "receipts": [
+        "Hidden 3 finished tasks · kept 1 with a working agent"
+      ],
+      "sequential": true,
+      "writes": [
+        {
+          "id": "t-interrupt",
+          "tookMs": 400
+        },
+        {
+          "id": "t-voice",
+          "tookMs": 400
+        },
+        {
+          "id": "t-queue",
+          "tookMs": 400
+        }
+      ],
+      "undoneStored": [
+        false,
+        false,
+        false
+      ]
+    },
+    "protectedSeat": {
+      "seatCard": {
+        "column": "assigned",
+        "lock": true,
+        "hideButton": false,
+        "resurfaced": "Back on the board: it holds the orchestrator's conversation",
+        "hideAgain": false
+      },
+      "receipts": [
+        "«Coordinate the atlas release» holds the orchestrator's conversation, so it stays on the board"
+      ],
+      "menuHide": {
+        "disabled": true,
+        "why": "Holds the orchestrator's conversation, so it stays on the board"
+      },
+      "patches": 0
+    },
+    "renameRefused": {
+      "optimistic": "Export presets: three, plus advanced",
+      "refused": {
+        "title": "Simplify the export settings sheet",
+        "notice": "Not saved: refused by the evidence fixture. Your text is kept."
+      },
+      "stored": "Export presets: three, plus advanced\nFold the eleven toggles into three sensible presets and one advanced disclosure."
+    },
+    "concurrentEdit": {
+      "incoming": {
+        "notice": "An agent changed the title while you edit: «Simplify the export settings sheet (agent revision)»",
+        "draft": "Export presets, my draft"
+      },
+      "theirs": "Simplify the export settings sheet (agent revision)"
+    },
+    "resurface": {
+      "before": null,
+      "back": {
+        "column": "assigned",
+        "needs": true,
+        "line": "Back on the board: a conversation asked for a decision"
+      },
+      "receipts": [
+        "«Merge the approved queue adapter release · merge» is back on the board: a conversation asked for a decision"
+      ]
+    },
+    "colour": {
+      "applied": {
+        "color": "teal",
+        "bar": "rgb(26, 158, 143)"
+      },
+      "stored": {
+        "color": "teal",
+        "updatedAtKept": true,
+        "fields": [
+          "color",
+          "expectedProject",
+          "expectedRevision"
+        ]
+      }
+    },
+    "tray": {
+      "shown": {
+        "column": "assigned",
+        "count": "4"
+      },
+      "restored": {
+        "count": "3",
+        "mutations": [
+          {
+            "kind": "restore",
+            "path": "/repo/old-spike.jsonl",
+            "placement": "manual"
+          }
+        ],
+        "receipts": [
+          "«Verify delivery recovery across transcript bou…» is back on the board",
+          "«Spike: a virtualized Done column» is back on the board"
+        ]
+      }
+    },
+    "keys": {
+      "rename": {
+        "card": "task:t-onboarding",
+        "editor": "title",
+        "menu": false
+      },
+      "describe": {
+        "card": "task:t-onboarding",
+        "editor": "description",
+        "menu": false
+      },
+      "colour": {
+        "card": null,
+        "editor": null,
+        "menu": true,
+        "swatches": 9
+      },
+      "hidden": null,
+      "undone": "inbox"
+    }
+  },
+  "failures": []
+}
