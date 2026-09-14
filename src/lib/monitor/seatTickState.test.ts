@@ -364,3 +364,14 @@ test("a legacy row reads as nothing retired, and an entry with no proof is dropp
   }));
   expect(readSeatTickState("viewer", unproven).retiredWakes).toEqual([]);
 });
+
+/* The released-attempt marker (#1672) rides the legacy import like every
+   other field, and a hand-edited half of one reads as none. */
+test("a released-wake marker survives the legacy import, and a broken one is dropped", () => {
+  const file = path.join(SANDBOX, "released-wake.json");
+  const releasedWake = { clientMessageId: "seat-tick:viewer:7:first:interval:fp-1", releasedAt: "2026-09-13T16:00:00.000Z" };
+  fs.writeFileSync(file, JSON.stringify({ version: 2, projects: { viewer: { ...row, releasedWake }, other: { ...row, releasedWake: { clientMessageId: "" } } } }));
+  expect(readSeatTickState("viewer", file).releasedWake).toEqual(releasedWake);
+  expect(readSeatTickState("other", file).releasedWake).toBeNull();
+  expect(readSeatTickState("never", file).releasedWake).toBeNull();
+});

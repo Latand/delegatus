@@ -1019,6 +1019,7 @@ export function seatTickWakeCommit(
       quietSince: null,
       eventsThrough,
       outstandingWake: null,
+      releasedWake: null,
     };
   }
 
@@ -1043,6 +1044,9 @@ export function seatTickWakeCommit(
     idleSince: null,
     eventsThrough,
     outstandingWake: null,
+    /* The landing moves the stamp, which is a new identity for every later
+       wake on its own; the marker has done its work (#1672). */
+    releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
   };
 }
