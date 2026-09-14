@@ -1,0 +1,544 @@
+{
+  "prototypeCompared": true,
+  "boardWidth": 1192,
+  "boardWidths": {
+    "1440": 1192,
+    "1680": 1432
+  },
+  "frames": {
+    "summary-default-light": {
+      "production": {
+        "compact": true,
+        "nodes": 0,
+        "pressed": "false",
+        "chips": 4
+      }
+    },
+    "graph-branch-retry-light": {
+      "production": {
+        "dir": "TB",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass taken",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      },
+      "prototype": {
+        "dir": "TB",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass   ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken ",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "summary-default-dark": {
+      "production": {
+        "compact": true,
+        "nodes": 0,
+        "pressed": "false",
+        "chips": 4
+      }
+    },
+    "graph-branch-retry-dark": {
+      "production": {
+        "dir": "TB",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass taken",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      },
+      "prototype": {
+        "dir": "TB",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass   ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken ",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "graph-two-stage": {
+      "production": {
+        "dir": "LR",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 176,
+            "height": 76,
+            "state": "needs you",
+            "detail": "attempt 1"
+          },
+          {
+            "stage": "review",
+            "width": 176,
+            "height": 76,
+            "state": "waiting",
+            "detail": "reviews the run before it"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass",
+            "dashed": false
+          }
+        ],
+        "labels": []
+      },
+      "prototype": {
+        "dir": "LR",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 176,
+            "height": 76,
+            "state": "needs you",
+            "detail": "attempt 1"
+          },
+          {
+            "stage": "review",
+            "width": 176,
+            "height": 76,
+            "state": "waiting",
+            "detail": "reviews the run before it"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass   ",
+            "dashed": false
+          }
+        ],
+        "labels": []
+      }
+    },
+    "five-rounds": {
+      "production": {
+        "dir": "LR",
+        "right": 1025,
+        "bottom": 547,
+        "chips": [
+          {
+            "text": "+4",
+            "right": 977,
+            "top": 514,
+            "bottom": 530
+          },
+          {
+            "text": "R5 ✓",
+            "right": 1014,
+            "top": 514,
+            "bottom": 530
+          }
+        ]
+      }
+    },
+    "failed-latest": {
+      "production": [
+        {
+          "kind": "attempt",
+          "label": "Builder · attempt 1",
+          "verdict": "failed"
+        }
+      ]
+    },
+    "history-open": {
+      "production": [
+        {
+          "kind": "round",
+          "label": "Reviewer · round 1",
+          "verdict": "approved",
+          "open": true
+        },
+        {
+          "kind": "attempt",
+          "label": "Builder · attempt 1",
+          "verdict": "passed",
+          "open": true
+        },
+        {
+          "kind": "attempt",
+          "label": "Builder · attempt 2",
+          "verdict": "passed",
+          "open": true
+        },
+        {
+          "kind": "attempt",
+          "label": "Reviewer · attempt 1",
+          "verdict": "passed",
+          "open": true
+        },
+        {
+          "kind": "attempt",
+          "label": "Verifier · attempt 1",
+          "verdict": "failed",
+          "open": true
+        },
+        {
+          "kind": "helper",
+          "label": "Builder · helper conversation 1",
+          "verdict": "passed",
+          "open": true
+        }
+      ]
+    }
+  },
+  "geometry": {
+    "retryLight": {
+      "dir": {
+        "production": "TB",
+        "prototype": "TB"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76,
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76,
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          234,
+          234,
+          234,
+          234
+        ],
+        "prototype": [
+          234,
+          234,
+          234,
+          234
+        ]
+      },
+      "edges": {
+        "production": 4,
+        "prototype": 4
+      },
+      "labels": {
+        "production": [
+          "pass",
+          "fail · retry 1 of 2"
+        ],
+        "prototype": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "retryDark": {
+      "dir": {
+        "production": "TB",
+        "prototype": "TB"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76,
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76,
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          234,
+          234,
+          234,
+          234
+        ],
+        "prototype": [
+          234,
+          234,
+          234,
+          234
+        ]
+      },
+      "edges": {
+        "production": 4,
+        "prototype": 4
+      },
+      "labels": {
+        "production": [
+          "pass",
+          "fail · retry 1 of 2"
+        ],
+        "prototype": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "twoStage": {
+      "dir": {
+        "production": "LR",
+        "prototype": "LR"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          176,
+          176
+        ],
+        "prototype": [
+          176,
+          176
+        ]
+      },
+      "edges": {
+        "production": 1,
+        "prototype": 1
+      },
+      "labels": {
+        "production": [],
+        "prototype": []
+      }
+    }
+  },
+  "flows": {
+    "helperOpen": "conversation_search-helper",
+    "toggleAndNode": {
+      "node": {
+        "pressed": "true",
+        "reader": "conversation_search-impl-2"
+      },
+      "summary": {
+        "nodes": 0,
+        "chips": 4
+      }
+    },
+    "liveEdge": {
+      "before": 0,
+      "afterHelper": 0,
+      "label": "fail · retry 2 of 2",
+      "clearedAfterMs": 2393
+    }
+  },
+  "failures": []
+}

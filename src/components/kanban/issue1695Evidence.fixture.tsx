@@ -29,6 +29,9 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
+/* K5a: the pipelines' review stages are bound to review flows with rounds. */
+const PIPELINES = SCENARIO === "pipelines";
+const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
@@ -108,13 +111,22 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
+/* K5a: a helper conversation the search builder brought in, and a review that took five rounds. */
+const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
+const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
+const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
 
 const pipelines: Pipeline[] = [
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
     [
-      { stageId: "implement", attempts: [attempt(1, "passed", searchImpl1), attempt(2, "passed", searchImpl2, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })] },
-      { stageId: "review", attempts: [attempt(1, "passed", searchRev, { reviewFlowSync: { generation: "g1", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
+      { stageId: "implement", attempts: [
+        attempt(1, "passed", searchImpl1),
+        attempt(2, "passed", searchImpl2, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }),
+        /* Lineage-adopted: the engine copies the source attempt's provenance onto it. */
+        ...(searchHelper ? [attempt(3, "passed", searchHelper, { historical: true, activatedBy: { stageId: "verify", attempt: 1, edge: "fail" }, startedAt: iso(55 * MIN) })] : []),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "passed", searchRev, { ...flowOf("flow-search-review"), reviewFlowSync: { generation: "g1", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
       { stageId: "verify", attempts: [attempt(1, "failed", searchVer1), attempt(2, "running", searchVer2, { activatedBy: { stageId: "review", attempt: 1, edge: "pass" } })] },
     ],
     { stageId: "verify", state: "running", input: null, activatedBy: null }),
@@ -123,7 +135,7 @@ const pipelines: Pipeline[] = [
     [
       { stageId: "plan", attempts: [attempt(1, "passed", uploadPlan)] },
       { stageId: "build-api", attempts: [attempt(1, "passed", uploadApi)] },
-      { stageId: "review-api", attempts: [attempt(1, "passed", uploadRevApi, { reviewFlowSync: { generation: "g2", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
+      { stageId: "review-api", attempts: [attempt(1, "passed", uploadRevApi, { ...flowOf("flow-upload-review-api"), reviewFlowSync: { generation: "g2", roundCount: 2, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
       { stageId: "build-ui", attempts: [attempt(1, "running", uploadUi)] },
     ],
     { stageId: "build-ui", state: "running", input: null, activatedBy: null }),
@@ -146,11 +158,38 @@ const pipelines: Pipeline[] = [
     [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
     [
       { stageId: "build", attempts: [attempt(1, "passed", compactBuild)] },
-      { stageId: "review", attempts: [attempt(1, "passed", compactRev, { reviewFlowSync: { generation: "g3", roundCount: 1, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
+      { stageId: "review", attempts: [attempt(1, "passed", compactRev, { ...flowOf("flow-compact-review"), reviewFlowSync: { generation: "g3", roundCount: 1, implementerHeadSha: null, reviewerHeadSha: null, verdict: null, relayState: "approved", terminalState: null } })] },
       { stageId: "verify", attempts: [attempt(1, "passed", compactVer)] },
     ],
     null),
+  ...(roundsBuild && roundsReview ? [pipeline("p-rounds", "Rework the retry banner until review passes", "t-rounds", "running",
+    [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+    [
+      { stageId: "build", attempts: [attempt(1, "passed", roundsBuild, { startedAt: iso(4 * 60 * MIN) })] },
+      { stageId: "review", attempts: [attempt(1, "reviewing", roundsReview, { flowId: "flow-rounds-review", startedAt: iso(3 * 60 * MIN) })] },
+    ],
+    { stageId: "review", state: "reviewing", input: null, activatedBy: null })] : []),
 ];
+
+/* Review flows as the store keeps them: one per bound review stage, with its rounds. */
+const reviewRole = { engine: "codex", model: "gpt-5.6", effort: "high" };
+function reviewFlow(id: string, implementer: FileEntry, reviewer: FileEntry, verdicts: Array<"APPROVE" | "REQUEST_CHANGES">, startedAgo: number) {
+  return {
+    id, template: "implement-review-loop", project: PROJECT, cwd: "/repo", implementerPath: implementer.path, implementerConversationId: implementer.conversationId,
+    roles: { implementer: { engine: "claude", model: "opus", effort: "high" }, reviewer: reviewRole }, baseRef: "0000000", baseMode: "merge-base", mode: "auto",
+    reviewerMode: "headless", roundLimit: 5, state: "approved", stateDetail: null, createdAt: iso(startedAgo + 10 * MIN), closedAt: null,
+    rounds: verdicts.map((verdict, index) => ({
+      n: index + 1, reviewerPath: index === verdicts.length - 1 ? reviewer.path : null, reviewerConversationId: index === verdicts.length - 1 ? reviewer.conversationId : null,
+      findingsPath: null, triggeredBy: "marker", readyNote: null, verdict, findingsCount: verdict === "APPROVE" ? 0 : 2, startedAt: iso(startedAgo - index * 20 * MIN),
+    })),
+  };
+}
+const flows = PIPELINES ? [
+  reviewFlow("flow-search-review", searchImpl2, searchRev, ["APPROVE"], 45 * MIN),
+  reviewFlow("flow-upload-review-api", uploadApi, uploadRevApi, ["REQUEST_CHANGES", "APPROVE"], 5 * 60 * MIN),
+  reviewFlow("flow-compact-review", compactBuild, compactRev, ["APPROVE"], 2 * 24 * 60 * MIN),
+  reviewFlow("flow-rounds-review", roundsBuild!, roundsReview!, ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 3 * 60 * MIN),
+] : [];
 
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
@@ -181,6 +220,7 @@ const tasks: BoardTask[] = [
   task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN),
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
+  ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -298,6 +338,18 @@ const evidence = {
     files[index] = { ...files[index]!, mtime: Math.floor(Date.now() / 1000), waitingInput: { since: Math.floor(Date.now() / 1000) } } as FileEntry;
     window.dispatchEvent(new Event("llv:tasks-changed"));
   },
+  /* A new attempt of a pipeline stage, as the engine records it, arriving on
+     the next catalog read. */
+  addStageAttempt(pipelineId: string, stageId: string, over: Record<string, unknown>) {
+    const record = pipelines.find((entry) => entry.id === pipelineId) as unknown as { runs: Array<{ stageId: string; attempts: Array<Record<string, unknown>> }>; cursor: unknown } | undefined;
+    if (!record) return;
+    let run = record.runs.find((entry) => entry.stageId === stageId);
+    if (!run) record.runs.push(run = { stageId, attempts: [] });
+    run.attempts.push(attempt(run.attempts.length + 1, "running", null, over));
+    /* A lineage-adopted attempt is evidence; it never moves the cursor. */
+    if (!over.historical) record.cursor = { stageId, state: "running", input: null, activatedBy: over.activatedBy ?? null };
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
   /* The stored row, as the fixture's server holds it. */
   storedTask(id: string) {
     return tasks.find((entry) => entry.id === id) ?? null;
@@ -324,7 +376,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
-    const body = JSON.stringify({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows: [], pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
+    const body = JSON.stringify({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }

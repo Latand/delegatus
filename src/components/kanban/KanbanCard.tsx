@@ -9,10 +9,12 @@ import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { cleanTitle, fmtAge } from "@/components/utils";
-import { attemptStateLabel, pipelineStateLabel, stageAttempts, stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit } from "./CardInlineText";
-import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
+import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
+import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
+import type { PastAttempt } from "./pipelineGraph";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 
 /* One card of the kanban board, in the approved prototype's anatomy
@@ -54,107 +56,17 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
   return t(`kanban.status.${status}`);
 }
 
-const LIVE_CHIP_STATES = new Set(["running", "reviewing", "committing"]);
-
-function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
-  const { pipeline, chips } = summary;
-  if (pipeline.state === "provisioning") return t("kanban.progress.provisioning");
-  const needs = chips.find((chip) => chip.state === "needs_decision");
-  if (needs) return t("kanban.progress.needs", { stage: nameOf(needs.stage) });
-  const live = chips.find((chip) => LIVE_CHIP_STATES.has(chip.state));
-  if (live) {
-    const attempts = stageAttempts(pipeline, live.stage.id).length;
-    const base = t("kanban.progress.live", { stage: nameOf(live.stage), state: attemptStateLabel(t, live.state) });
-    return attempts > 1 ? t("kanban.progress.attempt", { progress: base, n: attempts }) : base;
+/** The stages whose latest own attempt's conversation is open as a reader on
+    the card: the attempt a node opens, never a lineage-adopted helper. */
+function selectedStages(pipeline: Pipeline, readerKeys: readonly string[]): Set<string> {
+  const open = new Set(readerKeys);
+  const selected = new Set<string>();
+  for (const run of pipeline.runs) {
+    const attempt = latestAttempt(pipeline, run.stageId);
+    const identity = attempt?.conversationId ?? attempt?.agentPath;
+    if (identity && open.has(identity)) selected.add(run.stageId);
   }
-  if (pipeline.state === "completed") return pipelineStateLabel(t, pipeline.state);
-  const failed = chips.find((chip) => chip.state === "failed");
-  if (failed) return t("kanban.progress.failed", { stage: nameOf(failed.stage) });
-  return pipelineStateLabel(t, pipeline.state);
-}
-
-const CHIP_TONE: Record<string, string> = {
-  pending: "pending",
-  skipped: "pending",
-  running: "active",
-  committing: "active",
-  reviewing: "review",
-  passed: "ok",
-  failed: "bad",
-  needs_decision: "needs",
-};
-
-/** A stage's name on its chip: its role, unless another stage of the same
-    pipeline has that role too, where the stage's own id tells them apart. */
-function stageNames(t: TFunction, pipeline: Pipeline): Map<string, string> {
-  const roles = pipeline.stages.map((stage) => stageChipLabel(t, stage));
-  const repeated = new Set(roles.filter((label, index) => roles.indexOf(label) !== index));
-  return new Map(pipeline.stages.map((stage, index) => {
-    const role = roles[index]!;
-    if (!repeated.has(role)) return [stage.id, role] as const;
-    const words = stage.id.replace(/[-_]+/g, " ").trim();
-    return [stage.id, words ? words[0]!.toUpperCase() + words.slice(1) : role] as const;
-  }));
-}
-
-function PipelineSummary({ summary, onOpenStage }: { summary: KanbanPipeline; onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void }) {
-  const { t } = useLocale();
-  const { pipeline } = summary;
-  const names = stageNames(t, pipeline);
-  const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stageChipLabel(t, stage);
-  const main = summary.chips.filter((chip) => !chip.branch);
-  const branches = summary.chips.filter((chip) => chip.branch);
-  const chip = (entry: (typeof summary.chips)[number], index: number, branch: boolean) => {
-    const label = nameOf(entry.stage);
-    const state = attemptStateLabel(t, entry.state);
-    const openable = stageAttempts(pipeline, entry.stage.id).some((attempt) => attempt.agentPath || attempt.conversationId);
-    const className = `pchip tone-${CHIP_TONE[entry.state] ?? "pending"} st-${entry.state}${branch ? " side" : ""}`;
-    const body = (
-      <>
-        <i className="pdot" aria-hidden="true" />
-        <span className="pname">{branch ? t("kanban.branch", { stage: label }) : label}</span>
-        {entry.rounds ? <span className="prounds">{t("kanban.rounds", { count: entry.rounds })}</span> : null}
-      </>
-    );
-    const aria = entry.rounds ? t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds }) : t("kanban.stageAria", { stage: label, state });
-    return openable ? (
-      <button key={entry.stage.id} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={`${label} · ${state}`} onClick={() => onOpenStage(pipeline, entry.stage)}>
-        {body}
-      </button>
-    ) : (
-      <span key={entry.stage.id} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={`${label} · ${state}`} data-index={index}>
-        {body}
-      </span>
-    );
-  };
-  return (
-    <div className="stage-section compact" data-pipeline={pipeline.id} role="group" aria-label={t("kanban.pipelineAria", { progress: pipelineProgress(t, summary, nameOf) })}>
-      <div className="sec-head">
-        <span className="kind">{t("kanban.pipeline")}</span>
-        <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
-        <span className="progress">{pipelineProgress(t, summary, nameOf)}</span>
-        <span className="grow" />
-      </div>
-      <div className="psummary">
-        {main.map((entry, index) => (
-          <span key={entry.stage.id} className="pchip-wrap">
-            {index > 0 ? <span className="parrow" aria-hidden="true">→</span> : null}
-            {chip(entry, index, false)}
-          </span>
-        ))}
-        {summary.loops.map((loop) => (
-          <span
-            key={`${loop.from.id}->${loop.to.id}`}
-            className="ploop fail"
-            title={t("kanban.loopTitle", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}
-          >
-            {t("kanban.loop", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}
-          </span>
-        ))}
-        {branches.map((entry, index) => chip(entry, index, true))}
-      </div>
-    </div>
-  );
+  return selected;
 }
 
 function engineClass(file: FileEntry): string {
@@ -223,6 +135,11 @@ export interface KanbanCardProps {
   onUseTheirs: (cardId: string) => void;
   onKeepMine: (cardId: string) => void;
   onHide: (card: KanbanCardModel) => void;
+  /** The operator's graph-or-summary choices, by `cardId|pipelineId`. */
+  graphChoices: ReadonlyMap<string, boolean>;
+  onToggleGraph: (cardId: string, pipelineId: string, open: boolean) => void;
+  /** Open the conversation an earlier attempt or review round kept. */
+  onOpenAttempt: (conversation: PastAttempt["conversation"]) => void;
   /** Open readers this card shows, by conversation identity, one per line —
       a string so an unchanged set never re-renders the card. */
   readerKeys: string;
@@ -421,7 +338,14 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       </div>
 
       {!collapsed ? card.pipelines.map((summary) => (
-        <PipelineSummary key={summary.pipeline.id} summary={summary} onOpenStage={props.onOpenStage} />
+        <PipelineSection
+          key={summary.pipeline.id}
+          summary={summary}
+          open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
+          selected={selectedStages(summary.pipeline, readerKeys)}
+          onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
+          onOpenStage={props.onOpenStage}
+        />
       )) : null}
 
       {!collapsed && stageReaders.length ? (
@@ -443,6 +367,15 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             );
           })}
         </div>
+      ) : null}
+
+      {!collapsed && card.past.length ? (
+        <PastAttempts
+          rows={card.past}
+          names={new Map(card.pipelines.map((summary) => [summary.pipeline.id, stageNames(t, summary.pipeline)] as const))}
+          nowMs={nowMs}
+          onOpen={props.onOpenAttempt}
+        />
       ) : null}
 
       {!collapsed && (card.mirrors.length || card.notLoaded || card.otherSurfaces) ? (

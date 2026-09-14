@@ -217,6 +217,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [receipts]);
 
   const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
+  /* Which cards show a pipeline's graph or its summary, as the operator chose. */
+  const [graphChoices, setGraphChoices] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const toggleGraph = useCallback((cardId: string, pipelineId: string, open: boolean) => {
+    setGraphChoices((current) => new Map(current).set(`${cardId}|${pipelineId}`, open));
+  }, []);
   /* The board draws the edits it has sent ahead of the poll: a new title or
      colour at once, and a hidden group gone at once with a hide stamped now. */
   const hideStamps = useRef(new Map<string, string>());
@@ -275,8 +280,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, statuses, seatRefs, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, seatRefs, query, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
@@ -1172,22 +1177,26 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
-  const openStage = useCallback((pipeline: Pipeline, stage: PipelineStage) => {
-    const attempt = latestAttempt(pipeline, stage.id);
-    const file = (attempt?.agentPath ? filesByPath.get(attempt.agentPath) : undefined)
-      ?? (attempt?.conversationId ? files.find((entry) => entry.conversationId === attempt.conversationId) : undefined);
+  /* A conversation an attempt or a review round recorded: its reader when the
+     board carries its transcript. One this board does not carry (an older
+     attempt the scheme window left out) opens through the Viewer's own
+     conversation link, whose resolver pins the transcript for the next poll.
+     No view preference is written. */
+  const openRecorded = useCallback((conversation: { path: string | null; conversationId: string | null }) => {
+    const file = (conversation.path ? filesByPath.get(conversation.path) : undefined)
+      ?? (conversation.conversationId ? files.find((entry) => entry.conversationId === conversation.conversationId) : undefined);
     if (file) {
       openReaderFor(file);
       return;
     }
-    /* A stage conversation this board does not carry (an older attempt the
-       scheme window left out) opens through the Viewer's own conversation
-       link: its resolver pins the transcript for the next poll. No view
-       preference is written. */
-    if (attempt?.conversationId || attempt?.agentPath) {
-      location.hash = formatConversationHash({ conversationId: attempt.conversationId ?? undefined, path: attempt.agentPath ?? "" });
+    if (conversation.conversationId || conversation.path) {
+      location.hash = formatConversationHash({ conversationId: conversation.conversationId ?? undefined, path: conversation.path ?? "" });
     }
   }, [files, filesByPath, openReaderFor]);
+  const openStage = useCallback((pipeline: Pipeline, stage: PipelineStage) => {
+    const attempt = latestAttempt(pipeline, stage.id);
+    if (attempt) openRecorded({ path: attempt.agentPath, conversationId: attempt.conversationId });
+  }, [openRecorded]);
   const foldReaderFor = useCallback((key: string, folded: boolean) => {
     disown(key);
     memory.update((readers) => foldReader(readers, key, folded));
@@ -1446,6 +1455,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onUseTheirs: takeTheirs,
         onKeepMine: keepMine,
         onHide: hideCard,
+        graphChoices,
+        onToggleGraph: toggleGraph,
+        onOpenAttempt: openRecorded,
       }}
     />
   ));
@@ -1619,6 +1631,7 @@ type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
+  | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
 >;
 
 function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, placement, onColumnMenu, cardProps }: {
