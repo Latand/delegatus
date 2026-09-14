@@ -8,10 +8,15 @@
  *   bun scripts/deploy-staging.ts --revision <40-hex sha>
  *
  * Simple replace, no blue-green: build the image from the resolved revision
- * (the same Dockerfile path prod deployments use), remove the previous
- * staging pair, start the new one against the staging state dir, write the
+ * (the same Dockerfile path and LLV_RUNTIME_HOME build arg prod deployments
+ * use), build and stage that revision's Viewer MCP runtime into the staging
+ * state dir, remove the previous staging pair, publish the staging release
+ * target, start the new pair against the staging state dir, write the
  * staging-release.json record there, and gate on the staging port serving
- * that exact revision. Prod evidence: the script fingerprints prod's state
+ * that exact revision to an authenticated caller. A second gate resolves the
+ * control endpoint the way a staging stage agent's Viewer MCP server does and
+ * requires it to land on staging, never on the production port (#1683).
+ * Prod evidence: the script fingerprints prod's state
  * files before and after and fails if the deploy machinery touched
  * viewer-release.json. (Other prod files may legitimately change while the
  * live prod instance keeps working — they are reported, not failed on.)
@@ -25,6 +30,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { viewerControlOrigin, viewerControlToken } from "../src/lib/mcp/controlEndpoint";
+import type { ViewerMcpRuntimeIdentity, ViewerReleaseIdentity } from "../src/lib/runtime/contracts";
 import { stagingReleaseRecord, STAGING_RELEASE_FILE, type StagingReleaseRecord } from "../src/lib/staging";
 import {
   viewerCandidateTmuxEnvironment,
@@ -33,10 +40,14 @@ import {
   viewerComposeSnapshotWithoutWakatimeCredential,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror } from "../src/runtime-host/canonicalMirror";
+import { viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
+import { McpRuntimeReleaseStore } from "../src/runtime-host/mcpRuntimeRelease";
 import {
   STAGING_FRONT_PORT,
   STAGING_RUNTIME_HOST_CONTAINER,
   STAGING_VIEWER_CONTAINER,
+  stagingAgentViewerMcpEnvironment,
+  stagingImageBuildArgs,
   stagingImageName,
   stagingRuntimeHostDockerArgs,
   stagingStatePaths,
@@ -99,6 +110,45 @@ function collectProdState(prodStateDir: string): Map<string, ProdStateFingerprin
   return fingerprints;
 }
 
+/** Headers for a request to the staging Viewer. The staging service inherits
+    LLV_TOKEN from the compose configuration and authenticates every connection,
+    loopback included, so an unauthenticated health read can only answer 403
+    (#1683). The token never appears in a log line or an error. */
+export function stagingRequestHeaders(token: string | null | undefined): Record<string, string> {
+  const credential = token?.trim();
+  return credential ? { authorization: `Bearer ${credential}` } : {};
+}
+
+export interface StagingAgentControl {
+  origin: string;
+  /** Whether a credential resolved; the value itself is never returned. */
+  authenticated: boolean;
+  headers: Record<string, string>;
+}
+
+/** Resolve the control endpoint and credential exactly as a staging stage
+    agent's Viewer MCP server does, from the environment it inherits, and refuse
+    unless the endpoint is the staging Viewer. Before #1683 this resolved to
+    127.0.0.1:8898: agents on staging read and acted on production. */
+export function stagingAgentControl(
+  agentEnvironment: Readonly<Record<string, string>>,
+  stagingEndpoint: string,
+): StagingAgentControl {
+  const origin = viewerControlOrigin(agentEnvironment);
+  if (origin !== new URL(stagingEndpoint).origin) {
+    throw new Error(`staging agent Viewer MCP control resolves to ${origin}, not the staging endpoint ${stagingEndpoint}`);
+  }
+  const token = viewerControlToken(agentEnvironment, origin);
+  return { origin, authenticated: token !== null, headers: stagingRequestHeaders(token) };
+}
+
+function writeComposeSnapshot(filename: string, snapshot: string): void {
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, snapshot, { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, filename);
+}
+
 async function command(argv: string[], options: { cwd?: string } = {}): Promise<string> {
   const child = Bun.spawn(argv, {
     cwd: options.cwd,
@@ -149,12 +199,17 @@ async function containerGone(container: string): Promise<void> {
   }
 }
 
-async function waitForStagingRevision(endpoint: string, revision: string, timeoutMs = 180_000): Promise<void> {
+async function waitForStagingRevision(
+  endpoint: string,
+  revision: string,
+  headers: Record<string, string>,
+  timeoutMs = 180_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = "staging endpoint did not answer";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${endpoint}/api/staging`, { signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(`${endpoint}/api/staging`, { headers, signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const payload = await response.json() as { staging?: unknown; revision?: unknown };
         if (payload.staging === true && payload.revision === revision) return;
@@ -196,14 +251,29 @@ async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(sourceDir), { recursive: true, mode: 0o700 });
   await command(["git", "--git-dir", mirrorDir, "worktree", "prune"]);
   await command(["git", "--git-dir", mirrorDir, "worktree", "add", "--detach", sourceDir, revision]);
+  /* Staging's MCP releases live in its own state dir. No stable launcher is
+     installed from here: the operator's launcher belongs to prod deployments. */
+  const mcpRuntimeStore = new McpRuntimeReleaseStore({
+    stateDir: stagingStateDir,
+    stableRuntimeRoot: path.join(stagingStateDir, "mcp-runtime"),
+  });
+  const hotStateBackend = fs.existsSync(path.join(sourceDir, "src", "lib", "state", "hotStateAuthority.ts"))
+    ? "sqlite-v1" as const
+    : undefined;
   let service;
+  let composeSnapshot: string;
+  let mcpRuntime: ViewerMcpRuntimeIdentity;
   try {
     const composeConfig = await command([
       "docker", "compose", "--project-directory", sourceDir, "-f", path.join(sourceDir, "docker-compose.yml"),
       "--profile", "*", "config", "--format", "json",
     ]);
-    service = viewerComposeServiceFromConfig(viewerComposeSnapshotWithoutWakatimeCredential(composeConfig));
-    await command(["docker", "build", "--pull", "--label", `dev.live-log-viewer.revision=${revision}`, "-t", image, sourceDir]);
+    composeSnapshot = viewerComposeSnapshotWithoutWakatimeCredential(composeConfig);
+    service = viewerComposeServiceFromConfig(composeSnapshot);
+    await command(stagingImageBuildArgs({ revision, image, sourceDir, runtimeHome: service.environment.HOME }));
+    await command([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: sourceDir });
+    await command([process.execPath, "run", "build:mcp"], { cwd: sourceDir });
+    mcpRuntime = mcpRuntimeStore.stagePreparedPackage(sourceDir, `staging-${revision}`, revision);
   } finally {
     try { await command(["git", "--git-dir", mirrorDir, "worktree", "remove", "--force", sourceDir]); }
     catch { fs.rmSync(sourceDir, { recursive: true, force: true }); }
@@ -221,6 +291,21 @@ async function main(): Promise<void> {
   fs.mkdirSync(stagingStateDir, { recursive: true, mode: 0o700 });
   await containerGone(STAGING_VIEWER_CONTAINER);
   await containerGone(STAGING_RUNTIME_HOST_CONTAINER);
+  /* Published before the new pair starts, so the arriving Viewer owns the
+     target from its first request and moves the hot-state authority to this
+     revision itself; a target written after start fences every hot-state write
+     until the authority catches up. The compose snapshot is where an agent's
+     MCP server finds the staging Viewer's credential. */
+  writeComposeSnapshot(viewerComposeSnapshotPath(stagingStateDir, STAGING_VIEWER_CONTAINER), composeSnapshot);
+  const releaseTarget: ViewerReleaseIdentity = {
+    image,
+    container: STAGING_VIEWER_CONTAINER,
+    endpoint,
+    revision,
+    ...(hotStateBackend ? { hotStateBackend } : {}),
+    mcpRuntime,
+  };
+  mcpRuntimeStore.publishReleaseTarget(paths.releaseTarget, releaseTarget);
   await command(stagingRuntimeHostDockerArgs(context));
   await command(stagingViewerDockerArgs(context));
 
@@ -233,13 +318,24 @@ async function main(): Promise<void> {
   };
   writeReleaseRecord(path.join(stagingStateDir, STAGING_RELEASE_FILE), record);
 
-  await waitForStagingRevision(endpoint, revision);
+  await waitForStagingRevision(endpoint, revision, stagingRequestHeaders(service.environment.LLV_TOKEN));
+
+  const agentControl = stagingAgentControl(stagingAgentViewerMcpEnvironment(context), endpoint);
+  if (service.environment.LLV_TOKEN?.trim() && !agentControl.authenticated) {
+    throw new Error("staging agent Viewer MCP control resolved no credential for the staging Viewer");
+  }
+  await waitForStagingRevision(agentControl.origin, revision, agentControl.headers, 30_000);
 
   const changes = prodStateChanges(before, collectProdState(prodStateDir));
   if (changes.violation) {
     throw new Error(`stage deploy touched prod ${changes.violation} — investigate before trusting this staging instance`);
   }
-  console.log(JSON.stringify({ ...record, prodState: changes }, null, 2));
+  console.log(JSON.stringify({
+    ...record,
+    mcpRuntime,
+    agentControl: { origin: agentControl.origin, authenticated: agentControl.authenticated },
+    prodState: changes,
+  }, null, 2));
 }
 
 if (import.meta.main) {
