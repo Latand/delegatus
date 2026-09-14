@@ -170,8 +170,23 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
+    isRetiredLaunches(attempt.retiredLaunches) &&
     isUnresolvedTermination(attempt.unresolvedTermination)
   );
+}
+
+function isRetiredLaunches(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value)
+    && value.length <= 50
+    && value.every((retired) => retired !== null
+      && typeof retired === "object"
+      && !Array.isArray(retired)
+      && typeof (retired as { launchId: unknown }).launchId === "string"
+      && (retired as { launchId: string }).launchId.length > 0
+      && isNullableString((retired as { conversationId: unknown }).conversationId)
+      && typeof (retired as { error: unknown }).error === "string"
+      && typeof (retired as { retiredAt: unknown }).retiredAt === "string");
 }
 
 function isUnresolvedTermination(value: unknown): boolean {
@@ -633,6 +648,9 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             verdict: attempt.verdict ?? null,
             error: attempt.error ?? null,
             verdictRecovery: attempt.verdictRecovery ? { ...attempt.verdictRecovery } : undefined,
+            ...(attempt.retiredLaunches
+              ? { retiredLaunches: attempt.retiredLaunches.map((retired) => ({ ...retired })) }
+              : {}),
             unresolvedTermination: attempt.unresolvedTermination
               ? { ...attempt.unresolvedTermination, survivors: attempt.unresolvedTermination.survivors.map((survivor) => ({ ...survivor })) }
               : undefined,

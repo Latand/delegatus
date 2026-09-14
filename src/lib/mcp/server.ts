@@ -2824,7 +2824,7 @@ const pipelineStageSchema = z.object({
   kind: z.enum(["run", "review-loop"])
     .describe("run: an agent conversation that does the work. review-loop: a read-only review of the run stage whose next chain reaches it."),
   "prompt": z.string().min(1)
-    .describe(`Instruction for this stage's agent, appended to its role scaffold. Up to ${MAX_STAGE_PROMPT_LENGTH} characters once trimmed.`),
+    .describe(`Instruction for this stage's agent, appended to its role scaffold. Up to ${MAX_STAGE_PROMPT_LENGTH} characters once trimmed. {{task}} renders the pipeline task and {{prev.output}} the previous stage's final prose output; a prompt that places neither still receives the previous output as a labelled section appended after the instruction.`),
   next: z.string().nullable().optional()
     .describe("Pass successor: the id of the stage this one hands to when it passes, or null to end the chain. DEFAULTS TO null — without it nothing follows this stage, and a review-loop nothing points at is rejected as unreachable."),
   onFail: z.object({

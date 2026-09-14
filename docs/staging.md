@@ -27,11 +27,23 @@ bun scripts/deploy-staging.ts --revision <40-hex sha>   # deploy an exact stage 
 
 Simple replace, no blue-green: the script keeps its own canonical mirror
 under the staging state dir, resolves `refs/heads/stage`, builds the image
-through the same Dockerfile path prod deployments use
-(`agent-log-viewer:staging-<sha12>`), removes the previous
-`llv-staging-runtime-host` + `llv-staging-viewer` pair, starts the new one,
-and gates on `http://127.0.0.1:8899/api/staging` serving the exact deployed
-revision.
+through the same Dockerfile path and `LLV_RUNTIME_HOME` build arg prod
+deployments use (`agent-log-viewer:staging-<sha12>`), builds that revision's
+Viewer MCP runtime and stages it under the staging state dir's
+`mcp-runtime/releases`, removes the previous
+`llv-staging-runtime-host` + `llv-staging-viewer` pair, publishes the staging
+`viewer-release.json` and compose snapshot, starts the new pair, and gates on
+`http://127.0.0.1:8899/api/staging` serving the exact deployed revision to a
+caller holding the service token. A second gate resolves the Viewer control
+endpoint and credential from exactly the environment a staging stage agent
+inherits, the way that agent's MCP server does, and fails unless it is the
+staging Viewer at the deployed revision (#1683).
+
+Without the build arg, ssh inside the staging Viewer reads `known_hosts` from
+the image's default home and every pipeline branch publish fails host-key
+verification. The release target is published before the new pair starts, so
+the arriving Viewer moves the hot-state authority to its own revision; the
+operator's stable MCP launcher is never reinstalled from staging.
 
 The deployed revision is recorded in
 `~/.config/agent-log-viewer/state-staging/staging-release.json` and exposed
@@ -49,8 +61,18 @@ inbox, release records — resolves through `stateDir()`, and in staging mode
 that resolver **throws** if it would land on the prod state dir or the
 legacy `~/.claude/viewer-state` dir, and never runs the legacy migration
 copy. The container builders (`src/runtime-host/stagingContainer.ts`)
-re-assert the same guard and strip prod-only env
-(`LLV_VIEWER_DEPLOY_TARGET`, `LLV_VIEWER_PORT`) before any `docker run`.
+re-assert the same guard and repin every release-bearing variable the compose
+snapshot names for prod: `LLV_VIEWER_DEPLOY_TARGET` (the staging
+`viewer-release.json`), `LLV_VIEWER_PORT` and `LLV_VIEWER_CONTROL_URL` (8899),
+and `LLV_RUNTIME_JOURNAL` (the staging journal).
+
+The pinned values are what keep agents on staging. The
+structured hosts forward `LLV_STATE_DIR`, `LLV_VIEWER_DEPLOY_TARGET` and
+`LLV_VIEWER_PORT` to every agent they launch, and the Viewer MCP server falls
+back to `127.0.0.1:8898` when it has no port. With the pair stripped, a
+staging stage agent read staging state in-process while every tool that goes
+over Viewer control HTTP (`list_conversations`, `search_transcripts`,
+`send_message`, `deploy_exact_sha`) reached prod (#1683).
 
 Agent launches stay enabled on staging (operator revision of #659, comment
 of 2026-07-24): spawn, attach, migrations, pipelines and message delivery
@@ -65,7 +87,9 @@ untouched.
 ## Verification after a stage deploy
 
 1. **Staging serves the stage revision** —
-   `curl -s http://127.0.0.1:8899/api/staging` reports
+   `curl -s -H "Authorization: Bearer $LLV_TOKEN" http://127.0.0.1:8899/api/staging`
+   (the staging service inherits the compose `LLV_TOKEN`; without it the
+   answer is 403) reports
    `{"staging":true,"revision":<deployed sha>,…}` matching
    `git rev-parse origin/stage` and `staging-release.json`; the UI at
    `http://127.0.0.1:8899` shows the staging badge with that sha prefix.
@@ -81,3 +105,6 @@ untouched.
 4. **Launches stay staging-local** — spawn an agent from the staging UI;
    it appears on staging's board (`state-staging/agent-registry.json`)
    and prod's `agent-registry.json` fingerprint stays unchanged.
+5. **Agents' Viewer tools land on staging** — the deploy output's
+   `agentControl` reads `origin: http://127.0.0.1:8899` and
+   `authenticated: true`.

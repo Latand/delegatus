@@ -185,7 +185,32 @@ export type PipelineStageAttempt = {
     startedAt: string;
     rounds: number;
     retryAfter: string;
+    /** The largest budget any round of this wait asked for, and its backoff
+        cap (#1678): a later round of a cheaper class keeps the wait's budget.
+        Absent on waits persisted before these fields existed, which then read
+        as the round's own class. */
+    budgetMs?: number;
+    retryMaxMs?: number;
   };
+  /** Spawn calls this attempt has made across its activations, immediate
+      handshake retries included (#1678). Each consumed one client attempt id,
+      so the next retry index starts here. Persisted before the call is made:
+      a restart that interrupts a call still counts it, and the retry that
+      follows cannot replay the interrupted call's id. An attempt an engine
+      without this count left behind starts it past every id that engine
+      could have spent (#1678 review 3). */
+  spawnCalls?: number;
+  /** Launches this attempt reserved and then retired because their receipt
+      settled `failed` before any host ran them (#1678): the runtime host was
+      unreachable or the account mutation lock was busy. The receipt's own
+      terminal verdict is what permits re-dispatch; a launch whose fate the
+      receipt cannot vouch for is never retired here. Bounded, oldest first. */
+  retiredLaunches?: Array<{
+    launchId: string;
+    conversationId: string | null;
+    error: string;
+    retiredAt: string;
+  }>;
   /** Exactly-once relay (#353): the `{{prev.output}}` payload persisted when the
       cursor advanced here. Null on pre-v3 attempts, which fall back to the
       legacy positional scan. */

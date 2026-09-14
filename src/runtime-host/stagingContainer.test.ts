@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 
+import { viewerControlOrigin } from "@/lib/mcp/controlEndpoint";
+
 import type { ViewerComposeService } from "./candidateContainer";
 import {
   STAGING_FRONT_PORT,
   STAGING_LABEL,
   STAGING_RUNTIME_HOST_CONTAINER,
   STAGING_VIEWER_CONTAINER,
+  stagingAgentViewerMcpEnvironment,
+  stagingImageBuildArgs,
   stagingImageName,
   stagingRuntimeHostDockerArgs,
   stagingStatePaths,
@@ -76,6 +80,25 @@ test("staging image names pin the deployed revision", () => {
 test("staging state paths all live inside the staging state dir", () => {
   expect(paths.runtimeSocket.startsWith(`${paths.stateDir}${path.sep}`)).toBe(true);
   expect(paths.runtimeJournal.startsWith(`${paths.stateDir}${path.sep}`)).toBe(true);
+  expect(paths.releaseTarget).toBe(path.join(paths.stateDir, "viewer-release.json"));
+});
+
+test("issue 1683: the staging image sets the container user's passwd home the way prod builds do", () => {
+  const args = stagingImageBuildArgs({
+    revision,
+    image: stagingImageName(revision),
+    sourceDir: "/source",
+    runtimeHome: composeService.environment.HOME,
+  });
+  expect(args.slice(0, 3)).toEqual(["docker", "build", "--pull"]);
+  expect(valuesAfter(args, "--build-arg")).toEqual(["LLV_RUNTIME_HOME=/home/user"]);
+  expect(valuesAfter(args, "--label")).toEqual([`dev.live-log-viewer.revision=${revision}`]);
+  expect(valuesAfter(args, "-t")).toEqual([stagingImageName(revision)]);
+  expect(args.at(-1)).toBe("/source");
+  for (const runtimeHome of [undefined, "", "home/user"]) {
+    expect(() => stagingImageBuildArgs({ revision, image: stagingImageName(revision), sourceDir: "/source", runtimeHome }))
+      .toThrow(/HOME/);
+  }
 });
 
 test("the staging viewer container serves the fixed staging port from isolated state", () => {
@@ -114,17 +137,40 @@ test("staging containers retain the configured supplementary groups", () => {
   }
 });
 
-test("staging containers never carry prod deployment or release state env", () => {
+test("issue 1683: staging containers pin release, port, control and journal env to staging, never prod", () => {
+  const prodStateDir = "/home/user/.config/agent-log-viewer/state";
   for (const args of [
     stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
     stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
   ]) {
     const environment = environmentFromArgs(args);
-    expect(environment.LLV_VIEWER_DEPLOY_TARGET).toBeUndefined();
-    expect(environment.LLV_VIEWER_PORT).toBeUndefined();
+    expect(environment.LLV_VIEWER_DEPLOY_TARGET).toBe(paths.releaseTarget);
+    expect(environment.LLV_VIEWER_PORT).toBe("8899");
+    expect(environment.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:8899");
+    expect(environment.LLV_RUNTIME_JOURNAL).toBe(paths.runtimeJournal);
     expect(environment.LLV_STATE_DIR).toBe(paths.stateDir);
     expect(environment.LLV_STAGING).toBe("1");
+    const prodValues = Object.entries(environment)
+      .filter(([, value]) => value.startsWith(`${prodStateDir}${path.sep}`) || value === prodStateDir);
+    expect(prodValues).toEqual([]);
   }
+});
+
+test("issue 1683: a staging stage agent's Viewer MCP control resolves to the staging port", () => {
+  const context = { revision, image: stagingImageName(revision), service: composeService, paths, tmux };
+  const agentEnvironment = stagingAgentViewerMcpEnvironment(context);
+  expect(agentEnvironment).toEqual({
+    HOME: "/home/user",
+    XDG_CONFIG_HOME: "/home/user/.config",
+    LLV_STATE_DIR: paths.stateDir,
+    LLV_VIEWER_DEPLOY_TARGET: paths.releaseTarget,
+    LLV_VIEWER_PORT: "8899",
+  });
+  expect(viewerControlOrigin(agentEnvironment)).toBe("http://127.0.0.1:8899");
+  /* What the agent inherited before: the state dir without the release pair,
+     which the MCP server answers with the production port. */
+  expect(viewerControlOrigin({ HOME: "/home/user", LLV_STATE_DIR: paths.stateDir })).toBe("http://127.0.0.1:8898");
+  expect(viewerControlOrigin(stagingAgentViewerMcpEnvironment({ ...context, port: 18_899 }))).toBe("http://127.0.0.1:18899");
 });
 
 test("the staging runtime-host runs the events host against the staging journal without deployments", () => {
