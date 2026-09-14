@@ -43,7 +43,12 @@ Without the build arg, ssh inside the staging Viewer reads `known_hosts` from
 the image's default home and every pipeline branch publish fails host-key
 verification. The release target is published before the new pair starts, so
 the arriving Viewer moves the hot-state authority to its own revision; the
-operator's stable MCP launcher is never reinstalled from staging.
+operator's stable MCP launcher is never reinstalled from staging. Each staged
+MCP runtime carries production `node_modules` (about 600 MB), so once the
+gates pass the deploy keeps only the runtime the staging release target names
+and the one it named before (the rollback's), and removes the other staging
+runtimes. A target it cannot read prunes nothing, and it never looks outside
+the staging state dir.
 
 The deployed revision is recorded in
 `~/.config/agent-log-viewer/state-staging/staging-release.json` and exposed
@@ -72,7 +77,11 @@ structured hosts forward `LLV_STATE_DIR`, `LLV_VIEWER_DEPLOY_TARGET` and
 back to `127.0.0.1:8898` when it has no port. With the pair stripped, a
 staging stage agent read staging state in-process while every tool that goes
 over Viewer control HTTP (`list_conversations`, `search_transcripts`,
-`send_message`, `deploy_exact_sha`) reached prod (#1683).
+`send_message`, `deploy_exact_sha`) reached prod (#1683), and so did the
+pipeline tick its MCP server sends after a pipeline change, which read only
+`LLV_VIEWER_CONTROL_URL` (#1685). Prod's stable port vouches for loopback
+requests when its gateway marks the local entry trusted, so prod answered
+those calls.
 
 Agent launches stay enabled on staging (operator revision of #659, comment
 of 2026-07-24): spawn, attach, migrations, pipelines and message delivery
@@ -105,6 +114,10 @@ untouched.
 4. **Launches stay staging-local** — spawn an agent from the staging UI;
    it appears on staging's board (`state-staging/agent-registry.json`)
    and prod's `agent-registry.json` fingerprint stays unchanged.
-5. **Agents' Viewer tools land on staging** — the deploy output's
+5. **Agents' Viewer control lands on staging** — the deploy output's
    `agentControl` reads `origin: http://127.0.0.1:8899` and
-   `authenticated: true`.
+   `authenticated: true`. The gate resolves the endpoint and credential
+   through the same functions the MCP server's control calls and its pipeline
+   tick use, from the variables a staging agent inherits; the in-process
+   reads (`get_pipeline`, `list_pipelines`) use `LLV_STATE_DIR`, which staging
+   already pinned.
