@@ -2701,6 +2701,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
     "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
+    "`publication` defaults to internal: stages and reviews settle on the Viewer's own attempts, verdicts and exact local revisions, and nothing is pushed or read from GitHub. Pass remote-branch only when the pipeline must publish its branch; reviews then launch and settle only on the published head.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
   ].join(" "),
@@ -2995,6 +2996,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     ),
     src: z.string().optional().describe("Creator transcript path (.jsonl) under the shared Claude transcript store or a Codex sessions root; a native ~/.claude/projects path is normalized to its shared-store mirror when that file exists."),
     autoStart: z.boolean().optional().describe("false creates a draft for the operator to start from the board."),
+    publication: z.enum(["internal", "remote-branch"]).optional().describe("internal (default): nothing is pushed or read from a remote; the Viewer's own state decides every stage. remote-branch: push every accepted revision and fence reviews on origin/<branch>."),
   }).passthrough(),
   pipeline_action: z.object({
     clientRequestId: clientRequestIdSchema,

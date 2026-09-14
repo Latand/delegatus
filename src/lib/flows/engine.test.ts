@@ -109,7 +109,7 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
     expect(spawnSync("git", ["commit", "-am", "repair"], { cwd: directory }).status).toBe(0);
     const repairSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: directory, encoding: "utf8" }).stdout.trim();
     const flow = {
-      cwd: directory, headRef: "main", roles: {
+      cwd: directory, headRef: "main", requireRemoteHead: true, roles: {
         implementer: { engine: "codex", model: null, effort: "high" },
         reviewer: { engine: "codex", model: null, effort: "xhigh" },
       }, rounds: [],
@@ -117,6 +117,39 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
 
     expect(() => captureReviewHead(flow, newRound(flow, "marker", null)))
       .toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-internal-head-"));
+  const directory = path.join(root, "worktree");
+  fs.mkdirSync(directory);
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["config", "user.email", "flow@example.com"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["config", "user.name", "Flow Test"], { cwd: directory }).status).toBe(0);
+    /* An origin nobody can reach: any read of it fails. */
+    expect(spawnSync("git", ["remote", "add", "origin", path.join(root, "missing-origin.git")], { cwd: directory }).status).toBe(0);
+    fs.writeFileSync(path.join(directory, "work.txt"), "reviewed\n");
+    expect(spawnSync("git", ["add", "work.txt"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["commit", "-m", "reviewed"], { cwd: directory }).status).toBe(0);
+    const headSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: directory, encoding: "utf8" }).stdout.trim();
+    const flow = {
+      cwd: directory, headRef: "main", roles: {
+        implementer: { engine: "codex", model: null, effort: "high" },
+        reviewer: { engine: "codex", model: null, effort: "xhigh" },
+      }, rounds: [],
+    } as unknown as Flow;
+
+    const internal = newRound(flow, "marker", null);
+    expect(captureReviewHead(flow, internal)).toBe(headSha);
+    expect(internal.reviewHeadSha).toBe(headSha);
+
+    const publishing = { ...flow, requireRemoteHead: true } as Flow;
+    expect(() => captureReviewHead(publishing, newRound(publishing, "marker", null)))
+      .toThrow("review remote head is unavailable before launch: origin/main");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -218,6 +218,7 @@ export async function createFlowFromRequest(req: CreateFlowRequest, entries: Fil
     reviewerFallback: roles.reviewer.engine === "codex" ? configuredReviewerFallback() : null,
     baseRef: base.sha,
     headRef,
+    ...(headRef && req.requireRemoteHead === true ? { requireRemoteHead: true } : {}),
     targetSha,
     ...(normalizedSpec.spec ? { spec: normalizedSpec.spec } : {}),
     baseMode,
