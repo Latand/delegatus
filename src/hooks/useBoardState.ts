@@ -1023,8 +1023,8 @@ export interface BoardState extends BoardSnapshot {
   close(path: string): void;
   restore(path: string, placement: "auto" | "manual" | "expanded"): void;
   setViewMode(viewMode: BoardViewMode): void;
-  /** The desktop face: kanban (#1695) or the scheme, with the view it implies. */
-  setDesktopBoard(desktopBoard: "kanban" | null, viewMode?: BoardViewMode): void;
+  /** The desktop face: kanban (#1695) or an explicit scheme, with the view it implies. */
+  setDesktopBoard(desktopBoard: "kanban" | "scheme" | null, viewMode?: BoardViewMode): void;
   setTaskPanelOpen(open: boolean): void;
   /* The canonical selection's writers (#771) — the same three every view uses.
      Live even while the durable board is unavailable: the selection is session

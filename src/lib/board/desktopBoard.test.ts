@@ -18,9 +18,10 @@ function temporaryFile(): string {
 
 const body = (mutation: Record<string, unknown>) => ({ schemaVersion: 1, project: "fixture", baseRevision: 0, mutations: [mutation] });
 
-test("set-presentation accepts the kanban face with the view it implies, and refuses any other value", () => {
+test("set-presentation accepts the kanban face, an explicit scheme, or the default, and refuses any other value", () => {
   const parsed = validateBoardPatchPayload(body({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }));
   expect(parsed.mutations).toEqual([{ kind: "set-presentation", viewMode: "scheme", desktopBoard: "kanban" }]);
+  expect(validateBoardPatchPayload(body({ kind: "set-presentation", desktopBoard: "scheme" })).mutations).toEqual([{ kind: "set-presentation", desktopBoard: "scheme" }]);
   expect(validateBoardPatchPayload(body({ kind: "set-presentation", desktopBoard: null })).mutations).toEqual([{ kind: "set-presentation", desktopBoard: null }]);
   expect(() => validateBoardPatchPayload(body({ kind: "set-presentation", desktopBoard: "grid" }))).toThrow("desktopBoard");
 });
@@ -45,9 +46,9 @@ test("the choice persists across a reload and leaves the phone's view mode alone
   const reloaded = boardFor("fixture", file);
   expect(reloaded.prefs.desktopBoard).toBe("kanban");
   expect(reloaded.prefs.viewMode).toBe("scheme");
-  const back = mutateBoard("fixture", 1, [{ kind: "set-presentation", desktopBoard: null }], file);
+  const back = mutateBoard("fixture", 1, [{ kind: "set-presentation", desktopBoard: "scheme" }], file);
   expect(back).toMatchObject({ ok: true });
-  expect(boardFor("fixture", file).prefs.desktopBoard).toBeNull();
+  expect(boardFor("fixture", file).prefs.desktopBoard).toBe("scheme");
   expect(boardFor("fixture", file).prefs.viewMode).toBe("scheme");
 });
 
@@ -64,4 +65,16 @@ test("a board file without the key, and one with a key this build does not know,
   expect(loaded.revision).toBe(3);
   expect(loaded.prefs.viewMode).toBe("list");
   expect(loaded.prefs.desktopBoard).toBe("kanban");
+});
+
+test("a face a later build names loads here as data, and the rest of the board file with it", () => {
+  const file = temporaryFile();
+  const later = { schemaVersion: 1, revision: 7, updatedAt: "2026-09-14T10:00:00.000Z", prefs: { manual: ["/a.jsonl"], hidden: [], expanded: [], viewMode: "scheme", desktopBoard: "a-face-from-a-later-build", taskPanelOpen: false } };
+  const other = { schemaVersion: 1, revision: 2, updatedAt: "2026-09-14T10:00:00.000Z", prefs: { manual: [], hidden: [], expanded: [], viewMode: "list", taskPanelOpen: true } };
+  fs.writeFileSync(file, JSON.stringify({ projects: { fixture: later, neighbour: other } }));
+  expect(boardFor("fixture", file)).toMatchObject({ revision: 7, prefs: { manual: ["/a.jsonl"], desktopBoard: "a-face-from-a-later-build" } });
+  expect(boardFor("neighbour", file)).toMatchObject({ revision: 2, prefs: { viewMode: "list", taskPanelOpen: true } });
+  /* A write in this build keeps the value it does not understand. */
+  expect(mutateBoard("fixture", 7, [{ kind: "set-favorite", id: "conversation_x", favorite: true }], file)).toMatchObject({ ok: true });
+  expect(boardFor("fixture", file).prefs.desktopBoard).toBe("a-face-from-a-later-build");
 });

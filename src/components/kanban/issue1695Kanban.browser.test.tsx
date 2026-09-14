@@ -26,6 +26,13 @@ import { kanbanLayoutMode } from "./KanbanBoard";
  *   - every task is on the board or counted off it, per column;
  *   - a status move lands in the new column on the click, a refused one comes
  *     back with an error receipt, a keyboard move works, find narrows;
+ *   - the board never pushes the page sideways, in any mode;
+ *   - `/` inside the board finds a task and leaves the global search closed;
+ *     outside it the global search still opens;
+ *   - `U` undoes while its receipt is on screen, and not after it closed;
+ *   - a card's links open other views and conversations without writing a
+ *     view preference;
+ *   - presence names only the cards the operator can actually see;
  *   - the phone never mounts the kanban board.
  *
  * Geometry goes to `evidence/issue-1695/geometry.json`; frames to
@@ -45,6 +52,7 @@ const VIEWPORTS = [
   { width: 1024, height: 768 },
   { width: 960, height: 720 },
   { width: 700, height: 720 },
+  { width: 640, height: 720 },
 ] as const;
 const SCHEMES = ["light", "dark"] as const;
 const EXPECTED_COUNTS = { inbox: 3, assigned: 7, blocked: 2, done: 5 } as const;
@@ -56,6 +64,13 @@ interface BoardGeometry {
   columns: ColumnGeometry[];
   tablist: boolean;
   overflowX: number;
+  /** How far the board's right edge reaches past the window. */
+  beyondWindow: number;
+  /** Sideways scroll of the whole page, and the widest element causing it
+      that is not part of the board. Recorded, not gated: at a 640 px window
+      the Viewer's own header row overflows on every face (#1698). */
+  pageOverflow: number;
+  pageOverflowOutsideBoard: string | null;
   card: { paddingLeft: string; radius: string; titleSize: string; titleWeight: string; pillHeight: number; tileWidth: number | null } | null;
   hiddenCount: string | null;
   cards: number;
@@ -82,6 +97,12 @@ const measure = (page: Page, root: string) => page.evaluate((rootSelector): Boar
     columns,
     tablist: Boolean(board.querySelector('[role="tablist"]')),
     overflowX: Math.max(0, board.scrollWidth - board.clientWidth),
+    beyondWindow: Math.max(0, Math.round(boardRect.right - window.innerWidth)),
+    pageOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    pageOverflowOutsideBoard: [...document.querySelectorAll<HTMLElement>("body *")]
+      .filter((element) => !board.contains(element) && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().right > window.innerWidth + 1)
+      .sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right)
+      .map((element) => `${element.tagName.toLowerCase()}[${(element.getAttribute("aria-label") ?? element.textContent ?? "").trim().slice(0, 30)}] right=${Math.round(element.getBoundingClientRect().right)}`)[0] ?? null,
     card: cardStyle ? {
       paddingLeft: cardStyle.paddingLeft,
       radius: cardStyle.borderTopLeftRadius,
@@ -112,7 +133,10 @@ function gateGeometry(geometry: BoardGeometry, failures: string[], label: string
     const visible = geometry.columns.filter((column) => column.visible);
     if (visible.length !== 1) failures.push(`${label}: tabbed board shows ${visible.length} columns`);
   }
-  if ((expectedMode === "wide" || expectedMode === "narrow") && geometry.overflowX > 1) failures.push(`${label}: board overflows sideways by ${geometry.overflowX}px`);
+  /* Every mode: the board holds its content (the scroller scrolls inside
+     itself) and never reaches past the window. */
+  if (geometry.overflowX > 1) failures.push(`${label}: board overflows sideways by ${geometry.overflowX}px`);
+  if (geometry.beyondWindow > 1) failures.push(`${label}: board reaches ${geometry.beyondWindow}px past the window`);
 }
 
 async function openFixture(browser: Browser, url: string, viewport: { width: number; height: number }, scheme: "light" | "dark") {
@@ -248,9 +272,112 @@ browserTest("#1695 kanban board: the prototype's columns and cards over the real
       await page.screenshot({ path: path.join(OUT, "flow-find.png") });
       if (found !== "1 of 7") failures.push(`flow: find reads ${found}`);
       flows.find = found;
+
+      /* `/`: inside the board it focuses the kanban find and the global
+         search stays closed; from the page body the global search opens. */
+      await page.fill("[data-kanban-search]", "");
+      await page.focus('.card[data-id="task:t-links"]');
+      await page.keyboard.press("/");
+      await page.waitForTimeout(150);
+      const slashInside = await page.evaluate(() => ({
+        kanbanFind: document.activeElement?.hasAttribute("data-kanban-search") ?? false,
+        globalSearch: Boolean(document.querySelector('[aria-modal="true"]')),
+      }));
+      if (!slashInside.kanbanFind || slashInside.globalSearch) failures.push(`slash: inside the board ${JSON.stringify(slashInside)}`);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.keyboard.press("/");
+      await page.waitForTimeout(300);
+      const slashOutside = await page.evaluate(() => Boolean(document.querySelector('[aria-modal="true"]')));
+      if (!slashOutside) failures.push("slash: the global search no longer opens from the page body");
+      await page.keyboard.press("Escape");
+      flows.slash = { inside: slashInside, outsideOpensGlobalSearch: slashOutside };
+
+      /* Presence names what is on screen: a tile's conversation is reported
+         exactly when its card intersects its column's scroll box. */
+      const presenceCheck = async () => {
+        await page.waitForTimeout(1_500);
+        return page.evaluate(() => {
+          const posts = (window as unknown as { evidence: { presence: Array<{ mode: string; visiblePaths: string[] }> } }).evidence.presence;
+          const last = posts[posts.length - 1] ?? null;
+          const tiles = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .tile[data-member]")].map((tile) => {
+            const card = tile.closest<HTMLElement>(".card")!;
+            const body = card.closest<HTMLElement>(".col-body")!.getBoundingClientRect();
+            const rect = card.getBoundingClientRect();
+            const onScreen = rect.bottom > body.top && rect.top < body.bottom && getComputedStyle(card.closest(".column")!).display !== "none";
+            return { path: tile.dataset.member!, onScreen, reported: Boolean(last?.visiblePaths.includes(tile.dataset.member!)) };
+          });
+          return { posts: posts.length, mode: last?.mode ?? null, reported: last?.visiblePaths.length ?? 0, tiles };
+        });
+      };
+      const presenceTop = await presenceCheck();
+      await page.evaluate(() => { const body = document.querySelector<HTMLElement>('.column[data-status="assigned"] .col-body')!; body.scrollTop = body.scrollHeight; });
+      const presenceScrolled = await presenceCheck();
+      for (const [label, check] of [["top", presenceTop], ["scrolled", presenceScrolled]] as const) {
+        const wrong = check.tiles.filter((tile) => tile.onScreen !== tile.reported);
+        if (!check.posts || wrong.length) failures.push(`presence ${label}: ${JSON.stringify(wrong)} (${check.posts} posts)`);
+      }
+      if (!presenceTop.tiles.some((tile) => !tile.onScreen) || !presenceTop.tiles.some((tile) => tile.onScreen)) failures.push("presence: the fixture no longer has tiles both on and off screen");
+      flows.presence = { top: presenceTop, scrolled: presenceScrolled };
       if (pageErrors.length) failures.push(`flows: page errors ${pageErrors.join(" | ")}`);
     } finally {
       await context.close();
+    }
+
+    /* Undo lives as long as its receipt: U right after a move undoes it; U
+       after the receipt closed by its timer sends nothing. */
+    const undo = await openFixture(browser, base, VIEWPORTS[0], "light");
+    try {
+      await undo.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+      const columnOf = (id: string) => undo.page.evaluate((cardId) => document.querySelector(`.card[data-id="task:${cardId}"]`)?.closest<HTMLElement>(".column")?.dataset.status ?? null, id);
+      const patches = () => undo.page.evaluate(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length);
+      await undo.page.click('.card[data-id="task:t-merge-a"] .pill');
+      await undo.page.click('.menu [role="menuitemradio"]:has-text("Done")');
+      await undo.page.waitForFunction(() => document.querySelector('.card[data-id="task:t-merge-a"]')?.getAttribute("data-pending") === "0", undefined, { timeout: 5_000 });
+      await undo.page.keyboard.press("u");
+      await undo.page.waitForFunction(() => document.querySelector('.card[data-id="task:t-merge-a"]')?.getAttribute("data-pending") === "0", undefined, { timeout: 5_000 });
+      await undo.page.waitForTimeout(200);
+      const undone = { column: await columnOf("t-merge-a"), patches: await patches() };
+      if (undone.column !== "assigned" || undone.patches !== 2) failures.push(`undo: U while the receipt shows left ${JSON.stringify(undone)}`);
+
+      await undo.page.click('.card[data-id="task:t-disk"] .pill');
+      await undo.page.click('.menu [role="menuitemradio"]:has-text("Blocked")');
+      await undo.page.waitForFunction(() => document.querySelector('.card[data-id="task:t-disk"]')?.getAttribute("data-pending") === "0", undefined, { timeout: 5_000 });
+      await undo.page.waitForFunction(() => !document.querySelector("[data-kanban-receipt] .act"), undefined, { timeout: 12_000 });
+      const beforeLateUndo = await patches();
+      await undo.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await undo.page.keyboard.press("u");
+      await undo.page.waitForTimeout(800);
+      const expired = { column: await columnOf("t-disk"), patchesBefore: beforeLateUndo, patchesAfter: await patches() };
+      if (expired.column !== "blocked" || expired.patchesAfter !== expired.patchesBefore) failures.push(`undo: U after the receipt closed ${JSON.stringify(expired)}`);
+      flows.undo = { undone, expired };
+      if (undo.pageErrors.length) failures.push(`undo: page errors ${undo.pageErrors.join(" | ")}`);
+    } finally {
+      await undo.context.close();
+    }
+
+    /* A card's links look elsewhere without writing a view preference: the
+       elided-conversation link shows the list for this session only, and a
+       stage chip whose conversation left the scheme window opens it by id. */
+    const links = await openFixture(browser, base, VIEWPORTS[1], "light");
+    try {
+      await links.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+      const presentationWrites = () => links.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "set-presentation").length);
+      await links.page.click('.card[data-id="task:t-auth"] .ref.quiet');
+      await links.page.waitForFunction(() => !document.querySelector("[data-kanban-board]"), undefined, { timeout: 10_000 });
+      const afterList = { writes: await presentationWrites(), listTab: await links.page.evaluate(() => document.querySelector('[data-view-tab="list"]')?.getAttribute("aria-pressed") ?? null) };
+      await links.page.click('[data-view-tab="kanban"]');
+      await links.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
+      const writesBeforeChip = await presentationWrites();
+      await links.page.click('.card[data-id="task:t-compact"] [data-stage="build"]');
+      await links.page.waitForTimeout(400);
+      const afterChip = { writes: await presentationWrites(), hash: await links.page.evaluate(() => location.hash) };
+      if (afterList.writes !== 0 || afterList.listTab !== "true") failures.push(`links: the list link wrote ${afterList.writes} view preferences (list tab ${afterList.listTab})`);
+      if (afterChip.writes !== writesBeforeChip) failures.push(`links: the stage chip wrote ${afterChip.writes - writesBeforeChip} view preferences`);
+      if (afterChip.hash !== "#c=conversation_compact-build") failures.push(`links: the stage chip navigated to ${afterChip.hash}`);
+      flows.links = { afterList, writesBeforeChip, afterChip };
+      if (links.pageErrors.length) failures.push(`links: page errors ${links.pageErrors.join(" | ")}`);
+    } finally {
+      await links.context.close();
     }
 
     /* The tabs: from the scheme face, Kanban writes the face and mounts the
@@ -267,7 +394,7 @@ browserTest("#1695 kanban board: the prototype's columns and cards over the real
       const back = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
       if (kanbanBefore) failures.push("tabs: the kanban board was mounted on the scheme face");
       if (!written.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Kanban wrote ${JSON.stringify(written)}`);
-      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: null, viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
+      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "scheme", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
       flows.tabs = { kanbanBefore, written, back };
       if (faces.pageErrors.length) failures.push(`tabs: page errors ${faces.pageErrors.join(" | ")}`);
     } finally {

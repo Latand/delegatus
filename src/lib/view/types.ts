@@ -166,11 +166,13 @@ export interface BoardProjectStateV1 {
         reader of a duration, uses its own env-tuned constant. */
     idleCollapseMinutes?: number | null;
     viewMode: "scheme" | "list" | null;
-    /* The desktop board face while the kanban board (#1695) rolls out. Optional
-       on purpose: a board file written by a build that has it still loads in a
-       build that does not, because the stored-board validator ignores unknown
-       prefs keys. The phone reads `viewMode` alone and never this. */
-    desktopBoard?: "kanban" | null;
+    /* The desktop board face while the kanban board (#1695) rolls out:
+       "kanban", an explicit "scheme", or null/absent for the build's default.
+       Stored as any string on purpose: a value a later build writes loads here
+       as the default instead of making the whole board file unreadable, and a
+       build older than the key ignores it entirely. The phone reads `viewMode`
+       alone and never this. */
+    desktopBoard?: string | null;
     taskPanelOpen: boolean;
   };
 }

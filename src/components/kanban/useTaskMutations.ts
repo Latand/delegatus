@@ -63,6 +63,9 @@ export class TaskStatusMutations {
   private readonly chains = new Map<string, Promise<unknown>>();
   /** The newest stored revision and project this device has seen per task. */
   private readonly known = new Map<string, { revision: string; project: string; status: TaskStatus }>();
+  /** Revisions this device's own writes replaced: a poll still carrying one
+      of them is older than what `known` holds and must not replace it. */
+  private readonly replaced = new Map<string, Set<string>>();
   private readonly listeners = new Set<() => void>();
   private snapshot: ReadonlyMap<string, TaskStatus> = new Map();
 
@@ -84,10 +87,21 @@ export class TaskStatusMutations {
     for (const listener of this.listeners) listener();
   }
 
-  /** Apply a poll: drop optimistic statuses the stored rows have caught up with. */
+  /** Apply a poll: drop optimistic statuses the stored rows have caught up
+      with, and adopt a newer revision written elsewhere so the next move is
+      guarded by it instead of paying a 409 and a read. */
   reconcile(tasks: readonly BoardTask[]): void {
     let changed = false;
     const byId = new Map(tasks.map((task) => [task.id, task] as const));
+    for (const [id, known] of this.known) {
+      if (this.pending(id)) continue;
+      const row = byId.get(id);
+      const revision = row ? revisionOf(row) : null;
+      if (!row || !revision || revision === known.revision || this.replaced.get(id)?.has(revision)) continue;
+      /* The stored project is kept: a poll row carries the display-remapped
+         project name, which the guard must not adopt. */
+      this.known.set(id, { revision, project: known.project, status: row.status });
+    }
     for (const [id, override] of this.overrides) {
       if (override.pending > 0) continue;
       const row = byId.get(id);
@@ -125,9 +139,16 @@ export class TaskStatusMutations {
     return run;
   }
 
-  private remember(task: BoardTask): void {
+  private remember(task: BoardTask, replacing: string | null = null): void {
     const revision = revisionOf(task);
-    if (revision) this.known.set(task.id, { revision, project: task.project, status: task.status });
+    if (!revision) return;
+    if (replacing && replacing !== revision) {
+      const set = this.replaced.get(task.id) ?? new Set<string>();
+      set.add(replacing);
+      if (set.size > 16) set.delete(set.values().next().value!);
+      this.replaced.set(task.id, set);
+    }
+    this.known.set(task.id, { revision, project: task.project, status: task.status });
   }
 
   private guardFor(task: BoardTask): { project: string; revision: string } | null {
@@ -162,7 +183,7 @@ export class TaskStatusMutations {
       guard = this.guardFor(stored)!;
     }
     const first = await this.patchSafely(id, { status: to, expectedProject: guard.project, expectedRevision: guard.revision });
-    if (first.ok) return this.saved(first.task, from, to);
+    if (first.ok) return this.saved(first.task, from, to, guard.revision);
     if (first.status !== 409) return this.fail(id, from, to, first.status, first.error);
 
     const stored = await this.readSafely(id);
@@ -175,7 +196,7 @@ export class TaskStatusMutations {
     }
     if (stored.status === from || revisionOf(stored) === guard.revision) {
       const retry = await this.patchSafely(id, { status: to, expectedProject: stored.project, expectedRevision: revisionOf(stored) ?? "" });
-      if (retry.ok) return this.saved(retry.task, from, to);
+      if (retry.ok) return this.saved(retry.task, from, to, revisionOf(stored));
       return this.fail(id, from, to, retry.status, retry.error);
     }
     this.settle(id, stored.status, revisionOf(stored), true);
@@ -183,8 +204,8 @@ export class TaskStatusMutations {
     return { kind: "conflict", task: stored, from, to, serverStatus: stored.status };
   }
 
-  private saved(task: BoardTask, from: TaskStatus, to: TaskStatus): StatusMoveOutcome {
-    this.remember(task);
+  private saved(task: BoardTask, from: TaskStatus, to: TaskStatus, replacing: string | null): StatusMoveOutcome {
+    this.remember(task, replacing);
     this.settle(task.id, to, revisionOf(task), true);
     this.ports.changed();
     return { kind: "saved", task, from, to };

@@ -86,7 +86,8 @@ const pendingWorker = add(conversation("pending-worker", "Worker waiting for a s
 /* t-attach: done by decision while its verify stage still runs; t-compact: completed. */
 const attachBuild = add(conversation("attach-build", "Streams attachments in 256 KB chunks", { mtime: now - 13 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const attachVerify = add(conversation("attach-verify", "Re-running the phone matrix", working({ plan: { current: "Re-running the phone matrix" } })));
-const compactBuild = add(conversation("compact-build", "Folded finished stages into one row", { mtime: now - 3 * 24 * 60 * MIN }));
+/* Aged out of the scheme window: its stage chip must still open it, by identity. */
+const compactBuild = conversation("compact-build", "Folded finished stages into one row", { mtime: now - 3 * 24 * 60 * MIN });
 const compactRev = add(conversation("compact-rev", "Approved", { mtime: now - 2 * 24 * 60 * MIN - 90 * MIN, engine: "codex", model: "gpt-5.6" }));
 const compactVer = add(conversation("compact-ver", "Board frames match at five widths", { mtime: now - 2 * 24 * 60 * MIN }));
 
@@ -153,7 +154,8 @@ const tasks: BoardTask[] = [
   task("t-longtitle", "inbox", "You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.", "", 3 * 60 * MIN),
   task("t-pending", "inbox", "", "", 6 * MIN, [pendingWorker], { origin: { kind: "launch", key: "launch-pending", refinement: "pending" } } as Partial<BoardTask>),
   task("t-onboarding", "inbox", "Write the first-run walkthrough", "Three screens, one action each. No tour bubbles.", 2 * 24 * 60 * MIN),
-  task("t-auth", "blocked", "Passkey sign-in for the shared board", "Waiting on the domain decision before the relying-party id can be fixed.", 20 * 60 * MIN, [authImpl]),
+  /* One earlier conversation of this task is outside the scheme window. */
+  task("t-auth", "blocked", "Passkey sign-in for the shared board", "Waiting on the domain decision before the relying-party id can be fixed.", 20 * 60 * MIN, [authImpl, conversation("auth-earlier", "Implementer: first passkey attempt")]),
   task("t-limits", "blocked", "Show the account limit reset time on the card", "", 3 * 24 * 60 * MIN),
   task("t-interrupt", "done", "Universal interrupt and stop for every engine", "", 8 * 60 * MIN),
   task("t-attach", "done", "Finish responsive native attachment delivery", "", 12 * 60 * MIN),
@@ -174,6 +176,7 @@ let board = {
 
 const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  presence: [] as Array<{ mode: string; visiblePaths: string[] }>,
   boardMutations: [] as BoardMutationV1[],
   refuseNextTaskPatch: false,
   taskAnswerDelayMs: 400,
@@ -201,6 +204,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, applied: true, board });
     }
     return json({ ok: true, board });
+  }
+  if (url.pathname === "/api/view/presence" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { mode: string; visiblePaths: string[] };
+    evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths });
+    return json({ ok: true });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
   if (url.pathname.startsWith("/api/tasks/") && method === "PATCH") {

@@ -198,3 +198,49 @@ test("find narrows each column and says how many of how many it shows", () => {
   expect(columnOf(host, "a")).toBeNull();
   expect(columnOf(host, "b")).toBe("inbox");
 });
+
+test("/ inside the board finds a task and never reaches the Viewer's global search; outside the board it is left alone", () => {
+  const { host } = mount([task("a", "inbox", "Write the release notes")], { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} });
+  let globalSearch = 0;
+  const viewerListener = (event: Event) => { if ((event as KeyboardEvent).key === "/") globalSearch += 1; };
+  window.addEventListener("keydown", viewerListener);
+  try {
+    const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
+    card.focus();
+    flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "/", bubbles: true }) as unknown as Event));
+    expect(document.activeElement?.hasAttribute("data-kanban-search")).toBe(true);
+    expect(globalSearch).toBe(0);
+    (document.activeElement as HTMLElement).blur();
+    const outside = new dom.KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(outside as unknown as Event);
+    expect(globalSearch).toBe(1);
+    expect(outside.defaultPrevented).toBe(false);
+  } finally {
+    window.removeEventListener("keydown", viewerListener);
+  }
+});
+
+test("U undoes only while the move's receipt is on screen", async () => {
+  const patches: unknown[] = [];
+  const ports: TaskMutationPorts = {
+    patch: async (id, body) => {
+      patches.push({ id, body });
+      return { ok: true, task: task(id, body.status, "Write the release notes", { revision: REV(patches.length + 1) }) };
+    },
+    read: async () => null,
+    changed: () => {},
+  };
+  const { host } = mount([task("a", "inbox", "Write the release notes")], ports);
+  const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
+  card.focus();
+  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  await tick();
+  expect(columnOf(host, "a")).toBe("assigned");
+  /* The receipt is closed by hand: its Undo goes with it. */
+  click([...host.querySelectorAll("[data-kanban-receipt] .close")].at(-1));
+  expect(host.querySelector("[data-kanban-receipt]")).toBeNull();
+  flushSync(() => document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
+  await tick();
+  expect(patches).toHaveLength(1);
+  expect(columnOf(host, "a")).toBe("assigned");
+});

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
+import { formatConversationHash } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
@@ -126,6 +127,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const menu = useOverlay<{ kind: "status" | "card"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" }>();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
+  /* `U` undoes only what a receipt on screen still offers: once that receipt
+     closes, by its timer or by hand, the undo it carried is gone with it. */
+  const receiptsRef = useRef(receipts);
+  receiptsRef.current = receipts;
+  useEffect(() => {
+    if (latestUndo.current && !receipts.some((receipt) => receipt.id === latestUndo.current!.receiptId)) latestUndo.current = null;
+  }, [receipts]);
 
   const { bands, projection } = useBands(props);
   const { controller, statuses } = useTaskMutations(allTasks, props.mutationPorts);
@@ -431,18 +439,26 @@ export function KanbanBoard(props: KanbanBoardProps) {
     document.addEventListener("keydown", escape, true);
   }, [move]);
 
-  /* ── Global keys: undo, find ─────────────────────────────────────────── */
+  /* ── Keys: undo, find ────────────────────────────────────────────────── */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, [contenteditable='true']")) return;
-      if (!rootRef.current?.contains(target) && target !== document.body) return;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      const inBoard = Boolean(target && rootRef.current?.contains(target));
       if (event.key === "/") {
+        /* Outside the board `/` stays the Viewer's global search. Inside it,
+           it finds a task, and the Viewer's window listener must not open
+           the search palette over the field it just focused. */
+        if (!inBoard) return;
         event.preventDefault();
+        event.stopPropagation();
         rootRef.current?.querySelector<HTMLInputElement>("[data-kanban-search]")?.focus();
-      } else if ((event.key === "u" || event.key === "U") && !event.metaKey && !event.ctrlKey && latestUndo.current) {
-        event.preventDefault();
+      } else if (event.key === "u" || event.key === "U") {
+        if (!inBoard && target !== document.body) return;
         const undo = latestUndo.current;
+        if (!undo || !receiptsRef.current.some((receipt) => receipt.id === undo.receiptId)) return;
+        event.preventDefault();
         latestUndo.current = null;
         dismiss(undo.receiptId);
         undo.run();
@@ -457,9 +473,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const attempt = latestAttempt(pipeline, stage.id);
     const file = (attempt?.agentPath ? filesByPath.get(attempt.agentPath) : undefined)
       ?? (attempt?.conversationId ? files.find((entry) => entry.conversationId === attempt.conversationId) : undefined);
-    if (file) onOpenConversation(file);
-    else onOpenOnBoard();
-  }, [files, filesByPath, onOpenConversation, onOpenOnBoard]);
+    if (file) {
+      onOpenConversation(file);
+      return;
+    }
+    /* A stage conversation this board does not carry (an older attempt the
+       scheme window left out) opens through the Viewer's own conversation
+       link: its resolver pins the transcript for the next poll. No view
+       preference is written. */
+    if (attempt?.conversationId || attempt?.agentPath) {
+      location.hash = formatConversationHash({ conversationId: attempt.conversationId ?? undefined, path: attempt.agentPath ?? "" });
+    }
+  }, [files, filesByPath, onOpenConversation]);
   const focusCard = useCallback((cardId: string) => {
     const card = cardsById.get(cardId);
     if (card && mode === "tabs") setTab(card.status);
@@ -471,17 +496,57 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [cardsById, flash, mode]);
 
-  /* ── Presence: what this board shows ─────────────────────────────────── */
-  const presenceOrder = useMemo(() => {
-    const statuses = mode === "tabs" ? [tab] : KANBAN_STATUSES;
+  /* ── Presence: what the operator can actually see ────────────────────── */
+  /* A card counts as seen when it intersects its column's scroll box, the
+     board and the window, in a column that is displayed (one tab at a time on
+     a tabbed board). Measured after each render and on any scroll or resize
+     inside the board, one frame at a time. */
+  const [visibleCards, setVisibleCards] = useState("");
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const rootRect = root.getBoundingClientRect();
+      const ids: string[] = [];
+      root.querySelectorAll<HTMLElement>(".column[data-status]").forEach((column) => {
+        if (window.getComputedStyle(column).display === "none") return;
+        const body = column.querySelector<HTMLElement>(".col-body");
+        if (!body) return;
+        const box = body.getBoundingClientRect();
+        const top = Math.max(box.top, rootRect.top, 0);
+        const bottom = Math.min(box.bottom, rootRect.bottom, window.innerHeight);
+        const left = Math.max(box.left, rootRect.left, 0);
+        const right = Math.min(box.right, rootRect.right, window.innerWidth);
+        if (bottom <= top || right <= left) return;
+        body.querySelectorAll<HTMLElement>(".card[data-id]").forEach((card) => {
+          const rect = card.getBoundingClientRect();
+          if (rect.width > 0 && rect.bottom > top && rect.top < bottom && rect.right > left && rect.left < right) ids.push(card.dataset.id!);
+        });
+      });
+      setVisibleCards(ids.join("\n"));
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    schedule();
+    root.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    observer?.observe(root);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      root.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+    };
+  }, [model, mode, tab, collapsed]);
+  const presenceSignature = useMemo(() => {
     const paths: string[] = [];
-    for (const status of statuses) {
-      for (const card of model.columns[status].shown) for (const member of card.members) paths.push(member.file.path);
-      if (status === "inbox") for (const card of model.unlinkedShown) for (const member of card.members) paths.push(member.file.path);
+    for (const id of visibleCards ? visibleCards.split("\n") : []) {
+      for (const member of cardsById.get(id)?.members ?? []) paths.push(member.file.path);
     }
-    return paths;
-  }, [mode, model, tab]);
-  const presenceSignature = presenceOrder.join("\n");
+    return paths.join("\n");
+  }, [visibleCards, cardsById]);
   useEffect(() => {
     const order = presenceSignature ? presenceSignature.split("\n") : [];
     viewBus.reportSlice({
@@ -576,7 +641,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6 0 10 8 10 8a17.7 17.7 0 0 1-3.2 4.1" /><path d="M6.6 6.6C3.9 8.5 2 12 2 12s4 8 10 8a10.9 10.9 0 0 0 4.4-.9" /></svg>
             {t("kanban.hidden")} <span className="count num">{hiddenCount}</span>
           </button>
-          {props.viewSwitch}
+          {props.viewSwitch ? <span className="view-switch">{props.viewSwitch}</span> : null}
         </div>
       </header>
 

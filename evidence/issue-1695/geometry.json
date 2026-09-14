@@ -42,6 +42,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -89,6 +92,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -170,6 +176,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -217,6 +226,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -298,6 +310,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -345,6 +360,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -426,6 +444,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -473,6 +494,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -554,6 +578,9 @@
         ],
         "tablist": true,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -610,7 +637,70 @@
           }
         ],
         "tablist": true,
-        "overflowX": 22,
+        "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 1,
+        "pageOverflowOutsideBoard": null,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    },
+    {
+      "key": "640x720-light",
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 392,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 368,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 61,
+        "pageOverflowOutsideBoard": "button[New pipeline] right=701",
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -668,6 +758,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -715,6 +808,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -796,6 +892,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -843,6 +942,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -924,6 +1026,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -971,6 +1076,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1052,6 +1160,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1099,6 +1210,9 @@
         ],
         "tablist": false,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1180,6 +1294,9 @@
         ],
         "tablist": true,
         "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1236,7 +1353,70 @@
           }
         ],
         "tablist": true,
-        "overflowX": 22,
+        "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 1,
+        "pageOverflowOutsideBoard": null,
+        "card": {
+          "paddingLeft": "14px",
+          "radius": "12px",
+          "titleSize": "13px",
+          "titleWeight": "600",
+          "pillHeight": 22,
+          "tileWidth": 0
+        },
+        "hiddenCount": "1",
+        "cards": 17,
+        "pipelineSections": 6
+      },
+      "prototype": null,
+      "deltas": null,
+      "pageErrors": []
+    },
+    {
+      "key": "640x720-dark",
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "production": {
+        "boardWidth": 392,
+        "mode": "tabs",
+        "columns": [
+          {
+            "status": "inbox",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "3"
+          },
+          {
+            "status": "assigned",
+            "x": 12,
+            "width": 368,
+            "visible": true,
+            "count": "7"
+          },
+          {
+            "status": "blocked",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "2"
+          },
+          {
+            "status": "done",
+            "x": -248,
+            "width": 0,
+            "visible": false,
+            "count": "5"
+          }
+        ],
+        "tablist": true,
+        "overflowX": 0,
+        "beyondWindow": 0,
+        "pageOverflow": 61,
+        "pageOverflowOutsideBoard": "button[New pipeline] right=701",
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1288,6 +1468,91 @@
       "focused": "task:t-onboarding"
     },
     "find": "1 of 7",
+    "slash": {
+      "inside": {
+        "kanbanFind": true,
+        "globalSearch": false
+      },
+      "outsideOpensGlobalSearch": true
+    },
+    "presence": {
+      "top": {
+        "posts": 1,
+        "mode": "scheme",
+        "reported": 6,
+        "tiles": [
+          {
+            "path": "/repo/pending-worker.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/export-impl.jsonl",
+            "onScreen": false,
+            "reported": false
+          },
+          {
+            "path": "/repo/export-explore.jsonl",
+            "onScreen": false,
+            "reported": false
+          },
+          {
+            "path": "/repo/auth-impl.jsonl",
+            "onScreen": true,
+            "reported": true
+          }
+        ]
+      },
+      "scrolled": {
+        "posts": 2,
+        "mode": "scheme",
+        "reported": 6,
+        "tiles": [
+          {
+            "path": "/repo/pending-worker.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/export-impl.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/export-explore.jsonl",
+            "onScreen": true,
+            "reported": true
+          },
+          {
+            "path": "/repo/auth-impl.jsonl",
+            "onScreen": true,
+            "reported": true
+          }
+        ]
+      }
+    },
+    "undo": {
+      "undone": {
+        "column": "assigned",
+        "patches": 2
+      },
+      "expired": {
+        "column": "blocked",
+        "patchesBefore": 3,
+        "patchesAfter": 3
+      }
+    },
+    "links": {
+      "afterList": {
+        "writes": 0,
+        "listTab": "true"
+      },
+      "writesBeforeChip": 0,
+      "afterChip": {
+        "writes": 0,
+        "hash": "#c=conversation_compact-build"
+      }
+    },
     "tabs": {
       "kanbanBefore": false,
       "written": [
@@ -1343,7 +1608,7 @@
         },
         {
           "kind": "set-presentation",
-          "desktopBoard": null,
+          "desktopBoard": "scheme",
           "viewMode": "scheme"
         }
       ]

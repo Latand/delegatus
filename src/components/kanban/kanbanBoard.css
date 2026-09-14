@@ -38,7 +38,7 @@
 .kb .bar .summary .dot.warn { background: var(--color-warning); }
 .kb .bar .bar-alert { color: var(--color-danger); font-size: var(--text-ui); font-weight: 600; }
 .kb .bar .grow { flex: 1 1 auto; }
-.kb .bar .bar-tools { display: flex; align-items: center; gap: 8px; }
+.kb .bar .bar-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .kb .bar .search { position: relative; }
 .kb .bar .search input {
   width: 240px; height: 32px; padding: 0 10px 0 30px; border: 1px solid var(--border-default); border-radius: var(--radius-control);
@@ -54,6 +54,15 @@
 .kb[data-mode="scroll"] .bar .search, .kb[data-mode="tabs"] .bar .search { flex: 1 1 auto; }
 .kb[data-mode="scroll"] .bar .search input, .kb[data-mode="tabs"] .bar .search input { width: 100%; min-width: 120px; }
 .kb[data-mode="tabs"] .bar .summary { display: none; }
+/* On the two narrow faces the controls come first and the search field takes
+   what is left: the attention island's card, when it opens over the right end
+   of this row, covers part of the field instead of the view tabs. */
+.kb[data-mode="scroll"] .bar .view-switch, .kb[data-mode="tabs"] .bar .view-switch { order: 1; }
+.kb[data-mode="scroll"] .bar .hidden-pill, .kb[data-mode="tabs"] .bar .hidden-pill { order: 2; }
+.kb[data-mode="scroll"] .bar .search, .kb[data-mode="tabs"] .bar .search { order: 3; min-width: 0; flex-basis: 160px; }
+/* Tabbed (narrowest) face: the island's card spans most of the first row
+   under the badge, so that row is the search field and the tabs follow. */
+.kb[data-mode="tabs"] .bar .search { order: 0; flex-basis: 100%; }
 
 .kb .btn {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;

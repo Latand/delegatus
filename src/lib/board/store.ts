@@ -57,7 +57,8 @@ function projectState(value: unknown): value is BoardProjectStateV1 {
     (state.keyRevisions === undefined || keyRevisions(state.keyRevisions)) &&
     (state.keyRevisionFloor === undefined || (Number.isInteger(state.keyRevisionFloor) && state.keyRevisionFloor! >= 0)) &&
     (prefs!.viewMode === null || prefs!.viewMode === "scheme" || prefs!.viewMode === "list") &&
-    (prefs!.desktopBoard === undefined || prefs!.desktopBoard === null || prefs!.desktopBoard === "kanban") && typeof prefs!.taskPanelOpen === "boolean";
+    /* Any string: a face a later build names must not make this file unreadable. */
+    (prefs!.desktopBoard === undefined || prefs!.desktopBoard === null || typeof prefs!.desktopBoard === "string") && typeof prefs!.taskPanelOpen === "boolean";
 }
 
 /** Union of acknowledgement maps, newest stamp per conversation identity. */

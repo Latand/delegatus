@@ -244,3 +244,51 @@ test("a queued move that fails after an earlier one landed keeps the landed colu
   mutations.reconcile([task("a", "assigned", 2)]);
   expect(mutations.statuses().has("a")).toBe(false);
 });
+
+test("a newer revision written elsewhere is adopted from the poll, so the next move needs no 409", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "assigned");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await first;
+  /* An agent renames the task: the poll carries revision 3. */
+  mutations.reconcile([{ ...task("a", "assigned", 3), text: "Renamed by an agent" } as BoardTask]);
+  const second = mutations.move(task("a", "assigned", 3), "done");
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ status: "done", expectedProject: "fixture", expectedRevision: REV(3) });
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 4) });
+  expect((await second).kind).toBe("saved");
+  expect(server.reads).toHaveLength(0);
+});
+
+test("a poll older than this device's own write never replaces the revision that write returned", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1), "assigned");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await first;
+  /* The poll that raced the write still shows revision 1. */
+  mutations.reconcile([task("a", "inbox", 1)]);
+  const second = mutations.move(task("a", "inbox", 1), "done");
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(2));
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 3) });
+  expect((await second).kind).toBe("saved");
+});
+
+test("the guard keeps the stored project when a poll carries a display-remapped one", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const first = mutations.move(task("a", "inbox", 1, "stored-alias"), "assigned");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2, "stored-alias") });
+  await first;
+  mutations.reconcile([task("a", "blocked", 5, "merged-display")]);
+  const second = mutations.move(task("a", "blocked", 5, "merged-display"), "done");
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ status: "done", expectedProject: "stored-alias", expectedRevision: REV(5) });
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 6, "stored-alias") });
+  expect((await second).kind).toBe("saved");
+});

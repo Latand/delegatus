@@ -562,6 +562,11 @@ function ProjectDashboardView({
      preference — the operator's saved view returns with one tap on the
      Схема/Список control, which is what clears this. */
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
+  /* A view the kanban board opened for one look (#1695): the scheme for a
+     surface the kanban does not draw yet, the list for conversations beyond
+     the board. Session-only and desktop-only, so a card's link never rewrites
+     the saved view another device, or the phone, reads. Choosing a tab ends it. */
+  const [transientView, setTransientView] = useState<ProjectView | null>(null);
   /* Wall clock for the worker auto-collapse idle window (issue #112). Starts at
      0 so the server render and first client render agree (no hydration skew);
      the first tick lands the real time, and reviewer verdicts collapse without
@@ -1116,6 +1121,7 @@ function ProjectDashboardView({
     /* Another project is another board with its own saved view: the landing
        that forced this one's conversation surface does not travel with it. */
     setOpenedConversation(null);
+    setTransientView(null);
   }, [project]);
 
   /* An attention jump rides the same channel as switchboard opens: the ref is
@@ -1262,6 +1268,7 @@ function ProjectDashboardView({
      standing on a conversation a search opened. */
   const chooseEmptyView = (next: ProjectView) => {
     setOpenedConversation(null);
+    setTransientView(null);
     board.setViewMode(next);
   };
   /* The desktop faces (#1695): the kanban board and the scheme are one «board»
@@ -1273,7 +1280,10 @@ function ProjectDashboardView({
       return;
     }
     setOpenedConversation(null);
-    board.setDesktopBoard(next === "kanban" ? "kanban" : null, "scheme");
+    setTransientView(null);
+    /* Board is recorded as an explicit choice, so it survives the day the
+       kanban becomes the default face. */
+    board.setDesktopBoard(next === "kanban" ? "kanban" : "scheme", "scheme");
   };
 
   /* randomUUID needs a secure context; LAN http access gets the fallback. */
@@ -1773,7 +1783,8 @@ function ProjectDashboardView({
      the list exactly as before, and the landing's own node is what makes the
      scheme available in the first place. */
   const landedOnConversation = openedConversation !== null && schemeAvailable;
-  const projectView = landedOnConversation ? "scheme" : resolveProjectView({
+  const transientFace = !isMobile && transientView !== null && (transientView === "list" ? listAvailable : schemeAvailable) ? transientView : null;
+  const projectView = landedOnConversation ? "scheme" : transientFace ?? resolveProjectView({
     preferredView: board.prefs.viewMode,
     hasNodes,
     hasArchiveNodes,
@@ -1872,7 +1883,7 @@ function ProjectDashboardView({
   /* The kanban face of the desktop board (#1695). A conversation the operator
      just opened from a card still lands on the scheme, which is where its
      reader lives until the kanban carries readers of its own. */
-  const kanbanLeaf = !isMobile && desktopBoardLeaf && board.prefs.desktopBoard === "kanban" && !landedOnConversation;
+  const kanbanLeaf = !isMobile && desktopBoardLeaf && board.prefs.desktopBoard === "kanban" && !landedOnConversation && transientFace === null;
   const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "scheme", "list"] : ["kanban", "scheme"];
   /* Which conversations the phone board is showing, in the order it shows them,
      as a signature so the presence effect below compares BY VALUE — a fresh
@@ -2453,8 +2464,8 @@ function ProjectDashboardView({
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 onOpenConversation={openFullCatalogFile}
-                onOpenCatalog={() => chooseDesktopView("list")}
-                onOpenOnBoard={() => chooseDesktopView("scheme")}
+                onOpenCatalog={() => setTransientView("list")}
+                onOpenOnBoard={() => setTransientView("scheme")}
                 viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}
               />
             ) : desktopBoardLeaf ? (
