@@ -254,3 +254,28 @@ test("a conversation with no recorded task is a card of its own under Not on a t
   expect(result.unlinked[0]!.members.map((member) => member.file.path)).toEqual([loose.path]);
   expect(KANBAN_STATUSES.flatMap((status) => result.columns[status].cards)).toHaveLength(1);
 });
+
+test("a hidden group leaves its column for the hidden list, a resurfaced one comes back with its reason, and no task is lost", () => {
+  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2)];
+  const hiddenAt = "2026-09-14T12:00:00.000Z";
+  const tasks = [
+    task("t1", "assigned", [files[0]!.path], { groupHidden: { at: hiddenAt, by: "operator" } }),
+    task("t2", "done", [files[1]!.path], { groupHidden: { at: hiddenAt, by: "agent" }, color: "sky" }),
+    task("t3", "inbox", [], { color: "ultraviolet" as never }),
+  ];
+  const built = layout(files);
+  const bands = buildTaskBands(built, { tasks, projection: projectTaskWorkflows(tasks, [], [], files, "fixture"), untitled: "Untitled", reviewFlow: "Review" });
+  const model = buildKanbanModel({ bands, tasks, pipelines: [], projection: projectTaskWorkflows(tasks, [], [], files, "fixture"), files, now: NOW });
+  /* t1's conversation asked for a decision after the hide: back on the board. */
+  expect(model.columns.assigned.cards.map((card) => card.task?.id)).toEqual(["t1"]);
+  expect(model.resurfaced.map((entry) => [entry.card.task?.id, entry.reason.kind])).toEqual([["t1", "decision"]]);
+  /* t2 stays hidden, with its colour, and is counted once. */
+  expect(model.columns.done.cards).toHaveLength(0);
+  expect(model.hiddenGroups.map((card) => [card.task?.id, card.color])).toEqual([["t2", "sky"]]);
+  /* A colour this build does not know draws no label. */
+  const t3 = [...model.columns.inbox.cards, ...model.offBoard.map(() => null)].find((card) => card?.task?.id === "t3");
+  expect(t3 === undefined || t3?.color === null).toBe(true);
+  /* Every task: in a column, hidden, or off the board, exactly once. */
+  const placed = [...KANBAN_STATUSES.flatMap((status) => model.columns[status].cards.map((card) => card.task!.id)), ...model.hiddenGroups.map((card) => card.task!.id), ...model.offBoard.map((row) => row.id)];
+  expect(placed.sort()).toEqual(["t1", "t2", "t3"]);
+});

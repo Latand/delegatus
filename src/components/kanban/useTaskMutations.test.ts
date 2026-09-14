@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
-import { TaskStatusMutations, type PatchResult, type TaskMutationPorts } from "./useTaskMutations";
+import { TaskStatusMutations, type PatchBody, type PatchResult, type TaskMutationPorts } from "./useTaskMutations";
 
 /* The optimistic status controller against scripted ports: no server, no
    state directory, no timers. Every answer the ports give is explicit, so each
@@ -32,7 +32,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 function scripted() {
-  const patches: Array<{ id: string; body: { status: TaskStatus; expectedProject: string; expectedRevision: string }; answer: Deferred<PatchResult> }> = [];
+  const patches: Array<{ id: string; body: PatchBody & { status?: TaskStatus }; answer: Deferred<PatchResult> }> = [];
   const reads: Array<{ id: string; answer: Deferred<BoardTask | null> }> = [];
   let changed = 0;
   const ports: TaskMutationPorts = {
@@ -291,4 +291,99 @@ test("the guard keeps the stored project when a poll carries a display-remapped 
   expect(server.patches[1]!.body).toEqual({ status: "done", expectedProject: "stored-alias", expectedRevision: REV(5) });
   server.patches[1]!.answer.resolve({ ok: true, task: task("a", "done", 6, "stored-alias") });
   expect((await second).kind).toBe("saved");
+});
+
+/* ── Field edits (#1695 K4b): colour, group hide, text ─────────────────── */
+
+const withFields = (base: BoardTask, extra: Partial<BoardTask>): BoardTask => ({ ...base, ...extra }) as BoardTask;
+
+test("a hide shows at once, is fenced, and stays until the poll carries it", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "done", 1);
+  const done = mutations.edit(original, { field: "hide", value: true });
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  expect(mutations.pending("a")).toBe(true);
+  await flush();
+  expect(server.patches[0]!.body).toEqual({ hide: true, expectedProject: "fixture", expectedRevision: REV(1) });
+  const stored = withFields(task("a", "done", 2), { groupHidden: { at: "2026-09-14T12:00:00.000Z", by: "operator" } });
+  server.patches[0]!.answer.resolve({ ok: true, task: stored });
+  expect((await done).kind).toBe("saved");
+  mutations.reconcile([original]);
+  expect(mutations.edits().get("a")).toEqual({ hide: true });
+  mutations.reconcile([stored]);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("a hide refused because the task holds the seat rolls back at once and is never retried", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const done = mutations.edit(task("a", "assigned", 1), { field: "hide", value: true });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, code: "TASK_HIDE_PROTECTED", error: "holds the seat" });
+  expect(await done).toEqual({ kind: "failed", field: "hide", error: "holds the seat", status: 409, code: "TASK_HIDE_PROTECTED" });
+  expect(server.reads).toHaveLength(0);
+  expect(server.patches).toHaveLength(1);
+  expect(mutations.edits().has("a")).toBe(false);
+});
+
+test("a colour whose revision went stale is sent once more with the stored guard; clearing sends none", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const done = mutations.edit(withFields(task("a", "inbox", 1), { color: "teal" }), { field: "color", value: null });
+  await flush();
+  expect(server.patches[0]!.body).toEqual({ color: "none", expectedProject: "fixture", expectedRevision: REV(1) });
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, code: "TASK_REVISION_MISMATCH", error: "stale" });
+  await flush();
+  server.reads[0]!.answer.resolve(withFields(task("a", "blocked", 5), { color: "teal" }));
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ color: "none", expectedProject: "fixture", expectedRevision: REV(5) });
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "blocked", 6) });
+  expect((await done).kind).toBe("saved");
+  expect(mutations.edits().get("a")).toEqual({ color: null });
+});
+
+test("a title saved over text an agent changed meanwhile is a conflict carrying their text, and nothing is overwritten", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const done = mutations.edit(task("a", "assigned", 1), { field: "text", value: "Operator title" });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, error: "expectedRevision is stale" });
+  await flush();
+  server.reads[0]!.answer.resolve(withFields(task("a", "assigned", 3), { text: "Agent title" }));
+  const outcome = await done;
+  expect(outcome).toMatchObject({ kind: "conflict", field: "text", serverValue: "Agent title" });
+  expect(server.patches).toHaveLength(1);
+  expect(mutations.edits().get("a")).toEqual({ text: "Agent title" });
+});
+
+test("a text save whose stored text is still the one it started from is re-sent once", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const done = mutations.edit(task("a", "assigned", 1), { field: "text", value: "Renamed" });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, error: "expectedRevision is stale" });
+  await flush();
+  /* Only the status moved elsewhere; the text is still the original. */
+  server.reads[0]!.answer.resolve(task("a", "blocked", 4));
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ text: "Renamed", expectedProject: "fixture", expectedRevision: REV(4) });
+  server.patches[1]!.answer.resolve({ ok: true, task: withFields(task("a", "blocked", 5), { text: "Renamed" }) });
+  expect((await done).kind).toBe("saved");
+});
+
+test("a status move and an edit of the same task queue: the edit is guarded by the revision the move returned", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "inbox", 1);
+  const move = mutations.move(original, "assigned");
+  const recolour = mutations.edit(original, { field: "color", value: "sky" });
+  await flush();
+  expect(server.patches).toHaveLength(1);
+  server.patches[0]!.answer.resolve({ ok: true, task: task("a", "assigned", 2) });
+  await move;
+  await flush();
+  expect(server.patches[1]!.body).toEqual({ color: "sky", expectedProject: "fixture", expectedRevision: REV(2) });
+  server.patches[1]!.answer.resolve({ ok: true, task: withFields(task("a", "assigned", 3), { color: "sky" }) });
+  expect((await recolour).kind).toBe("saved");
 });

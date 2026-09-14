@@ -1,6 +1,7 @@
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import { groupHideState, type GroupHideState, type GroupResurfaceReason } from "@/lib/tasks/groupHide";
+import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
@@ -97,6 +98,10 @@ export interface KanbanCard {
   idle: boolean;
   updatedAtMs: number;
   searchText: string;
+  /** The task's colour label, when it names one this build knows. */
+  color: TaskColor | null;
+  /** Whether the task's group is hidden, and why a hidden one came back. */
+  hide: GroupHideState;
 }
 
 export interface KanbanColumn {
@@ -116,6 +121,11 @@ export interface KanbanModel {
   unlinkedShown: KanbanCard[];
   /** Tasks the board draws no card for: empty tasks taken off the board. */
   offBoard: BoardTask[];
+  /** Task groups the operator or an agent hid, newest hide first. Each is a
+      whole card, counted here and never in a column. */
+  hiddenGroups: KanbanCard[];
+  /** Hidden groups that came back because something newer needs the operator. */
+  resurfaced: Array<{ card: KanbanCard; reason: GroupResurfaceReason }>;
   totals: {
     tasks: number;
     onBoard: number;
@@ -321,6 +331,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     const status: TaskStatus = overridden ?? task?.status ?? "inbox";
+    const hide: GroupHideState = task
+      ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline) })
+      : { hidden: false, resurfaced: null };
+    const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     const title = band.title;
     const description = task ? descriptionOf(task.text) : "";
     /* A task's own write time, as the column orders it; a band without a
@@ -351,10 +365,16 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
         .toLowerCase(),
+      color,
+      hide,
     };
   });
 
-  const recorded = cards.filter((card) => card.task);
+  const hiddenGroups = cards
+    .filter((card) => card.task && card.hide.hidden)
+    .sort((a, b) => (b.hide.hidden ? Date.parse(b.hide.since) || 0 : 0) - (a.hide.hidden ? Date.parse(a.hide.since) || 0 : 0));
+  const resurfaced = cards.flatMap((card) => (card.task && !card.hide.hidden && card.hide.resurfaced ? [{ card, reason: card.hide.resurfaced }] : []));
+  const recorded = cards.filter((card) => card.task && !card.hide.hidden);
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
     const inColumn = recorded.filter((card) => card.status === status).sort(compareCards);
@@ -367,18 +387,22 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     } satisfies KanbanColumn];
   })) as Record<TaskStatus, KanbanColumn>;
 
-  const carded = new Set(recorded.map((card) => card.task!.id));
+  const carded = new Set([...recorded, ...hiddenGroups].map((card) => card.task!.id));
   const offBoard = tasks.filter((task) => !carded.has(task.id));
   return {
     columns,
     unlinked,
     unlinkedShown: unlinked.filter((card) => cardMatches(card, query)),
     offBoard,
+    hiddenGroups,
+    resurfaced,
     totals: {
       tasks: tasks.length,
       onBoard: recorded.length,
+      /* Agents of a hidden group keep working, and the header says so; a
+         decision the operator hid is not counted as waiting on them. */
       working: cards.reduce((sum, card) => sum + card.working, 0),
-      needsYou: cards.filter((card) => card.needsYou).length,
+      needsYou: cards.filter((card) => card.needsYou && !card.hide.hidden).length,
     },
   };
 }
