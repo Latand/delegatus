@@ -164,7 +164,11 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
             />
             {draft.phase === "changed" ? (
               <div className="draft-notice info" role="status" data-draft-changed="">
-                <span className="msg-text">{t("kanban.draft.changed", { theirs: draft.theirs ?? "" })}</span>
+                <span className="msg-text">
+                  {stagePromptExtra(draft.theirs ?? "") === stagePromptExtra(draft.base)
+                    ? t("kanban.draft.changedSettings")
+                    : t("kanban.draft.changed", { theirs: draft.theirs ?? "" })}
+                </span>
                 <button type="button" onClick={cancel}>{t("kanban.useTheirs")}</button>
                 <button type="button" onClick={() => save(true)}>{t("kanban.keepMine")}</button>
               </div>

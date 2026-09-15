@@ -24,16 +24,19 @@ import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
  *     undelivered first message and a closed composer, the live stage focused;
  *   - the retry sheet: attempt tabs on Implement and Verify, the loop chip;
  *   - a waiting node on a card opens its first message; Save sends the
- *     stage's wiring token with the words; a stage that starts during the save
- *     keeps the words, marked not delivered, and becomes the reader when let
- *     go; words saved elsewhere stop the save until Keep mine;
+ *     stage's wiring token with the words and the digest the read returned; a
+ *     stage another client saves between that read and the write is refused by
+ *     the route's guard and not overwritten; a stage that starts during the
+ *     save keeps the words, marked not delivered, and becomes the reader when
+ *     let go; words saved elsewhere stop the save until Keep mine;
  *   - one folded "Added when it starts" line under each waiting stage's first
  *     message, in the card panel and every waiting pane, unfolding to what
  *     `renderStagePrompt` adds (binding correction 2);
  *   - Pause and Resume over the pipeline route with the pending chip, the
  *     receipt, and a refusal with Retry; a lost answer reported as not
  *     confirmed with a Check again that only reads; a refused skip whose
- *     Retry finds the pipeline waiting on another stage and sends nothing;
+ *     Retry carries the same expected stage and attempt, which the route's
+ *     guard refuses once the pipeline waits on another stage;
  *   - the reader open on a card is the same mounted conversation in its pane
  *     and back, composer text included; the board's "/" stays behind the
  *     open sheet; Escape returns focus to Stages; arrow keys step the lane.
@@ -116,6 +119,8 @@ type Hook = { evidence: {
   writeStagePromptQuietly: (pipelineId: string, stageId: string, prompt: string) => void;
   loseNextPipelineAnswer: boolean;
   moveCursor: (pipelineId: string, stageId: string) => void;
+  changeStageBeforeNextPatch: { pipelineId: string; stageId: string; prompt: string } | null;
+  storedPipeline: (id: string) => { stages: Array<{ id: string; prompt: string }> } | null;
 } };
 
 async function boardReady(page: Page) {
@@ -261,7 +266,8 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
       await shot(page, "production", "flow-stage-draft", "light");
       flows.saveDraft = { focused, saved, status };
       if (!focused) failures.push("stage draft: Edit did not focus the field");
-      if (JSON.stringify(saved) !== JSON.stringify({ id: "p-links", body: { action: "override-stage", stageId: "review", prompt: "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog." } })) failures.push(`stage draft save: ${JSON.stringify(saved)}`);
+      const digest = (saved?.body as { expectedStageDigest?: unknown } | undefined)?.expectedStageDigest;
+      if (JSON.stringify({ ...saved, body: { ...saved?.body, expectedStageDigest: "<digest>" } }) !== JSON.stringify({ id: "p-links", body: { action: "override-stage", stageId: "review", prompt: "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog.", expectedStageDigest: "<digest>" } }) || typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) failures.push(`stage draft save: ${JSON.stringify(saved)}`);
       if (!/^Waiting for stage start · not delivered · edited \d/.test(status ?? "")) failures.push(`stage draft status: ${status}`);
     });
     await prototype("stage=t-links:review", "light", "prototype stage details", async (page) => {
@@ -302,6 +308,36 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
       flows.startedDuringSave = { notice, promoted };
       if (notice.message !== "Reviewer started with its previous first message. Your edit was not delivered." || notice.kept !== "Too late for this one." || notice.receipts.length) failures.push(`started during save: ${JSON.stringify(notice)}`);
       if (promoted.panel || promoted.reader !== "conversation_links-review") failures.push(`started during save, promoted: ${JSON.stringify(promoted)}`);
+    });
+
+    await production("light", "changed between read and write", async (page) => {
+      const section = `${card("t-links")} .stage-section`;
+      await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.click(`${section} .psummary [data-stage="review"]`);
+      const panel = `${card("t-links")} [data-stage-detail]`;
+      await page.waitForSelector(panel);
+      await page.click(`${panel} [data-draft-edit]`);
+      await page.fill(`${panel} textarea.draft-edit`, "Mine, typed before the other save landed.");
+      const theirs = "{{prev.output}}\n\nTheirs, saved between the read and the write.";
+      await page.evaluate((prompt) => { (window as unknown as Hook).evidence.changeStageBeforeNextPatch = { pipelineId: "p-links", stageId: "review", prompt }; }, theirs);
+      await page.click(`${panel} [data-draft-save]`);
+      await page.waitForSelector(`${panel} [data-draft-changed]`, { timeout: 5_000 });
+      await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.waitForTimeout(300);
+      const outcome = await page.evaluate((selector) => {
+        const hook = (window as unknown as Hook).evidence;
+        return {
+          notice: document.querySelector(`${selector} [data-draft-changed] .msg-text`)?.textContent ?? null,
+          field: document.querySelector<HTMLTextAreaElement>(`${selector} textarea.draft-edit`)?.value ?? null,
+          writes: hook.pipelinePatches.map((patch) => patch.body),
+          reads: hook.pipelineReads.length,
+          stored: hook.storedPipeline("p-links")?.stages.find((entry) => entry.id === "review")?.prompt ?? null,
+        };
+      }, panel);
+      await shot(page, "production", "flow-stage-guard-refused", "light");
+      flows.changedBetweenReadAndWrite = outcome;
+      if (outcome.notice !== "Changed elsewhere since you began: «Theirs, saved between the read and the write.»" || outcome.field !== "Mine, typed before the other save landed.") failures.push(`guarded save: ${JSON.stringify(outcome)}`);
+      if (outcome.writes.length !== 1 || outcome.reads !== 2 || outcome.stored !== theirs) failures.push(`guarded save requests: ${JSON.stringify(outcome)}`);
     });
 
     await production("light", "changed elsewhere", async (page) => {
@@ -389,7 +425,8 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
       flows.movedCursor = { refused, notSent, writes, reads };
       if (refused !== "Skip Builder was refused: the stage worktree has uncommitted changes") failures.push(`moved cursor, refusal: ${refused}`);
       if (notSent !== "Skip Builder was not sent: the pipeline now waits on Reviewer.") failures.push(`moved cursor, retry: ${notSent}`);
-      if (JSON.stringify(writes) !== JSON.stringify([{ action: "skip-stage" }]) || reads !== 2) failures.push(`moved cursor, requests: ${JSON.stringify({ writes, reads })}`);
+      const guarded = { action: "skip-stage", expectedStageId: "implement", expectedAttempt: 1 };
+      if (JSON.stringify(writes) !== JSON.stringify([guarded, guarded]) || reads !== 1) failures.push(`moved cursor, requests: ${JSON.stringify({ writes, reads })}`);
     });
 
     await production("light", "persistent reader and keys", async (page) => {

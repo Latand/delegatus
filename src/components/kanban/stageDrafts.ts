@@ -1,7 +1,7 @@
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildStagePrompt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 
-import { isAlreadyStarted, type PipelinePorts } from "./pipelinePorts";
+import { isAlreadyStarted, isStageChanged, type PipelinePorts, type PipelineRead } from "./pipelinePorts";
 import { draftOutcome, pipelineEnded, stageNotStarted, stageWiringIndex } from "./stagesModel";
 
 /**
@@ -15,14 +15,13 @@ import { draftOutcome, pipelineEnded, stageNotStarted, stageWiringIndex } from "
  * from the stage as it is stored at save time, exactly as the scheme's stage
  * placeholder does.
  *
- * Saving reads the pipeline first and compares the stage's words with the ones
- * the edit began from. That check narrows the window for overwriting a prompt
- * another client saved; it does not close it, because the read and the write
- * are two requests. The server's own guard for an unchanged stage (C7:
- * `expectedStageDigest`, 409 `STAGE_CHANGED`) does not exist yet. The engine's
- * guard for a stage that already started does, and it is the one this relies
- * on: a 409 "stage has already started" keeps the text, and what the stage
- * started with decides whether the edit made it (`draftOutcome`).
+ * Saving reads the pipeline and compares the stage's words with the ones the
+ * edit began from, which covers the time the operator spent editing. The
+ * write carries the digest that read returned (`expectedStageDigest`), and the
+ * engine checks it inside the same mutation that writes: a stage another
+ * client changed after the read answers 409 `STAGE_CHANGED` and nothing is
+ * overwritten. A stage that already started answers the engine's own 409, and
+ * what it started with decides whether the edit made it (`draftOutcome`).
  *
  * A write with no answer is `unconfirmed`, never "not saved": Check again
  * reads the stage and settles it only on what the stage holds.
@@ -37,7 +36,7 @@ export interface StageDraft {
   /** The stage's words when the edit began, or when Keep mine last accepted theirs. */
   base: string;
   phase: StageDraftPhase;
-  /** `changed`: the words the stage holds now. */
+  /** `changed`: the words the stage holds now; the same words when only its account, role or runtime changed. */
   theirs: string | null;
   /** `failed`: why, as the server said it, or the kind of read that failed. */
   error: { kind: "read" | "missing" | "write"; message: string } | null;
@@ -119,35 +118,16 @@ export class StageDrafts {
       if (current) this.set(key, { ...current, ...next });
     };
 
-    const record = await ports.read(draft.pipelineId);
-    if (!record) return settle({ phase: "failed", error: { kind: "read", message: "" } });
-    const stage = record.stages.find((candidate) => candidate.id === draft.stageId);
-    /* A check that finds the board behind the store asks it to catch up. */
-    if (!stage) {
-      ports.refresh();
-      return settle({ phase: "failed", error: { kind: "missing", message: "" } });
-    }
-    if (!stageNotStarted(record, stage.id) || pipelineEnded(record)) {
-      ports.refresh();
-      if (this.settleFromStage(key, record, { text, base }, true)) return;
-      return settle({ phase: draftOutcome(record, stage.id, { text, base }) === "ended-before-start" ? "ended" : "started" });
-    }
-    const stored = stagePromptExtra(stage.prompt);
-    if (stored === stagePromptExtra(text)) {
-      /* The stage already holds these words: nothing to write. */
-      ports.refresh();
-      this.set(key, null);
-      return;
-    }
-    if (stored !== stagePromptExtra(base)) {
-      ports.refresh();
-      return settle({ phase: "changed", theirs: stored });
-    }
+    const read = await ports.read(draft.pipelineId);
+    const decided = this.decide(key, read, ports, text, base);
+    if (decided.kind === "settled") return settle(decided.next);
+    if (decided.kind === "done") return;
 
     const result = await ports.patch(draft.pipelineId, {
       action: "override-stage",
-      stageId: stage.id,
-      "prompt": buildStagePrompt(stage.prompt, text, stageWiringIndex(record, stage.id)),
+      stageId: decided.stageId,
+      "prompt": decided.prompt,
+      expectedStageDigest: decided.digest,
     });
     if (result.ok) {
       this.savedAt.set(key, this.clock());
@@ -155,11 +135,53 @@ export class StageDrafts {
       return;
     }
     if (result.unknown) return settle({ phase: "unconfirmed" });
+    if (isStageChanged(result)) {
+      /* Another client wrote the stage after the read: read it again and say what it holds now. */
+      const again = this.decide(key, await ports.read(draft.pipelineId), ports, text, base);
+      if (again.kind === "settled") return settle(again.next);
+      if (again.kind === "done") return;
+      return settle({ phase: "changed", theirs: again.stored });
+    }
     if (isAlreadyStarted(result)) {
       ports.refresh();
       return settle({ phase: "started" });
     }
     settle({ phase: "failed", error: { kind: "write", message: result.error } });
+  }
+
+  /** What a read of the pipeline decides for a save: settle the draft, or write with this digest. */
+  private decide(key: string, read: PipelineRead | null, ports: PipelinePorts, text: string, base: string):
+    | { kind: "settled"; next: Partial<StageDraft> }
+    | { kind: "done" }
+    | { kind: "write"; stageId: string; prompt: string; digest: string; stored: string } {
+    if (!read) return { kind: "settled", next: { phase: "failed", error: { kind: "read", message: "" } } };
+    const record = read.pipeline;
+    const stage = record.stages.find((candidate) => candidate.id === this.drafts.get(key)?.stageId);
+    /* A check that finds the board behind the store asks it to catch up. */
+    if (!stage) {
+      ports.refresh();
+      return { kind: "settled", next: { phase: "failed", error: { kind: "missing", message: "" } } };
+    }
+    if (!stageNotStarted(record, stage.id) || pipelineEnded(record)) {
+      ports.refresh();
+      if (this.settleFromStage(key, record, { text, base }, true)) return { kind: "done" };
+      return { kind: "settled", next: { phase: draftOutcome(record, stage.id, { text, base }) === "ended-before-start" ? "ended" : "started" } };
+    }
+    const stored = stagePromptExtra(stage.prompt);
+    if (stored === stagePromptExtra(text)) {
+      /* The stage already holds these words: nothing to write. */
+      ports.refresh();
+      this.set(key, null);
+      return { kind: "done" };
+    }
+    if (stored !== stagePromptExtra(base)) {
+      ports.refresh();
+      return { kind: "settled", next: { phase: "changed", theirs: stored } };
+    }
+    /* Without the stage's digest the write could not be guarded: nothing is sent. */
+    const digest = read.stageDigests[stage.id];
+    if (!digest) return { kind: "settled", next: { phase: "failed", error: { kind: "read", message: "" } } };
+    return { kind: "write", stageId: stage.id, prompt: buildStagePrompt(stage.prompt, text, stageWiringIndex(record, stage.id)), digest, stored };
   }
 
   /**
@@ -171,7 +193,7 @@ export class StageDrafts {
   async check(key: string, ports: PipelinePorts): Promise<void> {
     const draft = this.drafts.get(key);
     if (!draft || draft.phase !== "unconfirmed") return;
-    const record = await ports.read(draft.pipelineId);
+    const record = (await ports.read(draft.pipelineId))?.pipeline;
     const current = this.drafts.get(key);
     if (!record || current !== draft) return;
     const stage = record.stages.find((candidate) => candidate.id === draft.stageId);

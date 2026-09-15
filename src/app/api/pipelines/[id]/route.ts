@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
-import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
+import { stageDigests } from "@/lib/pipelines/stageDigest";
+import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -14,8 +15,8 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode;
-  field?: "repoDir";
+  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode;
+  field?: "repoDir" | PipelineGuardField;
   path?: string;
   /** Present when a close was refused: the hosts it stopped and the one it could not. */
   close?: PipelineCloseReport;
@@ -24,12 +25,13 @@ type PipelineApiError = ApiError & {
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | ApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; stageDigests: Record<string, string> } | ApiError>> {
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
     if (!pipeline) return NextResponse.json({ error: "pipeline not found" }, { status: 404 });
-    return NextResponse.json({ ok: true, pipeline });
+    /* #1695 C7: each stage's digest, which a guarded `override-stage` names as `expectedStageDigest`. */
+    return NextResponse.json({ ok: true, pipeline, stageDigests: stageDigests(pipeline.stages) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -57,7 +59,10 @@ export async function PATCH(
     const result = await patchPipeline(id, body);
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not update pipeline",
-      ...(result.code ? { code: result.code, field: result.field, path: result.path } : {}),
+      /* A malformed guard names its field without a code: each travels on its own. */
+      ...(result.code ? { code: result.code } : {}),
+      ...(result.field ? { field: result.field } : {}),
+      ...(result.path ? { path: result.path } : {}),
       /* #1026: a draft stage edit runs the same batched stage validation the
          create path does, so its caller gets the same field-level list. */
       ...(result.violations?.length ? { violations: result.violations } : {}),
