@@ -92,8 +92,10 @@ export interface KanbanCard {
   conversations: number;
   /** Conversations counted from durable rows whose transcripts this board does not carry. */
   notLoaded: number;
-  /** Review decks, worker stacks and drafts the band carries besides conversations. */
+  /** Review decks and worker stacks the band carries besides conversations. */
   otherSurfaces: number;
+  /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
+  drafts: string[];
   pipelines: KanbanPipeline[];
   working: number;
   needsYou: boolean;
@@ -360,7 +362,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const updatedAtMs = task
       ? parseMs(task.updatedAt)
       : Math.max(parseMs(band.createdAt), ...members.map((member) => member.file.mtime * 1000));
-    const otherSurfaces = band.members.filter((member) => member.kind === "deck" || member.kind === "stack" || member.kind === "draft").length;
+    const otherSurfaces = band.members.filter((member) => member.kind === "deck" || member.kind === "stack").length;
+    const drafts = band.members.flatMap((member) => (member.kind === "draft" ? [member.key.slice("draft::".length)] : []));
     return {
       id: band.id,
       task,
@@ -374,11 +377,12 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       conversations: identities.size,
       notLoaded,
       otherSurfaces,
+      drafts,
       pipelines: summaries,
       working,
       needsYou,
       activity: working + provisioning,
-      idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0,
+      idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0 && drafts.length === 0,
       updatedAtMs,
       searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")

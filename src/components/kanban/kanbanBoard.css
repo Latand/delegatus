@@ -78,6 +78,10 @@
 .kb .btn svg { width: 15px; height: 15px; }
 .kb .btn .count { color: var(--color-muted); font-weight: 400; }
 .kb .btn.hidden-pill[data-count="0"] { display: none; }
+.kb .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.kb .btn .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
+/* `+ Task` and `+ Agent` (K9a), after the tools as the prototype's bar has them. */
+.kb .bar .bar-create { display: flex; align-items: center; gap: 8px; }
 
 .kb .scroll-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .kb .scroll-wrap .board { flex: 1 1 auto; min-height: 0; }
@@ -134,6 +138,8 @@
 .kb .tabs-nav .n { font-weight: 400; color: var(--color-muted); margin-left: 4px; }
 .kb .tabs-nav button[aria-selected="true"] .n { color: inherit; }
 .kb .tabs-nav.jump { padding: 10px 16px 0; }
+/* The tab strip sits above the tabbed board, inset by the board's own side padding. */
+.kb .scroll-wrap > .tabs-nav:not(.jump) { padding: 10px 24px; }
 .kb .tabs-nav.jump button { flex: 0 0 auto; padding: 0 12px; }
 
 /* ── Card ─────────────────────────────────────────────────────────────────── */
@@ -199,6 +205,9 @@
 .kb .pill[data-status="done"] { --st: var(--color-success); --st-soft: var(--color-success-soft); }
 .kb .card .age { color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
 .kb .card .foot .spacer { flex: 1; }
+.kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
+.kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
+.kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
 /* ── Members, references ──────────────────────────────────────────────────── */
@@ -339,7 +348,7 @@
   .kb .card .title { min-height: 44px; }
   .kb .tabs-nav button, .kb .btn, .kb .pill, .kb .receipt .act, .kb .popover .row .show, .kb .refs .ref { min-height: 44px; }
   .kb .pill { height: 36px; padding: 0 12px; }
-  .kb .tile, .kb .pchip { min-height: 44px; }
+  .kb .tile, .kb .pchip, .kb .card .add { min-height: 44px; }
   .kb .receipt .close { width: 44px; height: 44px; flex-shrink: 0; }
   .kb .menu [role="menuitem"], .kb .menu [role="menuitemradio"] { min-height: 44px; }
 }
@@ -414,6 +423,11 @@
 
 /* ── Readers: conversations open inside cards (K3) ───────────────────────── */
 .kb .card.has-reader { content-visibility: visible; }
+/* An agent draft on a card (K9a): the draft pane at reading width, as tall as a reader. */
+.kb .agent-drafts { display: flex; flex-direction: column; gap: 8px; }
+.kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: min(620px, 74vh); min-width: 0; }
+/* `+ Task`'s inline card at the top of Inbox. */
+.kb .card.new-task { content-visibility: visible; gap: 6px; }
 .kb .readers { display: flex; flex-direction: column; gap: 8px; }
 .kb .member-reader { flex: 1 1 100%; min-width: 0; }
 .kb .reader-slot { width: 100%; min-width: 0; }

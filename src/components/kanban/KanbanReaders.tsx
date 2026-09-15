@@ -188,6 +188,8 @@ interface ReaderProps extends ReaderView {
   onClose: (key: string) => void;
   onFull: (key: string) => void;
   onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
+  /** A failed launch in the conversation's feed offers its retry (K9a). */
+  onSpawnRetry?: (file: FileEntry) => void;
 }
 
 /** The host control the reader's actions menu offers, as the capability
@@ -200,7 +202,7 @@ export interface ReaderStop {
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -241,6 +243,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         file={file}
         tasks={[]}
         isRoot={false}
+        onSpawnRetry={onSpawnRetry}
         chrome={{
           header: (
             <div className="conv-head">
@@ -335,6 +338,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       file={file}
       tasks={[]}
       isRoot={false}
+      onSpawnRetry={onSpawnRetry}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}`,

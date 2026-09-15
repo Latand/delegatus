@@ -129,9 +129,7 @@ const q = (host: HTMLElement, sel: string) => host.querySelector(sel) as unknown
 const leaf = (host: HTMLElement) => q(host, '[data-testid="project-empty"]');
 const click = (node: HTMLElement) => flushSync(() => node.click());
 
-/* The desktop has no agent offer here until the Board carries its own «+ Agent» (#1695 F2): a draft the old
-   scheme drew would have nowhere to appear. The phone is unchanged. */
-test("desktop: the empty project offers the orchestrator, wired, and no agent offer without the Board's own", async () => {
+test("desktop: the empty project offers the orchestrator and one agent, both wired", async () => {
   const toggles: string[] = [];
   const host = await mount({ onToggleOrchestratorPanel: () => toggles.push("orchestrator") });
   const empty = leaf(host);
@@ -148,19 +146,30 @@ test("desktop: the empty project offers the orchestrator, wired, and no agent of
   click(orchestrator);
   expect(toggles).toEqual(["orchestrator"]);
 
-  expect(q(host, '[data-testid="project-empty-agent"]')).toBeNull();
+  /* The agent button runs the same draft flow as the board's «+ Agent»: a draft
+     pane appears on the board, which is exactly what leaves this empty state. */
+  const agent = q(host, '[data-testid="project-empty-agent"]')!;
+  expect(agent).not.toBeNull();
+  /* The visible copy is the header menu path, exactly: «Create → Agent», not
+     the board's «+ Agent» shorthand. */
+  expect(agent.textContent?.trim()).toBe(en["dash.emptyAgentCta"]);
+  expect(agent.textContent?.trim()).toBe(`${en["dash.createMenu"]} → ${en["dash.agent"]}`);
+  click(agent);
+  expect(await waitFor(() => leaf(host) === null)).toBe(true);
   await settle();
 });
 
-test("desktop: the orchestrator offer is a real 44px target", async () => {
+test("desktop: both offers are real 44px targets", async () => {
   const host = await mount({ onToggleOrchestratorPanel: () => {} });
-  expect(q(host, '[data-testid="project-empty-orchestrator"]')!.className).toContain("min-h-11");
+  for (const id of ["project-empty-orchestrator", "project-empty-agent"]) {
+    expect(q(host, `[data-testid="${id}"]`)!.className).toContain("min-h-11");
+  }
 });
 
-test("desktop: with no orchestrator dock wired, the leaf still names both ways to start", async () => {
+test("desktop: with no orchestrator dock wired, the agent offer still stands alone", async () => {
   const host = await mount();
   expect(q(host, '[data-testid="project-empty-orchestrator"]')).toBeNull();
-  expect(q(host, '[data-testid="project-empty-agent"]')).toBeNull();
+  expect(q(host, '[data-testid="project-empty-agent"]')).not.toBeNull();
   expect(leaf(host)!.textContent).toContain(en["dash.emptyOneAgent"]);
 });
 
@@ -191,5 +200,5 @@ test("Ukrainian carries the same two lines and the same two labels", async () =>
   expect(empty.textContent).toContain(translate("uk", "dash.emptyStartHere", { project: "atlas" }));
   expect(empty.textContent).toContain(translate("uk", "dash.emptyOneAgent"));
   expect(q(host, '[data-testid="project-empty-orchestrator"]')!.textContent?.trim()).toBe(translate("uk", "orchPanel.title"));
-  expect(q(host, '[data-testid="project-empty-agent"]')).toBeNull();
+  expect(q(host, '[data-testid="project-empty-agent"]')!.textContent?.trim()).toBe(translate("uk", "dash.emptyAgentCta"));
 });

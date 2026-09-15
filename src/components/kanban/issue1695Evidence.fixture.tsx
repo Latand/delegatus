@@ -397,6 +397,8 @@ const evidence = {
   taskAnswerDelayMs: 400,
   /* When each task write reached the fixture and when it was answered. */
   taskWrites: [] as Array<{ id: string; startedAt: number; answeredAt: number }>,
+  /* Tasks created from the board's «+ Task» (K9a), as the route received them. */
+  taskCreates: [] as Array<Record<string, unknown>>,
   /* An agent renames a task: the new title arrives on the next task read. */
   agentWritesTitle(id: string, title: string) {
     const index = tasks.findIndex((entry) => entry.id === id);
@@ -571,6 +573,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ ok: true });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
+  if (url.pathname === "/api/tasks" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    evidence.taskCreates.push(body);
+    const at = new Date().toISOString();
+    const created = { id: `created-${evidence.taskCreates.length}`, project: PROJECT, text: String(body.text), status: "inbox", placement: body.placement, assignments: [], createdAt: at, updatedAt: at, revision: REV(revision++) } as BoardTask;
+    tasks.push(created);
+    return json({ ok: true, task: created });
+  }
+  /* A draft pane's directory suggestions (K9a): the fixture's one checkout. */
+  if (url.pathname === "/api/spawn" && method === "GET") return json({ dirs: ["/repo"], cwd: null });
   if (url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;

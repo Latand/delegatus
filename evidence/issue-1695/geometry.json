@@ -639,7 +639,7 @@
         "tablist": true,
         "overflowX": 0,
         "beyondWindow": 0,
-        "pageOverflow": 1,
+        "pageOverflow": 0,
         "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
@@ -699,8 +699,8 @@
         "tablist": true,
         "overflowX": 0,
         "beyondWindow": 0,
-        "pageOverflow": 61,
-        "pageOverflowOutsideBoard": "button[New pipeline] right=701",
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1355,7 +1355,7 @@
         "tablist": true,
         "overflowX": 0,
         "beyondWindow": 0,
-        "pageOverflow": 1,
+        "pageOverflow": 0,
         "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
@@ -1415,8 +1415,8 @@
         "tablist": true,
         "overflowX": 0,
         "beyondWindow": 0,
-        "pageOverflow": 61,
-        "pageOverflowOutsideBoard": "button[New pipeline] right=701",
+        "pageOverflow": 0,
+        "pageOverflowOutsideBoard": null,
         "card": {
           "paddingLeft": "14px",
           "radius": "12px",
@@ -1564,8 +1564,19 @@
       }
     },
     "tabs": {
-      "kanbanBefore": false,
-      "written": [
+      "tabs": [
+        "kanban",
+        "list"
+      ],
+      "schemeShown": false,
+      "openedWrites": 0,
+      "openedMutationKinds": [
+        "reconcile-roots",
+        "reconcile-roots"
+      ],
+      "listed": 21,
+      "conversationsTail": "End of the list · all 21 conversations",
+      "toList": [
         {
           "kind": "reconcile-roots",
           "roots": [],
@@ -1588,8 +1599,7 @@
         },
         {
           "kind": "set-presentation",
-          "desktopBoard": "kanban",
-          "viewMode": "scheme"
+          "viewMode": "list"
         }
       ],
       "back": [
@@ -1615,15 +1625,42 @@
         },
         {
           "kind": "set-presentation",
-          "desktopBoard": "kanban",
-          "viewMode": "scheme"
+          "viewMode": "list"
         },
         {
           "kind": "set-presentation",
-          "desktopBoard": "scheme",
+          "desktopBoard": "kanban",
           "viewMode": "scheme"
         }
       ]
+    },
+    "k9a": {
+      "composerFirst": {
+        "column": "inbox",
+        "first": true,
+        "focused": true,
+        "width": 396
+      },
+      "creates": [
+        {
+          "project": "atlas",
+          "text": "Write the migration guide",
+          "placement": "unplaced",
+          "attachments": [],
+          "clientRequestId": "present"
+        }
+      ],
+      "barDraft": {
+        "column": "inbox",
+        "paneWidth": 368,
+        "inside": true
+      },
+      "cardDraft": {
+        "paneWidth": 386,
+        "inside": true,
+        "prompt": "Repair old links in the release notes"
+      },
+      "pageOverflow": 0
     },
     "phone": {
       "kanbanMounted": false

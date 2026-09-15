@@ -1330,8 +1330,10 @@ function ProjectDashboardView({
 
   /* The handoff handle under a pane: a draft that continues this conversation
      hangs right below it, inheriting the transcript and its directory. A
-     repeat click refocuses the existing draft instead of stacking duplicates. */
-  const addHandoffDraft = (file: FileEntry) => {
+     repeat click refocuses the existing draft instead of stacking duplicates.
+     On the kanban board the draft sits on the card that holds the conversation
+     (`bandId`), the way a card's own «+ Agent» draft does. */
+  const addHandoffDraft = (file: FileEntry, bandId: string | null = null) => {
     onUserNavigate?.();
     const existing = drafts.find((id) => (file.conversationId
       && draftParentConversationId(id) === file.conversationId)
@@ -1342,6 +1344,7 @@ function ProjectDashboardView({
     }
     const id = newDraftId();
     setDraftSrc(id, file.path, file.conversationId);
+    if (bandId) setDraftBand(id, bandId);
     const handoffCwd = projectDraftWorkingDirectory(files, project, projectCatalogEntries, file.path, projectCwdFallbacks, initialDraftCwd);
     setDraftCwd(id, handoffCwd);
     persistDrafts([...drafts, id]);
@@ -1791,12 +1794,16 @@ function ProjectDashboardView({
   const landedOnConversation = openedConversation !== null && schemeAvailable;
   /* Conversations for one look (a card's link to more conversations): the desktop has no other face to visit. */
   const transientFace = !isMobile && transientView === "list" && listAvailable ? "list" : null;
-  const projectView = landedOnConversation ? "scheme" : transientFace ?? resolveProjectView({
+  /* The desktop Board is a view even before the project has a card (#1695 K9a): chosen over Conversations,
+     it draws its empty columns with + Task and + Agent, so a project whose catalog is known and whose board is
+     empty still reaches creation. The phone keeps its own resolution. */
+  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && board.prefs.viewMode === "scheme";
+  const projectView = landedOnConversation ? "scheme" : transientFace ?? (desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView: board.prefs.viewMode,
     hasNodes,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
-  });
+  }));
   const viewToggle = schemeAvailable && listAvailable;
 
   /* The phone's board (mobile v2 lane 2, README §4.1): the switchboard's triage
@@ -1886,7 +1893,7 @@ function ProjectDashboardView({
   /* The desktop leaf that is the board itself — the one leaf that owns chrome in
      the top-left corner, so it is handed the view switch instead of having one
      floated over it (#1614). */
-  const desktopBoardLeaf = projectView === "scheme" && schemeAvailable;
+  const desktopBoardLeaf = projectView === "scheme" && (schemeAvailable || desktopEmptyBoard);
   /* The desktop board is the kanban (#1695), whatever face an earlier build stored: a conversation opened
      from anywhere opens as a reader in its card. */
   const kanbanLeaf = !isMobile && desktopBoardLeaf;
@@ -2445,7 +2452,7 @@ function ProjectDashboardView({
             {/* The board carries the switch inside its own tool palette (see
                 ProjectViewTabs); every other desktop leaf has no chrome in that
                 corner, so there it floats. */}
-            {boardReady && viewToggle && !desktopBoardLeaf ? (
+            {boardReady && listAvailable && !desktopBoardLeaf ? (
               <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} floating />
             ) : null}
             {!boardReady ? (
@@ -2480,6 +2487,13 @@ function ProjectDashboardView({
                 )}
                 onOpenCatalog={() => setTransientView("list")}
                 onOpenConversations={() => setTransientView("list")}
+                onNewAgent={addDraft}
+                onAddAgent={addBandAgentDraft}
+                onDraftClose={removeDraft}
+                onDraftSpawned={draftSpawned}
+                onHandoff={addHandoffDraft}
+                onSpawnRetry={retryLaunch}
+                onCloseConversation={(file) => closeNode(file.path)}
                 viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}
               />
             ) : listAvailable ? (
@@ -2488,6 +2502,8 @@ function ProjectDashboardView({
               <EmptyProjectLeaf
                 projectName={projectName}
                 onOrchestrator={onToggleOrchestratorPanel}
+                onAgent={addDraft}
+                agentDisabled={!loaded}
               />
             )}
           </div>
