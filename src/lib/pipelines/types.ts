@@ -135,6 +135,37 @@ export type PipelineVerdictRecovery = {
   messageTs: number | null;
 };
 
+/** What a pipeline's accepted revisions depend on (#1692).
+
+    `internal` (the default, and every record without the field): the Viewer's
+    own durable state is the authority. A stage passes on its attempt, its
+    verdict and the exact clean local revision it was judged on; a review
+    settles on the SHA the reviewer was fenced to, read from the local
+    worktree. Nothing is pushed, fetched or read from a remote while the
+    pipeline runs. Creating or starting one without `baseRef` still fetches
+    `origin/<base>` once, time-bounded, so it starts from the current base;
+    a pinned `baseRef` never touches the network.
+
+    `remote-branch`: the caller asked for publication. Every accepted revision
+    is pushed to `origin/<branch>`, reviewers launch only on a published head,
+    an approval settles only when the remote carries the reviewed SHA, and a
+    terminal stage completes only once its revision is remotely durable. A
+    publication failure is its own state beside the verdict and never rewrites
+    it. */
+export type PipelinePublication = "internal" | "remote-branch";
+
+export type PipelineBoundedWait = {
+  startedAt: string;
+  rounds: number;
+  retryAfter: string;
+  /** The largest budget any round of this wait asked for, and its backoff
+      cap (#1678): a later round of a cheaper class keeps the wait's budget.
+      Absent on waits persisted before these fields existed, which then read
+      as the round's own class. */
+  budgetMs?: number;
+  retryMaxMs?: number;
+};
+
 export type PipelineStageAttempt = {
   n: number;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -181,17 +212,14 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: {
-    startedAt: string;
-    rounds: number;
-    retryAfter: string;
-    /** The largest budget any round of this wait asked for, and its backoff
-        cap (#1678): a later round of a cheaper class keeps the wait's budget.
-        Absent on waits persisted before these fields existed, which then read
-        as the round's own class. */
-    budgetMs?: number;
-    retryMaxMs?: number;
-  };
+  controllerWait?: PipelineBoundedWait;
+  /** Bounded wait for the remote pipeline branch after an approved review
+      whose final remote read the network failed (#1692). Same shape and
+      arithmetic as `controllerWait`, kept apart because that wait ends the
+      moment a reviewer launch is under way, which an approved flow always is.
+      Left in place when the budget runs out, as the record of the retries the
+      park counts. */
+  remoteHeadWait?: PipelineBoundedWait;
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -298,11 +326,13 @@ export type Pipeline = {
   baseBranch: string;
   baseRef: string;
   lastPassedCommit: string;
-  /** The revision the orchestrator last published to `origin/<branch>`. The
-      review layer fences every round on the published head, so publication is
-      the pipeline's job, not a stage's; recording what landed lets a steady
-      state skip the remote probe entirely. Null while nothing is published
-      (a fresh pipeline, or a repo with no `origin` to publish to). */
+  /** Absent reads as `internal`. See {@link PipelinePublication}. */
+  publication?: PipelinePublication;
+  /** The revision the orchestrator last published to `origin/<branch>` under
+      the `remote-branch` policy. Under that policy the review layer fences
+      every round on the published head, so publication is the pipeline's job,
+      not a stage's; recording what landed lets a steady state skip the remote
+      probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
@@ -357,6 +387,8 @@ export type CreatePipelineRequest = {
   /** Creator transcript. API callers may omit it only when caller authentication can derive it. */
   src?: string;
   autoStart?: boolean;
+  /** Defaults to `internal`; see {@link PipelinePublication}. */
+  publication?: PipelinePublication;
 };
 
 /* The accepted actions, declared once (#774). The MCP tool schema publishes

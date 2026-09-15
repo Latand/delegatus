@@ -26,6 +26,22 @@ function validPipelineBranch(value: string): boolean {
   return validBaseBranch(value);
 }
 
+/* A single-branch fetch of a repository that is already cloned. The bound
+   only has to stop an unanswered connection from holding the caller: the
+   create request, or the provisioning tick with the pipeline mutation held. */
+const BASE_FETCH_TIMEOUT = "60s";
+
+/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
+    usually ends on SIGKILL with no exit status at all (#1692). */
+function killedAtBound(result: ExecResult): boolean {
+  return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
+}
+
+/** Resolves the exact commit a pipeline starts from. Without `baseRef` this
+    is the one remote read an internal pipeline makes: a bounded fetch of
+    `origin/<base>`, so the worktree starts from the current base (#360). A
+    remote that cannot answer refuses the creation rather than starting from
+    a stale ref. A pinned `baseRef` never touches the network. */
 export function resolvePipelineBase(
   repoDir: string,
   input: { baseBranch?: string; baseRef?: string },
@@ -36,10 +52,11 @@ export function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = exec(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      "timeout",
+      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
       repoDir,
     );
+    if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
   }
   const ref = requestedRef || `origin/${baseBranch}`;
@@ -205,15 +222,33 @@ export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha };
 }
 
+export type PipelineRemoteHeadResult =
+  | { ok: true; sha: string }
+  | { ok: false; error: string; transient: boolean };
+
+/* Checked first: an SSH login the server refused can also print "Connection
+   closed by …", and that is a credential problem no retry fixes. */
+const REMOTE_READ_REFUSED = /permission denied|authentication failed|host key verification failed|could not read (username|password)|repository not found|does not appear to be a git repository|returned error: 40[134]/i;
+const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failure in name resolution|connection refused|connection reset|connection closed by|network is unreachable|no route to host|failed to connect to|returned error: 5\d\d/i;
+
+/** Whether a failed remote read is one the network failed (#1692): it says
+    nothing about the branch, so asking again is sound. A refused login, a
+    missing repository and anything unrecognized are not. */
+function remoteReadFailureIsTransient(error: string): boolean {
+  return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
+}
+
 /** Reads the authoritative remote pipeline branch without relying on a stale
-    tracking ref. Approval fences use this alongside the clean local HEAD. */
-export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
-  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
-  const remote = exec("git", ["ls-remote", "--heads", "origin", `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
-  if (remote.code !== 0) return failure("checking the remote pipeline branch", remote);
-  const sha = remote.stdout.trim().split(/\s+/)[0] ?? "";
-  if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA" };
-  return { ok: true, sha };
+    tracking ref. Approval fences use this alongside the clean local HEAD. The
+    read is time-bounded like the publication read: an unbounded `ls-remote`
+    waited out a two-minute SSH connect timeout while holding the pipeline
+    mutation (#1692). */
+export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
+  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
+  const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
+  if (!remote.ok) return { ok: false, error: remote.error, transient: remoteReadFailureIsTransient(remote.error) };
+  if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
+  return { ok: true, sha: remote.sha };
 }
 
 export type PipelinePublishResult =
@@ -238,7 +273,7 @@ function readRemotePipelineBranch(
     pipeline.worktreeDir,
   );
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
-  if (result.code === 124 || result.code === 137) {
+  if (killedAtBound(result)) {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
   }
   return failure(step, result);

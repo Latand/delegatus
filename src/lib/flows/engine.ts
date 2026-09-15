@@ -271,7 +271,7 @@ export function reserveReviewerSpawn(
 export function captureReviewHead(flow: Flow, round: Round): string {
   const headSha = resolveCleanFlowHead(flow.cwd);
   if (!headSha) throw new Error("review requires a clean committed HEAD");
-  if (flow.headRef) {
+  if (flow.headRef && flow.requireRemoteHead === true) {
     const remoteSha = resolveFlowRemoteHead(flow.cwd, flow.headRef);
     if (remoteSha !== headSha) {
       const detail = remoteSha
@@ -1114,9 +1114,10 @@ export async function tickFlow(
       const markerRound = newRound(flow, "marker", note);
       flow.rounds.push(markerRound);
       try {
-        /* Pipeline-owned flows carry headRef. Capture their clean published
-           repair fence in the same durable marker transition, before a delayed
-           reviewer launch or parent reconciliation can expose the prior HEAD. */
+        /* Pipeline-owned flows carry headRef. Capture their clean repair fence
+           (and its published copy, when the pipeline publishes) in the same
+           durable marker transition, before a delayed reviewer launch or
+           parent reconciliation can expose the prior HEAD. */
         if (flow.headRef) captureReviewHead(flow, markerRound);
         flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
         flow.stateDetail = null;

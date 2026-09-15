@@ -114,6 +114,7 @@ function isFlow(value: unknown): value is Flow {
     typeof flow.implementerPath === "string" &&
     typeof flow.baseRef === "string" &&
     (flow.headRef === undefined || flow.headRef === null || typeof flow.headRef === "string") &&
+    (flow.requireRemoteHead === undefined || typeof flow.requireRemoteHead === "boolean") &&
     (flow.targetSha === undefined || flow.targetSha === null || typeof flow.targetSha === "string") &&
     (flow.spec === undefined || typeof flow.spec === "string") &&
     (flow.reviewerSandbox === undefined || flow.reviewerSandbox === "full" || flow.reviewerSandbox === "restricted") &&

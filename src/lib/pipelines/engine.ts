@@ -71,6 +71,7 @@ import type {
   EffectivePipelineRole,
   PatchPipelineRequest,
   Pipeline,
+  PipelineBoundedWait,
   PipelineRoleId,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
@@ -1126,6 +1127,11 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
     admission attempts the spawn layer makes before it records the failure. */
 const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+/** A `remote-branch` pipeline whose remote the network failed after an
+    approved review asks again on this budget (#1692). Every read may hold the
+    tick for its full five-second timeout, so the backoff starts at fifteen
+    seconds rather than one. */
+const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, retryMaxMs: 60_000 };
 /** Retired launches an attempt keeps; the host budget cannot mint more than
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
@@ -1917,6 +1923,13 @@ export function reconcileEmbeddedReviewFlows(
   return changed;
 }
 
+/** Whether this pipeline asked for remote publication (#1692). Every other
+    record, including every one written before the policy existed, is
+    internal: nothing it accepts waits on a remote. */
+function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean {
+  return pipeline.publication === "remote-branch";
+}
+
 /** Advance along the pass edge, persisting the relay record: the completed
     attempt's output is the next activation's `{{prev.output}}`, written in the
     same mutation as the verdict/commit that produced it (exactly-once, #353). */
@@ -1951,15 +1964,22 @@ function keepPassedStageUnpublished(
   pipeline.stateDetail = message;
 }
 
-/** A terminal pass cannot close until its accepted revision is remotely
-    durable. The pass receipt stays terminal and the committing cursor becomes
-    a publication retry seam, so later ticks never rerun or reset stage work. */
+/** Under `remote-branch`, a terminal pass cannot close until its accepted
+    revision is remotely durable. The pass receipt stays terminal and the
+    committing cursor becomes a publication retry seam, so later ticks never
+    rerun or reset stage work. An internal pipeline has nothing to wait for:
+    a pass an older build left waiting here closes on its own record. */
 function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
 ): void {
+  if (!publishesRemoteBranch(pipeline)) {
+    attempt.error = null;
+    advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
   const published = publishPipelineBranch(pipeline, ports.exec, {
     acceptedSha: pipeline.lastPassedCommit,
     publishedSha: pipeline.publishedCommit ?? null,
@@ -2049,12 +2069,19 @@ function commitPassedStage(
     return;
   }
   pipeline.lastPassedCommit = result.sha;
-  /* Publish before the next stage can gate on the publication (#729). A review
-     stage fences every round on `origin/<branch>` through captureReviewHead, so
-     a builder that produced a usable head strands the whole handoff unless the
-     orchestrator itself pushes it — waiting for a stage to have run `git push`
-     is what left pipeline 2ae14391 parked for over seven hours. Publication
-     failure is its own recoverable class: the commit is already durable in
+  if (!publishesRemoteBranch(pipeline)) {
+    attempt.state = "passed";
+    attempt.completedAt = ports.now();
+    advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
+  /* Under `remote-branch`, publish before the next stage can gate on the
+     publication (#729). A review stage then fences every round on
+     `origin/<branch>` through captureReviewHead, so a builder that produced a
+     usable head strands the whole handoff unless the orchestrator itself
+     pushes it — waiting for a stage to have run `git push` is what left
+     pipeline 2ae14391 parked for over seven hours. Publication failure is its
+     own recoverable class: the commit is already durable in
      `lastPassedCommit`, so nothing is lost while the operator resolves it. */
   const published = publishPipelineBranch(pipeline, ports.exec, {
     acceptedSha: result.sha,
@@ -2730,6 +2757,8 @@ function publishReviewIngressHead(
       detail: `review stage head mismatch: the accepted review head is ${expected}, but the pipeline worktree is at ${local.sha}; nothing was published`,
     };
   }
+  /* An internal pipeline reviews the clean local revision it accepted. */
+  if (!publishesRemoteBranch(pipeline)) return { ok: true };
 
   /* `publishedSha` is deliberately omitted: ingress probes the remote for real
      rather than trusting a durable record that may be stale or migrated. */
@@ -2768,12 +2797,7 @@ async function tickReviewStage(
     return;
   }
   if (attempt.state === "committing") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
-    commitPassedStage(pipeline, stage, attempt, ports);
+    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
   const implementer = latestPassedRun(pipeline, stage.id);
@@ -2834,6 +2858,7 @@ async function tickReviewStage(
       baseMode: "head",
       baseRef: pipeline.baseRef,
       headRef: pipeline.branch,
+      ...(publishesRemoteBranch(pipeline) ? { requireRemoteHead: true } : {}),
       targetSha: attempt.expectedReviewHeadSha,
       spec: pipeline.spec ?? pipeline.task,
       mode: "auto",
@@ -2922,11 +2947,7 @@ async function tickReviewStage(
     pipeline.stateDetail = null;
   }
   if (flow.state === "approved") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
+    if (!approvedReviewHeadHolds(pipeline, attempt, ports)) return;
     attempt.output = `Review loop approved after ${flow.rounds.length} round(s).`;
     attempt.verdict = { status: "pass", confidence: 1 };
     attempt.state = "committing";
@@ -3061,21 +3082,80 @@ const RECONCILABLE_BOUND_FLOW_ERRORS = [
   "embedded review flow record disappeared",
 ] as const;
 
-function reviewHeadFenceError(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+const APPROVED_REMOTE_HEAD_UNVERIFIED = "approved review flow could not verify the remote pipeline head";
+const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the remote pipeline head: ";
+
+/** The exact-head fence an approved review must hold before its stage settles
+    (#526, #533): the approval envelope, and the clean local HEAD at the
+    reviewed SHA. A `remote-branch` pipeline also needs `origin/<branch>` at
+    that SHA; an internal one never reads a remote (#1692). `park` is a
+    verdict; `retry` is a remote read the network failed, which says nothing
+    about the head either way. */
+function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): { park: string } | { retry: string } | null {
   if (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha) {
-    return `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}`;
+    return { park: `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}` };
   }
   const currentHead = currentPipelineBranchHead(pipeline, ports.exec);
-  if (!currentHead.ok) return `approved review flow could not verify the current pipeline head: ${currentHead.error}`;
+  if (!currentHead.ok) return { park: `approved review flow could not verify the current pipeline head: ${currentHead.error}` };
   if (attempt.reviewHeadSha !== currentHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}` };
   }
+  if (!publishesRemoteBranch(pipeline)) return null;
   const remoteHead = currentPipelineRemoteBranchHead(pipeline, ports.exec);
-  if (!remoteHead.ok) return `approved review flow could not verify the remote pipeline head: ${remoteHead.error}`;
+  if (!remoteHead.ok) return remoteHead.transient ? { retry: remoteHead.error } : { park: `${APPROVED_REMOTE_HEAD_UNVERIFIED}: ${remoteHead.error}` };
   if (attempt.reviewHeadSha !== remoteHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}` };
   }
   return null;
+}
+
+/**
+ * True when an approved review may settle this tick (#1692).
+ *
+ * For a `remote-branch` pipeline, a remote read the network failed books a
+ * bounded wait instead of parking.
+ * Nothing else moves: the attempt keeps its state, the flow is not touched,
+ * no reviewer launches and nothing is sent. The next due tick checks the
+ * clean local head and the remote head against the reviewed SHA from scratch,
+ * so a remote that comes back at another head parks on the mismatch like any
+ * other. Every other fence failure parks at once, and so does a wait whose
+ * budget is spent, with the retries it made.
+ */
+function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  const now = ports.now();
+  const wait = attempt.remoteHeadWait;
+  if (wait && unixMs(wait.retryAfter) > unixMs(now)) return false;
+  const fence = reviewHeadFence(pipeline, attempt, ports);
+  if (!fence) {
+    delete attempt.remoteHeadWait;
+    return true;
+  }
+  if ("park" in fence) {
+    park(pipeline, fence.park, attempt);
+    return false;
+  }
+  const next = nextBoundedWait(wait, now, now, APPROVED_REMOTE_HEAD_WAIT);
+  if (!next) {
+    const seconds = Math.round(Math.max(0, unixMs(now) - unixMs(wait!.startedAt)) / 1_000);
+    park(pipeline, `${APPROVED_REMOTE_HEAD_UNVERIFIED} after ${wait!.rounds} automatic retries over ${seconds}s: ${fence.retry}`, attempt);
+    return false;
+  }
+  attempt.remoteHeadWait = next.wait;
+  attempt.error = null;
+  pipeline.stateDetail = `${APPROVED_REMOTE_HEAD_WAIT_PREFIX}${fence.retry}; retry at ${next.wait.retryAfter}`;
+  ports.scheduleTick?.(next.delayMs);
+  return false;
+}
+
+/** A park a build before #1692 left because the remote head could not be
+    read, with the flow still approved. Every such record is internal, and an
+    internal pipeline never needed that read, so it resumes once and settles
+    on the local fence alone. A park on a remote head that answered a
+    different SHA is a verdict about the remote and never resumes here. */
+function parkedOnUnverifiedRemoteHead(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, flow: Flow | null): boolean {
+  return flow?.state === "approved"
+    && !publishesRemoteBranch(pipeline)
+    && !!attempt?.error?.startsWith(`${APPROVED_REMOTE_HEAD_UNVERIFIED}: `);
 }
 
 function terminalReviewFlowError(flow: Flow): string | null {
@@ -3138,7 +3218,7 @@ function reconcileBoundReviewFlow(pipeline: Pipeline, ports: PipelinePorts, pers
   let flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
   if (
     !attemptError
-    || !RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix))
+    || !(RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix)) || parkedOnUnverifiedRemoteHead(pipeline, attempt, flow))
     || !flow
     || !RECONCILABLE_REVIEW_FLOW_STATES.has(flow.state)
   ) return false;
@@ -3415,30 +3495,40 @@ function bookControllerWaitRound(
   ports: PipelinePorts,
   budget: { budgetMs: number; retryMaxMs: number } = { budgetMs: SPAWN_CONTROLLER_WAIT_BUDGET_MS, retryMaxMs: SPAWN_CONTROLLER_RETRY_MAX_MS },
 ): "waiting" | "exhausted" {
+  const next = nextBoundedWait(attempt.controllerWait, since, now, budget);
+  if (!next) return "exhausted";
+  attempt.controllerWait = next.wait;
+  ports.scheduleTick?.(next.delayMs);
+  return "waiting";
+}
+
+/** One more round of a bounded wait, or null once its budget is spent. The
+    backoff doubles from `retryBaseMs` (one second unless given) up to its cap,
+    and never past what is left of the budget. */
+function nextBoundedWait(
+  wait: PipelineBoundedWait | undefined,
+  since: string,
+  now: string,
+  budget: { budgetMs: number; retryMaxMs: number; retryBaseMs?: number },
+): { wait: PipelineBoundedWait; delayMs: number } | null {
   const nowMs = unixMs(now);
-  const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
+  const current = wait ?? { startedAt: since, rounds: 0, retryAfter: since };
   /* One wait keeps the largest budget any of its rounds asked for (review
      round 2): a busy-lock sighting a minute into a runtime-host outage must
      not cut the host's ten minutes down to the lock's thirty seconds. */
-  const budgetMs = Math.max(wait.budgetMs ?? 0, budget.budgetMs);
-  const retryMaxMs = Math.max(wait.retryMaxMs ?? 0, budget.retryMaxMs);
-  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(wait.startedAt));
-  if (remainingMs <= 0) return "exhausted";
+  const budgetMs = Math.max(current.budgetMs ?? 0, budget.budgetMs);
+  const retryMaxMs = Math.max(current.retryMaxMs ?? 0, budget.retryMaxMs);
+  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(current.startedAt));
+  if (remainingMs <= 0) return null;
   const delayMs = Math.min(
     retryMaxMs,
-    SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
+    (budget.retryBaseMs ?? SPAWN_HANDSHAKE_RETRY_DELAY_MS) * (2 ** current.rounds),
     remainingMs,
   );
-  attempt.controllerWait = {
-    ...wait,
-    startedAt: wait.startedAt,
-    rounds: wait.rounds + 1,
-    retryAfter: new Date(nowMs + delayMs).toISOString(),
-    budgetMs,
-    retryMaxMs,
+  return {
+    wait: { ...current, rounds: current.rounds + 1, retryAfter: new Date(nowMs + delayMs).toISOString(), budgetMs, retryMaxMs },
+    delayMs,
   };
-  ports.scheduleTick?.(delayMs);
-  return "waiting";
 }
 
 function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, failure: string): string {
@@ -3696,6 +3786,7 @@ const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relati
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}} — run stages only`;
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and only creation or start without baseRef fetches the base, time-bounded) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 function stageViolations(violations: PipelineValidationViolation[]): { error: string; violations: PipelineValidationViolation[] } {
@@ -4125,6 +4216,9 @@ export async function createPipelineFromRequest(
   if (req.spec !== undefined && typeof req.spec !== "string") violations.push({ field: "spec", message: "spec must be a string", expected: `string up to ${MAX_SPEC_LENGTH} characters` });
   if (spec && spec.length > MAX_SPEC_LENGTH) violations.push({ field: "spec", message: `spec exceeds ${MAX_SPEC_LENGTH} characters`, expected: `string up to ${MAX_SPEC_LENGTH} characters` });
   if (req.autoStart !== undefined && typeof req.autoStart !== "boolean") violations.push({ field: "autoStart", message: "autoStart must be a boolean", expected: "boolean (false creates a draft the operator starts)" });
+  if (req.publication !== undefined && req.publication !== "internal" && req.publication !== "remote-branch") {
+    violations.push({ field: "publication", message: "publication must be internal or remote-branch", expected: PIPELINE_PUBLICATION_SHAPE });
+  }
   if (req.baseBranch !== undefined && typeof req.baseBranch !== "string") violations.push({ field: "baseBranch", message: "baseBranch must be a string", expected: "branch name string" });
   if (req.baseRef !== undefined && typeof req.baseRef !== "string") violations.push({ field: "baseRef", message: "baseRef must be a string", expected: "commit-ish string resolved against repoDir" });
   if (req.taskIds !== undefined && (!Array.isArray(req.taskIds) || req.taskIds.some((taskId) => typeof taskId !== "string" || !taskId.trim()))) {
@@ -4195,6 +4289,7 @@ export async function createPipelineFromRequest(
     srcConversationId: creator.lineage.srcConversationId,
     now: ports.now(),
     state: req.autoStart === false ? "draft" : "provisioning",
+    ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
@@ -4788,7 +4883,13 @@ export async function patchPipeline(
           };
         }
       }
-      const retryReviewHead = stage?.kind === "review-loop" ? synchronizePipelineRetryHead(pipeline, ports.exec) : null;
+      /* An internal review retries on the clean local head it holds; only a
+         `remote-branch` pipeline takes a remote repair or republishes. */
+      const retryReviewHead = stage?.kind !== "review-loop"
+        ? null
+        : publishesRemoteBranch(pipeline)
+          ? synchronizePipelineRetryHead(pipeline, ports.exec)
+          : currentPipelineBranchHead(pipeline, ports.exec);
       if (retryReviewHead && !retryReviewHead.ok) {
         pipeline.stateDetail = retryReviewHead.error;
         persist();
@@ -4798,20 +4899,22 @@ export async function patchPipeline(
         pipeline.state = "provisioning";
       } else if (stage?.kind === "review-loop") {
         pipeline.lastPassedCommit = retryReviewHead!.sha;
-        /* A retried reviewer fences on the published head exactly like the first
-           one. Without this, a local repair the operator committed in the
-           worktree would park the retry on the same unavailable remote the
-           retry was meant to escape — an unbounded operator loop. */
-        const republished = publishPipelineBranch(pipeline, ports.exec, {
-          acceptedSha: retryReviewHead!.sha,
-          publishedSha: pipeline.publishedCommit ?? null,
-        });
-        if (!republished.ok) {
-          pipeline.stateDetail = republished.error;
-          persist();
-          return { error: republished.error, status: 409 };
+        if (publishesRemoteBranch(pipeline)) {
+          /* A retried reviewer fences on the published head exactly like the
+             first one. Without this, a local repair the operator committed in
+             the worktree would park the retry on the same unavailable remote
+             the retry was meant to escape — an unbounded operator loop. */
+          const republished = publishPipelineBranch(pipeline, ports.exec, {
+            acceptedSha: retryReviewHead!.sha,
+            publishedSha: pipeline.publishedCommit ?? null,
+          });
+          if (!republished.ok) {
+            pipeline.stateDetail = republished.error;
+            persist();
+            return { error: republished.error, status: 409 };
+          }
+          pipeline.publishedCommit = republished.remote === "published" ? republished.sha : null;
         }
-        pipeline.publishedCommit = republished.remote === "published" ? republished.sha : null;
         pipeline.state = "running";
       } else if (pipeline.lastPassedCommit) {
         const reset = resetPipelineStage(pipeline, ports.exec);

@@ -194,8 +194,14 @@ export type Flow = {
   /** Configured cross-engine fallback for unattended reviewer launches. */
   reviewerFallback?: RoleConfig | null;
   baseRef: string; // resolved git SHA captured at creation
-  /** Remote branch that must equal each captured review head. */
+  /** The branch a pipeline-owned flow reviews. Each review head is captured
+      from its clean local HEAD when a round is marked ready and again at
+      reviewer launch. */
   headRef?: string | null;
+  /** True only when the owning pipeline asked for remote publication
+      (#1692): the capture then also requires `origin/<headRef>` to carry that
+      head. Absent or false, no remote is read. */
+  requireRemoteHead?: boolean;
   /** Expected clean HEAD for the first reviewer launch. The diff still starts at baseRef. */
   targetSha?: string | null;
   /** Pinned task specification and acceptance criteria shown to every reviewer. */
@@ -249,8 +255,10 @@ export type CreateFlowRequest = {
       workflow branch start here so every round reviews the whole workflow
       diff; when absent the base resolves from baseMode in the session cwd. */
   baseRef?: string;
-  /** Remote branch fence supplied by durable branch-owning controllers. */
+  /** Branch supplied by durable branch-owning controllers. */
   headRef?: string;
+  /** Also fence each review head on `origin/<headRef>` (#1692). */
+  requireRemoteHead?: boolean;
   /** Expected clean HEAD for the first reviewer launch, supplied by durable controllers. */
   targetSha?: string;
   /** Optional pinned task specification and acceptance criteria for the flow. */

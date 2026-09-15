@@ -12,7 +12,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { normalizeStageOutputPath } from "./stageAccess";
-import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
+import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
 
 export const PIPELINES_SCHEMA_VERSION = 5;
@@ -373,6 +373,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
     typeof pipeline.lastPassedCommit === "string" &&
+    (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
     Array.isArray(pipeline.stages) &&
     pipeline.stages.every(isStage) &&
@@ -939,6 +940,7 @@ export function buildPipeline(input: {
   srcConversationId: string | null;
   now: string;
   state?: "draft" | "provisioning";
+  publication?: PipelinePublication;
 }): Pipeline {
   const identity = pipelineIdentity(input.id, input.task, input.repoDir);
   return {
@@ -953,6 +955,7 @@ export function buildPipeline(input: {
     baseBranch: "",
     baseRef: "",
     lastPassedCommit: "",
+    ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,
     stages: (JSON.parse(JSON.stringify(input.stages)) as PipelineStage[]).map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),
