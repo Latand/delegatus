@@ -36,6 +36,12 @@ afterEach(() => {
 /** The sentence the lock's synchronous acquire refuses with (#1716). */
 const BUSY = "account mutation is busy in this process; retry shortly";
 const TEXT = "carry this through the handover";
+/** When each contended recovery attempt is due, from the first: 1s, 2s, 4s, 8s
+    and then 15s apart, twelve attempts in all. */
+const CONTENDED_SCHEDULE_MS = [0, 1_000, 3_000, 7_000, 15_000, 30_000, 45_000, 60_000, 75_000, 90_000, 105_000, 120_000];
+/** One original more than the 128 whose contention history the executor once
+    kept, past which it dropped the oldest one's attempts and due time. */
+const BATCH = 129;
 
 function idleHostState(sessionKey: string): HostState {
   return {
@@ -241,6 +247,81 @@ function trackedQueue(options: {
   return { queue, transitions, status: () => status, wakes: () => wakes };
 }
 
+/**
+ * One queue draining an original send for each of `count` conversations whose
+ * hosts are gone, all admitted to one real runtime journal. Each recovery is
+ * recorded; while `contended()` holds it is refused before its reservation, and
+ * otherwise it brings that conversation's host back.
+ */
+function contendedBatch(count: number, contended: () => boolean) {
+  const directory = fs.mkdtempSync(path.join(sandbox, "batch-"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const ledger = createFakeDeliveryLedger();
+  const hosts = new Map<string, FakeEngineHost>();
+  const recovered = new Set<string>();
+  const attemptedAt = new Map<string, number[]>();
+  const sends: string[] = [];
+  const originals = Array.from({ length: count }, (_, index) => {
+    const conversationId = `conversation-batch-${index}`;
+    const sessionId = `session-batch-${index}`;
+    journal.append({
+      scope: { type: "session", id: conversationId },
+      kind: "session-status",
+      payload: {
+        conversationId,
+        sessionKey: { engine: "claude", sessionId },
+        hostKind: "claude-broker",
+        host: "hosted",
+        turn: "idle",
+        provenance: "structured",
+        artifactPath: path.join(directory, `${sessionId}.jsonl`),
+        capabilities: { steer: false, structuredAttention: true },
+      },
+    });
+    const host = new FakeEngineHost(ledger, idleHostState(sessionId));
+    const send = host.send.bind(host);
+    host.send = async (entry) => {
+      sends.push(entry.id);
+      return send(entry);
+    };
+    hosts.set(conversationId, host);
+    attemptedAt.set(conversationId, []);
+    const { operationId, receipt } = journal.executeOperation({
+      kind: "send",
+      operationId: `operation-batch-${index}`,
+      idempotencyKey: `idempotency-batch-${index}`,
+      conversationId,
+      text: `${TEXT} ${index}`,
+      policy: "queue",
+    });
+    return { conversationId, operationId, admitted: receipt };
+  });
+  const queue = new StructuredDeliveryQueue(
+    journalPort(journal),
+    (conversationId) => (recovered.has(conversationId) ? hosts.get(conversationId) ?? null : null),
+    undefined,
+    () => {},
+    async (conversationId) => {
+      attemptedAt.get(conversationId)!.push(Date.now());
+      if (contended()) throw new StructuredRecoveryContendedError(new AccountMutationBusyError(BUSY));
+      recovered.add(conversationId);
+      return true;
+    },
+  );
+  return {
+    journal,
+    ledger,
+    queue,
+    originals,
+    sends,
+    /** Every conversation's attempt times, relative to `startedAt`. */
+    attempts: (startedAt: number) => originals.map(({ conversationId }) =>
+      attemptedAt.get(conversationId)!.map((at) => at - startedAt)),
+    receipt: (operationId: string) => journal.operationResult(operationId)!.receipt,
+    pendingSends: () => journal.effectBatch(count + 1, ["runtime.send"]),
+  };
+}
+
 for (const engine of ["codex", "claude"] as const) {
   test(`${engine}: a recovery the account lock refuses keeps the original queued, and it is delivered once after the holder lets go`, async () => {
     const startedAt = Date.now();
@@ -381,10 +462,7 @@ test("contention that outlasts its attempts settles failed after a bounded, spac
       expect(attemptedAt.length - before).toBeLessThanOrEqual(1);
     }
 
-    expect({ shape, attemptedAt }).toEqual({
-      shape,
-      attemptedAt: [0, 1_000, 3_000, 7_000, 15_000, 30_000, 45_000, 60_000, 75_000, 90_000, 105_000, 120_000],
-    });
+    expect({ shape, attemptedAt }).toEqual({ shape, attemptedAt: CONTENDED_SCHEDULE_MS });
     /* Only an attempt requeues; the passes between them write nothing. */
     expect(tracked.transitions.filter(([, status]) => status === "queued")).toHaveLength(12);
     expect(tracked.transitions.at(-1)).toEqual([
@@ -397,6 +475,91 @@ test("contention that outlasts its attempts settles failed after a bounded, spac
     await tracked.queue.drain();
     expect(attemptedAt).toHaveLength(12);
     setSystemTime();
+  }
+});
+
+test("each of more than 128 contended originals keeps its own spacing and settles failed at the cap", async () => {
+  const startedAt = Date.now();
+  setSystemTime(new Date(startedAt));
+  const batch = contendedBatch(BATCH, () => true);
+  try {
+    for (let elapsed = 0; elapsed <= 180_000 && batch.pendingSends().length > 0; elapsed += 250) {
+      setSystemTime(new Date(startedAt + elapsed));
+      await batch.queue.drain();
+    }
+
+    /* Every original was tried on the schedule, once per attempt, and no more
+       than the cap: a pass never tries one early or twice. */
+    expect(batch.attempts(startedAt)).toEqual(batch.originals.map(() => CONTENDED_SCHEDULE_MS));
+    for (const { operationId } of batch.originals) {
+      expect(batch.receipt(operationId)).toMatchObject({
+        operationId,
+        status: "failed",
+        reason: `structured host recovery failed after 12 contended attempts: ${BUSY}`,
+      });
+    }
+    expect(batch.sends).toEqual([]);
+
+    setSystemTime(new Date(startedAt + 600_000));
+    await batch.queue.drain();
+    expect(batch.attempts(startedAt)).toEqual(batch.originals.map(() => CONTENDED_SCHEDULE_MS));
+  } finally {
+    batch.journal.close();
+  }
+});
+
+test("each of more than 128 contended originals is delivered once, as admitted, when contention ends before the cap", async () => {
+  const startedAt = Date.now();
+  setSystemTime(new Date(startedAt));
+  let contended = true;
+  const batch = contendedBatch(BATCH, () => contended);
+  try {
+    const admittedSends = batch.pendingSends();
+    expect(admittedSends).toHaveLength(BATCH);
+
+    /* Two refused attempts, and a pass inside each spacing that tries nothing. */
+    for (const elapsed of [0, 500, 1_000, 2_500]) {
+      setSystemTime(new Date(startedAt + elapsed));
+      await batch.queue.drain();
+    }
+    expect(batch.attempts(startedAt)).toEqual(batch.originals.map(() => [0, 1_000]));
+    for (const { operationId, admitted } of batch.originals) {
+      expect(batch.receipt(operationId)).toMatchObject({
+        operationId,
+        idempotencyKey: admitted.idempotencyKey,
+        conversationId: admitted.conversationId,
+        status: "queued",
+        revision: admitted.revision,
+      });
+    }
+    expect(batch.pendingSends()).toEqual(admittedSends);
+    expect(batch.sends).toEqual([]);
+
+    /* The holder lets go; the next due attempt brings every host back. */
+    contended = false;
+    setSystemTime(new Date(startedAt + 3_000));
+    await batch.queue.drain();
+
+    expect(batch.attempts(startedAt)).toEqual(batch.originals.map(() => [0, 1_000, 3_000]));
+    expect([...batch.sends].sort()).toEqual(batch.originals.map(({ operationId }) => operationId).sort());
+    for (const { operationId, admitted } of batch.originals) {
+      const admittedSend = admittedSends.find((effect) => effect.payload.operationId === operationId)!;
+      expect(batch.ledger.writes.filter((write) => write.id === operationId)).toEqual([
+        expect.objectContaining({ text: admittedSend.payload.text, contentDigest: admittedSend.payload.contentDigest }),
+      ]);
+      expect(batch.receipt(operationId)).toMatchObject({
+        operationId,
+        idempotencyKey: admitted.idempotencyKey,
+        status: "delivered",
+      });
+    }
+
+    setSystemTime(new Date(startedAt + 60_000));
+    await batch.queue.drain();
+    expect(batch.sends).toHaveLength(BATCH);
+    expect(batch.attempts(startedAt)).toEqual(batch.originals.map(() => [0, 1_000, 3_000]));
+  } finally {
+    batch.journal.close();
   }
 });
 

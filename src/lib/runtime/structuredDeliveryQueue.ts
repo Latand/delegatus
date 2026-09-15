@@ -113,8 +113,6 @@ const UNPROJECTED_TERMINAL_LIMIT = 128;
 const CONTENDED_RECOVERY_ATTEMPTS = 12;
 const CONTENDED_RECOVERY_FIRST_SPACING_MS = 1_000;
 const CONTENDED_RECOVERY_MAX_SPACING_MS = 15_000;
-/** Contended operations one executor remembers at once; the oldest goes first. */
-const CONTENDED_RECOVERY_LIMIT = 128;
 const TERMINAL_DELIVERY_STATUSES = new Set([
   "turn-started",
   "steered",
@@ -633,7 +631,10 @@ export class StructuredDeliveryQueue {
   /** Operations whose host recovery contention refused before the successor
       reservation existed (#1716): the attempts made so far and when the next
       one is due. Executor memory, like the first-dispatch evidence: a successor
-      executor starts its own bounded count. */
+      executor starts its own bounded count. The map has no size cap: dropping
+      an entry while its operation is pending would hand that operation a fresh
+      count and an immediate attempt. Each pass drops the entries of operations
+      the journal no longer lists. */
   private readonly contendedRecoveries = new Map<string, { attempts: number; nextAt: number }>();
   /** #1560: injections whose engine write is done and whose canonical evidence
       is still being read, detached from the pass that issued them. */
@@ -719,6 +720,16 @@ export class StructuredDeliveryQueue {
       }
       if (page.length < STRUCTURED_DELIVERY_BATCH_SIZE) break;
       afterEventSeq = nextCursor;
+    }
+    /* #1716: contention history lasts as long as its operation is pending. One
+       the journal no longer lists has settled, whether through recovery or
+       another path such as a discard, a kill or delivery on a host that came
+       back, and its entry goes with it. */
+    if (this.contendedRecoveries.size > 0) {
+      const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+      for (const operationId of this.contendedRecoveries.keys()) {
+        if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
+      }
     }
     if (rawEffects.length === 0) return;
     const grouped = new Map<string, DeliveryEffect[]>();
@@ -1748,11 +1759,7 @@ export class StructuredDeliveryQueue {
       the next one (#1716). */
   private deferContendedRecovery(effect: Pick<DeliveryEffect, "conversationId" | "operationId">, attempts: number): void {
     const spacingMs = Math.min(CONTENDED_RECOVERY_FIRST_SPACING_MS * 2 ** (attempts - 1), CONTENDED_RECOVERY_MAX_SPACING_MS);
-    this.contendedRecoveries.delete(effect.operationId);
     this.contendedRecoveries.set(effect.operationId, { attempts, nextAt: Date.now() + spacingMs });
-    while (this.contendedRecoveries.size > CONTENDED_RECOVERY_LIMIT) {
-      this.contendedRecoveries.delete(this.contendedRecoveries.keys().next().value!);
-    }
     console.error("[structured delivery] host recovery deferred by account mutation contention", {
       conversationId: effect.conversationId,
       operationId: effect.operationId,
