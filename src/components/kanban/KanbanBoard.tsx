@@ -22,9 +22,11 @@ import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 import { cleanTitle } from "@/components/utils";
+import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
 import { HiddenTray } from "./HiddenTray";
+import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
@@ -34,7 +36,7 @@ import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type T
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
-import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderStop, type ReaderView } from "./KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
@@ -104,10 +106,23 @@ export interface KanbanBoardProps {
   focus?: string | null;
   /** A reader opened: the same seen-stamp opening a conversation leaves. */
   onConversationOpened?: (path: string) => void;
-  /** The project's full conversation catalog (the List view). */
-  onOpenCatalog: () => void;
-  /** The scheme board, for surfaces this board does not draw yet. */
-  onOpenOnBoard: () => void;
+  /** Conversations, the project's every conversation: for what no card draws (review decks, collapsed workers)
+      and conversations this board's files do not carry. */
+  onOpenConversations: () => void;
+  /** «+ Agent» in the bar: a draft on a card of its own, a task in the making (K9a). */
+  onNewAgent?: () => void;
+  /** «+ Agent» on a card: a draft in that card, seeded with its task's text. */
+  onAddAgent?: (band: { id: string; task: BoardTask | null; title: string }) => void;
+  /** A draft closed from its pane. */
+  onDraftClose?: (id: string) => void;
+  /** A draft's launch started its conversation. */
+  onDraftSpawned?: (id: string, file: FileEntry) => void;
+  /** Hand a conversation to a new agent: a draft on the card that holds it. */
+  onHandoff?: (file: FileEntry, cardId: string | null) => void;
+  /** Retry a failed launch from its conversation's feed: a draft prefilled from the launch. */
+  onSpawnRetry?: (file: FileEntry) => void;
+  /** Take a conversation off the board (the `hidden` board preference); Hidden lists it with Restore. */
+  onCloseConversation?: (file: FileEntry) => void;
   /** Conversations closed on this project's board (the `hidden` board
       preference); the Hidden tray lists the ones this board carries. */
   closedPaths?: readonly string[];
@@ -147,6 +162,7 @@ const EMPTY_FLOWS: Flow[] = [];
 const EMPTY_PIPELINES: Pipeline[] = [];
 const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
 const NO_READERS: readonly OpenReader[] = [];
+const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
   try {
@@ -217,7 +233,24 @@ function useBands(props: KanbanBoardProps) {
 
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useLocale();
-  const { project, allTasks, pipelines, files, loaded, catalogFailures, selection, onOpenCatalog, onOpenOnBoard, onConversationOpened } = props;
+  const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
+     tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
+     and so is its card. */
+  const [createdTasks, setCreatedTasks] = useState<ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }>>(NO_CREATED);
+  const allTasks = useMemo(() => {
+    const fresh = createdTasks
+      .filter((entry) => entry.basis === storedTasks && entry.task.project === project && !storedTasks.some((stored) => stored.id === entry.task.id))
+      .map((entry) => entry.task);
+    return fresh.length ? [...storedTasks, ...fresh] : storedTasks;
+  }, [createdTasks, storedTasks, project]);
+  useEffect(() => {
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- a newer payload retires what was drawn ahead of it */
+    setCreatedTasks((current) => (current.some((entry) => entry.basis !== storedTasks) ? current.filter((entry) => entry.basis === storedTasks) : current));
+  }, [storedTasks]);
+  const storedTasksRef = useRef(storedTasks);
+  storedTasksRef.current = storedTasks;
+  const [composingTask, setComposingTask] = useState(false);
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -343,7 +376,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* One reader at a time may take the whole window; it is the same reader,
      moved, and goes back into its card when it leaves. */
   const [fullReader, setFullReader] = useState<string | null>(null);
+  /* A conversation no card holds (a review round in a deck, a collapsed worker, an engine's subagent) opens as a
+     reader of its own, in the whole window: the same transcript and composer, for as long as it is open. It is
+     not remembered, nothing is written to the board, and it belongs to the project it was opened in: a board kept
+     mounted across a project switch never shows it over another project. */
+  const [looseReader, setLooseReader] = useState<{ key: string; path: string; project: string } | null>(null);
+  const loose = looseReader?.project === project ? looseReader : null;
+  const looseRef = useRef(loose);
+  looseRef.current = loose;
   const toggleFull = useCallback((key: string) => setFullReader((current) => (current === key ? null : key)), []);
+  /* The window is the loose reader's only place: leaving it, or its project, closes the reader. */
+  useEffect(() => {
+    if (!looseReader) return;
+    if (looseReader.project !== project) {
+      setLooseReader(null);
+      setFullReader((current) => (current === looseReader.key ? null : current));
+    } else if (fullReader !== looseReader.key) {
+      setLooseReader(null);
+    }
+  }, [fullReader, looseReader, project]);
+  /* Going anywhere else on the board leaves the loose reader's window first, so it never stays over the card,
+     reader or pipeline the operator went to. */
+  const leaveLoose = useCallback((keep: string | null) => {
+    const current = looseRef.current;
+    if (!current || current.key === keep) return;
+    setLooseReader(null);
+    setFullReader((full) => (full === current.key ? null : full));
+  }, []);
   /* Escape puts it back, unless the key belongs to a field or an open menu.
      Listened for on the document: the reader is a portal, so its key events
      never pass through the overlay in React's tree. */
@@ -391,6 +450,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* A conversation a pane shows is mounted in that pane, unless it has the window. */
   const sheetSlots = useMemo(() => new Set(sheetPanes.flatMap((pane) => (pane.readerKey && pane.readerKey !== fullReader ? [pane.readerKey] : []))), [sheetPanes, fullReader]);
 
+  /* A reader's owner is rebuilt with the model; while it names the same card, title and stage, the reader keeps
+     the object it had, so a model rebuild does not re-render every open reader. */
+  const ownerCache = useRef(new Map<string, ReaderOwner>());
+  const stableOwner = (key: string, next: ReaderOwner): ReaderOwner => {
+    const previous = ownerCache.current.get(key);
+    if (previous && previous.cardId === next.cardId && previous.cardTitle === next.cardTitle
+      && previous.stage?.pipeline === next.stage?.pipeline && previous.stage?.stage === next.stage?.stage) return previous;
+    ownerCache.current.set(key, next);
+    return next;
+  };
   const readerViews = useMemo<ReaderView[]>(() => {
     const views: ReaderView[] = openReaders.flatMap((reader) => {
       const owner = owners.get(reader.key);
@@ -404,9 +473,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
         folded: reader.folded && fullReader !== reader.key && !inSheet,
         full: fullReader === reader.key,
         inSheet,
-        owner: owner && card ? { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage } : null,
+        owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
       }];
     });
+    if (loose && !views.some((view) => view.readerKey === loose.key)) {
+      const file = filesByIdentity.get(loose.key) ?? filesByPath.get(loose.path) ?? lastSeenFiles.current.get(loose.key);
+      if (file) views.push({ readerKey: loose.key, file, folded: false, full: true, owner: null });
+    }
     /* A pane's conversation no card has open is mounted for as long as the pane shows it. */
     if (sheetSummary) {
       const open = new Set(openReaders.map((reader) => reader.key));
@@ -419,12 +492,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
           folded: false,
           full: fullReader === pane.readerKey,
           inSheet: fullReader !== pane.readerKey,
-          owner: { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } },
+          owner: stableOwner(pane.readerKey, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } }),
         });
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, sheetSlots, sheetSummary, sheetPanes]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, loose, sheetSlots, sheetSummary, sheetPanes]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1084,6 +1157,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
             void navigator.clipboard?.writeText(link).then(() => show(t("kanban.linkCopied", { conversation: name })), () => undefined);
           },
         },
+        ...(props.onHandoff && canHandoff(view.file) ? [{
+          type: "item" as const,
+          label: t("kanban.handoff"),
+          why: t("kanban.handoffWhy"),
+          onSelect: () => props.onHandoff?.(view.file, view.owner?.cardId ?? null),
+        }] : []),
         { type: "sep" },
         {
           type: "item",
@@ -1109,6 +1188,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
             });
           },
         },
+        ...(props.onCloseConversation ? [
+          { type: "sep" as const },
+          {
+            type: "item" as const,
+            label: t("kanban.closeOnBoard"),
+            why: t("kanban.closeOnBoardWhy"),
+            onSelect: () => {
+              const file = view.file;
+              closeReaderFor(key);
+              props.onCloseConversation?.(file);
+              show(t("kanban.closedReceipt", { conversation: name }), props.onRestoreConversation ? { label: t("kanban.undo"), run: () => props.onRestoreConversation?.(file) } : undefined);
+            },
+          },
+        ] : []),
         ...(stop.state === "hidden" ? [] : [
           { type: "sep" as const },
           {
@@ -1293,8 +1386,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Opening what a card holds ───────────────────────────────────────── */
   /* What to bring into view once React has committed: the card, and the
      reader when one was opened. */
-  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean } | null>(null);
-  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false) => {
+  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean; focusSelector?: string } | null>(null);
+  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false, focusSelector?: string) => {
+    leaveLoose(readerKey);
     const card = cardsByIdRef.current.get(cardId);
     if (card) {
       setCollapsed((current) => {
@@ -1306,9 +1400,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (query && !cardMatchesShown(modelRef.current, card)) setQuery("");
       if (modeRef.current === "tabs") setTab(card.status);
     }
-    pendingReveal.current = { cardId, readerKey, focusReader };
+    pendingReveal.current = { cardId, readerKey, focusReader, focusSelector };
     setRevealTick((tick) => tick + 1);
-  }, [query]);
+  }, [query, leaveLoose]);
   /* What each attention request's handoff changed about a reader, so that
      request's Return undoes exactly that: close a reader it opened, fold again
      one it unfolded. A reader that was already open and expanded is not the
@@ -1321,12 +1415,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean } = {}) => {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
-    memory.update((readers) => openReader(readers, key, file.path));
+    const owner = ownersRef.current.get(key);
+    if (owner) memory.update((readers) => openReader(readers, key, file.path));
     setFocusedReader(key);
     onConversationOpened?.(file.path);
-    const owner = ownersRef.current.get(key);
+    /* Revealing leaves another loose reader's window, so a new one takes the window after it. */
     revealCard(owner?.cardId ?? "", key, options.focus !== false);
-  }, [memory, onConversationOpened, revealCard, disown]);
+    if (!owner) {
+      setLooseReader({ key, path: file.path, project });
+      setFullReader(key);
+    }
+  }, [memory, onConversationOpened, revealCard, disown, project]);
   const [revealTick, setRevealTick] = useState(0);
   useLayoutEffect(() => {
     const wanted = pendingReveal.current;
@@ -1339,9 +1438,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (!target) return;
     target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     if (slot && wanted.focusReader) slot.querySelector<HTMLElement>("[data-kanban-reader]")?.focus({ preventScroll: true });
+    if (wanted.focusSelector) target.querySelector<HTMLElement>(wanted.focusSelector)?.focus({ preventScroll: true });
   }, [revealTick, placement]);
   const ownersRef = useRef(owners);
   ownersRef.current = owners;
+  const anchorsRef = useRef(anchors);
+  anchorsRef.current = anchors;
   const modelRef = useRef(model);
   modelRef.current = model;
   const modeRef = useRef(mode);
@@ -1520,6 +1622,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     disown(key);
     const cardId = ownersRef.current.get(key)?.cardId;
     setFullReader((current) => (current === key ? null : current));
+    setLooseReader((current) => (current?.key === key ? null : current));
     memory.update((readers) => closeReader(readers, key));
     if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
   }, [memory, disown]);
@@ -1534,11 +1637,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (cardsByIdRef.current.has(cardId)) revealCard(cardId);
       return;
     }
+    /* A pipeline link: the card that holds the pipeline, revealed and focused. */
+    if (focusTarget.startsWith("group::pipeline::")) {
+      const cardId = anchorsRef.current.get(focusTarget);
+      if (cardId) {
+        revealCard(cardId);
+        focusCard(cardId);
+      }
+      return;
+    }
+    if (focusTarget.startsWith("draft::")) {
+      const id = focusTarget.slice("draft::".length);
+      const holder = [...cardsByIdRef.current.values()].find((card) => card.drafts.includes(id));
+      if (holder) revealCard(holder.id, null, false, `[data-kanban-draft="${cssEscape(id)}"] textarea`);
+      return;
+    }
     const file = filesByPath.get(focusTarget);
     if (!file) return;
-    if (ownersRef.current.has(conversationIdentity(file))) openReaderFor(file);
-    /* A conversation no card holds is shown where the Viewer can show it. */
-    else onOpenOnBoard();
+    /* On its card, or, for a conversation no card holds, as a reader of its own in the window. */
+    openReaderFor(file);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
   }, [focusTarget]);
 
@@ -1637,15 +1754,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [presenceSignature, selection, focusedPath]);
 
   /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
-  const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project), [model, anchors, project]);
+  /* Conversations no card holds resolve too: a handoff opens them as a reader of their own. */
+  const looseAnchors = useMemo(() => new Set(files.filter((file) => !owners.has(conversationIdentity(file))).map((file) => file.path)), [files, owners]);
+  const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project, looseAnchors), [model, anchors, project, looseAnchors]);
   useEffect(() => focusHandoffBus.setBoard({
     project,
     index: focusIndex,
     moveTo: (destination) => {
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
       const cardId = anchor ? anchors.get(anchor) : undefined;
-      if (!cardId) return false;
-      const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
+      const loosePath = !cardId ? destination.anchorKeys.find((key) => looseAnchors.has(key)) ?? (destination.path && looseAnchors.has(destination.path) ? destination.path : undefined) : undefined;
+      if (!cardId && !loosePath) return false;
+      /* A conversation no card holds has one surface, its reader, for `show` as for `open`. */
+      const file = loosePath ? filesByPath.get(loosePath) : destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file) {
         const key = conversationIdentity(file);
         const requestId = destination.requestId ?? "";
@@ -1656,7 +1777,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           handoffOwned.current.set(requestId, { key, restore: before ? "fold" : "close" });
         }
         openReaderFor(file, { focus: false, handoff: true });
-      } else {
+      } else if (cardId) {
         revealCard(cardId);
       }
       return true;
@@ -1665,6 +1786,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     arrival: (destination) => {
       const root = rootRef.current;
       if (!root) return null;
+      const loosePath = destination.anchorKeys.find((key) => looseAnchors.has(key) && !anchors.has(key)) ?? (destination.path && looseAnchors.has(destination.path) ? destination.path : undefined);
+      if (loosePath) {
+        const looseFile = filesByPath.get(loosePath);
+        return looseFile && readerArrived(root, placement.slotOf(conversationIdentity(looseFile))) ? (destination.intent === "open" ? "reader" : "visible") : null;
+      }
+      /* A loose reader's window covers the board: nothing under it has arrived, and a resumed handoff moves again. */
+      if (looseRef.current) return null;
       const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file && readerArrived(root, placement.slotOf(conversationIdentity(file)))) return "reader";
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
@@ -1681,7 +1809,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         memory.update((readers) => closeReader(readers, owned.key));
       }
     },
-  }), [project, focusIndex, anchors, filesByPath, openReaderFor, revealCard, memory, placement]);
+  }), [project, focusIndex, anchors, looseAnchors, filesByPath, openReaderFor, revealCard, memory, placement]);
 
   /* ── What the board is not drawing: hidden groups, empty tasks off the
      board, and conversations closed on it ─────────────────────────────── */
@@ -1742,9 +1870,48 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const card = cardsById.get(view.owner.cardId);
     if (card && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
   }
+  /* So does one holding an agent draft, and Inbox while `+ Task` composes in it. */
+  for (const card of cardsById.values()) {
+    if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
+  }
+  if (composingTask) readingStatuses.add("inbox");
   const readingStyle = (mode === "wide" || mode === "narrow") && readingStatuses.size
     ? ({ "--c-assigned": "minmax(440px, 1fr)", ...Object.fromEntries([...readingStatuses].map((status) => [`--c-${status}`, "minmax(420px, 460px)"])) } as CSSProperties)
     : undefined;
+
+  /* ── K9a: + Task, + Agent and the drafts cards hold ─────────────────── */
+  const openNewTask = () => {
+    setComposingTask(true);
+    if (mode === "tabs") setTab("inbox");
+    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-kanban-new-task]")?.scrollIntoView({ block: "nearest", behavior: "auto" }));
+  };
+  const closeNewTask = useCallback(() => {
+    setComposingTask(false);
+    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-new-task]")?.focus({ preventScroll: true }));
+  }, []);
+  const taskCreated = useCallback((task: BoardTask) => {
+    setComposingTask(false);
+    setCreatedTasks((current) => [...current.filter((entry) => entry.task.id !== task.id), { task, basis: storedTasksRef.current }]);
+    show(t("kanban.taskCreated", { title: task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled") }));
+    revealCard(`task:${task.id}`, null, false, ".title-trigger");
+  }, [show, t, revealCard]);
+  const addAgentRef = useRef(props.onAddAgent);
+  addAgentRef.current = props.onAddAgent;
+  const addAgentToCard = useCallback((card: KanbanCardModel) => addAgentRef.current?.({ id: card.id, task: card.task, title: card.title }), []);
+  /* The dashboard hands a fresh callback on each of its renders; readers get one that stays the same. */
+  const spawnRetryRef = useRef(props.onSpawnRetry);
+  spawnRetryRef.current = props.onSpawnRetry;
+  const spawnRetry = useCallback((file: FileEntry) => spawnRetryRef.current?.(file), []);
+  const draftCloseRef = useRef(props.onDraftClose);
+  draftCloseRef.current = props.onDraftClose;
+  const draftSpawnedRef = useRef(props.onDraftSpawned);
+  draftSpawnedRef.current = props.onDraftSpawned;
+  const draftActions = useMemo<KanbanDraftActions>(() => ({
+    project,
+    files,
+    onClose: (id) => draftCloseRef.current?.(id),
+    onSpawned: (id, file) => draftSpawnedRef.current?.(id, file),
+  }), [project, files]);
 
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
@@ -1766,6 +1933,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}
       placement={placement}
+      newTask={status === "inbox" && composingTask ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -1776,8 +1944,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenMember: openReaderFor,
         onOpenStage: openStage,
         onFocusCard: focusCard,
-        onOpenCatalog,
-        onOpenOnBoard,
+        onOpenConversations,
         onStartEdit: startEdit,
         onEditDraft: editDraft,
         onCommitEdit: commitEdit,
@@ -1797,6 +1964,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
+        onAddAgent: props.onAddAgent ? addAgentToCard : undefined,
       }}
     />
   ));
@@ -1824,6 +1992,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
+    <KanbanDraftContext.Provider value={draftActions}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
       <header className="bar">
         <span className="summary">
@@ -1866,6 +2035,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
           </button>
           {props.viewSwitch ? <span className="view-switch">{props.viewSwitch}</span> : null}
         </div>
+        <div className="bar-create">
+          <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
+            <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
+          </button>
+          {props.onNewAgent ? (
+            <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
+              <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
+            </button>
+          ) : null}
+        </div>
       </header>
 
       <div className="kb-page">
@@ -1873,45 +2052,51 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
       {!loaded ? (
         <div className="board-loading" role="status">{t("kanban.loading")}</div>
-      ) : mode === "tabs" ? (
-        <div className="board tabs" data-board="" data-mode={mode}>
-          <div className="tabs-nav" role="tablist" aria-label={t("kanban.columns")}>
-            {KANBAN_STATUSES.map((status) => (
-              <button
-                key={status}
-                type="button"
-                role="tab"
-                aria-selected={tab === status}
-                aria-controls={`kb-col-${status}`}
-                data-tab={status}
-                onClick={() => setTab(status)}
-              >
-                {statusLabel(t, status)}
-                <span className="n num">{model.columns[status].cards.length}</span>
-              </button>
-            ))}
-          </div>
-          {columnsView}
-        </div>
-      ) : mode === "scroll" ? (
-        <div className="scroll-wrap">
-          <div className="tabs-nav jump" aria-label={t("kanban.columns")}>
-            {KANBAN_STATUSES.map((status) => (
-              <button
-                key={status}
-                type="button"
-                aria-label={t("kanban.scrollTo", { column: statusLabel(t, status) })}
-                onClick={() => rootRef.current?.querySelector(`.column[data-status="${status}"]`)?.scrollIntoView({ inline: "start", block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" })}
-              >
-                {statusLabel(t, status)}
-                <span className="n num">{model.columns[status].cards.length}</span>
-              </button>
-            ))}
-          </div>
-          <div className="board scroll" data-board="" data-mode={mode}>{columnsView}</div>
-        </div>
       ) : (
-        <div className={`board${mode === "narrow" ? " narrow" : ""}${readingStatuses.size ? " reading" : ""}`} data-board="" data-mode={mode} style={readingStyle}>{columnsView}</div>
+        /* One tree for every width: the navigation above the columns changes with the mode and the columns
+           stay mounted, so crossing a breakpoint keeps every card, its draft panes and their launches. */
+        <div className="scroll-wrap" data-board-wrap={mode}>
+          {mode === "tabs" ? (
+            <div className="tabs-nav" role="tablist" aria-label={t("kanban.columns")}>
+              {KANBAN_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === status}
+                  aria-controls={`kb-col-${status}`}
+                  data-tab={status}
+                  onClick={() => setTab(status)}
+                >
+                  {statusLabel(t, status)}
+                  <span className="n num">{model.columns[status].cards.length}</span>
+                </button>
+              ))}
+            </div>
+          ) : mode === "scroll" ? (
+            <div className="tabs-nav jump" aria-label={t("kanban.columns")}>
+              {KANBAN_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  aria-label={t("kanban.scrollTo", { column: statusLabel(t, status) })}
+                  onClick={() => rootRef.current?.querySelector(`.column[data-status="${status}"]`)?.scrollIntoView({ inline: "start", block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" })}
+                >
+                  {statusLabel(t, status)}
+                  <span className="n num">{model.columns[status].cards.length}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div
+            className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}${(mode === "wide" || mode === "narrow") && readingStatuses.size ? " reading" : ""}`}
+            data-board=""
+            data-mode={mode}
+            style={readingStyle}
+          >
+            {columnsView}
+          </div>
+        </div>
       )}
       </div>
       </div>
@@ -1930,6 +2115,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onClose={closeReaderFor}
         onFull={toggleFull}
         onMenu={openReaderMenu}
+        onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
       />
 
       {openMenu && menu.open ? (
@@ -1987,20 +2173,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
     </div>
+    </KanbanDraftContext.Provider>
     </AccountChoiceContext.Provider>
   );
 }
 
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
-  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
+  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
+  /** `+ Task`'s inline card, drawn first in Inbox. */
+  newTask: ReactNode;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
   failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
@@ -2044,7 +2233,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
   const active = status === "assigned" ? shown.filter((card) => !card.idle) : shown;
   const idle = status === "assigned" ? shown.filter((card) => card.idle) : [];
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
-  const empty = shown.length === 0 && unlinked.length === 0;
+  const empty = shown.length === 0 && unlinked.length === 0 && !newTask;
   return (
     <section
       className={`column${mode === "tabs" && activeTab === status ? " active" : ""}${reading ? " reading" : ""}`}
@@ -2071,6 +2260,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
         </button>
       </div>
       <div className="col-body" data-status={status}>
+        {newTask}
         {empty ? (
           <div className="empty">
             <strong>{filtering ? t("kanban.noMatch") : t(`kanban.empty.${status}.title`)}</strong>

@@ -348,25 +348,95 @@ browserTest("#1695 kanban board: the prototype's columns and cards over the real
       await links.context.close();
     }
 
-    /* The tabs: from the scheme face, Kanban writes the face and mounts the
-       board; Board takes it back. */
+    /* The views (#1695): a board stored on the scheme face opens on the Board, the desktop offers only Board and
+       Conversations, Conversations lists the project's conversations and writes the list view, and Board comes
+       back with the kanban face. Nothing stored is rewritten just by opening. */
     const faces = await openFixture(browser, `${base}?face=scheme`, VIEWPORTS[1], "light");
     try {
-      await faces.page.waitForSelector('[data-view-tab="kanban"]', { state: "attached", timeout: 20_000 });
-      const kanbanBefore = Boolean(await faces.page.$("[data-kanban-board]"));
+      await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+      const tabs = await faces.page.$$eval("[data-view-tab]", (nodes) => nodes.map((node) => node.getAttribute("data-view-tab")));
+      const schemeShown = Boolean(await faces.page.$("[data-scheme-band], [data-scheme-ui]"));
+      const openedMutations = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations);
+      /* Opening reads the stored view: no presentation is written. Membership convergence (`reconcile-roots`) runs
+         on every open, whatever the view, and is recorded as it is. */
+      const openedWrites = openedMutations.filter((mutation) => mutation.kind === "set-presentation").length;
+      await faces.page.click('[data-kanban-board] [data-view-tab="list"]');
+      await faces.page.waitForSelector("[data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
+      const listed = await faces.page.$$eval("[data-desktop-conversations-row]", (nodes) => nodes.length);
+      const conversationsTail = await faces.page.$eval("[data-desktop-conversations-tail]", (node) => node.textContent ?? "");
+      const kanbanOnList = Boolean(await faces.page.$("[data-kanban-board]"));
+      const toList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
+      await faces.page.screenshot({ path: path.join(OUT, "production-conversations-light.png") });
       await faces.page.click('[data-view-tab="kanban"]');
       await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
-      const written = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-      await faces.page.click('[data-kanban-board] [data-view-tab="scheme"]');
-      await faces.page.waitForFunction(() => !document.querySelector("[data-kanban-board]"), undefined, { timeout: 10_000 });
       const back = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-      if (kanbanBefore) failures.push("tabs: the kanban board was mounted on the scheme face");
-      if (!written.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Kanban wrote ${JSON.stringify(written)}`);
-      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "scheme", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
-      flows.tabs = { kanbanBefore, written, back };
+      if (JSON.stringify(tabs) !== JSON.stringify(["kanban", "list"])) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
+      if (schemeShown) failures.push("tabs: the scheme was drawn on the desktop");
+      if (openedWrites !== 0) failures.push(`tabs: opening a board stored on the scheme face wrote a presentation: ${JSON.stringify(openedMutations)}`);
+      if (kanbanOnList || listed === 0) failures.push(`tabs: Conversations listed ${listed} rows with the kanban ${kanbanOnList ? "still" : "not"} mounted`);
+      if (!toList.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", viewMode: "list" }))) failures.push(`tabs: Conversations wrote ${JSON.stringify(toList)}`);
+      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
+      flows.tabs = { tabs, schemeShown, openedWrites, openedMutationKinds: openedMutations.map((mutation) => mutation.kind), listed, conversationsTail, toList, back };
+      await faces.page.screenshot({ path: path.join(OUT, "production-default-board-light.png") });
       if (faces.pageErrors.length) failures.push(`tabs: page errors ${faces.pageErrors.join(" | ")}`);
     } finally {
       await faces.context.close();
+    }
+
+    /* + Task and + Agent (#1695 K9a): the new task is an inline card at the top of Inbox and lands there, the
+       bar's + Agent opens a draft on a card of its own, and a card's + Agent opens one on that card. Each draft
+       pane stays inside its card at reading width, and nothing pushes the page sideways. */
+    const create = await openFixture(browser, base, VIEWPORTS[1], "light");
+    try {
+      const { page } = create;
+      await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+      await page.click("[data-new-task]");
+      await page.waitForSelector("[data-kanban-new-task] textarea", { timeout: 10_000 });
+      const composerFirst = await page.$eval("[data-kanban-new-task]", (node) => ({
+        column: node.closest<HTMLElement>(".column")?.dataset.status ?? null,
+        first: node.parentElement?.firstElementChild === node,
+        focused: node.contains(document.activeElement),
+        width: Math.round(node.getBoundingClientRect().width),
+      }));
+      await page.screenshot({ path: path.join(OUT, "k9a-new-task-light.png") });
+      await page.fill("[data-kanban-new-task] textarea", "Write the migration guide");
+      await page.$eval("[data-kanban-new-task]", (node) => (node as HTMLFormElement).requestSubmit());
+      await page.waitForSelector('.column[data-status="inbox"] .card[data-id="task:created-1"]', { state: "attached", timeout: 10_000 });
+      /* The request id is recorded as present, never as its value: evidence carries no id-shaped literal. */
+      const creates = await page.evaluate(() => (window as unknown as { evidence: { taskCreates: Array<Record<string, unknown>> } }).evidence.taskCreates
+        .map(({ clientRequestId, ...rest }): Record<string, unknown> => ({ ...rest, clientRequestId: typeof clientRequestId === "string" && clientRequestId.length > 0 ? "present" : clientRequestId })));
+
+      await page.click("[data-new-agent]");
+      await page.waitForSelector('.card[data-id^="draft:"] [data-kanban-draft] section', { timeout: 10_000 });
+      const barDraft = await page.$eval('.card[data-id^="draft:"]', (card) => {
+        const pane = card.querySelector<HTMLElement>("[data-kanban-draft]")!.getBoundingClientRect();
+        const box = card.getBoundingClientRect();
+        return { column: card.closest<HTMLElement>(".column")?.dataset.status ?? null, paneWidth: Math.round(pane.width), inside: pane.left >= box.left - 1 && pane.right <= box.right + 1 };
+      });
+      await page.screenshot({ path: path.join(OUT, "k9a-agent-draft-light.png") });
+
+      const cardId = "task:t-links";
+      await page.click(`[data-add-agent="${cardId}"]`);
+      await page.waitForSelector(`.card[data-id="${cardId}"] [data-kanban-draft] section`, { timeout: 10_000 });
+      const cardDraft = await page.$eval(`.card[data-id="${cardId}"]`, (card) => {
+        const pane = card.querySelector<HTMLElement>("[data-kanban-draft]")!.getBoundingClientRect();
+        const box = card.getBoundingClientRect();
+        const prompt = card.querySelector<HTMLTextAreaElement>('[data-kanban-draft] textarea[aria-label="First prompt text"]');
+        return { paneWidth: Math.round(pane.width), inside: pane.left >= box.left - 1 && pane.right <= box.right + 1, prompt: prompt?.value ?? null };
+      });
+      const pageOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      await page.$eval(`.card[data-id="${cardId}"]`, (node) => node.scrollIntoView({ block: "center" }));
+      await page.screenshot({ path: path.join(OUT, "k9a-card-draft-light.png") });
+
+      if (composerFirst.column !== "inbox" || !composerFirst.first || !composerFirst.focused) failures.push(`k9a: the new task card ${JSON.stringify(composerFirst)}`);
+      if (creates.length !== 1 || creates[0]!.placement !== "unplaced" || creates[0]!.clientRequestId !== "present") failures.push(`k9a: + Task wrote ${JSON.stringify(creates)}`);
+      if (barDraft.column !== "inbox" || !barDraft.inside || barDraft.paneWidth > 780) failures.push(`k9a: the bar's draft ${JSON.stringify(barDraft)}`);
+      if (!cardDraft.inside || cardDraft.paneWidth > 780 || cardDraft.prompt !== "Repair old links in the release notes") failures.push(`k9a: the card's draft ${JSON.stringify(cardDraft)}`);
+      if (pageOverflow > 0) failures.push(`k9a: the page scrolls sideways by ${pageOverflow} px`);
+      if (create.pageErrors.length) failures.push(`k9a: page errors ${create.pageErrors.join(" | ")}`);
+      flows.k9a = { composerFirst, creates, barDraft, cardDraft, pageOverflow };
+    } finally {
+      await create.context.close();
     }
 
     /* The phone keeps its own board: the kanban never mounts there. */

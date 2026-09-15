@@ -12,6 +12,7 @@ import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit } from "./CardInlineText";
+import { CardDrafts } from "./KanbanDrafts";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
 import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
@@ -132,8 +133,7 @@ export interface KanbanCardProps {
   onOpenMember: (file: FileEntry) => void;
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage, cardId: string) => void;
   onFocusCard: (cardId: string) => void;
-  onOpenCatalog: () => void;
-  onOpenOnBoard: () => void;
+  onOpenConversations: () => void;
   /** The title or description being edited on this card, with its draft. */
   editing: { field: "title" | "description"; draft: string } | null;
   /** A save the server refused: the draft is kept for Retry. */
@@ -169,6 +169,8 @@ export interface KanbanCardProps {
   onStagePanelFold: (panelKey: string, folded: boolean) => void;
   onStagePanelClose: (panelKey: string) => void;
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
+  /** «+ Agent» in the footer: a draft on this card, seeded with the task's text (K9a). */
+  onAddAgent?: (card: KanbanCardModel) => void;
 }
 
 function ageLabel(t: TFunction, updatedAtMs: number, nowMs: number): string {
@@ -193,7 +195,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const readerKeys = props.readerKeys ? props.readerKeys.split("\n") : [];
   const panels = parsePanels(props.stagePanels);
   const acting = parseActing(props.acting);
-  const reading = !collapsed && (readerKeys.length > 0 || panels.length > 0);
+  const reading = !collapsed && (readerKeys.length > 0 || panels.length > 0 || card.drafts.length > 0);
   const tileKeys = new Set(tiles.map((member) => conversationIdentity(member.file)));
   /* A stage's reader opens under the card's pipeline; a tile's reader takes
      the tile's place. */
@@ -424,6 +426,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       ) : null}
 
+      {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
+
       {!collapsed && card.past.length ? (
         <PastAttempts
           rows={card.past}
@@ -441,12 +445,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             </button>
           ))}
           {card.notLoaded ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenCatalog}>
+            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.notLoaded", { count: card.notLoaded })}
             </button>
           ) : null}
           {card.otherSurfaces ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenOnBoard}>
+            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.otherSurfaces", { count: card.otherSurfaces })}
             </button>
           ) : null}
@@ -467,6 +471,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </button>
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           <span className="spacer" />
+          {props.onAddAgent ? (
+            <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
+              <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="foot">

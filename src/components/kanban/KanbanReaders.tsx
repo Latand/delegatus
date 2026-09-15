@@ -188,6 +188,8 @@ interface ReaderProps extends ReaderView {
   onClose: (key: string) => void;
   onFull: (key: string) => void;
   onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
+  /** A failed launch in the conversation's feed offers its retry (K9a). */
+  onSpawnRetry?: (file: FileEntry) => void;
 }
 
 /** The host control the reader's actions menu offers, as the capability
@@ -200,7 +202,7 @@ export interface ReaderStop {
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -219,6 +221,18 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
       {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
+      {/* Supersedence lineage (#383), as the pane's own header carries it: the retired predecessor's history is one
+          click away, and the Viewer opens the `#c=` link in place. */}
+      {file.continues ? (
+        <a
+          href={"#c=" + encodeURIComponent(file.continues.conversationId)}
+          data-continues-chip=""
+          className="ch-continues"
+          title={t("lineage.continuesTitle", { round: file.continues.round })}
+        >
+          {t("lineage.continues", { round: file.continues.round })}
+        </a>
+      ) : null}
     </>
   );
   const menuButton = (
@@ -241,6 +255,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         file={file}
         tasks={[]}
         isRoot={false}
+        onSpawnRetry={onSpawnRetry}
         chrome={{
           header: (
             <div className="conv-head">
@@ -335,6 +350,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       file={file}
       tasks={[]}
       isRoot={false}
+      onSpawnRetry={onSpawnRetry}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}`,

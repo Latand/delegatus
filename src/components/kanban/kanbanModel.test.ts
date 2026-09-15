@@ -295,3 +295,25 @@ test("a hidden group leaves its column for the hidden list, a resurfaced one com
   /* A hidden group's working agents still count in the header; its decision does not. */
   expect(model.totals.onBoard).toBe(4);
 });
+
+test("an agent draft is the card's own: a band-local draft on its task, any other draft on a card of its own, and neither is idle or sent to Conversations", () => {
+  const tasks = [task("t1", "assigned")];
+  const base = layout([]);
+  (base as unknown as { drafts: unknown[] }).drafts = [
+    { key: "draft::draft-on-task", id: "draft-on-task", x: 0, y: 0, w: 600, h: 400 },
+    { key: "draft::draft-alone", id: "draft-alone", x: 648, y: 0, w: 600, h: 400 },
+  ];
+  const projection = projectTaskWorkflows([...tasks], [], [], []);
+  const bands = buildTaskBands(base, { tasks, projection, draftBands: new Map([["draft-on-task", "task:t1"]]), untitled: "Untitled task" });
+  const result = buildKanbanModel({ bands, tasks, pipelines: [], projection, now: NOW });
+
+  const onTask = result.columns.assigned.cards.find((card) => card.id === "task:t1")!;
+  expect(onTask.drafts).toEqual(["draft-on-task"]);
+  expect(onTask.otherSurfaces).toBe(0);
+  expect(onTask.idle).toBe(false);
+
+  const alone = result.unlinked.find((card) => card.drafts.includes("draft-alone"))!;
+  expect(alone.origin).toBe("draft");
+  expect(alone.otherSurfaces).toBe(0);
+  expect(alone.idle).toBe(false);
+});

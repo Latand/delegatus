@@ -73,8 +73,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
       loaded
       catalogFailures={0}
       selection={new Set()}
-      onOpenCatalog={() => {}}
-      onOpenOnBoard={() => {}}
+      onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={ports}
     />,

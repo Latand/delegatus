@@ -86,7 +86,11 @@ export function cardAnchors(cards: readonly KanbanCard[], owners: ReadonlyMap<st
   return anchors;
 }
 
-export function kanbanFocusIndex(model: KanbanModel, anchors: ReadonlyMap<string, string>, project: string): FocusFrameIndex {
+/** Where a conversation no card holds lands: its own reader, in the window. */
+const LOOSE_READER_RECT: FocusRect = { x: -1000, y: 0, w: 600, h: 180 };
+
+/** `loose`: the paths of the board's conversations no card holds, which a handoff opens as a reader of their own. */
+export function kanbanFocusIndex(model: KanbanModel, anchors: ReadonlyMap<string, string>, project: string, loose: ReadonlySet<string> = new Set()): FocusFrameIndex {
   const place = new Map<string, FocusRect>();
   KANBAN_STATUSES.forEach((status, column) => {
     model.columns[status].cards.forEach((card, row) => place.set(card.id, { x: column * 1000, y: row * 200, w: 600, h: 180 }));
@@ -96,7 +100,8 @@ export function kanbanFocusIndex(model: KanbanModel, anchors: ReadonlyMap<string
   });
   const rectOf = (key: string) => {
     const cardId = anchors.get(key);
-    return cardId ? place.get(cardId) ?? null : null;
+    if (cardId) return place.get(cardId) ?? null;
+    return loose.has(key) ? LOOSE_READER_RECT : null;
   };
   return {
     project,

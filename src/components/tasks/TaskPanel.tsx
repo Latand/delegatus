@@ -1,11 +1,10 @@
 "use client";
 
 import { Crown, EyeOff, MapPin, Rows3 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Link2, X } from "@/components/icons";
 import { activityDot, cleanTitle, fmtAge } from "@/components/utils";
-import { useTaskDraft } from "@/hooks/useTaskDraft";
 import { projectDisplayName } from "@/lib/displayNames";
 import { getLocale, useLocale } from "@/lib/i18n";
 import { taskMembershipInScope, taskShowsOnBoard, type BoardConversationKeys } from "@/lib/tasks/boardVisibility";
@@ -15,10 +14,11 @@ import type { FileEntry } from "@/lib/types";
 
 import { type FavoriteRow } from "@/components/favorites/favoriteRows";
 
-import { createTask, updateTask } from "./taskApi";
+import { updateTask } from "./taskApi";
 import { pushTaskToast } from "./taskToast";
 import { TaskComposer } from "./TaskComposer";
 import { TASK_TONES, taskTitle } from "./taskModel";
+import { useTaskCreateDraft } from "./useTaskCreateDraft";
 
 export type { FavoriteRow };
 
@@ -95,44 +95,7 @@ function panelOrder(a: BoardTask, b: BoardTask): number {
     position); it shows in the list at once and can be placed later. */
 function PanelNewTask({ project, onDone }: { project: string; onDone: () => void }) {
   const { t } = useLocale();
-  /* A ref (updated in an effect) bridges the composer's `submit`, needed at
-     construction, to the later `save` without a forward reference. */
-  const saveRef = useRef<(text?: string) => void | Promise<void>>(() => {});
-  const draft = useTaskDraft(project, (overrideText) => saveRef.current(overrideText));
-  const { composer } = draft;
-
-  const save = async (overrideText?: string) => {
-    const text = (overrideText ?? composer.textRef.current).trim();
-    if (composer.busy || composer.voiceSending) return;
-    if (!text) {
-      composer.setStatus({ kind: "err", text: t("tasks.composerNeedsText") });
-      return;
-    }
-    composer.setBusy(true);
-    composer.setStatus(null);
-    try {
-      const created = await createTask({
-        project,
-        text,
-        placement: "unplaced",
-        dueAt: draft.dueAt,
-        dueTz: draft.dueTz,
-        attachments: draft.stagedAttachments(),
-        clientRequestId: draft.getRequestId(),
-      });
-      if ("error" in created) {
-        composer.setStatus({ kind: "err", text: created.error });
-        return;
-      }
-      draft.reset();
-      onDone();
-    } finally {
-      composer.setBusy(false);
-    }
-  };
-  useEffect(() => {
-    saveRef.current = save;
-  });
+  const draft = useTaskCreateDraft(project, { placement: "unplaced" }, () => onDone());
 
   return (
     <form

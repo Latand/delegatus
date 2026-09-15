@@ -40,6 +40,8 @@ const EDITING = SCENARIO === "editing";
 const ACCOUNTS = SCENARIO === "accounts";
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
+/* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
+const LOOSE = SCENARIO === "loose";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -139,6 +141,7 @@ const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rewor
 const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
 /* K5b: the conversation the release-notes Review gets when it starts during a save. */
 const searchRevFirst = STAGES ? add(conversation("search-rev-1", "Round 2 approved", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
+const exportReview = LOOSE ? add(conversation("export-review", "Reviewer: two presets share a name", { mtime: now - 12 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
 const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both anchors against the published notes", working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading the published notes" } }))) : null;
 
 const pipelines: Pipeline[] = [
@@ -278,7 +281,7 @@ const flows = PIPELINES ? [
   reviewFlow("flow-upload-review-api", uploadApi, uploadRevApi, ["REQUEST_CHANGES", "APPROVE"], 5 * 60 * MIN),
   reviewFlow("flow-compact-review", compactBuild, compactRev, ["APPROVE"], 2 * 24 * 60 * MIN),
   reviewFlow("flow-rounds-review", roundsBuild!, roundsReview!, ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 3 * 60 * MIN),
-] : [];
+] : LOOSE ? [reviewFlow("flow-export-review", exportImpl, exportReview!, ["APPROVE"], 30 * MIN)] : [];
 
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
@@ -397,6 +400,8 @@ const evidence = {
   taskAnswerDelayMs: 400,
   /* When each task write reached the fixture and when it was answered. */
   taskWrites: [] as Array<{ id: string; startedAt: number; answeredAt: number }>,
+  /* Tasks created from the board's «+ Task» (K9a), as the route received them. */
+  taskCreates: [] as Array<Record<string, unknown>>,
   /* An agent renames a task: the new title arrives on the next task read. */
   agentWritesTitle(id: string, title: string) {
     const index = tasks.findIndex((entry) => entry.id === id);
@@ -571,6 +576,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ ok: true });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
+  if (url.pathname === "/api/tasks" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    evidence.taskCreates.push(body);
+    const at = new Date().toISOString();
+    const created = { id: `created-${evidence.taskCreates.length}`, project: PROJECT, text: String(body.text), status: "inbox", placement: body.placement, assignments: [], createdAt: at, updatedAt: at, revision: REV(revision++) } as BoardTask;
+    tasks.push(created);
+    return json({ ok: true, task: created });
+  }
+  /* A draft pane's directory suggestions (K9a): the fixture's one checkout. */
+  if (url.pathname === "/api/spawn" && method === "GET") return json({ dirs: ["/repo"], cwd: null });
   if (url.pathname.startsWith("/api/tasks/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;

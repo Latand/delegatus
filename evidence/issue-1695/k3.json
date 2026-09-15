@@ -237,7 +237,7 @@
           "conversation_orchestrator": 1
         },
         "pageOverflowX": 0,
-        "boardFrameHeight": 442,
+        "boardFrameHeight": 440,
         "innerHeight": 720,
         "boardWidth": 452
       },
@@ -481,7 +481,7 @@
           "conversation_orchestrator": 1
         },
         "pageOverflowX": 0,
-        "boardFrameHeight": 442,
+        "boardFrameHeight": 440,
         "innerHeight": 720,
         "boardWidth": 452
       },
@@ -588,8 +588,8 @@
     },
     "rerank": {
       "scrolled": {
-        "top": 1632,
-        "room": 1892
+        "top": 1630,
+        "room": 1890
       },
       "beforeRank": [
         "task:t-links",
@@ -610,10 +610,10 @@
         "task:t-disk"
       ],
       "kept": {
-        "top": 1632,
+        "top": 1630,
         "sameCard": true
       },
-      "settledTop": 1632
+      "settledTop": 1630
     },
     "orchestratorCard": {
       "card": "lineage:conversation_orchestrator",
@@ -627,8 +627,10 @@
       "menuItems": [
         "Open as a full pane",
         "Copy conversation link",
+        "Hand off to a new agentA draft opens on this card in the conversation's directory; nothing starts until you launch it",
         "Link to another task…Nothing is sent to the agent",
         "Unlink from this taskNothing stops. With no other task it gets an untitled task of its own",
+        "Remove from the boardThe agent keeps running and its history stays; Hidden lists it with Restore",
         "Stop host · PID 4401Stops the agent's process; the conversation and its card stay"
       ],
       "stopConfirm": {
@@ -655,7 +657,7 @@
         "conversation_orchestrator": 1
       },
       "pageOverflowX": 0,
-      "boardFrameHeight": 442,
+      "boardFrameHeight": 440,
       "innerHeight": 720,
       "boardWidth": 392
     }
