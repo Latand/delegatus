@@ -203,7 +203,8 @@ test("a structured switch queued behind a turn is reported for every page by the
   /* A reconfigure that keeps the account, or names the one it runs on, is no switch. */
   expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ accountId: null }) }).view).toEqual({ kind: "none" });
   expect(switchView({ current: "account-g", migration: null, request: null, receipt: null, pending: queued() }).view).toEqual({ kind: "none" });
-  /* This page's own request is no longer the only witness. */
+  /* This page's own request is no longer the only witness, with or without a receipt of its own on this page. */
+  expect(switchView({ current: "default", migration: null, request: request({ answeredStatus: null }), receipt: null, pending: queued() }).view).toEqual({ kind: "waiting", target: "account-g", source: "runtime" });
   expect(switchView({ current: "default", migration: null, request: request(), receipt: { status: "queued" }, pending: queued() }).view).toEqual({ kind: "waiting", target: "account-g", source: "runtime" });
   expect(switchView({ current: "default", migration: null, request: request({ phase: "unknown", operationId: null }), receipt: null, pending: queued() })).toEqual({ view: { kind: "waiting", target: "account-g", source: "runtime" }, settle: null });
   /* Another client's newer switch superseded this page's: the page's request settles failed, the newer one shows. */
