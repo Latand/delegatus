@@ -136,28 +136,77 @@ interface FlowMembership {
  * onto the corpus before the comparison. Without it every round of a flow that
  * predates its account's cut-over misses and renders as a free node.
  */
+interface FlowMembershipIndex {
+  byId: ReadonlyMap<string, Flow>;
+  /** Resolved reviewer path → its round, in flows-then-rounds order (first wins). */
+  reviewerByPath: ReadonlyMap<string, { flow: Flow; round: Round }>;
+  /** Resolved implementer path → its flow, in flows order (first wins). */
+  implementerByPath: ReadonlyMap<string, Flow>;
+}
+
+/* One membership index per (flows projection, claim resolver) pair. Both are
+   rebuilt per render — a poll hands a new flows array and `collapseContext`
+   anchors a fresh resolver on the file corpus — so weak keys let the index of a
+   superseded revision leave memory with its last consumer, exactly like
+   `conversationFileIndex`. The board asks for membership once per FILE and from
+   three call sites; scanning every flow and round for each of those turned a
+   few hundred flows and a few hundred files into hundreds of thousands of
+   `resolve` calls per pass, which is the grouping work #1546 measured. */
+const membershipStore = globalThis as typeof globalThis & {
+  __llvFlowMembershipIndexes?: WeakMap<readonly Flow[], WeakMap<TranscriptClaimResolver, FlowMembershipIndex>>;
+};
+const membershipIndexes = membershipStore.__llvFlowMembershipIndexes ??= new WeakMap();
+
+function flowMembershipIndex(flows: readonly Flow[], resolve: TranscriptClaimResolver): FlowMembershipIndex {
+  let byResolver = membershipIndexes.get(flows);
+  if (!byResolver) membershipIndexes.set(flows, byResolver = new WeakMap());
+  const cached = byResolver.get(resolve);
+  if (cached) return cached;
+  const byId = new Map<string, Flow>();
+  const reviewerByPath = new Map<string, { flow: Flow; round: Round }>();
+  const implementerByPath = new Map<string, Flow>();
+  /* Insertion order reproduces the scan this replaces: the first flow carrying
+     an id wins the id lookup, the first round claiming a resolved reviewer path
+     wins the reviewer lookup, and the first flow claiming a resolved
+     implementer path wins the implementer lookup. */
+  for (const flow of flows) {
+    if (!byId.has(flow.id)) byId.set(flow.id, flow);
+    for (const round of flow.rounds) {
+      if (!round.reviewerPath) continue;
+      const path = resolve(round.reviewerPath);
+      if (!reviewerByPath.has(path)) reviewerByPath.set(path, { flow, round });
+    }
+  }
+  for (const flow of flows) {
+    const path = resolve(flow.implementerPath);
+    if (!implementerByPath.has(path)) implementerByPath.set(path, flow);
+  }
+  const index = { byId, reviewerByPath, implementerByPath };
+  byResolver.set(resolve, index);
+  return index;
+}
+
 function flowMembership(
   file: FileEntry,
   flows: readonly Flow[],
   resolve: TranscriptClaimResolver = IDENTITY_CLAIM_RESOLVER,
 ): FlowMembership | null {
+  const index = flowMembershipIndex(flows, resolve);
   const durable = file.durableLineage?.memberships.find((membership) => membership.kind === "flow");
   if (durable) {
-    const flow = flows.find((candidate) => candidate.id === durable.containerId);
+    const flow = index.byId.get(durable.containerId);
     if (flow && durable.role === "reviewer") {
       const round = flow.rounds.find((candidate) => candidate.n === durable.round) ?? null;
       return { role: "reviewer", flow, round };
     }
     if (flow && durable.role === "implementer") return { role: "implementer", flow, round: null };
   }
-  for (const flow of flows) {
-    for (const round of flow.rounds) {
-      if (round.reviewerPath && resolve(round.reviewerPath) === file.path) return { role: "reviewer", flow, round };
-    }
-  }
-  for (const flow of flows) {
-    if (resolve(flow.implementerPath) === file.path) return { role: "implementer", flow, round: null };
-  }
+  /* A reviewer match wins over an implementer match, whichever flow each is in:
+     the scan this replaces ran every flow's rounds before any implementer. */
+  const reviewer = index.reviewerByPath.get(file.path);
+  if (reviewer) return { role: "reviewer", flow: reviewer.flow, round: reviewer.round };
+  const implementer = index.implementerByPath.get(file.path);
+  if (implementer) return { role: "implementer", flow: implementer, round: null };
   return null;
 }
 
