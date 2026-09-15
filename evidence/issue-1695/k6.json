@@ -40,7 +40,7 @@
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:03 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
             "disabled": false,
             "meter": true
@@ -148,7 +148,7 @@
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:03 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
             "disabled": false,
             "meter": true
@@ -259,7 +259,7 @@
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
             "disabled": false,
             "meter": true
@@ -337,44 +337,43 @@
             "Account G · waits for the current turn to end"
           ]
         ],
-        "label": "Accounts",
+        "label": "Change the pending account",
         "rows": [
           {
             "name": "Account A · Max",
             "tag": "current",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account C · Max",
             "tag": "",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account G · Pro",
             "tag": "pending",
             "checked": true,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           }
         ],
         "notes": [
           "Known to this page only. A reload or another page won't show this switch until the server records it.",
-          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
           "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
           "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
         ],
-        "cancel": false,
+        "cancel": true,
         "chip": {
           "text": "Account A→Account Gafter this turn",
           "pending": true,
@@ -455,44 +454,43 @@
             "Account G · waits for the current turn to end"
           ]
         ],
-        "label": "Accounts",
+        "label": "Change the pending account",
         "rows": [
           {
             "name": "Account A · Max",
             "tag": "current",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account C · Max",
             "tag": "",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account G · Pro",
             "tag": "pending",
             "checked": true,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           }
         ],
         "notes": [
           "Known to this page only. A reload or another page won't show this switch until the server records it.",
-          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
           "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
           "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
         ],
-        "cancel": false,
+        "cancel": true,
         "chip": {
           "text": "Account A→Account Gafter this turn",
           "pending": true,
@@ -623,7 +621,7 @@
         ]
       ],
       "label": [
-        "Accounts",
+        "Change the pending account",
         "Change the pending account"
       ],
       "rows": [
@@ -639,11 +637,10 @@
         true
       ],
       "cancel": [
-        false,
+        true,
         true
       ]
-    },
-    "cancelAbsentOnPurpose": "#1705"
+    }
   },
   "flows": {
     "stageAccount": {
@@ -688,7 +685,7 @@
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
             "disabled": false,
             "meter": true
@@ -747,44 +744,43 @@
             "Account G · waits for the current turn to end"
           ]
         ],
-        "label": "Accounts",
+        "label": "Change the pending account",
         "rows": [
           {
             "name": "Account A · Max",
             "tag": "current",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account C · Max",
             "tag": "",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account G · Pro",
             "tag": "pending",
             "checked": true,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
-            "disabled": true,
+            "disabled": false,
             "meter": true
           }
         ],
         "notes": [
           "Known to this page only. A reload or another page won't show this switch until the server records it.",
-          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
           "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
           "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
         ],
-        "cancel": false,
+        "cancel": true,
         "chip": {
           "text": "Account A→Account Gafter this turn",
           "pending": true,
@@ -805,11 +801,39 @@
         "Switch to Account G requested for Verifier. It waits for the current turn to end.",
         "Account G is outside this project's accounts; the switch is recorded as your choice"
       ],
-      "committed": "Account G",
+      "migrationRequests": [
+        {
+          "conversationId": "conversation_search-ver-2",
+          "body": {
+            "action": "withdraw",
+            "operationId": "account-switch-1"
+          }
+        }
+      ],
+      "changedRequests": [
+        {
+          "action": "reconfigure",
+          "path": "/repo/search-ver-2.jsonl",
+          "conversationId": "conversation_search-ver-2",
+          "accountId": "account-g",
+          "model": "opus",
+          "effort": "low"
+        },
+        {
+          "action": "reconfigure",
+          "path": "/repo/search-ver-2.jsonl",
+          "conversationId": "conversation_search-ver-2",
+          "accountId": "account-c",
+          "model": "opus",
+          "effort": "low"
+        }
+      ],
+      "changedChip": "Account A→Account Cafter this turn",
+      "committed": "Account C",
       "receipts": [
-        "Switch to Account G requested for Verifier. It waits for the current turn to end.",
-        "Account G is outside this project's accounts; the switch is recorded as your choice",
-        "Verifier now runs on Account G"
+        "Cancelled the switch to Account G for Verifier",
+        "Switch to Account C requested for Verifier. It waits for the current turn to end.",
+        "Verifier now runs on Account C"
       ]
     },
     "recordedAndLost": {
@@ -828,6 +852,77 @@
           [
             "Pending",
             "Account C · waits for the current turn to end"
+          ]
+        ],
+        "label": "Change the pending account",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "pending",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "outside this project's accounts",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 07:47 AM",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Messages sent meanwhile are held for the switch.",
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": true,
+        "chip": {
+          "text": "Account A→Account Cafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      },
+      "source": "record",
+      "cancelRequests": [
+        {
+          "conversationId": "conversation_search-ver-2",
+          "body": {
+            "action": "cancel",
+            "expectedRevision": 2
+          }
+        }
+      ],
+      "cancelledChip": "Account A",
+      "started": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ],
+          [
+            "Pending",
+            "Account C · switching"
           ]
         ],
         "label": "Accounts",
@@ -855,29 +950,28 @@
           },
           {
             "name": "Account E · Pro",
-            "tag": "limit · resets 07:04 AM",
+            "tag": "limit · resets 07:47 AM",
             "checked": false,
             "disabled": true,
             "meter": true
           }
         ],
         "notes": [
-          "Messages sent meanwhile are held for the switch.",
-          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
+          "Too late to cancel: the switch has started.",
           "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
           "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
         ],
         "cancel": false,
         "chip": {
-          "text": "Account A→Account Cafter this turn",
+          "text": "Account A→Account Cswitching…",
           "pending": true,
-          "when": "after this turn"
+          "when": "switching…"
         }
       },
-      "source": "record",
       "lost": "not confirmed",
       "requests": 1,
       "receipts": [
+        "Cancelled the switch to Account C for Verifier",
         "Switching Verifier to Account C got no answer. It may be queued; this page won't send it again."
       ]
     }

@@ -1,9 +1,9 @@
 # K6b plan: a lossless Cancel for account switches (#1695, #1705)
 
-Status: plan, with its tests prepared and red on main. Nothing here is implemented. K6a (#1707) ships the
-account chips and pickers. While a switch is pending, K6a offers no Cancel and no change of target. It reports
-a queued structured switch from the runtime session's `pendingReconfigure`, which the runtime journal already
-projects for every page. K6 is complete when this plan lands with the stage regression below.
+Status: implemented in the K6b pull request, on top of K6a (#1707, merged). The prepared tests below went
+green with it; the pull request lists what else was added. K6a shipped the account chips and pickers without
+Cancel or Change and reports a queued structured switch from the runtime session's `pendingReconfigure`, which
+the runtime journal already projects for every page.
 
 ## What exists, and why every cancel path is unsafe today
 
@@ -59,6 +59,9 @@ The defects, each reproduced in isolated tests on main 098932f8 (#1705):
   re-arms the deliveries still fenced by a migration no longer in flight.
 - **Supersede back to the source account** retires the migration like a cancel: fenced deliveries are
   re-armed, never failed.
+- **Unchanged: a switch that commits.** `commitSuccessor` still ends the deliveries left pending at commit with
+  "its owning account migration committed; send again" (covered by `registry.reseat.test.ts`). K6b changes only
+  what a cancel, withdrawal, supersede or failure does to them.
 
 ### 2. Withdrawing a queued switch, atomically against its claim
 - **Registry.** `withdrawConversationReconfigure(conversationId, operationId)` runs in one transaction:
@@ -133,7 +136,7 @@ activation:
 - the verdict lands in the successor transcript;
 - the stage passes, the fail edge's round count stays 0, and no stage starts from `onFail`.
 
-## Prepared tests (red on main)
+## Prepared tests (red on main before K6b)
 `src/lib/runtime/structuredSwitchCancel.test.ts` is built on the account-switch fixture. Its source
 conversation holds:
 - a delivery assigned before the switch;

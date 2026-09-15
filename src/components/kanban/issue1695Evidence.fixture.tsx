@@ -480,6 +480,10 @@ const evidence = {
   loseNextAccountAnswer: false,
   /* The project's accounts cannot be read. */
   bindingsUnreadable: false,
+  /* K6b: cancels and withdrawals sent to the conversation migration route, in order. */
+  migrationRequests: [] as Array<{ conversationId: string; body: Record<string, unknown> }>,
+  /* The next cancel or withdrawal is refused with these words and code. */
+  refuseNextMigrationRequest: null as { status: number; error: string; code: string } | null,
   /* The conversation's migration record, as the files route projects it. */
   setMigration(pathname: string, migration: Record<string, unknown> | null) {
     const index = files.findIndex((entry) => entry.path === pathname || entry.conversationId === pathname);
@@ -722,6 +726,30 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
   if (ACCOUNTS && url.pathname === "/api/account-project-bindings" && method === "GET") {
     return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(bindingsBody);
+  }
+  const migrationRoute = ACCOUNTS && method === "POST" ? /^\/api\/conversations\/([^/]+)\/migration$/.exec(url.pathname) : null;
+  if (migrationRoute) {
+    const conversationId = decodeURIComponent(migrationRoute[1]!);
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.migrationRequests.push({ conversationId, body });
+    await new Promise((resolve) => setTimeout(resolve, evidence.accountAnswerDelayMs));
+    if (evidence.refuseNextMigrationRequest) {
+      const refusal = evidence.refuseNextMigrationRequest;
+      evidence.refuseNextMigrationRequest = null;
+      return json({ error: refusal.error, code: refusal.code }, refusal.status);
+    }
+    const index = files.findIndex((entry) => entry.conversationId === conversationId);
+    if (body.action === "cancel") {
+      /* The engine's guard: a revision and a phase it can still cancel in. */
+      const current = index >= 0 ? (files[index] as FileEntry & { migration?: { phase: string; revision?: number } }).migration : undefined;
+      if (!current) return json({ error: "conversation has no switch to cancel" }, 404);
+      if (current.revision !== body.expectedRevision) return json({ error: "migration revision is stale", code: "MIGRATION_STALE" }, 409);
+      if (current.phase !== "requested" && current.phase !== "waiting-turn") return json({ error: "the switch has already started", code: "SWITCH_STARTED" }, 409);
+      evidence.setMigration(conversationId, null);
+      return json({ id: conversationId, migration: { ...current, phase: "rolled-back" } });
+    }
+    if (body.action === "withdraw") return json({ withdraw: "withdrawn" });
+    return json({ error: "unsupported in the evidence fixture" }, 400);
   }
   if (ACCOUNTS && url.pathname === "/api/conversation-host" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

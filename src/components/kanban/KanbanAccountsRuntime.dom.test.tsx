@@ -68,6 +68,7 @@ const BINDINGS = { project: "fixture", engines: { claude: { engine: "claude", re
 
 /* The conversation host route: every switch the board sent, answered as `hostAnswer` says. */
 const hostRequests: Array<Record<string, unknown>> = [];
+const migrationRequests: Array<Record<string, unknown>> = [];
 let hostAnswer: "queued" | "lost" | { status: number; error: string } = "queued";
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -78,6 +79,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url === "/api/accounts") return json(ACCOUNTS);
   if (url.startsWith("/api/account-project-bindings?project=")) return json(BINDINGS);
+  if (/^\/api\/conversations\/[^/]+\/migration$/.test(url)) {
+    migrationRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json({ withdraw: "withdrawn" });
+  }
   if (url === "/api/conversation-host") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     hostRequests.push(body);
@@ -119,6 +124,7 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   hostRequests.length = 0;
+  migrationRequests.length = 0;
   hostAnswer = "queued";
   runtimeState = inertRuntimeState();
 });
@@ -290,7 +296,7 @@ function installRuntime(pending: { operationId: string; accountId: string | null
   for (const listener of runtimeListeners) flushSync(() => listener());
 }
 
-test("a switch another page queued, with no receipt on this page, locks this page's picker: no second switch is offered or sent", async () => {
+test("a switch another page queued, with no receipt on this page, is shown here and can only be cancelled or changed through its operation, never simply replaced", async () => {
   installRuntime({ operationId: "op-elsewhere", accountId: "account-g" });
   const { host } = mount(searchPipeline());
   await tick();
@@ -301,7 +307,23 @@ test("a switch another page queued, with no receipt on this page, locks this pag
   expect(picker(host)!.querySelector("[data-account-pending]")?.getAttribute("data-account-source")).toBe("runtime");
   /* Not this page's alone: the runtime session reports it for every page. */
   expect(notes(host)).not.toContain("Known to this page only. A reload or another page won't show this switch until the server records it.");
-  expect(notes(host)).toContain("Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.");
+  expect(picker(host)!.querySelector("[data-account-cancel]")?.getAttribute("data-account-cancel")).toBe("withdraw");
+  /* Change: the other page's switch is withdrawn by its operation before anything new is asked for. */
+  click(row(host, "account-c"));
+  await tick(40);
+  expect(migrationRequests).toEqual([{ action: "withdraw", operationId: "op-elsewhere" }]);
+  expect(hostRequests.map((body) => body.accountId)).toEqual(["account-c"]);
+});
+
+test("a switch the queue is already applying locks this page's picker: no cancel, no change, nothing sent", async () => {
+  installRuntime({ operationId: "op-applying", accountId: "account-g" }, { receipts: [{ operationId: "op-applying", status: "applying" }] });
+  const { host } = mount(searchPipeline());
+  await tick();
+  await openVerify(host);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account G switching…");
+  await openPicker(host);
+  expect(picker(host)!.querySelector("[data-account-cancel]")).toBeNull();
+  expect(notes(host)).toContain("Too late to cancel: the switch has started.");
   expect(rows(host).map((entry) => [entry.id, entry.tag, entry.checked, entry.disabled])).toEqual([
     ["default", "current", false, true],
     ["account-c", "", false, true],
@@ -311,6 +333,7 @@ test("a switch another page queued, with no receipt on this page, locks this pag
   click(row(host, "account-c"));
   await tick(40);
   expect(hostRequests).toEqual([]);
+  expect(migrationRequests).toEqual([]);
 });
 
 test("a superseded switch does not clear the newer target, and the migration record takes precedence once it exists", async () => {
@@ -321,7 +344,8 @@ test("a superseded switch does not clear the newer target, and the migration rec
   await openVerify(host);
   expect(chipText(conversationChip(host))).toBe("Account A → Account C after this turn");
   await openPicker(host);
-  expect(rows(host).every((entry) => entry.disabled)).toBe(true);
+  /* The newer switch is the one a cancel names. */
+  expect(picker(host)!.querySelector("[data-account-cancel]")?.getAttribute("data-account-cancel")).toBe("withdraw");
   await closePicker();
 
   update({ files: [build, { ...verify, migration: { intentId: "intent-1", trigger: "manual", phase: "preparing", targetAccountId: "account-c", targetLabel: "account-c", failure: null, revision: 4 } }] });
@@ -329,6 +353,7 @@ test("a superseded switch does not clear the newer target, and the migration rec
   expect(chipText(conversationChip(host))).toBe("Account A → Account C switching…");
   await openPicker(host);
   expect(picker(host)!.querySelector("[data-account-pending]")?.getAttribute("data-account-source")).toBe("record");
+  expect(picker(host)!.querySelector("[data-account-cancel]")).toBeNull();
   expect(rows(host).every((entry) => entry.disabled)).toBe(true);
   await closePicker();
 
