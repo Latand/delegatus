@@ -133,7 +133,7 @@ export interface KanbanCardProps {
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage, cardId: string) => void;
   onFocusCard: (cardId: string) => void;
   onOpenCatalog: () => void;
-  onOpenOnBoard: () => void;
+  onOpenConversations: () => void;
   /** The title or description being edited on this card, with its draft. */
   editing: { field: "title" | "description"; draft: string } | null;
   /** A save the server refused: the draft is kept for Retry. */
@@ -446,7 +446,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             </button>
           ) : null}
           {card.otherSurfaces ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenOnBoard}>
+            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.otherSurfaces", { count: card.otherSurfaces })}
             </button>
           ) : null}

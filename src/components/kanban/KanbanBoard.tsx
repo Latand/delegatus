@@ -107,7 +107,7 @@ export interface KanbanBoardProps {
   /** The project's full conversation catalog (the List view). */
   onOpenCatalog: () => void;
   /** The scheme board, for surfaces this board does not draw yet. */
-  onOpenOnBoard: () => void;
+  onOpenConversations: () => void;
   /** Conversations closed on this project's board (the `hidden` board
       preference); the Hidden tray lists the ones this board carries. */
   closedPaths?: readonly string[];
@@ -217,7 +217,7 @@ function useBands(props: KanbanBoardProps) {
 
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useLocale();
-  const { project, allTasks, pipelines, files, loaded, catalogFailures, selection, onOpenCatalog, onOpenOnBoard, onConversationOpened } = props;
+  const { project, allTasks, pipelines, files, loaded, catalogFailures, selection, onOpenCatalog, onOpenConversations, onConversationOpened } = props;
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1537,8 +1537,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const file = filesByPath.get(focusTarget);
     if (!file) return;
     if (ownersRef.current.has(conversationIdentity(file))) openReaderFor(file);
-    /* A conversation no card holds is shown where the Viewer can show it. */
-    else onOpenOnBoard();
+    /* A conversation no card holds (in a review deck, a worker stack or a draft) is listed in Conversations. */
+    else onOpenConversations();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
   }, [focusTarget]);
 
@@ -1777,7 +1777,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenStage: openStage,
         onFocusCard: focusCard,
         onOpenCatalog,
-        onOpenOnBoard,
+        onOpenConversations,
         onStartEdit: startEdit,
         onEditDraft: editDraft,
         onCommitEdit: commitEdit,
@@ -1993,7 +1993,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
-  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenOnBoard"
+  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu"

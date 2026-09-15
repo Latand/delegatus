@@ -145,7 +145,7 @@ function mount(options: { tasks: BoardTask[]; files: FileEntry[]; assignments?: 
       selection={new Set()}
       focus={next.focus ?? options.focus ?? null}
       onOpenCatalog={() => {}}
-      onOpenOnBoard={() => {}}
+      onOpenConversations={() => {}}
       mutationPorts={idlePorts}
       {...(options.assignments ? { assignmentPorts: options.assignments } : {})}
       {...(options.readerStorage ? { readerStorage: options.readerStorage } : {})}

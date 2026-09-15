@@ -28,6 +28,7 @@ import { TaskStrip } from "./BranchPane";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
 import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
+import { DesktopConversations } from "./DesktopConversations";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
 import { OrchestratorPanelToggle } from "./orchestrator/OrchestratorPanelToggle";
 import { useOrchestratorSeat } from "./orchestrator/useOrchestratorSeat";
@@ -69,7 +70,6 @@ import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
 import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
-import { SchemeBoard } from "./scheme/SchemeBoard";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat } from "./kanban/kanbanSeatStore";
@@ -248,18 +248,15 @@ function gotoProject(project: string) {
   location.hash = "#p=" + encodeURIComponent(project);
 }
 
-/** A desktop face: the scheme, the list, or the kanban board (#1695). */
-type DesktopView = ProjectView | "kanban";
+/** A desktop view: the Board (the kanban, #1695) or Conversations (the list). The phone keeps its own views. */
+type DesktopView = "kanban" | "list";
 
 /**
- * The desktop board/list switch (#1614).
+ * The desktop view switch: Board and Conversations (#1614, #1695).
  *
  * `floating` draws it as its own chip over a leaf that has no chrome of its own
- * — the agent list, the empty project. On the board it is `embedded` instead,
- * handed to `SchemeBoard` and drawn inside the tool palette: the palette floats
- * at `left-3 top-3 z-40`, so a switch floated at the same corner sits under it
- * and a click at the centre of «Список» reached the task tool instead. Sharing
- * one container is what makes that overlap impossible rather than unlikely.
+ * (Conversations, the empty project); on the Board it is `inline`, in flow in
+ * the kanban's own bar, so nothing floats over the board's corner.
  */
 function ProjectViewTabs({
   value,
@@ -267,7 +264,7 @@ function ProjectViewTabs({
   floating = false,
   embedded = false,
   inline = false,
-  modes = ["scheme", "list"],
+  modes = ["kanban", "list"],
 }: {
   value: DesktopView;
   onChange: (next: DesktopView) => void;
@@ -275,15 +272,14 @@ function ProjectViewTabs({
   embedded?: boolean;
   /** Drawn in a toolbar row of its own (the kanban board's bar): the chip, in flow. */
   inline?: boolean;
-  /** The faces this project can show. The kanban board (#1695) is offered on
-      the desktop while it rolls out beside the scheme. */
+  /** The views this project can show on the desktop: the Board, and Conversations when there are any. */
   modes?: readonly DesktopView[];
 }) {
   const { t } = useLocale();
-  const labelOf = (mode: DesktopView) => t(mode === "kanban" ? "kanban.viewTab" : mode === "scheme" ? "dash.viewScheme" : "dash.viewList");
+  const labelOf = (mode: DesktopView) => t(mode === "kanban" ? "kanban.viewTab" : "dash.viewList");
   const iconOf = (mode: DesktopView) => mode === "kanban"
     ? <Columns3 className="h-3 w-3" aria-hidden />
-    : mode === "scheme" ? <Network className="h-3 w-3" aria-hidden /> : <List className="h-3 w-3" aria-hidden />;
+    : <List className="h-3 w-3" aria-hidden />;
   return (
     <div
       data-project-view-tabs
@@ -1278,9 +1274,9 @@ function ProjectDashboardView({
     setTransientView(null);
     board.setViewMode(next);
   };
-  /* The desktop faces (#1695): the kanban board and the scheme are one «board»
-     view with two faces while the kanban rolls out, so choosing either also
-     restores the board view; the list keeps its own preference. */
+  /* The desktop's two views (#1695): the Board, which is the kanban, and Conversations. Board writes the
+     board view mode with the kanban face, so a build from before the kanban became the only desktop board
+     still opens it; Conversations keeps the list preference it always had. */
   const chooseDesktopView = (next: DesktopView) => {
     if (next === "list") {
       chooseEmptyView("list");
@@ -1288,9 +1284,7 @@ function ProjectDashboardView({
     }
     setOpenedConversation(null);
     setTransientView(null);
-    /* Board is recorded as an explicit choice, so it survives the day the
-       kanban becomes the default face. */
-    board.setDesktopBoard(next === "kanban" ? "kanban" : "scheme", "scheme");
+    board.setDesktopBoard("kanban", "scheme");
   };
 
   /* randomUUID needs a secure context; LAN http access gets the fallback. */
@@ -1795,7 +1789,8 @@ function ProjectDashboardView({
      the list exactly as before, and the landing's own node is what makes the
      scheme available in the first place. */
   const landedOnConversation = openedConversation !== null && schemeAvailable;
-  const transientFace = !isMobile && transientView !== null && (transientView === "list" ? listAvailable : schemeAvailable) ? transientView : null;
+  /* Conversations for one look (a card's link to more conversations): the desktop has no other face to visit. */
+  const transientFace = !isMobile && transientView === "list" && listAvailable ? "list" : null;
   const projectView = landedOnConversation ? "scheme" : transientFace ?? resolveProjectView({
     preferredView: board.prefs.viewMode,
     hasNodes,
@@ -1892,19 +1887,15 @@ function ProjectDashboardView({
      the top-left corner, so it is handed the view switch instead of having one
      floated over it (#1614). */
   const desktopBoardLeaf = projectView === "scheme" && schemeAvailable;
-  /* The kanban face of the desktop board (#1695). A conversation the operator
-     just opened from a card still lands on the scheme, which is where its
-     reader lives until the kanban carries readers of its own. */
-  /* A conversation opened while the kanban is the chosen face opens as a
-     reader in its card, so a landing no longer trades the kanban for the
-     scheme; a view picked for one look still does. */
-  const kanbanLeaf = !isMobile && desktopBoardLeaf && board.prefs.desktopBoard === "kanban" && transientFace === null;
+  /* The desktop board is the kanban (#1695), whatever face an earlier build stored: a conversation opened
+     from anywhere opens as a reader in its card. */
+  const kanbanLeaf = !isMobile && desktopBoardLeaf;
   const kanbanSeat = useKanbanSeat(project);
   useLayoutEffect(() => {
     onKanbanFace?.(kanbanLeaf);
   }, [kanbanLeaf, onKanbanFace]);
   useLayoutEffect(() => () => onKanbanFace?.(false), [onKanbanFace]);
-  const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "scheme", "list"] : ["kanban", "scheme"];
+  const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "list"] : ["kanban"];
   /* Which conversations the phone board is showing, in the order it shows them,
      as a signature so the presence effect below compares BY VALUE — a fresh
      array every render would re-report the same view on every poll. Null
@@ -2118,7 +2109,6 @@ function ProjectDashboardView({
           conversationAliases={conversationAliases}
           repository={projectCatalogEntries.find((entry) => entry.project === project)?.repository ?? null}
           onOpenTask={closeSheetThen(openTask)}
-          onPlaceOnMap={isMobile ? undefined : placeOnMap}
           onOpenFile={closeSheetThen(openSwitchboardFile)}
         />
         <LaunchHistory items={launchHistory} onRetry={closeSheetThen(retryLaunch)} />
@@ -2252,14 +2242,8 @@ function ProjectDashboardView({
                 </span>
               ) : null}
             </button>
-            <button
-              type="button"
-              onClick={() => setTemplatePickerOpen(true)}
-              aria-label={t("dash.newPipeline")}
-              className="flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-2.5 py-1 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <span className="text-[13px] leading-none text-accent">+</span> {t("dash.pipeline")}
-            </button>
+            {/* No «+ Pipeline» on the desktop (#1695): pipelines are created by agents through MCP, and their
+                drafts and stages are shown and edited on the Board's cards and Stages sheet. */}
           </>
         </div>
       )}
@@ -2462,7 +2446,7 @@ function ProjectDashboardView({
                 ProjectViewTabs); every other desktop leaf has no chrome in that
                 corner, so there it floats. */}
             {boardReady && viewToggle && !desktopBoardLeaf ? (
-              <ProjectViewTabs value={projectView} onChange={chooseDesktopView} modes={desktopViewModes} floating />
+              <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} floating />
             ) : null}
             {!boardReady ? (
               catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
@@ -2495,91 +2479,17 @@ function ProjectDashboardView({
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
                 )}
                 onOpenCatalog={() => setTransientView("list")}
-                onOpenOnBoard={() => setTransientView("scheme")}
+                onOpenConversations={() => setTransientView("list")}
                 viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}
               />
-            ) : desktopBoardLeaf ? (
-              <SchemeBoard
-                project={project}
-                groups={layoutGroups}
-                manual={layoutManual}
-                files={files}
-                flows={flows}
-                reviewGroups={directReviewGroups}
-                pipelines={pipelines}
-                surfacePipelines={activePipelines}
-                now={nowSeconds}
-                tasks={hasNodes ? boardTasks : EMPTY_TASKS}
-                allTasks={projectTasks}
-                workerStacks={workerStacks}
-                drafts={layoutDrafts}
-                favorites={favoriteIdSet}
-                isolatedManualPaths={isolatedCompactHistoryPaths}
-                focus={highlight}
-                attentionPaths={attentionPaths}
-                trayApi={trayApi}
-                onSelect={openSwitchboardFile}
-                onClose={closeNode}
-                onDraftClose={removeDraft}
-                onDraftSpawned={draftSpawned}
-                onHandoff={addHandoffDraft}
-                onSpawnRetry={retryLaunch}
-                onTaskDraft={openTaskDraft}
-                onOpenTask={openTask}
-                onConversationOpened={markPathSeen}
-                placeTaskId={placeTask?.id ?? null}
-                onTaskPlaced={() => setPlaceTask(null)}
-                newTaskNonce={newTaskNonce}
-                onTaskCollapse={(task) => setTaskExpanded(task.id, false)}
-                builderPipelineId={builderPipelineId}
-                onBuilderOpened={() => setBuilderPipelineId(null)}
-                draftBands={draftBands}
-                onAddAgent={addBandAgentDraft}
-                viewSwitch={<ProjectViewTabs value={projectView} onChange={chooseDesktopView} modes={desktopViewModes} embedded />}
-              />
             ) : listAvailable ? (
-              <ConversationList project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
+              <DesktopConversations project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
             ) : (
               <EmptyProjectLeaf
                 projectName={projectName}
                 onOrchestrator={onToggleOrchestratorPanel}
-                onAgent={addDraft}
-                agentDisabled={!loaded}
               />
             )}
-            {/* The create button floats in the bottom-left corner of the board —
-                away from the fixed attention pill in the top-right, above the
-                residual strip. On the phone the header keeps this button. */}
-            {/* The create buttons place drafts, sticky composers and builders on
-                the scheme; the kanban board gets its own in a later slice (#1695 K9a). */}
-            <div data-chip-keepout className={`pointer-events-none absolute bottom-4 left-4 z-30 flex items-center gap-2${kanbanLeaf ? " hidden" : ""}`}>
-              <button
-                type="button"
-                onClick={addDraft}
-                disabled={!loaded}
-                aria-label={t("dash.newConvo")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("dash.agent")}
-              </button>
-              <button
-                type="button"
-                onClick={addTask}
-                aria-label={t("dash.newTask")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("dash.task")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTemplatePickerOpen(true)}
-                disabled={!loaded}
-                aria-label={t("pipelineBuilder.createDraftAria")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("board.pipeline")}
-              </button>
-            </div>
           </div>
           {taskPanelOpen ? (
             <TaskPanel
@@ -2590,7 +2500,6 @@ function ProjectDashboardView({
               onOpenFavorite={openSwitchboardFile}
               onToggleFavorite={(id) => board.setFavorite(id, false)}
               onOpenTask={openTask}
-              onPlaceOnMap={placeOnMap}
               onClose={toggleTaskPanel}
             />
           ) : null}

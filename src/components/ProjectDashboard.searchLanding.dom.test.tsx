@@ -193,7 +193,9 @@ function mount(focusRequest: { path: string; nonce: number; catalog?: boolean } 
 
 const listShown = (host: HTMLElement) => host.textContent?.includes(translate("en", "list.title")) ?? false;
 const composer = (host: HTMLElement) => host.querySelector("textarea");
-const card = (host: HTMLElement) => host.querySelector(`[data-scheme-node="${FOUND_PATH}"]`);
+/* The desktop board is the kanban (#1695): the landed conversation is open as a reader in its card. */
+const card = (host: HTMLElement) => Array.from(host.querySelectorAll("[data-kanban-card].has-reader"))
+  .find((element) => (element.getAttribute("aria-label") ?? "").startsWith(found.title ?? "")) ?? null;
 const chatShell = (host: HTMLElement) => host.querySelector('[data-testid="mobile-chat-shell"]');
 
 test("desktop: a search landing opens the conversation with its composer even from saved «Список»", async () => {
@@ -233,7 +235,7 @@ test("the operator's «Список» tap takes the view back and the saved pref
   rerender({ path: FOUND_PATH, nonce: 1, catalog: true });
   expect(await waitFor(() => card(host) !== null)).toBe(true);
 
-  /* The floating Схема/Список tabs are the desktop face of that control. */
+  /* The Board/Conversations tabs are the desktop face of that control. */
   const listTab = Array.from(host.querySelectorAll("button")).find(
     (el) => (el.textContent ?? "").trim() === translate("en", "dash.viewList"),
   ) as unknown as HTMLButtonElement | undefined;

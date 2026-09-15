@@ -208,7 +208,7 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
       catalogFailures={0}
       selection={new Set()}
       onOpenCatalog={() => {}}
-      onOpenOnBoard={() => {}}
+      onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={idlePorts}
       pipelinePorts={route.ports}

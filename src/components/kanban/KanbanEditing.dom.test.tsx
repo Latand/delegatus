@@ -152,7 +152,7 @@ function mount(tasks: BoardTask[], options: { ports?: TaskMutationPorts; seat?: 
         catalogFailures={0}
         selection={new Set()}
         onOpenCatalog={() => {}}
-        onOpenOnBoard={() => {}}
+        onOpenConversations={() => {}}
         seatRefs={seat}
         closedPaths={options.closed}
         {...(options.onRestore ? { onRestoreConversation: options.onRestore } : {})}

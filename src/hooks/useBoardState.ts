@@ -203,6 +203,13 @@ export function resetSelectionSessionsForTest(): void {
   selectionSessions.clear();
 }
 
+/** Make `paths` the project's selection, as an operator's gesture would. Test-only seam: the desktop Board has no
+    select mode yet (#1695), so the publication contract is exercised from a set made through the store itself. */
+export function seedSelectionSessionForTest(project: string, paths: readonly string[]): void {
+  selectionSessions.set(project, { paths: new Set(paths), armed: false });
+  notifySelection(project);
+}
+
 /**
  * Pre-add a conversation to a project's board. A child conversation (`connected`
  * = isChildConversation, what the tree can nest) goes into the expand set so it

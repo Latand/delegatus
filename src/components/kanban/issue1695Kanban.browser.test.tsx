@@ -348,22 +348,33 @@ browserTest("#1695 kanban board: the prototype's columns and cards over the real
       await links.context.close();
     }
 
-    /* The tabs: from the scheme face, Kanban writes the face and mounts the
-       board; Board takes it back. */
+    /* The views (#1695): a board stored on the scheme face opens on the Board, the desktop offers only Board and
+       Conversations, Conversations lists the project's conversations and writes the list view, and Board comes
+       back with the kanban face. Nothing stored is rewritten just by opening. */
     const faces = await openFixture(browser, `${base}?face=scheme`, VIEWPORTS[1], "light");
     try {
-      await faces.page.waitForSelector('[data-view-tab="kanban"]', { state: "attached", timeout: 20_000 });
-      const kanbanBefore = Boolean(await faces.page.$("[data-kanban-board]"));
+      await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+      const tabs = await faces.page.$$eval("[data-view-tab]", (nodes) => nodes.map((node) => node.getAttribute("data-view-tab")));
+      const schemeShown = Boolean(await faces.page.$("[data-scheme-band], [data-scheme-ui]"));
+      const openedWrites = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations.length);
+      await faces.page.click('[data-kanban-board] [data-view-tab="list"]');
+      await faces.page.waitForSelector("[data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
+      const listed = await faces.page.$$eval("[data-desktop-conversations-row]", (nodes) => nodes.length);
+      const conversationsTail = await faces.page.$eval("[data-desktop-conversations-tail]", (node) => node.textContent ?? "");
+      const kanbanOnList = Boolean(await faces.page.$("[data-kanban-board]"));
+      const toList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
+      await faces.page.screenshot({ path: path.join(OUT, "production-conversations-light.png") });
       await faces.page.click('[data-view-tab="kanban"]');
       await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
-      const written = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-      await faces.page.click('[data-kanban-board] [data-view-tab="scheme"]');
-      await faces.page.waitForFunction(() => !document.querySelector("[data-kanban-board]"), undefined, { timeout: 10_000 });
       const back = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-      if (kanbanBefore) failures.push("tabs: the kanban board was mounted on the scheme face");
-      if (!written.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Kanban wrote ${JSON.stringify(written)}`);
-      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "scheme", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
-      flows.tabs = { kanbanBefore, written, back };
+      if (JSON.stringify(tabs) !== JSON.stringify(["kanban", "list"])) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
+      if (schemeShown) failures.push("tabs: the scheme was drawn on the desktop");
+      if (openedWrites !== 0) failures.push(`tabs: opening a board stored on the scheme face wrote ${openedWrites} mutations`);
+      if (kanbanOnList || listed === 0) failures.push(`tabs: Conversations listed ${listed} rows with the kanban ${kanbanOnList ? "still" : "not"} mounted`);
+      if (!toList.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", viewMode: "list" }))) failures.push(`tabs: Conversations wrote ${JSON.stringify(toList)}`);
+      if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
+      flows.tabs = { tabs, schemeShown, openedWrites, listed, conversationsTail, toList, back };
+      await faces.page.screenshot({ path: path.join(OUT, "production-default-board-light.png") });
       if (faces.pageErrors.length) failures.push(`tabs: page errors ${faces.pageErrors.join(" | ")}`);
     } finally {
       await faces.context.close();

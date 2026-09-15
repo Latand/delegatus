@@ -193,8 +193,8 @@ test("a failed-delivery launch record on a scanned transcript path never hides t
   const path = "/claude-projects/repo-fixture/conversation-claim.jsonl";
   const host = mount([conversationWithFailedLaunchRecord(path)]);
 
-  /* The conversation is real board content: it must keep its scheme card. */
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${path}"]`) !== null)).toBe(true);
+  /* The conversation is real board content: it must keep its tile on the Board (the kanban, #1695). */
+  expect(await waitFor(() => host.querySelector(`[data-member="${path}"]`) !== null)).toBe(true);
 
   /* The failed delivery stays visible: the shelf still lists the record. */
   await settle();

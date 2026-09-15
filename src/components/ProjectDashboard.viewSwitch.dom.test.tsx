@@ -1,17 +1,11 @@
 /**
- * The desktop board/list switch is reachable (#1614).
+ * The desktop view switch is reachable (#1614), and offers only the Board and
+ * Conversations (#1695).
  *
- * The switch used to be floated by the dashboard at `absolute left-3 top-3
- * z-30` while `SchemeBoard` floats its tool palette at the same corner at
- * `z-40`. Both rendered; only one could be clicked. In a real browser
- * `document.elementFromPoint` at the centre of «Список» resolved to the task
- * tool, so the operator had no way into the agent list at all.
- *
- * happy-dom lays nothing out and cannot hit-test, so this file asserts the
- * structural fact that makes the overlap impossible instead of the hit itself:
- * on the board, exactly one element claims that corner, and the switch is
- * inside it. The hit test itself is taken in a real browser against a
- * production build by `scripts/capture-issue-1614-board.ts`.
+ * On the Board, which is the kanban, the switch sits in the board's own bar in
+ * flow, so nothing floats over the board's corner; on Conversations it floats
+ * as its own chip in that corner, and it is the only thing there. happy-dom lays
+ * nothing out and cannot hit-test, so this file asserts those structural facts.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -38,7 +32,6 @@ mock.module("@/hooks/useRuntime", () => ({
 mock.module("@/hooks/useConversationCatalog", () => ({
   useConversationCatalog: () => ({ items: [], nextCursor: null, total: 0, loading: false, error: false, loadMore: () => {}, retry: () => {} }),
 }));
-const { viewBus } = await import("@/hooks/viewPresenceBus");
 const { resetSelectionSessionsForTest } = await import("@/hooks/useBoardState");
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 
@@ -232,68 +225,57 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
   return host as unknown as HTMLElement;
 }
 
-const slice = () => viewBus.getSlice();
-/** The view toggle an operator actually clicks. */
-function clickViewTab(host: HTMLElement, view: "scheme" | "list") {
-  const label = view === "scheme" ? "scheme" : "conversations";
-  const tab = Array.from(host.querySelectorAll("button[aria-pressed]")).find(
-    (button) => (button.getAttribute("aria-label") ?? "") === label,
-  ) as HTMLButtonElement | undefined;
+/** The view tab an operator actually clicks. */
+function clickViewTab(host: HTMLElement, view: "kanban" | "list") {
+  const tab = host.querySelector(`button[data-view-tab="${view}"]`) as HTMLButtonElement | null;
   expect(tab).toBeTruthy();
   flushSync(() => tab!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 }
 
-
 const TOP_LEFT_CORNER = "[class*='absolute'][class*='left-3'][class*='top-3']";
 const tabsIn = (host: HTMLElement) => host.querySelector("[data-project-view-tabs]") as HTMLElement | null;
-const viewButtons = (host: HTMLElement) => Array.from(host.querySelectorAll("button[aria-pressed]"))
-  .filter((button) => ["scheme", "conversations"].includes(button.getAttribute("aria-label") ?? ""));
+const viewTabs = (host: HTMLElement) => Array.from(host.querySelectorAll("button[data-view-tab]")).map((button) => button.getAttribute("data-view-tab"));
 
-test("on the board the view switch shares the tool palette, so nothing floats over it", async () => {
+test("the desktop offers only the Board and Conversations, and on the Board the switch sits in the board's own bar", async () => {
   const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-scheme-band]") !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  expect(slice().mode).toBe("scheme");
 
-  /* Both tabs are rendered, and neither is disabled. */
-  expect(viewButtons(host).map((button) => button.getAttribute("aria-label"))).toEqual(["scheme", "conversations"]);
-  expect(viewButtons(host).some((button) => (button as HTMLButtonElement).disabled)).toBe(false);
-
-  /* THE REGRESSION: two separately positioned elements in the same corner. The
-     board's palette is the only one, and it holds the switch. */
-  const corners = Array.from(host.querySelectorAll(TOP_LEFT_CORNER));
-  expect(corners).toHaveLength(1);
-  const palette = corners[0] as HTMLElement;
-  expect(palette.hasAttribute("data-scheme-ui")).toBe(true);
-  expect(palette.contains(tabsIn(host))).toBe(true);
-  /* Same palette as the zoom controls — one row, not two stacked layers. */
-  expect(palette.querySelector("button[title^='Zoom']")).toBeTruthy();
-  /* And the switch itself no longer positions anything of its own. */
+  expect(viewTabs(host)).toEqual(["kanban", "list"]);
+  expect(host.querySelector("[data-scheme-band], [data-scheme-ui]")).toBeNull();
+  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
+  expect(board.contains(tabsIn(host))).toBe(true);
   expect(tabsIn(host)!.className).not.toContain("absolute");
+  expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(0);
 });
 
-test("the switch still opens the agent list, and stays reachable once the board is gone", async () => {
+test("the switch opens Conversations, floats alone in that corner there, and comes back to the Board", async () => {
   const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-scheme-band]") !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
   clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
   await settle();
-
-  /* The board unmounted with its palette, so on the list the switch floats on
-     its own again — and it is the only thing in that corner there too. */
-  expect(host.querySelector("[data-scheme-band]")).toBeNull();
+  expect(host.querySelector("[data-kanban-board]")).toBeNull();
   expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(1);
   expect(tabsIn(host)!.className).toContain("absolute");
-  expect(viewButtons(host)).toHaveLength(2);
+  expect(viewTabs(host)).toEqual(["kanban", "list"]);
+  expect(boards[PROJECT]!.prefs.viewMode).toBe("list");
 
-  /* And back: the round trip is the operator's, through the switch itself. */
-  clickViewTab(host, "scheme");
-  expect(await waitFor(() => slice().mode === "scheme")).toBe(true);
+  clickViewTab(host, "kanban");
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  expect(await waitFor(() => host.querySelector("[data-scheme-band]") !== null)).toBe(true);
-  const corners = Array.from(host.querySelectorAll(TOP_LEFT_CORNER));
-  expect(corners).toHaveLength(1);
-  expect((corners[0] as HTMLElement).contains(tabsIn(host))).toBe(true);
+  expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
+  expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "kanban" });
+});
+
+test("a board stored on the scheme face before the kanban became the desktop board opens on the Board", async () => {
+  boards = { [PROJECT]: { ...seededBoard(), prefs: { ...seededBoard().prefs, viewMode: "scheme", desktopBoard: "scheme" } } };
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(host.querySelector("[data-scheme-band], [data-scheme-ui]")).toBeNull();
+  /* Nothing stored is rewritten to get there. */
+  expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "scheme" });
 });
