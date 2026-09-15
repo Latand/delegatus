@@ -62,6 +62,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
+import { isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
@@ -72,6 +73,8 @@ import type {
   PatchPipelineRequest,
   Pipeline,
   PipelineBoundedWait,
+  PipelineGuardErrorCode,
+  PipelineGuardField,
   PipelineRoleId,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
@@ -4081,6 +4084,65 @@ function replaceDraftStages(
   return {};
 }
 
+/**
+ * The guard fields a caller may state (#1695 C7 and the retry/skip guard),
+ * checked for shape on every action: a value that is present but malformed,
+ * or stated on an action it does not guard, is refused with 400, so a caller
+ * never believes a write was guarded when it was not.
+ */
+function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
+  const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
+  const stageBound = req.action === "retry-stage" || req.action === "skip-stage";
+  if (stated("expectedStageDigest")) {
+    if (req.action !== "override-stage") return { error: "expectedStageDigest applies only to override-stage", status: 400, field: "expectedStageDigest" };
+    if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
+  }
+  if (stated("expectedStageId")) {
+    if (!stageBound) return { error: "expectedStageId applies only to retry-stage and skip-stage", status: 400, field: "expectedStageId" };
+    if (typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()) return { error: "expectedStageId must be a non-empty stage id", status: 400, field: "expectedStageId" };
+  }
+  if (stated("expectedAttempt")) {
+    /* It only ever rides with expectedStageId, which is refused on any other action. */
+    if (typeof req.expectedAttempt !== "number" || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt < 1) {
+      return { error: "expectedAttempt must be a positive integer attempt number", status: 400, field: "expectedAttempt" };
+    }
+    if (!stated("expectedStageId")) return { error: "expectedAttempt requires expectedStageId", status: 400, field: "expectedAttempt" };
+  }
+  return null;
+}
+
+/**
+ * Retry and skip act on whatever stage the pipeline waits on when they run.
+ * A caller that names the stage (and the attempt) it saw is refused when the
+ * pipeline is no longer waiting on exactly that: not waiting on a decision, on
+ * another stage, or on another latest own attempt of the same stage. A
+ * lineage-adopted (historical) attempt is never the one compared.
+ */
+function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
+  if (req.expectedStageId === undefined) return null;
+  const waiting = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
+  if (waiting !== req.expectedStageId) {
+    return {
+      error: waiting ? `the pipeline waits on ${waiting}, not ${req.expectedStageId}` : `the pipeline is ${pipeline.state} and waits on no stage`,
+      status: 409,
+      code: "STAGE_CHANGED",
+      field: "expectedStageId",
+    };
+  }
+  if (req.expectedAttempt !== undefined) {
+    const latest = currentAttempt(pipeline, waiting)?.n ?? null;
+    if (latest !== req.expectedAttempt) {
+      return {
+        error: `${waiting} waits on attempt ${latest ?? "none"}, not ${req.expectedAttempt}`,
+        status: 409,
+        code: "STAGE_CHANGED",
+        field: "expectedAttempt",
+      };
+    }
+  }
+  return null;
+}
+
 export type PipelineMutationResult = {
   pipeline?: Pipeline;
   error?: string;
@@ -4565,15 +4627,23 @@ function discardDraft(pipeline: Pipeline, ports: PipelinePorts): void {
   pipeline.stateDetail = "discarded as a draft; it never ran";
 }
 
+/** A patch's answer: a mutation result, or the refusal of a stated guard (`STAGE_CHANGED`, or a malformed guard field). */
+export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field"> & {
+  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode;
+  field?: PipelineMutationResult["field"] | PipelineGuardField;
+};
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
-): Promise<PipelineMutationResult> {
+): Promise<PipelinePatchResult> {
   return withPipelineMutation(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    const guardShape = stageGuardShapeError(req);
+    if (guardShape) return guardShape;
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
     const flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
@@ -4810,6 +4880,8 @@ export async function patchPipeline(
       pipeline.stateDetail = pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
+      const expectation = expectedStageRefusal(pipeline, req);
+      if (expectation) return expectation;
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
@@ -4929,6 +5001,8 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.stateDetail = null;
     } else if (req.action === "skip-stage") {
+      const expectation = expectedStageRefusal(pipeline, req);
+      if (expectation) return expectation;
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision" || !stage) return { error: "pipeline does not have a stage awaiting a decision", status: 409 };
@@ -4963,6 +5037,12 @@ export async function patchPipeline(
          has not started; editing a stage mid-attempt would silently no-op. */
       const run = pipeline.runs.find((item) => item.stageId === target.id);
       if (run && run.attempts.length > 0) return { error: "stage has already started", status: 409 };
+      /* #1695 C7: checked inside this mutation and before any field is written,
+         so a stage another client changed since the caller read it is refused
+         and keeps that client's values. The started refusal above keeps its answer. */
+      if (req.expectedStageDigest !== undefined && stageDigest(target) !== req.expectedStageDigest) {
+        return { error: "the stage changed since it was read; read it again before overriding it", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
+      }
       const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined;
       if (!changesRoleOrRuntime && req.prompt === undefined && req.account === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
       /* Validate the runtime types up front: resolvePipelineRole treats a

@@ -3,6 +3,11 @@ import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
 export type PipelineAccess = "read-only" | "read-write";
 export type PipelineSandbox = "full" | "restricted";
 
+/** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
+    `expectedAttempt`) no longer holds: nothing was changed. */
+export type PipelineGuardErrorCode = "STAGE_CHANGED";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt";
+
 export type PipelineRepoPreflightErrorCode =
   | "missing"
   | "not_directory"
@@ -436,6 +441,19 @@ export type PatchPipelineRequest = {
   stageId?: string;
   /** retry-stage identity fence for a retry initiated from a launch receipt. */
   launchId?: string;
+  /** for override-stage (#1695 C7): the `stageDigest` of the stage configuration
+      this edit was made against, as `GET /api/pipelines/:id` answers it. A stage
+      that no longer has it answers 409 `STAGE_CHANGED` and is left unchanged. */
+  expectedStageDigest?: string;
+  /** for retry-stage and skip-stage: the stage the caller saw the pipeline
+      waiting on. A pipeline no longer waiting on it answers 409 `STAGE_CHANGED`
+      before anything is closed, reset or started. Deliberately not `stageId`,
+      which on retry-stage names a launch-receipt retry. */
+  expectedStageId?: string;
+  /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
+      attempt the caller saw. A different latest attempt answers 409
+      `STAGE_CHANGED`. */
+  expectedAttempt?: number;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

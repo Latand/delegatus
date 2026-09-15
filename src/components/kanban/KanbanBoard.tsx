@@ -1002,7 +1002,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         label,
         why: busy ? t("kanban.pipelineAct.busy", { action: t(`kanban.pipelineAct.pending.${busy}`) }) : refusalWhy(option) ?? why,
         disabled: Boolean(busy) || option.refusal !== null,
-        onSelect: () => startPipelineAction({ pipelineId: pipeline.id, title, action: option.action, stageId: option.stageId, stageName }),
+        onSelect: () => startPipelineAction({ pipelineId: pipeline.id, title, action: option.action, stageId: option.stageId, stageName, expectedAttempt: option.attempt }),
       };
     };
     const retry = options.get("retry-stage")!;

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import type { PatchPipelineRequest, Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 
+import { stageDigest, stageDigests } from "@/lib/pipelines/stageDigest";
+
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { actionObserved, currentStageId, draftFacts, draftOutcome, finishedStageIds, paneFacts, pipelineActionOptions, shownAttempt, stageNotStarted } from "./stagesModel";
@@ -90,15 +92,18 @@ test("a stage is editable until its first attempt exists, a helper included", ()
 test("pipeline actions carry the engine's own refusals", () => {
   const byAction = (record: Pipeline) => Object.fromEntries(pipelineActionOptions(record).map((option) => [option.action, option]));
   expect(byAction(retrying)).toEqual({
-    pause: { action: "pause", refusal: null, stageId: null },
-    "retry-stage": { action: "retry-stage", refusal: "no-decision", stageId: null },
-    "skip-stage": { action: "skip-stage", refusal: "no-decision", stageId: null },
-    close: { action: "close", refusal: null, stageId: null },
+    pause: { action: "pause", refusal: null, stageId: null, attempt: null },
+    "retry-stage": { action: "retry-stage", refusal: "no-decision", stageId: null, attempt: null },
+    "skip-stage": { action: "skip-stage", refusal: "no-decision", stageId: null, attempt: null },
+    close: { action: "close", refusal: null, stageId: null, attempt: null },
   });
   const parked = byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "verify", state: "running" } } as unknown as Pipeline);
-  expect(parked["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "verify" });
-  expect(parked["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "verify" });
-  expect(byAction({ ...retrying, state: "paused" } as Pipeline).resume).toEqual({ action: "resume", refusal: null, stageId: null });
+  /* The attempt retry and skip expect is the waiting stage's latest own attempt. */
+  expect(parked["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "verify", attempt: 2 });
+  expect(parked["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "verify", attempt: 2 });
+  /* Implement's last recorded attempt is an adopted helper (3): the expected attempt is its own latest, 2. */
+  expect(byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "implement", state: "running" } } as unknown as Pipeline)["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "implement", attempt: 2 });
+  expect(byAction({ ...retrying, state: "paused" } as Pipeline).resume).toEqual({ action: "resume", refusal: null, stageId: null, attempt: null });
   const ended = byAction({ ...retrying, state: "completed" } as Pipeline);
   expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal]).toEqual(["ended", "ended", "ended"]);
   const draft = byAction({ ...retrying, state: "draft" } as Pipeline);
@@ -115,7 +120,8 @@ function fakePorts(records: Array<Pipeline | null>, answers: PipelineWriteResult
     refresh: () => { refreshes.count += 1; },
     read: async (id) => {
       reads.push(id);
-      return records.length > 1 ? records.shift()! : records[0]!;
+      const record = records.length > 1 ? records.shift()! : records[0]!;
+      return record ? { pipeline: record, stageDigests: stageDigests(record.stages) } : null;
     },
     patch: async (_id, body) => {
       patches.push(body);
@@ -125,6 +131,7 @@ function fakePorts(records: Array<Pipeline | null>, answers: PipelineWriteResult
   return { ports, patches, reads, refreshes };
 }
 const key = stageDraftKey("p-search", "merge");
+const mergeDigest = (record: Pipeline) => stageDigest(record.stages.find((entry) => entry.id === "merge")!);
 const withMergePrompt = (prompt: string, record = retrying) => ({ ...record, stages: record.stages.map((entry) => (entry.id === "merge" ? { ...entry, prompt } : entry)) }) as Pipeline;
 
 test("a save re-reads the stage and writes its words back into the stage's own wiring", async () => {
@@ -134,7 +141,7 @@ test("a save re-reads the stage and writes its words back into the stage's own w
   drafts.edit(key, "  Merge after the rebuild settles.  ");
   await drafts.save(key, ports);
   expect(reads).toEqual(["p-search"]);
-  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles." }]);
+  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles.", expectedStageDigest: mergeDigest(retrying) }]);
   expect(drafts.get(key)).toBeNull();
   expect(drafts.saved(key)).toBe(1_000);
 });
@@ -160,7 +167,7 @@ test("words another client saved since the edit began stop the write: Use theirs
   expect(drafts.get(key)).toMatchObject({ phase: "changed", theirs: "Merge only on a green main.", text: "Merge after the rebuild settles.", base: "Stage merge." });
 
   await drafts.save(key, ports, { keepMine: true });
-  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles." }]);
+  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles.", expectedStageDigest: mergeDigest(theirs) }]);
   expect(drafts.get(key)).toBeNull();
 
   drafts.begin("p-search", "merge", "Stage merge.");
@@ -225,7 +232,7 @@ test("a draft saving cannot be edited, dropped or saved twice; unchanged words c
   const patches: PatchPipelineRequest[] = [];
   const ports: PipelinePorts = {
     refresh: () => {},
-    read: () => new Promise<Pipeline>((resolve) => { release = resolve; }),
+    read: () => new Promise((resolve) => { release = (record) => resolve({ pipeline: record, stageDigests: stageDigests(record.stages) }); }),
     patch: async (_id, body) => { patches.push(body); return { ok: true, pipeline: retrying }; },
   };
   drafts.begin("p-search", "merge", "Stage merge.");
@@ -237,7 +244,7 @@ test("a draft saving cannot be edited, dropped or saved twice; unchanged words c
   await drafts.save(key, ports);
   release(retrying);
   await saving;
-  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles." }]);
+  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles.", expectedStageDigest: mergeDigest(retrying) }]);
 
   const same = new StageDrafts();
   const quiet = fakePorts([retrying]);
@@ -290,7 +297,7 @@ test("empty words are saved as the stage's wiring alone", async () => {
   drafts.begin("p-search", "merge", "Stage merge.");
   drafts.edit(key, "   ");
   await drafts.save(key, ports);
-  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}" }]);
+  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}", expectedStageDigest: mergeDigest(retrying) }]);
   expect(drafts.get(key)).toBeNull();
 });
 
@@ -360,4 +367,51 @@ test("the browser port calls a write with no answer, or an answer without the ro
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+/* ── K5c: the engine's own guard on a stage message save ─────────────────── */
+
+const stageChanged: PipelineWriteResult = { ok: false, status: 409, error: "the stage changed since it was read; read it again before overriding it", code: "STAGE_CHANGED", field: "expectedStageDigest" };
+
+test("a stage another client changed between the read and the write is refused by the engine; the save reads it again and shows its words", async () => {
+  const drafts = new StageDrafts();
+  const theirs = withMergePrompt("{{prev.output}}\n\nMerge only on a green main.");
+  const route = fakePorts([retrying, theirs], [stageChanged]);
+  drafts.begin("p-search", "merge", "Stage merge.");
+  drafts.edit(key, "Merge after the rebuild settles.");
+  await drafts.save(key, route.ports);
+  expect(route.patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the rebuild settles.", expectedStageDigest: mergeDigest(retrying) }]);
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(drafts.get(key)).toMatchObject({ phase: "changed", theirs: "Merge only on a green main.", text: "Merge after the rebuild settles." });
+  expect(drafts.saved(key)).toBeNull();
+});
+
+test("when only the stage's account, role or runtime changed, its words are the same, and Keep mine writes against the new digest", async () => {
+  const drafts = new StageDrafts();
+  const otherAccount = { ...retrying, stages: retrying.stages.map((entry) => (entry.id === "merge" ? { ...entry, account: "account-b" } : entry)) } as Pipeline;
+  const route = fakePorts([retrying, otherAccount, otherAccount], [stageChanged]);
+  drafts.begin("p-search", "merge", "Stage merge.");
+  drafts.edit(key, "Merge after the rebuild settles.");
+  await drafts.save(key, route.ports);
+  expect(drafts.get(key)).toMatchObject({ phase: "changed", theirs: "Stage merge.", base: "Stage merge." });
+  await drafts.save(key, route.ports, { keepMine: true });
+  expect(route.patches.map((patch) => patch.expectedStageDigest)).toEqual([mergeDigest(retrying), mergeDigest(otherAccount)]);
+  expect(drafts.get(key)).toBeNull();
+});
+
+test("a read that carries no digest for the stage writes nothing, and a stage that started before the re-read settles as started", async () => {
+  const unguarded = new StageDrafts();
+  const bare: PipelinePorts = { refresh: () => {}, read: async () => ({ pipeline: retrying, stageDigests: {} }), patch: async () => { throw new Error("no write may be sent"); } };
+  unguarded.begin("p-search", "merge", "Stage merge.");
+  unguarded.edit(key, "Merge after the rebuild settles.");
+  await unguarded.save(key, bare);
+  expect(unguarded.get(key)).toMatchObject({ phase: "failed", error: { kind: "read" } });
+
+  const raced = new StageDrafts();
+  const route = fakePorts([retrying, started("{{prev.output}}\n\nStage merge.")], [stageChanged]);
+  raced.begin("p-search", "merge", "Stage merge.");
+  raced.edit(key, "Merge after the rebuild settles.");
+  await raced.save(key, route.ports);
+  expect(route.patches).toHaveLength(1);
+  expect(raced.get(key)).toMatchObject({ phase: "started", text: "Merge after the rebuild settles." });
 });

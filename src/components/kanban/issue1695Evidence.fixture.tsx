@@ -412,6 +412,8 @@ const evidence = {
   startStageOnNextPatch: null as { pipelineId: string; stageId: string } | null,
   /* The next pipeline write is carried out and its answer is lost on the way back. */
   loseNextPipelineAnswer: false,
+  /* Another client saves this stage's prompt after the board's read and before its write lands. */
+  changeStageBeforeNextPatch: null as { pipelineId: string; stageId: string; prompt: string } | null,
   /* Another client acts first: the pipeline now waits on this stage. */
   moveCursor(pipelineId: string, stageId: string) {
     const index = pipelines.findIndex((entry) => entry.id === pipelineId);
@@ -445,6 +447,25 @@ class QuietEventSource {
 Object.assign(window, { EventSource: QuietEventSource });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+/* The engine's stage digest (`stageDigest`) is a SHA-256 the server computes;
+   this page has no server, so its route answers an opaque stand-in over the
+   same canonical fields. The board only ever hands a digest back. */
+function fixtureStageDigest(stage: Pipeline["stages"][number]): string {
+  const canonical = JSON.stringify({
+    "prompt": stage.prompt,
+    account: typeof stage.account === "string" && stage.account.trim() ? stage.account.trim() : null,
+    role: stage.role ? { roleId: stage.role.roleId, params: stage.role.params ?? null } : null,
+    runtime: { engine: stage.effectiveRole.engine, model: stage.effectiveRole.model ?? null, effort: stage.effectiveRole.effort ?? null, access: stage.effectiveRole.access ?? null },
+  });
+  let hex = "";
+  for (let seed = 0; seed < 8; seed += 1) {
+    let hash = 0x811c9dc5 ^ seed;
+    for (let index = 0; index < canonical.length; index += 1) hash = Math.imul(hash ^ canonical.charCodeAt(index), 0x01000193);
+    hex += (hash >>> 0).toString(16).padStart(8, "0");
+  }
+  return hex;
+}
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
@@ -540,7 +561,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (index < 0) return json({ error: "pipeline not found" }, 404);
     if (method === "GET") {
       evidence.pipelineReads.push(id);
-      return json({ ok: true, pipeline: pipelines[index] });
+      const read = pipelines[index]!;
+      return json({ ok: true, pipeline: read, stageDigests: Object.fromEntries(read.stages.map((stage) => [stage.id, fixtureStageDigest(stage)])) });
     }
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -558,10 +580,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         record.state = "running";
         pipelines[index] = record;
       }
+      const between = evidence.changeStageBeforeNextPatch;
+      if (between && between.pipelineId === id) {
+        evidence.changeStageBeforeNextPatch = null;
+        const target = record.stages.find((entry) => entry.id === between.stageId);
+        if (target) target.prompt = between.prompt;
+        pipelines[index] = structuredClone(record);
+      }
       if (evidence.refuseNextPipelinePatch) {
         const refusal = evidence.refuseNextPipelinePatch;
         evidence.refuseNextPipelinePatch = null;
         return json({ error: refusal.error }, refusal.status);
+      }
+      /* The engine's guards (#1695 C7, retry/skip), checked before anything changes. */
+      const stageChanged = (field: string, error: string) => json({ error, code: "STAGE_CHANGED", field }, 409);
+      if ((body.action === "retry-stage" || body.action === "skip-stage") && body.expectedStageId !== undefined) {
+        const waiting = record.state === "needs_decision" ? record.cursor?.stageId ?? null : null;
+        if (waiting !== body.expectedStageId) return stageChanged("expectedStageId", `the pipeline waits on ${waiting ?? "no stage"}, not ${String(body.expectedStageId)}`);
+        const latest = record.runs.find((run) => run.stageId === waiting)?.attempts.findLast((entry) => !entry.historical)?.n ?? null;
+        if (body.expectedAttempt !== undefined && latest !== body.expectedAttempt) return stageChanged("expectedAttempt", `${waiting} waits on attempt ${latest ?? "none"}`);
       }
       /* The engine's preconditions for what the board sends (`patchPipeline`). */
       const ended = record.state === "completed" || record.state === "closed";
@@ -570,6 +607,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const target = record.stages.find((entry) => entry.id === body.stageId);
         if (!target) return json({ error: "stage not found" }, 404);
         if ((record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
+        if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
       } else if (body.action === "pause") {
         if (record.state === "draft") return json({ error: "draft pipelines can only be started, edited, or deleted" }, 409);

@@ -7,6 +7,8 @@ import type { PatchPipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { stageDigest, stageDigests } from "@/lib/pipelines/stageDigest";
+
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
@@ -129,8 +131,26 @@ function task(id: string, status: TaskStatus, text: string): BoardTask {
 const idlePorts: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* The engine's guards (#1695 C7, retry/skip), as the route answers them. */
+function guardRefusal(pipeline: Pipeline, body: PatchPipelineRequest): PipelineWriteResult | null {
+  const changed = (field: string, error: string): PipelineWriteResult => ({ ok: false, status: 409, error, code: "STAGE_CHANGED", field });
+  if (body.action === "override-stage" && body.expectedStageDigest !== undefined) {
+    const target = pipeline.stages.find((entry) => entry.id === body.stageId);
+    if (target && stageDigest(target) !== body.expectedStageDigest) return changed("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
+  }
+  if ((body.action === "retry-stage" || body.action === "skip-stage") && body.expectedStageId !== undefined) {
+    const waiting = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
+    if (waiting !== body.expectedStageId) return changed("expectedStageId", `the pipeline waits on ${waiting ?? "no stage"}`);
+    const latest = pipeline.runs.find((run) => run.stageId === waiting)?.attempts.findLast((attempt) => !attempt.historical)?.n ?? null;
+    if (body.expectedAttempt !== undefined && latest !== body.expectedAttempt) return changed("expectedAttempt", `${waiting} waits on attempt ${latest}`);
+  }
+  return null;
+}
+
 /* The pipeline route, answered by the test: each write waits for `release`
-   when `hold` is set, so the pending state can be read. */
+   when `hold` is set, so the pending state can be read. Queued answers win;
+   otherwise the engine's guards decide against the record as it is then, and
+   `beforeWrite` lets another client act between a read and a write. */
 function pipelineRoute(stored: () => Pipeline) {
   const patches: Array<{ id: string; body: PatchPipelineRequest }> = [];
   const reads: string[] = [];
@@ -140,16 +160,24 @@ function pipelineRoute(stored: () => Pipeline) {
     hold: false,
     release: () => {},
     refreshes: 0,
+    omitDigests: false,
+    beforeWrite: null as (() => void) | null,
   };
   const ports: PipelinePorts = {
     read: async (id) => {
       reads.push(id);
-      return state.record ?? stored();
+      const pipeline = state.record ?? stored();
+      return { pipeline, stageDigests: state.omitDigests ? {} : stageDigests(pipeline.stages) };
     },
     patch: async (id, body) => {
       patches.push({ id, body });
       if (state.hold) await new Promise<void>((resolve) => { state.release = resolve; });
-      return state.answers.shift() ?? { ok: true, pipeline: stored() };
+      const queued = state.answers.shift();
+      if (queued) return queued;
+      state.beforeWrite?.();
+      state.beforeWrite = null;
+      const current = state.record ?? stored();
+      return guardRefusal(current, body) ?? { ok: true, pipeline: current };
     },
     refresh: () => { state.refreshes += 1; },
   };
@@ -289,7 +317,9 @@ test("retry and skip name the stage the pipeline waits on and send the action al
   expect(menuItem(host, "Retry Verifier")?.getAttribute("aria-disabled")).toBeNull();
   click(menuItem(host, "Skip Verifier"));
   await tick();
-  expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage" } }]);
+  /* The stage and attempt the operator saw ride along; the engine checks them before it acts. */
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+  expect(route.reads).toEqual([]);
   expect(receiptTexts(host)).toEqual(["Skipped Verifier in «Restore search results after the index rebuild»"]);
 });
 
@@ -435,7 +465,7 @@ test("a waiting node opens its first message on the card; Save re-reads the stag
   key(field, "Enter", { ctrlKey: true });
   await tick();
   expect(route.reads).toEqual(["p-search"]);
-  expect(route.patches).toEqual([{ id: "p-search", body: { action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the alias swap and one warm query." } }]);
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "override-stage", stageId: "merge", prompt: "{{prev.output}}\n\nMerge after the alias swap and one warm query.", expectedStageDigest: stageDigest(searchPipeline().stages.find((entry) => entry.id === "merge")!) } }]);
   expect(panel.querySelector("textarea.draft-edit")).toBeNull();
   expect(panel.querySelector(".bstatus")?.textContent).toMatch(/^Waiting for stage start · not delivered · edited \d/);
   same(document.activeElement, panel.querySelector("[data-draft-edit]"));
@@ -525,40 +555,107 @@ test("Escape cancels an edit and hands focus back to Edit; a panel with nothing 
 
 const parkedOn = (stageId: string) => searchPipeline({ state: "needs_decision", cursor: { stageId, state: "running", input: null, activatedBy: null } } as Partial<Pipeline>);
 
-test("a refused skip's Retry reads the pipeline first: with the cursor moved, nothing is sent and the receipt names the stage it waits on now", async () => {
+test("a refused skip's Retry sends the same guarded expectations; with the cursor moved the engine refuses it, and the receipt names the stage it waits on now", async () => {
   const { host, route } = mount(parkedOn("verify"));
   await tick();
   route.state.answers.push({ ok: false, status: 409, error: "the stage worktree has uncommitted changes" });
   click(card(host).querySelector("[data-pipeline-menu]"));
   click(menuItem(host, "Skip Verifier"));
   await tick();
-  expect(route.reads).toEqual(["p-search"]);
-  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "skip-stage" }]);
+  expect(route.reads).toEqual([]);
+  const guarded: PatchPipelineRequest = { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 };
+  expect(route.patches.map((patch) => patch.body)).toEqual([guarded]);
   const refused = host.querySelector("[data-kanban-receipt].error");
   expect(refused?.querySelector(".msg")?.textContent).toBe("Skip Verifier was refused: the stage worktree has uncommitted changes");
   route.state.record = parkedOn("implement");
   click(refused?.querySelector(".act"));
   await tick();
-  expect(route.reads).toEqual(["p-search", "p-search"]);
-  expect(route.patches).toHaveLength(1);
+  expect(route.patches.map((patch) => patch.body)).toEqual([guarded, guarded]);
+  /* Refused by the guard: read once, to say what waits now; nothing is resent. */
+  expect(route.reads).toEqual(["p-search"]);
   expect(receiptTexts(host)).toEqual(["Skip Verifier was not sent: the pipeline now waits on Builder."]);
 });
 
-test("a skip chosen on a stale menu sends nothing once the read shows another stage waiting, and a sent one is named from that read", async () => {
+test("a retry chosen on a stale menu is refused by the engine when another stage, or a newer attempt of the same stage, waits now; a current one retries", async () => {
   const { host, route } = mount(parkedOn("verify"));
   await tick();
   route.state.record = parkedOn("implement");
   click(card(host).querySelector("[data-pipeline-menu]"));
   click(menuItem(host, "Retry Verifier"));
   await tick();
-  expect(route.patches).toEqual([]);
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 }]);
   expect(receiptTexts(host)).toEqual(["Retry Verifier was not sent: the pipeline now waits on Builder."]);
+
+  const newer = parkedOn("verify");
+  newer.runs.find((run) => run.stageId === "verify")!.attempts.push(attempt(3, "failed", verify2, 60) as never);
+  route.state.record = newer;
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Retry Verifier"));
+  await tick();
+  expect(receiptTexts(host).at(-1)).toBe("Retry Verifier was not sent: a newer attempt of Verifier waits now.");
+
   route.state.record = null;
   click(card(host).querySelector("[data-pipeline-menu]"));
   click(menuItem(host, "Retry Verifier"));
   await tick();
-  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "retry-stage" }]);
+  expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 });
   expect(receiptTexts(host).at(-1)).toBe("Retrying Verifier in «Restore search results after the index rebuild»");
+});
+
+test("a stage another client changes between the save's read and its write is refused by the engine and keeps that client's words, which the notice shows", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  await tick();
+  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  click(panel().querySelector("[data-draft-edit]"));
+  type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
+  route.state.beforeWrite = () => { route.state.record = withMergePrompt(searchPipeline(), "{{prev.output}}\n\nTheirs, saved in between."); };
+  click(panel().querySelector("[data-draft-save]"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
+  expect(route.patches[0]!.body.expectedStageDigest).toBe(stageDigest(searchPipeline().stages.find((entry) => entry.id === "merge")!));
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(panel().querySelector("[data-draft-changed] .msg-text")?.textContent).toBe("Changed elsewhere since you began: «Theirs, saved in between.»");
+  expect(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")?.value).toBe("Mine.");
+});
+
+test("when only the stage's account changed in between, the words are the same: the notice says so, and Keep mine saves against the new digest", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  await tick();
+  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  click(panel().querySelector("[data-draft-edit]"));
+  type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
+  const otherAccount = searchPipeline();
+  otherAccount.stages.find((entry) => entry.id === "merge")!.account = "account-b";
+  route.state.beforeWrite = () => { route.state.record = otherAccount; };
+  click(panel().querySelector("[data-draft-save]"));
+  await tick();
+  expect(panel().querySelector("[data-draft-changed] .msg-text")?.textContent).toBe("The stage's account, role or runtime changed elsewhere since you began; its words did not. Your text is kept.");
+  click([...panel().querySelectorAll<HTMLElement>("[data-draft-changed] button")].find((button) => button.textContent === "Keep mine"));
+  await tick();
+  expect(route.patches.map((patch) => patch.body.expectedStageDigest)).toEqual([
+    stageDigest(searchPipeline().stages.find((entry) => entry.id === "merge")!),
+    stageDigest(otherAccount.stages.find((entry) => entry.id === "merge")!),
+  ]);
+  expect(panel().querySelector("textarea.draft-edit")).toBeNull();
+});
+
+test("a read without the stage's digest sends no unguarded write", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  await tick();
+  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  click(panel().querySelector("[data-draft-edit]"));
+  type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
+  route.state.omitDigests = true;
+  click(panel().querySelector("[data-draft-save]"));
+  await tick();
+  expect(route.patches).toEqual([]);
+  expect(panel().querySelector("[data-draft-failed]")).toBeTruthy();
 });
 
 test("an action with no answer is not confirmed, never refused; Check again only reads, and says what the pipeline shows", async () => {
@@ -654,7 +751,7 @@ test("clearing a waiting stage's words saves its wiring alone", async () => {
   expect(panel()!.querySelector<HTMLButtonElement>("[data-draft-save]")?.disabled).toBe(false);
   key(panel()!.querySelector("textarea.draft-edit"), "Enter", { ctrlKey: true });
   await tick();
-  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}" }]);
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}", expectedStageDigest: stageDigest(searchPipeline().stages.find((entry) => entry.id === "merge")!) }]);
   expect(panel()!.querySelector("textarea.draft-edit")).toBeNull();
 });
 

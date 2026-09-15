@@ -20,11 +20,17 @@ import { applyPipelineSnapshot } from "@/hooks/useFiles";
  */
 export type PipelineWriteResult =
   | { ok: true; pipeline: Pipeline }
-  | { ok: false; status: number; error: string; code?: string; unknown?: true };
+  | { ok: false; status: number; error: string; code?: string; field?: string; unknown?: true };
+
+/** A pipeline as the route reads it, with each stage's digest (`stageDigest`), which guards `override-stage`. */
+export interface PipelineRead {
+  pipeline: Pipeline;
+  stageDigests: Readonly<Record<string, string>>;
+}
 
 export interface PipelinePorts {
   /** The stored record, or null when it cannot be read. */
-  read(id: string): Promise<Pipeline | null>;
+  read(id: string): Promise<PipelineRead | null>;
   patch(id: string, body: PatchPipelineRequest): Promise<PipelineWriteResult>;
   /** Ask every surface to read the catalog again: a check found it behind. */
   refresh(): void;
@@ -38,8 +44,10 @@ export const browserPipelinePorts: PipelinePorts = {
     try {
       const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (!response.ok) return null;
-      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline } | null;
-      return json?.pipeline ?? null;
+      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; stageDigests?: Record<string, unknown> } | null;
+      if (!json?.pipeline) return null;
+      const stageDigests = Object.fromEntries(Object.entries(json.stageDigests ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+      return { pipeline: json.pipeline, stageDigests };
     } catch {
       return null;
     }
@@ -51,14 +59,14 @@ export const browserPipelinePorts: PipelinePorts = {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string; code?: string } | null;
+      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string; code?: string; field?: string } | null;
       if (response.ok && json?.pipeline) {
         applyPipelineSnapshot(json.pipeline, true);
         if (REFRESH_ACTIONS.has(body.action)) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
         return { ok: true, pipeline: json.pipeline };
       }
       if (response.ok || typeof json?.error !== "string") return { ok: false, status: response.status, error: `HTTP ${response.status}`, unknown: true };
-      return { ok: false, status: response.status, error: json.error, ...(json.code ? { code: json.code } : {}) };
+      return { ok: false, status: response.status, error: json.error, ...(json.code ? { code: json.code } : {}), ...(json.field ? { field: json.field } : {}) };
     } catch (error) {
       return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), unknown: true };
     }
@@ -67,6 +75,11 @@ export const browserPipelinePorts: PipelinePorts = {
     window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
   },
 };
+
+/** The engine's refusal of a guarded write: the stage it named is not the one the pipeline holds now. */
+export function isStageChanged(result: PipelineWriteResult): boolean {
+  return !result.ok && !result.unknown && result.status === 409 && result.code === "STAGE_CHANGED";
+}
 
 /** The engine's refusal for a stage whose first attempt exists (`override-stage`). */
 export function isAlreadyStarted(result: PipelineWriteResult): boolean {

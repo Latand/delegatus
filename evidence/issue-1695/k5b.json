@@ -855,10 +855,11 @@
         "body": {
           "action": "override-stage",
           "stageId": "review",
-          "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog."
+          "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog.",
+          "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
         }
       },
-      "status": "Waiting for stage start · not delivered · edited 03:04 AM"
+      "status": "Waiting for stage start · not delivered · edited 03:49 AM"
     },
     "startedDuringSave": {
       "notice": {
@@ -871,6 +872,20 @@
         "reader": "conversation_links-review"
       }
     },
+    "changedBetweenReadAndWrite": {
+      "notice": "Changed elsewhere since you began: «Theirs, saved between the read and the write.»",
+      "field": "Mine, typed before the other save landed.",
+      "writes": [
+        {
+          "action": "override-stage",
+          "stageId": "review",
+          "prompt": "{{prev.output}}\n\nMine, typed before the other save landed.",
+          "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
+        }
+      ],
+      "reads": 2,
+      "stored": "{{prev.output}}\n\nTheirs, saved between the read and the write."
+    },
     "changedElsewhere": {
       "changed": "Changed elsewhere since you began: «Document the resume token and link the migration note.»",
       "writesBefore": 0,
@@ -879,7 +894,8 @@
         "body": {
           "action": "override-stage",
           "stageId": "docs",
-          "prompt": "{{prev.output}}\n\nDocument the resume token, the limits, and the retry header."
+          "prompt": "{{prev.output}}\n\nDocument the resume token, the limits, and the retry header.",
+          "expectedStageDigest": "382c4b2ed9ec63d73a022630da557501ecc6e55a3545c233d8ec47ccb3287acd"
         }
       }
     },
@@ -912,10 +928,17 @@
       "notSent": "Skip Builder was not sent: the pipeline now waits on Reviewer.",
       "writes": [
         {
-          "action": "skip-stage"
+          "action": "skip-stage",
+          "expectedStageId": "implement",
+          "expectedAttempt": 1
+        },
+        {
+          "action": "skip-stage",
+          "expectedStageId": "implement",
+          "expectedAttempt": 1
         }
       ],
-      "reads": 2
+      "reads": 1
     },
     "persistentReader": {
       "inPane": {

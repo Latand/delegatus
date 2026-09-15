@@ -9688,3 +9688,176 @@ test("a spawn the engine before #1678 left interrupted retries under an id that 
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
 });
+
+/* ── #1695 C7 and the retry/skip guard: stated expectations, checked in the mutation ── */
+
+const { stageDigest } = await import("./stageDigest");
+const buildStageOf = () => loadPipelines()[0]!.stages.find((stage) => stage.id === "build")!;
+
+test("override-stage with expectedStageDigest writes only against the digest the stage still has, whatever another client changed", async () => {
+  const { ports } = harness();
+  const created = await create(ports);
+  const seen = stageDigest(buildStageOf());
+  const saved = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine.", expectedStageDigest: seen }, ports);
+  expect(saved.error).toBeUndefined();
+  expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine.");
+
+  /* Each change another client can make through override-stage moves the digest, and a write against the old one changes nothing. */
+  const changes: Array<[string, Parameters<typeof patchPipeline>[1]]> = [
+    ["prompt", { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nTheirs." }],
+    ["account", { action: "override-stage", stageId: "build", account: "account-b" }],
+    ["role", { action: "override-stage", stageId: "build", role: { roleId: "architect" } }],
+    ["runtime", { action: "override-stage", stageId: "build", engine: "claude", model: "opus", effort: "high" }],
+  ];
+  for (const [label, change] of changes) {
+    const before = stageDigest(buildStageOf());
+    expect((await patchPipeline(created.id, change, ports)).error).toBeUndefined();
+    const theirs = structuredClone(buildStageOf());
+    expect(stageDigest(theirs)).not.toBe(before);
+    const refused = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": `Build from {{prev.output}}\n\nMine after ${label}.`, account: null, expectedStageDigest: before }, ports);
+    expect({ label, status: refused.status, code: refused.code, field: refused.field }).toEqual({ label, status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+    expect(buildStageOf()).toEqual(theirs);
+  }
+
+  /* A write against the digest the stage has now goes through. */
+  const current = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine at last.", expectedStageDigest: current }, ports)).error).toBeUndefined();
+  expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine at last.");
+});
+
+test("a started stage keeps its already-started answer even against a stale digest, and an override without a digest is unchanged", async () => {
+  const { ports } = harness();
+  const created = await create(ports);
+  const stale = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build v2" }, ports)).error).toBeUndefined();
+  const started = loadPipelines()[0]!;
+  started.runs.find((run) => run.stageId === "build")!.attempts.push({
+    n: 1, state: "running", effectiveRole: structuredClone(buildStageOf().effectiveRole), launchId: null,
+    conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+  });
+  savePipelines([started]);
+  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports)).toEqual({ error: "stage has already started", status: 409 });
+});
+
+test("guard values that are present but malformed, or stated on an action they do not guard, are refused before anything changes", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = structuredClone(loadPipelines()[0]!);
+  const refusals: Array<[Record<string, unknown>, "expectedStageDigest" | "expectedStageId" | "expectedAttempt"]> = [
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: "abc" }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: null }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()).toUpperCase() }, "expectedStageDigest"],
+    [{ action: "retry-stage", expectedStageDigest: stageDigest(buildStageOf()) }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageId: "build" }, "expectedStageId"],
+    [{ action: "skip-stage", expectedStageId: "" }, "expectedStageId"],
+    [{ action: "retry-stage", expectedStageId: 7 }, "expectedStageId"],
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1.5 }, "expectedAttempt"],
+    [{ action: "skip-stage", expectedStageId: "plan", expectedAttempt: "1" }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedAttempt: 1 }, "expectedAttempt"],
+    [{ action: "pause", expectedAttempt: 1 }, "expectedAttempt"],
+  ];
+  for (const [request, field] of refusals) {
+    const refused = await patchPipeline(created.id, request as never, h.ports);
+    expect({ request, status: refused.status, field: refused.field, code: refused.code }).toEqual({ request, status: 400, field, code: undefined });
+  }
+  expect(loadPipelines()[0]).toEqual(before);
+  expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(false);
+});
+
+test("retry-stage with the stage and attempt the caller saw retries it; the same expectations again are refused before any effect, and one new attempt starts", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+
+  const first = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(first.error).toBeUndefined();
+  const callsAfterFirst = h.calls.length;
+  const second = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: second.status, code: second.code, field: second.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageId" });
+  expect(h.calls.length).toBe(callsAfterFirst);
+
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith(`spawn:pipeline_${pipeline.id}_plan_`))).toEqual([
+    `spawn:pipeline_${pipeline.id}_plan_1:parent=/codex/creator.jsonl:supersedes=none`,
+    `spawn:pipeline_${pipeline.id}_plan_2:parent=/codex/creator.jsonl:supersedes=conversation_stage_1`,
+  ]);
+
+  /* Attempt 2 parks too: a retry that still names attempt 1 is refused, one naming attempt 2 retries. */
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail", "still blocked")], h.ports);
+  const callsBeforeStale = h.calls.length;
+  const stale = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: stale.status, code: stale.code, field: stale.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(h.calls.length).toBe(callsBeforeStale);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_3:parent=/codex/creator.jsonl:supersedes=conversation_stage_2`);
+});
+
+test("skip-stage naming another stage or another attempt is refused before the worktree is reset; the one it names is skipped", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision", "operator choice")], h.ports);
+  const resets = () => h.calls.filter((call) => call.includes("reset --hard") || call.includes("clean -fd")).length;
+
+  const otherStage = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "build" }, h.ports);
+  expect({ status: otherStage.status, code: otherStage.code, field: otherStage.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageId" });
+  const otherAttempt = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports);
+  expect({ status: otherAttempt.status, code: otherAttempt.code, field: otherAttempt.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(resets()).toBe(0);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+
+  const skipped = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(skipped.pipeline?.cursor?.stageId).toBe("build");
+  expect(resets()).toBe(2);
+  /* The pipeline no longer waits on plan: the same skip again changes nothing. */
+  const again = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(again.code).toBe("STAGE_CHANGED");
+  expect(resets()).toBe(2);
+});
+
+test("the attempt retry expects is the stage's latest own attempt, never a lineage-adopted one", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "retry me")], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  adoptAttempt(pipeline, "plan", {
+    sourceConversationId: "conversation_stage_1", launchId: "launch-historical", conversationId: "conversation_historical",
+    sessionId: "session-historical", agentPath: "/codex/historical.jsonl", paneId: null, startedAt: "1970-01-01T00:12:00.000Z",
+  });
+  savePipelines([pipeline]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.map((attempt) => [attempt.n, attempt.historical ?? false])).toEqual([[1, false], [2, true]]);
+
+  const onHelper = await patchPipeline(created.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports);
+  expect({ code: onHelper.code, field: onHelper.field }).toEqual({ code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect((await patchPipeline(created.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+});
+
+test("a launch-receipt retry keeps its meaning with the guard stated beside it", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  const firstAttempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.ports.spawnReceipt = (candidate) => candidate === firstAttempt.launchId ? {
+    state: "failed", launchId: firstAttempt.launchId!, conversationId: firstAttempt.conversationId!,
+    sessionId: firstAttempt.sessionId, "transcript": firstAttempt.agentPath, paneId: firstAttempt.paneId,
+  } : null;
+  /* A receipt for a different launch is still refused as before, guard or not. */
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "plan", launchId: "launch-other", expectedStageId: "plan", expectedAttempt: 1 }, h.ports))
+    .toEqual({ error: "the clicked launch is no longer the current failed attempt", status: 409 });
+  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "plan", launchId: firstAttempt.launchId!, expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(retried.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_2:parent=/codex/creator.jsonl:supersedes=conversation_stage_1`);
+});
