@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import type { SchemeLayout } from "@/components/scheme/layout";
+import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
@@ -306,4 +307,70 @@ test("an agent draft is the card's own: a band-local draft on its task, any othe
   expect(alone.origin).toBe("draft");
   expect(alone.otherSurfaces).toBe(0);
   expect(alone.idle).toBe(false);
+});
+
+
+function reviewerActivityFixture() {
+  const implementer = file(101, { lastAgentWorkAt: 1000 });
+  const reviewer = file(102, { lastAgentWorkAt: 3000, parent: implementer.path });
+  const other = file(103, { lastAgentWorkAt: 2000 });
+  const role = { engine: "codex" as const, model: null, effort: null };
+  const flow: Flow = {
+    id: "folded-review-flow", template: "implement-review-loop", project: "fixture", cwd: "/repo",
+    implementerPath: implementer.path, implementerConversationId: implementer.conversationId,
+    roles: { implementer: role, reviewer: role }, baseRef: "fixture-base", baseMode: "head", mode: "auto",
+    reviewerMode: "headless", roundLimit: 2, state: "reviewing", stateDetail: null,
+    createdAt: "2026-09-15T00:00:00Z", closedAt: null,
+    rounds: [{ n: 1, reviewerPath: reviewer.path, reviewerConversationId: reviewer.conversationId,
+      findingsPath: null, triggeredBy: "marker", readyNote: null, verdict: null, findingsCount: null,
+      startedAt: "2026-09-15T00:01:00Z", reviewedAt: null, relayedAt: null, error: null }],
+  };
+  const project = (files: FileEntry[], tasks: BoardTask[] = []) => {
+    const layout = buildSchemeLayout([], [implementer, other], files, [flow]);
+    const projection = projectTaskWorkflows(tasks, [], [flow], files);
+    const bands = buildTaskBands(layout, { tasks, projection, untitled: "Untitled" });
+    const result = buildKanbanModel({ bands, tasks, pipelines: [], flows: [flow], files, projection, now: NOW });
+    return { layout, bands, result, card: result.unlinked.find(card => card.id === `flow:${flow.id}`)! };
+  };
+  return { implementer, reviewer, other, flow, project };
+}
+
+test("taskless flow ordering includes reviewers folded into the real review deck", () => {
+  const { implementer, reviewer, other, project } = reviewerActivityFixture();
+  const { layout, result, card } = project([implementer, reviewer, other]);
+  expect(layout.decks[0]!.rounds.some(round => round.file?.path === reviewer.path)).toBe(true);
+  expect(card.members.map(member => member.file.path)).toEqual([implementer.path]);
+  expect(card.lastAgentWorkAtMs).toBe(3000);
+  expect(result.unlinked[0]).toBe(card);
+  const older = project([implementer, { ...reviewer, lastAgentWorkAt: null, mtime: NOW + 1000, title: "Renamed" }, other]);
+  expect(older.card.lastAgentWorkAtMs).toBe(1000);
+  expect(older.result.unlinked[0]).not.toBe(older.card);
+});
+
+test("folded reviewer ordering preserves historical bindings and current-generation resolution", () => {
+  const { implementer, reviewer, other, flow, project } = reviewerActivityFixture();
+  const membership = (slot: string) => ({ kind: "flow" as const, containerId: flow.id, role: "reviewer" as const,
+    round: 1, slot, stageId: null, stageOrder: null, parentConversationId: implementer.conversationId! });
+  const history = file(104, { lastAgentWorkAt: 4000, parent: implementer.path,
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: implementer.conversationId!, reviewsConversationId: implementer.conversationId!, memberships: [membership("reviewer:1:prior")] } });
+  const current = file(105, { conversationId: reviewer.conversationId, lastAgentWorkAt: 5000, parent: implementer.path,
+    predecessorPath: reviewer.path,
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: implementer.conversationId!, reviewsConversationId: implementer.conversationId!, memberships: [membership("reviewer:1:current")] } });
+  const files = [implementer, { ...reviewer, migratedTo: current.path }, other, history, current,
+    file(106, { lastAgentWorkAt: 9000 })];
+  expect(project(files).card.lastAgentWorkAtMs).toBe(5000);
+  expect(project(files.map(row => row.path === current.path ? { ...row, lastAgentWorkAt: 2500 } : row)).card.lastAgentWorkAtMs).toBe(4000);
+});
+
+
+test("linking a flow to a task preserves its folded reviewer activity and column", () => {
+  const { implementer, reviewer, other, project } = reviewerActivityFixture();
+  const linked = task("linked-flow", "blocked", [implementer.path]);
+  const { bands, result } = project([implementer, reviewer, other], [linked]);
+  const band = bands.find(band => band.task?.id === linked.id)!;
+  expect(band.flow).toBeNull();
+  expect(band.members.some(member => member.kind === "deck")).toBe(true);
+  const card = result.columns.blocked.cards.find(card => card.task?.id === linked.id)!;
+  expect(card.lastAgentWorkAtMs).toBe(3000);
+  expect(card.status).toBe("blocked");
 });

@@ -1,3 +1,4 @@
+import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
@@ -6,6 +7,7 @@ import { TASK_COLORS, type BoardTask, type TaskColor, type TaskStatus } from "@/
 import type { FileEntry } from "@/lib/types";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import { taskTitle } from "@/components/tasks/taskModel";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
@@ -287,9 +289,26 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     }
     if (file.conversationId) knownConversations.add(file.conversationId);
   }
+  // A folded reviewer deck is not a standalone node. Include its
+  // resolved historical/current bindings without changing card membership or
+  // scanning the file corpus per round; the shared resolver indexes it once.
+  const reviewerWorkByFlow = new Map<Flow, number>();
+  const reviewerFiles = input.files ?? [];
+  const reviewerWorkAt = (flow: Flow | null | undefined): number => {
+    if (!flow) return 0;
+    const cached = reviewerWorkByFlow.get(flow);
+    if (cached !== undefined) return cached;
+    let latest = 0;
+    for (const round of flow.rounds) for (const target of reviewerBindingTargetsForRound(flow, round, reviewerFiles)) {
+      latest = Math.max(latest, workByIdentity.get(target.conversationId ?? target.path) ?? workByIdentity.get(target.path) ?? 0);
+    }
+    reviewerWorkByFlow.set(flow, latest);
+    return latest;
+  };
   const query = input.query ?? "";
   const pipelineById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
   const flowsById = new Map((input.flows ?? []).map((flow) => [flow.id, flow] as const));
+  const flowsByDeck = new Map((input.flows ?? []).map(flow => [deckKey(flow.id), flow]));
   const stageByPath = new Map<string, { pipeline: Pipeline; stage: PipelineStage }>();
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
@@ -362,8 +381,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     const title = band.title;
     const description = task ? descriptionOf(task.text) : "";
-    /* A task's own write time, as the column orders it; a band without a
-       task has only its conversations to date it. */
+    /* Retain modification metadata separately from agent-work ordering. A
+       band without a task has only its conversations to date it. */
     const updatedAtMs = task
       ? parseMs(task.updatedAt)
       : Math.max(parseMs(band.createdAt), ...members.map((member) => member.file.mtime * 1000));
@@ -389,7 +408,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       activity: working + provisioning,
       idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0 && drafts.length === 0,
       updatedAtMs,
-      lastAgentWorkAtMs: Math.max(0,
+      lastAgentWorkAtMs: Math.max(reviewerWorkAt(band.flow),
+        ...band.members.filter(member => member.kind === "deck").map(member => reviewerWorkAt(flowsByDeck.get(member.key))),
         ...[...members, ...mirrors].map(member => member.file.lastAgentWorkAt ?? 0).filter(Number.isFinite),
         ...[...identities].map(id => workByIdentity.get(id) ?? 0)),
       searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
