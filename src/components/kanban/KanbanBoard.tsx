@@ -378,13 +378,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [fullReader, setFullReader] = useState<string | null>(null);
   /* A conversation no card holds (a review round in a deck, a collapsed worker, an engine's subagent) opens as a
      reader of its own, in the whole window: the same transcript and composer, for as long as it is open. It is
-     not remembered, and nothing is written to the board. */
-  const [looseReader, setLooseReader] = useState<{ key: string; path: string } | null>(null);
+     not remembered, nothing is written to the board, and it belongs to the project it was opened in: a board kept
+     mounted across a project switch never shows it over another project. */
+  const [looseReader, setLooseReader] = useState<{ key: string; path: string; project: string } | null>(null);
+  const loose = looseReader?.project === project ? looseReader : null;
+  const looseRef = useRef(loose);
+  looseRef.current = loose;
   const toggleFull = useCallback((key: string) => setFullReader((current) => (current === key ? null : key)), []);
-  /* The window is the loose reader's only place: leaving it closes the reader. */
+  /* The window is the loose reader's only place: leaving it, or its project, closes the reader. */
   useEffect(() => {
-    if (looseReader && fullReader !== looseReader.key) setLooseReader(null);
-  }, [fullReader, looseReader]);
+    if (!looseReader) return;
+    if (looseReader.project !== project) {
+      setLooseReader(null);
+      setFullReader((current) => (current === looseReader.key ? null : current));
+    } else if (fullReader !== looseReader.key) {
+      setLooseReader(null);
+    }
+  }, [fullReader, looseReader, project]);
+  /* Going anywhere else on the board leaves the loose reader's window first, so it never stays over the card,
+     reader or pipeline the operator went to. */
+  const leaveLoose = useCallback((keep: string | null) => {
+    const current = looseRef.current;
+    if (!current || current.key === keep) return;
+    setLooseReader(null);
+    setFullReader((full) => (full === current.key ? null : full));
+  }, []);
   /* Escape puts it back, unless the key belongs to a field or an open menu.
      Listened for on the document: the reader is a portal, so its key events
      never pass through the overlay in React's tree. */
@@ -458,9 +476,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
       }];
     });
-    if (looseReader && !views.some((view) => view.readerKey === looseReader.key)) {
-      const file = filesByIdentity.get(looseReader.key) ?? filesByPath.get(looseReader.path) ?? lastSeenFiles.current.get(looseReader.key);
-      if (file) views.push({ readerKey: looseReader.key, file, folded: false, full: true, owner: null });
+    if (loose && !views.some((view) => view.readerKey === loose.key)) {
+      const file = filesByIdentity.get(loose.key) ?? filesByPath.get(loose.path) ?? lastSeenFiles.current.get(loose.key);
+      if (file) views.push({ readerKey: loose.key, file, folded: false, full: true, owner: null });
     }
     /* A pane's conversation no card has open is mounted for as long as the pane shows it. */
     if (sheetSummary) {
@@ -479,7 +497,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, looseReader, sheetSlots, sheetSummary, sheetPanes]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, loose, sheetSlots, sheetSummary, sheetPanes]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1370,6 +1388,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      reader when one was opened. */
   const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean; focusSelector?: string } | null>(null);
   const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false, focusSelector?: string) => {
+    leaveLoose(readerKey);
     const card = cardsByIdRef.current.get(cardId);
     if (card) {
       setCollapsed((current) => {
@@ -1383,7 +1402,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     pendingReveal.current = { cardId, readerKey, focusReader, focusSelector };
     setRevealTick((tick) => tick + 1);
-  }, [query]);
+  }, [query, leaveLoose]);
   /* What each attention request's handoff changed about a reader, so that
      request's Return undoes exactly that: close a reader it opened, fold again
      one it unfolded. A reader that was already open and expanded is not the
@@ -1397,16 +1416,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
     const owner = ownersRef.current.get(key);
-    if (owner) {
-      memory.update((readers) => openReader(readers, key, file.path));
-    } else {
-      setLooseReader({ key, path: file.path });
-      setFullReader(key);
-    }
+    if (owner) memory.update((readers) => openReader(readers, key, file.path));
     setFocusedReader(key);
     onConversationOpened?.(file.path);
+    /* Revealing leaves another loose reader's window, so a new one takes the window after it. */
     revealCard(owner?.cardId ?? "", key, options.focus !== false);
-  }, [memory, onConversationOpened, revealCard, disown]);
+    if (!owner) {
+      setLooseReader({ key, path: file.path, project });
+      setFullReader(key);
+    }
+  }, [memory, onConversationOpened, revealCard, disown, project]);
   const [revealTick, setRevealTick] = useState(0);
   useLayoutEffect(() => {
     const wanted = pendingReveal.current;
@@ -1769,9 +1788,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!root) return null;
       const loosePath = destination.anchorKeys.find((key) => looseAnchors.has(key) && !anchors.has(key)) ?? (destination.path && looseAnchors.has(destination.path) ? destination.path : undefined);
       if (loosePath) {
-        const loose = filesByPath.get(loosePath);
-        return loose && readerArrived(root, placement.slotOf(conversationIdentity(loose))) ? (destination.intent === "open" ? "reader" : "visible") : null;
+        const looseFile = filesByPath.get(loosePath);
+        return looseFile && readerArrived(root, placement.slotOf(conversationIdentity(looseFile))) ? (destination.intent === "open" ? "reader" : "visible") : null;
       }
+      /* A loose reader's window covers the board: nothing under it has arrived, and a resumed handoff moves again. */
+      if (looseRef.current) return null;
       const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file && readerArrived(root, placement.slotOf(conversationIdentity(file)))) return "reader";
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
