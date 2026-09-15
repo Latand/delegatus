@@ -6,6 +6,7 @@ import { setVoiceConnected, setVoiceSpeaking } from "@/lib/audio/app";
 import type { Speaker } from "@/lib/audio/ambientLoop";
 import { speakingFromLines } from "@/lib/audio/speech";
 import { codexRealtimeClient, type CodexRealtimeLine, type CodexRealtimeSnapshot } from "@/lib/realtime/codexRealtimeClient";
+import { projectVoiceDeliveryBodies } from "@/lib/runtime/voiceBodyProjection";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
 import type { HostAxis, RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
 
@@ -192,23 +193,20 @@ export function useCodexRealtime(
   useEffect(() => () => { startEpoch.current += 1; startPending.current = false; }, [client, bodyKey]);
   const latestVoice = useRef({ deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds });
   latestVoice.current = { deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds };
-  const bodiesReady = deferredVoiceRevision === undefined || bodyState?.key === bodyKey;
-  const mergedDeliveries = useMemo(() => {
+  const bodyProjection = useMemo(() => {
     const acknowledged = new Set([...acknowledgedVoiceIds, ...(bodyState?.key === bodyKey ? bodyState.acknowledged : [])]);
-    // The summary retains every pending delivery/response id. Streamed
-    // acknowledgments remove those ids, so a hydrated body can never revive
-    // work after the bounded tombstone tail has rolled over.
-    const recovered = new Map((bodyState?.key === bodyKey ? bodyState.deliveries : []).map(delivery => [delivery.deliveryId, delivery]));
-    return workerDeliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)).map(delivery => {
-      const body = recovered.get(delivery.deliveryId);
-      if (!body) return delivery;
-      const responses = new Map(body.responses.map(response => [response.responseId, response]));
-      return { ...delivery, responses: delivery.responses.map(response => response.text ? response : responses.get(response.responseId) ?? response) };
-    });
-  }, [bodyKey, bodyState, workerDeliveries, acknowledgedVoiceIds]);
+    if (deferredVoiceRevision === undefined) return {
+      deliveries: workerDeliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), complete: true,
+    };
+    return projectVoiceDeliveryBodies(workerDeliveries, bodyState?.key === bodyKey ? bodyState.deliveries : [], acknowledged);
+  }, [bodyKey, bodyState, workerDeliveries, acknowledgedVoiceIds, deferredVoiceRevision]);
+  const bodiesReady = deferredVoiceRevision === undefined || (bodyState?.key === bodyKey && bodyProjection.complete);
   const hydrateBodies = () => {
     if (deferredVoiceRevision === undefined) return Promise.resolve({ deliveries: [...workerDeliveries], acknowledged: [...acknowledgedVoiceIds] });
-    if (bodyState?.key === bodyKey) return Promise.resolve(bodyState);
+    if (bodyState?.key === bodyKey && projectVoiceDeliveryBodies(
+      latestVoice.current.deliveries, bodyState.deliveries,
+      new Set([...latestVoice.current.acknowledged, ...bodyState.acknowledged]),
+    ).complete) return Promise.resolve(bodyState);
     if (requestRef.current?.key === bodyKey) return requestRef.current.promise;
     const promise = (async () => {
       const response = await fetch(`/api/runtime/snapshot?voiceFor=${encodeURIComponent(conversationId)}`);
@@ -220,6 +218,9 @@ export function useCodexRealtime(
       const acknowledged = new Set(session.acknowledgedVoiceDeliveryIds ?? []);
       const deliveries = normalizeVoiceDeliveries(session.voiceDeliveries).filter(delivery => !acknowledged.has(delivery.deliveryId));
       if (currentKey.current === bodyKey) {
+        if (!projectVoiceDeliveryBodies(latestVoice.current.deliveries, deliveries,
+          new Set([...latestVoice.current.acknowledged, ...acknowledged])).complete)
+          throw new Error("Voice delivery recovery is incomplete");
         setBodyState({ key: bodyKey, deliveries, acknowledged: [...acknowledged] });
         setBodyError(null);
       }
@@ -247,10 +248,10 @@ export function useCodexRealtime(
       recover();
       return () => { cancelled = true; if (timer) clearTimeout(timer); };
     }
-    client?.reconcileWorkerDeliveries(mergedDeliveries, { authoritative: true, ready: true });
+    client?.reconcileWorkerDeliveries(bodyProjection.deliveries, { authoritative: true, ready: true });
     // hydrateBodies joins one request per snapshot identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, snapshot.phase, bodyKey, bodiesReady, mergedDeliveries]);
+  }, [client, snapshot.phase, bodyKey, bodiesReady, bodyProjection]);
   useEffect(() => {
     client?.reconcileCanonicalTranscript(canonicalTranscript);
   }, [canonicalTranscript, client]);
@@ -285,12 +286,14 @@ export function useCodexRealtime(
         // flight. Read the current id set here, never the start-click closure.
         const current = latestVoice.current;
         const acknowledged = new Set([...current.acknowledged, ...recovered.acknowledged]);
-        const bodies = new Map(recovered.deliveries.map(delivery => [delivery.deliveryId, delivery]));
-        const deliveries = current.deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)).map(delivery => {
-          const responses = new Map(bodies.get(delivery.deliveryId)?.responses.map(response => [response.responseId, response]) ?? []);
-          return { ...delivery, responses: delivery.responses.map(response => response.text ? response : responses.get(response.responseId) ?? response) };
-        });
-        client.reconcileWorkerDeliveries(deliveries, { authoritative: true, ready: true });
+        const projection = deferredVoiceRevision === undefined
+          ? { deliveries: current.deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), complete: true }
+          : projectVoiceDeliveryBodies(current.deliveries, recovered.deliveries, acknowledged);
+        if (!projection.complete) {
+          client.reconcileWorkerDeliveries([], { ready: false });
+          throw new Error("Voice delivery recovery is incomplete");
+        }
+        client.reconcileWorkerDeliveries(projection.deliveries, { authoritative: true, ready: true });
         await client.start();
       } finally {
         if (startEpoch.current === epoch) { startPending.current = false; setPreparingVoice(null); }

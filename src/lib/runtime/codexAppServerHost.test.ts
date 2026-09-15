@@ -21,7 +21,8 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
-import type { RuntimeVoiceDelivery } from "./voiceDelivery";
+import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
+import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
 import {
   COORDINATOR_VOICE_PERSONA,
@@ -1046,6 +1047,30 @@ describe("CodexAppServerHost", () => {
     expect(diagnostics).toMatchObject([["[realtime context] selected", { truncated: true }]]);
     expect(JSON.stringify(diagnostics)).not.toContain("follow-up-19");
     await host.release();
+  });
+
+  test("hydrated growing response sets reach the receiver in full before durable acknowledgment", async () => {
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer("voice-hydrated-thread");
+    const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+    try {
+      const responseA = { responseId: "response-a", text: "First canonical response. " };
+      const responseB = { responseId: "response-b", text: "Second canonical response." };
+      const recovered = normalizeVoiceDeliveries([{ turnId: "turn-hydrated", responses: [responseA], ready: false }]);
+      const pending = normalizeVoiceDeliveries([{ turnId: "turn-hydrated", responses: [{ ...responseA, text: "" }, { ...responseB, text: "" }], ready: true }]);
+      const unresolved = projectVoiceDeliveryBodies(pending, recovered, new Set());
+      expect(unresolved.complete).toBe(false);
+      for (const delivery of unresolved.deliveries) await host.deliverRealtimeWorkerResponse(delivery);
+      expect(server.acceptedRealtimeSpeech).toEqual([]);
+      expect(eventStore.load("voice-hydrated-thread").filter(event => event.kind === "realtime-delivery-acknowledged")).toHaveLength(0);
+
+      const current = [{ ...pending[0]!, responses: [{ ...responseA, text: "" }, responseB] }];
+      const complete = projectVoiceDeliveryBodies(current, recovered, new Set());
+      expect(complete.complete).toBe(true);
+      await expect(host.deliverRealtimeWorkerResponse(complete.deliveries[0]!)).resolves.toEqual({ deliveryId: current[0]!.deliveryId, acknowledged: true });
+      expect(server.acceptedRealtimeSpeech.join("")).toBe(responseA.text + responseB.text);
+      expect(eventStore.load("voice-hydrated-thread").at(-1)).toMatchObject({ kind: "realtime-delivery-acknowledged", deliveryId: current[0]!.deliveryId });
+    } finally { await host.release(); }
   });
 
   test("delivers a large multi-item response exactly once and deduplicates after host recovery", async () => {
