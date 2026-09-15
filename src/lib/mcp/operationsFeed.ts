@@ -1,6 +1,12 @@
 import type { Database as BunDatabase } from "bun:sqlite";
 
-import { MCP_OPERATION_TOOLS, isMcpOperationTool, type McpOperationCaller, type McpOperationTool } from "./receiptsDatabase";
+import {
+  MCP_OPERATION_TOOLS,
+  isMcpOperationTool,
+  type McpOperationCaller,
+  type McpOperationTarget,
+  type McpOperationTool,
+} from "./receiptsDatabase";
 
 /**
  * The read-only operations feed (#1695 C5): what `create_pipeline` and
@@ -16,35 +22,46 @@ export const MCP_OPERATIONS_MAX_LIMIT = 50;
     its process, and nothing can prove it did not, so it reads unknown. */
 export const MCP_OPERATION_PENDING_LEASE_MS = 120_000;
 
+/** A creation stamped on a pipeline in the reader's project is answered again
+    in `refreshed` while its claim is younger than this, so a reader whose
+    cursor passed the row before the pipeline was stamped still sees it land.
+    Older creations are already on the board as cards. */
+export const MCP_OPERATION_CREATION_WINDOW_MS = 10 * 60_000;
+
 const MAX_REFUSAL_CHARS = 200;
 
 export type McpOperationState = "pending" | "accepted" | "failed" | "unknown";
 
 export interface McpOperation {
-  /** The receipt row's sequence; the feed's order and cursor. */
+  /** The receipt row's sequence; stable for the life of the call. */
   sequence: number;
   tool: McpOperationTool;
-  /** The receipt digest. `Pipeline.creationReceipt.requestDigest` carries the same value. */
+  /** The receipt digest; stable for the life of the call.
+      `Pipeline.creationReceipt.requestDigest` carries the same value. */
   requestDigest: string;
   state: McpOperationState;
   claimedAt: string;
   callerConversationId: string | null;
   callerProject: string | null;
-  /** The target's project once the result names it. */
-  project: string | null;
-  pipelineId?: string;
-  taskId?: string;
+  /** Where the operation lands. Pending, unknown and refused rows carry the
+      target validated when the call was claimed; an accepted row carries what
+      its result or its stamped pipeline names. Null: the target is unknown. */
+  target: McpOperationTarget | null;
   /** The recorded refusal, shortened; only on `failed`. */
   refusal: string | null;
 }
 
 export interface McpOperationsPage {
   operations: McpOperation[];
-  /** Pass back unchanged. A pending row holds it, so that row is answered
-      again until it settles or turns unknown. */
+  /** Pass back unchanged. It moves past every row this page considered;
+      unresolved rows are followed through `unresolved`. */
   after: number;
   /** More matching rows follow `after`. */
   hasMore: boolean;
+  /** The current state of each requested unresolved sequence in this project,
+      and of this project's recently stamped creations at or before `after`,
+      without the rows already in `operations`. */
+  refreshed: McpOperation[];
 }
 
 export interface McpOperationsRequest {
@@ -52,12 +69,22 @@ export interface McpOperationsRequest {
   /** Rows after this sequence; null reads the newest rows. */
   after: number | null;
   limit: number;
+  /** Sequences the reader still holds as pending or unknown. At most 50 are
+      read per page; a reader holding more sends the rest on later pages. */
+  unresolved?: readonly number[];
+}
+
+/** A stored pipeline stamped with a creation receipt (C8). */
+export interface McpPipelineCreation {
+  pipelineId: string;
+  project: string;
+  claimedAt: string;
 }
 
 export interface McpOperationsOptions {
   now?: number;
-  /** The pipeline stamped with this creation digest (C8), if any. */
-  pipelineForDigest?: (digest: string) => { id: string; project: string } | null;
+  /** Stamped pipelines by their creation digest. */
+  creations?: ReadonlyMap<string, McpPipelineCreation>;
 }
 
 type ReceiptRow = {
@@ -67,6 +94,7 @@ type ReceiptRow = {
   result_json: string | null;
   claimed_at: number;
   caller_json: string | null;
+  target_json: string | null;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -96,22 +124,31 @@ function callerOf(serialized: string | null): McpOperationCaller | null {
   };
 }
 
-/** Target identity named by an accepted result, without copying the body. */
-function targetOf(tool: McpOperationTool, result: Record<string, unknown>): { project: string | null; pipelineId?: string; taskId?: string } {
-  if (tool === "create_pipeline") {
-    const pipeline = record(result.pipeline);
-    const pipelineId = text(result.pipelineId) ?? text(pipeline?.id);
-    return { project: text(pipeline?.project), ...(pipelineId ? { pipelineId } : {}) };
-  }
-  const task = record(result.task) ?? record(Array.isArray(result.tasks) ? result.tasks[0] : null);
-  const taskId = text(result.taskId) ?? text(task?.id);
-  return { project: text(task?.project), ...(taskId ? { taskId } : {}) };
+function claimedTargetOf(serialized: string | null): McpOperationTarget | null {
+  const target = record(parseJson(serialized));
+  const project = text(target?.project);
+  return target && project ? { project, taskId: text(target.taskId), pipelineId: text(target.pipelineId) } : null;
 }
 
-function operationOf(row: ReceiptRow, now: number, options: McpOperationsOptions): McpOperation | null {
+/** The target an accepted result names, without copying its body. */
+function acceptedTarget(tool: McpOperationTool, result: Record<string, unknown>, claimed: McpOperationTarget | null): McpOperationTarget | null {
+  if (tool === "create_pipeline") {
+    const pipeline = record(result.pipeline);
+    const project = text(pipeline?.project);
+    const pipelineId = text(result.pipelineId) ?? text(pipeline?.id);
+    return project && pipelineId ? { project, taskId: claimed?.taskId ?? null, pipelineId } : claimed;
+  }
+  const task = record(result.task) ?? record(Array.isArray(result.tasks) ? result.tasks[0] : null);
+  const project = text(task?.project);
+  const taskId = text(result.taskId) ?? text(task?.id);
+  return project && taskId ? { project, taskId, pipelineId: null } : claimed;
+}
+
+function operationOf(row: ReceiptRow, now: number, creations: ReadonlyMap<string, McpPipelineCreation>): McpOperation | null {
   const tool = row.receipt_key.slice(0, row.receipt_key.indexOf(":"));
   if (!isMcpOperationTool(tool)) return null;
   const caller = callerOf(row.caller_json);
+  const claimed = claimedTargetOf(row.target_json);
   const base = {
     sequence: row.sequence,
     tool,
@@ -122,71 +159,113 @@ function operationOf(row: ReceiptRow, now: number, options: McpOperationsOptions
   };
   /* The durable pipeline outranks the receipt: a card stamped with this
      digest exists, whatever the row managed to record. */
-  const receipted = tool === "create_pipeline" ? options.pipelineForDigest?.(row.digest) ?? null : null;
-  if (receipted) return { ...base, state: "accepted", project: receipted.project, pipelineId: receipted.id, refusal: null };
+  const creation = tool === "create_pipeline" ? creations.get(row.digest) : undefined;
+  if (creation) {
+    const target = { project: creation.project, taskId: claimed?.taskId ?? null, pipelineId: creation.pipelineId };
+    return { ...base, state: "accepted", target, refusal: null };
+  }
   if (row.result_json === null) {
     const state = now - row.claimed_at <= MCP_OPERATION_PENDING_LEASE_MS ? "pending" : "unknown";
-    return { ...base, state, project: null, refusal: null };
+    return { ...base, state, target: claimed, refusal: null };
   }
   const result = record(parseJson(row.result_json));
-  if (result?.ok === true) return { ...base, state: "accepted", ...targetOf(tool, result), refusal: null };
+  if (result?.ok === true) return { ...base, state: "accepted", target: acceptedTarget(tool, result, claimed), refusal: null };
   if (result?.ok === false) {
     const error = text(result.error) ?? "refused";
     const refusal = error.length > MAX_REFUSAL_CHARS ? `${error.slice(0, MAX_REFUSAL_CHARS - 1)}…` : error;
-    return { ...base, state: "failed", project: null, refusal };
+    return { ...base, state: "failed", target: claimed, refusal };
   }
-  return { ...base, state: "unknown", project: null, refusal: null };
+  return { ...base, state: "unknown", target: claimed, refusal: null };
 }
 
 function clampLimit(limit: number): number {
   return Number.isFinite(limit) ? Math.min(MCP_OPERATIONS_MAX_LIMIT, Math.max(1, Math.floor(limit))) : MCP_OPERATIONS_MAX_LIMIT;
 }
 
+function unresolvedSequences(values: readonly number[] | undefined): number[] {
+  return [...new Set((values ?? []).filter((value) => Number.isSafeInteger(value) && value > 0))].slice(0, MCP_OPERATIONS_MAX_LIMIT);
+}
+
 /**
- * One page of a project's operations, ascending by sequence. A row belongs to
- * the project when its recorded caller or its result's target is in it.
+ * One page of a project's operations, ascending by sequence, with the current
+ * state of the unresolved rows the reader asks about. A row belongs to the
+ * project when its recorded caller, its claimed target, its result's target or
+ * a pipeline stamped with its digest is in it.
  */
 export function readMcpOperations(
   db: BunDatabase | null,
   request: McpOperationsRequest,
   options: McpOperationsOptions = {},
 ): McpOperationsPage {
-  if (!db) return { operations: [], after: request.after ?? 0, hasMore: false };
+  const empty = { operations: [], after: request.after ?? 0, hasMore: false, refreshed: [] };
+  if (!db) return empty;
   const limit = clampLimit(request.limit);
   const now = options.now ?? Date.now();
+  const creations = options.creations ?? new Map<string, McpPipelineCreation>();
   const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map((column) => column.name));
-  if (!columns.size) return { operations: [], after: request.after ?? 0, hasMore: false };
-  /* A database no MCP process has migrated yet has no caller column. */
+  if (!columns.size) return empty;
+  /* A database no MCP process has migrated yet lacks the claim columns. */
   const callerColumn = columns.has("caller_json") ? "caller_json" : "NULL";
+  const targetColumn = columns.has("target_json") ? "target_json" : "NULL";
+  /* CASE guards json_extract, so one malformed row cannot fail the page. */
+  const field = (column: string, path: string) => `(CASE WHEN json_valid(${column}) THEN json_extract(${column}, '${path}') END)`;
   const toolFilter = MCP_OPERATION_TOOLS.map(() => "receipt_key LIKE ? ESCAPE '\\'").join(" OR ");
   const toolPatterns = MCP_OPERATION_TOOLS.map((tool) => `${tool.replaceAll("_", "\\_")}:%`);
-  /* CASE guards json_extract, so one malformed row cannot fail the page. */
-  const projectFilter = `
-    (CASE WHEN json_valid(${callerColumn}) THEN json_extract(${callerColumn}, '$.project') END) = ?
+  const projectCreations = [...creations].filter(([, creation]) => creation.project === request.project);
+  /* The stamped-pipeline digests scope rows before any paging, so a creation
+     proven only by its pipeline is never filtered out of that project. */
+  const scope = `(
+    ${field(callerColumn, "$.project")} = ?
+    OR ${field(targetColumn, "$.project")} = ?
     OR (CASE WHEN json_valid(result_json) THEN coalesce(
       json_extract(result_json, '$.pipeline.project'),
       json_extract(result_json, '$.task.project'),
       json_extract(result_json, '$.tasks[0].project')
-    ) END) = ?`;
-  const select = `SELECT sequence, receipt_key, digest, result_json, claimed_at, ${callerColumn} AS caller_json FROM mcp_receipts`;
-  const filters = [...toolPatterns, request.project, request.project];
+    ) END) = ?
+    OR digest IN (SELECT value FROM json_each(?))
+  )`;
+  const filters: (string | number)[] = [
+    ...toolPatterns,
+    request.project, request.project, request.project,
+    JSON.stringify(projectCreations.map(([digest]) => digest)),
+  ];
+  const select = `SELECT sequence, receipt_key, digest, result_json, claimed_at, ${callerColumn} AS caller_json, ${targetColumn} AS target_json
+    FROM mcp_receipts WHERE (${toolFilter}) AND ${scope}`;
+  const operationsOf = (rows: ReceiptRow[]) => rows
+    .map((row) => operationOf(row, now, creations))
+    .filter((operation): operation is McpOperation => operation !== null);
   return db.transaction(() => {
     const maxSequence = db.query<{ sequence: number | null }, []>("SELECT MAX(sequence) AS sequence FROM mcp_receipts").get()?.sequence ?? 0;
     let rows: ReceiptRow[];
     let hasMore = false;
     if (request.after === null) {
-      rows = db.query<ReceiptRow, (string | number)[]>(`${select} WHERE (${toolFilter}) AND (${projectFilter}) ORDER BY sequence DESC LIMIT ?`)
-        .all(...filters, limit)
-        .reverse();
+      rows = db.query<ReceiptRow, (string | number)[]>(`${select} ORDER BY sequence DESC LIMIT ?`).all(...filters, limit).reverse();
     } else {
-      rows = db.query<ReceiptRow, (string | number)[]>(`${select} WHERE sequence > ? AND (${toolFilter}) AND (${projectFilter}) ORDER BY sequence ASC LIMIT ?`)
-        .all(request.after, ...filters, limit + 1);
+      rows = db.query<ReceiptRow, (string | number)[]>(`${select} AND sequence > ? ORDER BY sequence ASC LIMIT ?`)
+        .all(...filters, request.after, limit + 1);
       hasMore = rows.length > limit;
       rows = rows.slice(0, limit);
     }
-    const operations = rows.map((row) => operationOf(row, now, options)).filter((operation): operation is McpOperation => operation !== null);
-    const considered = hasMore ? rows.at(-1)!.sequence : Math.max(maxSequence, request.after ?? 0);
-    const pending = operations.find((operation) => operation.state === "pending");
-    return { operations, after: pending ? Math.min(pending.sequence - 1, considered) : considered, hasMore };
+    const operations = operationsOf(rows);
+    const after = hasMore ? rows.at(-1)!.sequence : Math.max(maxSequence, request.after ?? 0);
+    /* Reconciliation is bounded and read-only: the sequences the reader still
+       holds unresolved, plus this project's recently stamped creations. A row
+       that settled after the cursor passed it is answered here, by the same
+       sequence and digest, and newer rows keep paging independently. */
+    const unresolved = unresolvedSequences(request.unresolved);
+    const recentCreations = projectCreations
+      .filter(([, creation]) => now - Date.parse(creation.claimedAt) <= MCP_OPERATION_CREATION_WINDOW_MS)
+      .sort(([, left], [, right]) => Date.parse(right.claimedAt) - Date.parse(left.claimedAt))
+      .slice(0, MCP_OPERATIONS_MAX_LIMIT)
+      .map(([digest]) => digest);
+    if (!unresolved.length && !recentCreations.length) return { operations, after, hasMore, refreshed: [] };
+    const listed = new Set(operations.map((operation) => operation.sequence));
+    const refreshed = operationsOf(db.query<ReceiptRow, (string | number)[]>(`${select}
+      AND sequence <= ?
+      AND (sequence IN (SELECT value FROM json_each(?)) OR digest IN (SELECT value FROM json_each(?)))
+      ORDER BY sequence ASC LIMIT ?`)
+      .all(...filters, after, JSON.stringify(unresolved), JSON.stringify(recentCreations), MCP_OPERATIONS_MAX_LIMIT * 2))
+      .filter((operation) => !listed.has(operation.sequence));
+    return { operations, after, hasMore, refreshed };
   })();
 }

@@ -35,7 +35,14 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
-import { isMcpOperationTool, mcpReceiptsDatabasePath, type McpOperationCaller } from "./receiptsDatabase";
+import {
+  isMcpOperationTool,
+  mcpReceiptsDatabasePath,
+  type McpOperationCaller,
+  type McpOperationClaim,
+  type McpOperationTarget,
+  type McpOperationTool,
+} from "./receiptsDatabase";
 import type { McpToolPolicy } from "./toolAllowlist";
 
 export const MCP_SERVER_NAME = "viewer";
@@ -516,8 +523,8 @@ export type ReceiptClaim =
   | { kind: "conflict"; record?: McpReceiptRecord };
 
 export interface McpReceiptStore {
-  /** `caller` is recorded only by a store that serves the operations feed. */
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, caller?: McpOperationCaller): ReceiptClaim | Promise<ReceiptClaim>;
+  /** `operation` is recorded only by a store that serves the operations feed. */
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, operation?: McpOperationClaim): ReceiptClaim | Promise<ReceiptClaim>;
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
 }
 
@@ -1472,7 +1479,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     this.secureFiles();
   }
 
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, caller?: McpOperationCaller): ReceiptClaim {
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, operation?: McpOperationClaim): ReceiptClaim {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const now = this.now();
@@ -1489,10 +1496,14 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       }
       const bindingJson = binding ? JSON.stringify(binding) : null;
       const storageBytes = this.storageBytes(key, digest, null, bindingJson);
-      this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null, string | null]>(`
-        INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage, caller_json)
-        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
-      `).run(key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null, caller ? JSON.stringify(caller) : null);
+      this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null, string | null, string | null]>(`
+        INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage, caller_json, target_json)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+      `).run(
+        key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null,
+        operation?.caller ? JSON.stringify(operation.caller) : null,
+        operation?.target ? JSON.stringify(operation.target) : null,
+      );
       this.pruneBoundedReceipts(now);
       this.db.exec("COMMIT");
       return { kind: "fresh" };
@@ -1663,8 +1674,10 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       if (!columns.has("binding_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN binding_json TEXT");
       if (!columns.has("stage")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN stage TEXT");
       if (!columns.has("recovery_result_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN recovery_result_json TEXT");
-      /* #1695 C5: the server-derived caller of an operations-feed claim. */
+      /* #1695 C5: the server-derived caller and the validated target of an
+         operations-feed claim. */
       if (!columns.has("caller_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN caller_json TEXT");
+      if (!columns.has("target_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN target_json TEXT");
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -1984,6 +1997,9 @@ export interface McpToolServiceOptions {
   /** #1695 C5: resolves the server-derived caller an operations-feed claim
       records. Absent records none. */
   operationCaller?: () => McpOperationCaller;
+  /** #1695 C5: resolves the validated target an operations-feed claim records.
+      Absent, or answering null, records none. */
+  operationTarget?: (toolName: McpOperationTool, args: McpToolArgs) => McpOperationTarget | null;
 }
 
 /** The closed outcome vocabulary of original-key recovery (#1490). */
@@ -2070,6 +2086,19 @@ function resolveOperationCaller(resolve: (() => McpOperationCaller) | undefined)
   if (!resolve) return null;
   try {
     return resolve();
+  } catch {
+    return null;
+  }
+}
+
+function resolveOperationTarget(
+  resolve: McpToolServiceOptions["operationTarget"],
+  toolName: McpOperationTool,
+  args: McpToolArgs,
+): McpOperationTarget | null {
+  if (!resolve) return null;
+  try {
+    return resolve(toolName, args);
   } catch {
     return null;
   }
@@ -2605,13 +2634,16 @@ export function createMcpToolService(
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
         const claimStartedAt = performance.now();
-        /* #1695 C5: an operations-feed tool records who is calling in its claim,
-           so the operation is attributable while it runs. Attribution never
-           gates the call: a resolver fault records no caller. */
-        const operation = isMcpOperationTool(typedTool);
-        const operationCaller = operation ? resolveOperationCaller(options.operationCaller) : null;
+        /* #1695 C5: an operations-feed tool records who is calling and where the
+           call lands in its claim, so the operation is attributable and
+           pointable while it runs. Neither gates the call: a resolver fault
+           records nothing. */
+        const operationClaim: McpOperationClaim | undefined = isMcpOperationTool(typedTool) ? {
+          caller: resolveOperationCaller(options.operationCaller),
+          target: resolveOperationTarget(options.operationTarget, typedTool, effectiveArgs),
+        } : undefined;
         const claimedAt = new Date().toISOString();
-        const claim = await receipts.claim(key, digest, retention, undefined, operationCaller ?? undefined);
+        const claim = await receipts.claim(key, digest, retention, undefined, operationClaim);
         phaseDurations.claim = performance.now() - claimStartedAt;
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -2632,7 +2664,7 @@ export function createMcpToolService(
         let settled: McpToolResult;
         const bindingStartedAt = performance.now();
         try {
-          const receipt: McpOperationReceipt | undefined = operation ? { digest, claimedAt, caller: operationCaller } : undefined;
+          const receipt: McpOperationReceipt | undefined = operationClaim ? { digest, claimedAt, caller: operationClaim.caller } : undefined;
           const payload = await bindings[typedTool](effectiveArgs, receipt ? { ...context, receipt } : context);
           settled = {
             ...payload,
@@ -3393,6 +3425,7 @@ export async function startViewerMcpServer(): Promise<void> {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpOperationCaller,
+    viewerMcpOperationTarget,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
@@ -3406,7 +3439,12 @@ export async function startViewerMcpServer(): Promise<void> {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
-    { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools(), operationCaller: viewerMcpOperationCaller() },
+    {
+      timings: productionMcpToolTimings,
+      recovery: viewerMcpRecoverableTools(),
+      operationCaller: viewerMcpOperationCaller(),
+      operationTarget: viewerMcpOperationTarget(),
+    },
   );
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();

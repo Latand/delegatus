@@ -2395,6 +2395,22 @@ test("create_pipeline maps taskId into task links and the claimed receipt into i
   expect(createPipelineInputFromMcp({ clientRequestId: "create-4", task: "Ship", taskId: 7 }).request.taskIds).toEqual([7] as never);
 });
 
+/* #1695 C5: the target recorded at claim is the named task, validated against
+   the task store; nothing names a target that does not exist. */
+test("the operations-feed target is the named board task with its project, or none", async () => {
+  const { viewerMcpOperationTarget } = await import("./bindings");
+  const resolve = viewerMcpOperationTarget({ loadTasks: () => [{ id: "task-beta", project: "beta" }] as never });
+
+  expect(resolve("update_task", { clientRequestId: "a", taskId: " task-beta ", status: "done" }))
+    .toEqual({ project: "beta", taskId: "task-beta", pipelineId: null });
+  expect(resolve("create_pipeline", { clientRequestId: "b", task: "Ship", taskId: "task-beta" }))
+    .toEqual({ project: "beta", taskId: "task-beta", pipelineId: null });
+  expect(resolve("update_task", { clientRequestId: "c", taskId: "task-missing" })).toBeNull();
+  expect(resolve("update_task", { clientRequestId: "d", refine: { text: "Title" } })).toBeNull();
+  expect(resolve("create_pipeline", { clientRequestId: "e", task: "Ship" })).toBeNull();
+  expect(resolve("update_task", { clientRequestId: "f", taskId: 7 })).toBeNull();
+});
+
 test("create_pipeline batches every invalid stage model with each engine catalog", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-binding-pipeline-models-"));
   sandboxes.push(sandbox);

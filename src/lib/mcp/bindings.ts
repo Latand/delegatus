@@ -155,7 +155,7 @@ import {
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
-import type { McpOperationCaller } from "./receiptsDatabase";
+import type { McpOperationCaller, McpOperationTarget, McpOperationTool } from "./receiptsDatabase";
 import {
   productionSelectedContextDependencies,
   resolveSelectedContext,
@@ -4391,6 +4391,21 @@ export function viewerMcpOperationCaller(
       recoveryPredecessors: () => [],
     });
     return { kind, conversationId, project };
+  };
+}
+
+/** #1695 C5: the target an operations-feed claim records — the board task the
+    call names (`update_task.taskId`, `create_pipeline.taskId`), validated
+    against the task store, with that task's project. A call naming no task, or
+    a task that does not exist, records none, so its target reads unknown. */
+export function viewerMcpOperationTarget(
+  domainDependencies: Pick<ViewerMcpDomainDependencies, "loadTasks"> = productionDomainDependencies,
+): (toolName: McpOperationTool, args: McpToolArgs) => McpOperationTarget | null {
+  return (_toolName, args) => {
+    const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
+    if (!taskId) return null;
+    const task = domainDependencies.loadTasks().find((candidate) => candidate.id === taskId);
+    return task ? { project: task.project, taskId: task.id, pipelineId: null } : null;
   };
 }
 

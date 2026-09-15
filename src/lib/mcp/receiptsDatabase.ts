@@ -26,6 +26,21 @@ export interface McpOperationCaller {
   project: string | null;
 }
 
+/** Where an operation lands. At claim time it is the board task the call names,
+    validated against the task store, with that task's project; a pipeline id
+    is known only once a pipeline exists. */
+export interface McpOperationTarget {
+  project: string;
+  taskId: string | null;
+  pipelineId: string | null;
+}
+
+/** What an operations-feed claim records beside its idempotency key. */
+export interface McpOperationClaim {
+  caller: McpOperationCaller | null;
+  target: McpOperationTarget | null;
+}
+
 /**
  * Opens the receipt database for reading only, or answers null while no MCP
  * process has created it. A reader never creates, migrates or writes it; the
