@@ -13,6 +13,7 @@ import {
   structuredContent,
   type StructuredMessageContent,
 } from "./structuredContent";
+import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 
 export interface StructuredDeliveryEffect {
   id: string;
@@ -88,6 +89,10 @@ export interface StructuredDeliveryQueuePort {
 }
 
 export type StructuredHostResolver = (conversationId: string) => EngineHost | null;
+/** Starts a successor host for a conversation whose host is gone, answering
+    whether it started one. A {@link StructuredRecoveryContendedError} says the
+    attempt was refused before it reserved anything; the queue keeps the
+    operation queued and tries again on a bounded schedule (#1716). */
 export type StructuredHostRecovery = (conversationId: string) => Promise<boolean>;
 export type StructuredKillRefusal = (conversationId: string) => string | null | Promise<string | null>;
 
@@ -100,6 +105,14 @@ export const CONTROL_SETTLEMENT_WINDOW_MS = 2 * 60_000;
     given up (#1612). The Viewer's side of the same bound the runtime journal
     keeps on the receipts themselves. */
 const UNPROJECTED_TERMINAL_LIMIT = 128;
+/** How many attempts a host recovery gets while account-mutation contention
+    keeps refusing its successor reservation before the reservation exists
+    (#1716). Attempts are spaced 1s, 2s, 4s, 8s and then 15s apart, about two
+    minutes in all, after which the operation settles failed with the busy
+    reason. */
+const CONTENDED_RECOVERY_ATTEMPTS = 12;
+const CONTENDED_RECOVERY_FIRST_SPACING_MS = 1_000;
+const CONTENDED_RECOVERY_MAX_SPACING_MS = 15_000;
 const TERMINAL_DELIVERY_STATUSES = new Set([
   "turn-started",
   "steered",
@@ -615,6 +628,14 @@ export class StructuredDeliveryQueue {
       the repair needs no timer of its own and stops as soon as the journal can
       answer. */
   private readonly unprojectedTerminals = new Set<string>();
+  /** Operations whose host recovery contention refused before the successor
+      reservation existed (#1716): the attempts made so far and when the next
+      one is due. Executor memory, like the first-dispatch evidence: a successor
+      executor starts its own bounded count. The map has no size cap: dropping
+      an entry while its operation is pending would hand that operation a fresh
+      count and an immediate attempt. Each pass drops the entries of operations
+      the journal no longer lists. */
+  private readonly contendedRecoveries = new Map<string, { attempts: number; nextAt: number }>();
   /** #1560: injections whose engine write is done and whose canonical evidence
       is still being read, detached from the pass that issued them. */
   private readonly activeInjections = new Map<string, Promise<void>>();
@@ -699,6 +720,16 @@ export class StructuredDeliveryQueue {
       }
       if (page.length < STRUCTURED_DELIVERY_BATCH_SIZE) break;
       afterEventSeq = nextCursor;
+    }
+    /* #1716: contention history lasts as long as its operation is pending. One
+       the journal no longer lists has settled, whether through recovery or
+       another path such as a discard, a kill or delivery on a host that came
+       back, and its entry goes with it. */
+    if (this.contendedRecoveries.size > 0) {
+      const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+      for (const operationId of this.contendedRecoveries.keys()) {
+        if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
+      }
     }
     if (rawEffects.length === 0) return;
     const grouped = new Map<string, DeliveryEffect[]>();
@@ -804,6 +835,7 @@ export class StructuredDeliveryQueue {
       if (!durable.readable) return this.fenceUnavailable();
       if (durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
         this.firstDispatches.delete(effect.operationId);
+        this.contendedRecoveries.delete(effect.operationId);
         continue;
       }
       const expired = isRuntimeControlEffect(effect)
@@ -929,6 +961,7 @@ export class StructuredDeliveryQueue {
       }
       const host = this.resolveHost(effect.conversationId);
       if (!host) {
+        if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
         await this.recoverUnavailableHost(effect);
         return true;
@@ -941,6 +974,7 @@ export class StructuredDeliveryQueue {
       if (!state.readable) return this.fenceUnavailable();
       const health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
+        if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
         await this.recoverUnavailableHost(effect);
         return true;
@@ -1195,6 +1229,7 @@ export class StructuredDeliveryQueue {
        asynchronous, and a kill behind this effect must not wait a whole pass
        for it. */
     if (!host) {
+      if (this.awaitingContendedRecovery(effect.operationId)) return { blocked: false, terminated: false };
       if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) {
         return { blocked: false, terminated: false };
       }
@@ -1215,6 +1250,7 @@ export class StructuredDeliveryQueue {
     }
     const health = state.value;
     if (health.status === "dead" || health.status === "unhosted") {
+      if (this.awaitingContendedRecovery(effect.operationId)) return { blocked: false, terminated: false };
       if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) {
         return { blocked: false, terminated: false };
       }
@@ -1663,10 +1699,25 @@ export class StructuredDeliveryQueue {
     return latest.operationId === effect.operationId && latest.eventSeq === effect.eventSeq;
   }
 
+  /**
+   * Starts recovery for a conversation whose host is unavailable, and settles
+   * the operation that asked for it when recovery cannot start.
+   *
+   * Account-mutation contention gets a bounded retry (#1716). When the lock
+   * refused the successor reservation before it existed, recovery left nothing
+   * behind: no receipt, no process, no engine write. The operation stays
+   * `queued` exactly as it was admitted, and the retry wake brings recovery
+   * back on a doubling spacing until the attempts run out. The recovery layer
+   * marks that case at the reservation call; the same busy error raised later
+   * in recovery arrives unmarked and settles failed with every other failure,
+   * since trying again there could reserve a second successor.
+   */
   private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId">): Promise<void> {
     if (!this.recoverHost) return;
     try {
-      if (await this.recoverHost(effect.conversationId)) {
+      const recovered = await this.recoverHost(effect.conversationId);
+      this.contendedRecoveries.delete(effect.operationId);
+      if (recovered) {
         this.rerun = true;
         return;
       }
@@ -1674,9 +1725,48 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
-      const reason = `structured host recovery failed: ${failureReason(error)}`.slice(0, 240);
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+      let reason = `structured host recovery failed: ${failureReason(error)}`;
+      if (error instanceof StructuredRecoveryContendedError) {
+        const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
+        if (attempts < CONTENDED_RECOVERY_ATTEMPTS) {
+          this.deferContendedRecovery(effect, attempts);
+          return;
+        }
+        reason = `structured host recovery failed after ${attempts} contended attempts: ${failureReason(error)}`;
+      }
+      this.contendedRecoveries.delete(effect.operationId);
+      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: reason.slice(0, 240) });
     }
+  }
+
+  /**
+   * Whether the operation is still inside the spacing before its next contended
+   * recovery attempt (#1716). Such a pass writes nothing for it, neither the
+   * `dead-host` requeue nor a recovery attempt, and asks for the retry wake. A
+   * due time further out than the largest spacing can only come from a clock
+   * that moved backwards, and counts as due.
+   */
+  private awaitingContendedRecovery(operationId: string): boolean {
+    const contended = this.contendedRecoveries.get(operationId);
+    if (!contended) return false;
+    const remainingMs = contended.nextAt - Date.now();
+    if (remainingMs <= 0 || remainingMs > CONTENDED_RECOVERY_MAX_SPACING_MS) return false;
+    this.retrySoon();
+    return true;
+  }
+
+  /** Records one contended recovery attempt and asks for the wake that brings
+      the next one (#1716). */
+  private deferContendedRecovery(effect: Pick<DeliveryEffect, "conversationId" | "operationId">, attempts: number): void {
+    const spacingMs = Math.min(CONTENDED_RECOVERY_FIRST_SPACING_MS * 2 ** (attempts - 1), CONTENDED_RECOVERY_MAX_SPACING_MS);
+    this.contendedRecoveries.set(effect.operationId, { attempts, nextAt: Date.now() + spacingMs });
+    console.error("[structured delivery] host recovery deferred by account mutation contention", {
+      conversationId: effect.conversationId,
+      operationId: effect.operationId,
+      attempts,
+      retryInMs: spacingMs,
+    });
+    this.retrySoon();
   }
 
   private async drainControl(effect: ControlEffect): Promise<ControlDrainResult> {
