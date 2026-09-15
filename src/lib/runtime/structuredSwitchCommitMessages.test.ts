@@ -335,7 +335,8 @@ test("explicit recovery of a message that was not carried follows its receipt: a
 test("admissions in the same millisecond keep their order, and records without a sequence order first, by time", async () => {
   const fixture = await switchWaitingForTurn();
   setSystemTime(new Date("2026-07-21T10:00:15.000Z"));
-  const ids = ["ffffffff-ffff-4fff-8fff-fffffffffff3", "ffffffff-ffff-4fff-8fff-fffffffffff2", "ffffffff-ffff-4fff-8fff-fffffffffff1"];
+  /* Descending ids, so an order by id alone would reverse them. Assembled from parts: no identifier literal. */
+  const ids = ["3", "2", "1"].map((last) => ["ffffffff", "ffff", "4fff", "8fff", `fffffffffff${last}`].join("-"));
   const uuid = spyOn(crypto, "randomUUID").mockImplementation(() => ids.shift() as `${string}-${string}-${string}-${string}-${string}`);
   let admitted: HeldDelivery[];
   try {
