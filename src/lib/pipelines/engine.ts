@@ -4103,8 +4103,8 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
   }
   if (stated("expectedAttempt")) {
     /* It only ever rides with expectedStageId, which is refused on any other action. */
-    if (typeof req.expectedAttempt !== "number" || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt < 1) {
-      return { error: "expectedAttempt must be a positive integer attempt number", status: 400, field: "expectedAttempt" };
+    if (typeof req.expectedAttempt !== "number" || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt < 0) {
+      return { error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet", status: 400, field: "expectedAttempt" };
     }
     if (!stated("expectedStageId")) return { error: "expectedAttempt requires expectedStageId", status: 400, field: "expectedAttempt" };
   }
@@ -4117,6 +4117,9 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  * pipeline is no longer waiting on exactly that: not waiting on a decision, on
  * another stage, or on another latest own attempt of the same stage. A
  * lineage-adopted (historical) attempt is never the one compared.
+ * `expectedAttempt: 0` states that the stage has no own attempt yet (a
+ * provisioning park waits on its first stage before any attempt exists), so a
+ * pipeline that has since started attempt 1 there is refused too.
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
@@ -4130,10 +4133,10 @@ function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): Pi
     };
   }
   if (req.expectedAttempt !== undefined) {
-    const latest = currentAttempt(pipeline, waiting)?.n ?? null;
+    const latest = currentAttempt(pipeline, waiting)?.n ?? 0;
     if (latest !== req.expectedAttempt) {
       return {
-        error: `${waiting} waits on attempt ${latest ?? "none"}, not ${req.expectedAttempt}`,
+        error: `${waiting} waits on ${latest ? `attempt ${latest}` : "no attempt of its own"}, not ${req.expectedAttempt ? `attempt ${req.expectedAttempt}` : "none"}`,
         status: 409,
         code: "STAGE_CHANGED",
         field: "expectedAttempt",

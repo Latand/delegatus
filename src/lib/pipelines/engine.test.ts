@@ -9752,7 +9752,9 @@ test("guard values that are present but malformed, or stated on an action they d
     [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageId: "build" }, "expectedStageId"],
     [{ action: "skip-stage", expectedStageId: "" }, "expectedStageId"],
     [{ action: "retry-stage", expectedStageId: 7 }, "expectedStageId"],
-    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, "expectedAttempt"],
+    /* 0 is the stated "no own attempt yet" (see the provisioning-park test); below it, null and fractions are malformed. */
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: -1 }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: null }, "expectedAttempt"],
     [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1.5 }, "expectedAttempt"],
     [{ action: "skip-stage", expectedStageId: "plan", expectedAttempt: "1" }, "expectedAttempt"],
     [{ action: "retry-stage", expectedAttempt: 1 }, "expectedAttempt"],
@@ -9860,4 +9862,75 @@ test("a launch-receipt retry keeps its meaning with the guard stated beside it",
   expect(retried.error).toBeUndefined();
   await tickPipelines([], h.ports);
   expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_2:parent=/codex/creator.jsonl:supersedes=conversation_stage_1`);
+});
+
+test("the digest follows the stored role snapshot: a registry edit no override applied changes nothing, and an override re-resolving the same role moves it by the scaffold alone", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = structuredClone(buildStageOf());
+  const lookup = h.ports.roleLookup!;
+  h.ports.roleLookup = (roleId) => {
+    const resolved = lookup(roleId);
+    return roleId === "builder" && resolved ? { ...resolved, promptScaffold: "Builder guidance, revised" } : resolved;
+  };
+  /* The registry changed; the stored stage, and what its first attempt would snapshot, did not. */
+  expect(stageDigest(buildStageOf())).toBe(stageDigest(before));
+  const unchanged = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine.", expectedStageDigest: stageDigest(before) }, h.ports);
+  expect(unchanged.error).toBeUndefined();
+  expect(buildStageOf().effectiveRole.promptScaffold).toBe(before.effectiveRole.promptScaffold);
+
+  /* Another client re-applies the same role: only the stored scaffold moves, and the digest with it. */
+  const seen = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", role: { roleId: "builder" } }, h.ports)).error).toBeUndefined();
+  const theirs = structuredClone(buildStageOf());
+  expect({ engine: theirs.effectiveRole.engine, model: theirs.effectiveRole.model, effort: theirs.effectiveRole.effort, access: theirs.effectiveRole.access, prompt: theirs.prompt })
+    .toEqual({ engine: before.effectiveRole.engine, model: before.effectiveRole.model, effort: before.effectiveRole.effort, access: before.effectiveRole.access, prompt: "Build from {{prev.output}}\n\nMine." });
+  expect(theirs.effectiveRole.promptScaffold).toBe("Builder guidance, revised");
+  expect(stageDigest(theirs)).not.toBe(seen);
+  const refused = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine, again.", expectedStageDigest: seen }, h.ports);
+  expect({ status: refused.status, code: refused.code, field: refused.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+  expect(buildStageOf()).toEqual(theirs);
+});
+
+test("expectedAttempt 0 states a stage with no attempt of its own: it retries a provisioning park, and is refused once attempt 1 exists", async () => {
+  const h = harness();
+  savePipelines([]);
+  const baseExec = h.ports.exec;
+  let failWorktreeAdd = true;
+  h.ports.exec = (command, args, cwd) => {
+    if (args[0] === "worktree" && failWorktreeAdd) return { code: 128, stdout: "", stderr: "worktree unavailable" };
+    if (args[0] === "rev-parse" && args[1] === "--abbrev-ref" && cwd?.includes("-pipeline-")) {
+      return failWorktreeAdd ? { code: 128, stdout: "", stderr: "missing worktree" } : { code: 0, stdout: `${loadPipelines()[0]!.branch}\n`, stderr: "" };
+    }
+    return baseExec(command, args, cwd);
+  };
+  const created = await createPipelineFromRequest({ task: "Recover provision", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const id = created.pipeline!.id;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts).toHaveLength(0);
+
+  /* Naming an attempt that does not exist is refused before anything is reset. */
+  const resets = () => h.calls.filter((call) => call.includes("reset --hard") || call.includes("clean -fd")).length;
+  const named = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: named.status, code: named.code, field: named.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+
+  failWorktreeAdd = false;
+  const none = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports);
+  expect(none.pipeline?.state).toBe("provisioning");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts.map((attempt) => attempt.n)).toEqual([1]);
+
+  /* A menu that still shows "no attempt yet" is stale now. */
+  const resetsBefore = resets();
+  const stale = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports);
+  expect({ status: stale.status, code: stale.code, field: stale.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(resets()).toBe(resetsBefore);
+  expect((await patchPipeline(id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports)).code).toBe("STAGE_CHANGED");
+  expect(resets()).toBe(resetsBefore);
+  expect((await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
 });

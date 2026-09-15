@@ -141,7 +141,7 @@ function guardRefusal(pipeline: Pipeline, body: PatchPipelineRequest): PipelineW
   if ((body.action === "retry-stage" || body.action === "skip-stage") && body.expectedStageId !== undefined) {
     const waiting = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
     if (waiting !== body.expectedStageId) return changed("expectedStageId", `the pipeline waits on ${waiting ?? "no stage"}`);
-    const latest = pipeline.runs.find((run) => run.stageId === waiting)?.attempts.findLast((attempt) => !attempt.historical)?.n ?? null;
+    const latest = pipeline.runs.find((run) => run.stageId === waiting)?.attempts.findLast((attempt) => !attempt.historical)?.n ?? 0;
     if (body.expectedAttempt !== undefined && latest !== body.expectedAttempt) return changed("expectedAttempt", `${waiting} waits on attempt ${latest}`);
   }
   return null;
@@ -797,4 +797,24 @@ test("while the Stages sheet is open the board's keys stay behind it, and a shee
   await tick();
   expect(sheet(host)).toBeNull();
   same(document.activeElement, card(host));
+});
+
+test("a stage waiting before any attempt of its own is expected as attempt 0, and that menu is refused once attempt 1 has started and parked", async () => {
+  const { host, route } = mount(parkedOn("merge"));
+  await tick();
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  const started = parkedOn("merge");
+  started.runs.push({ stageId: "merge", attempts: [attempt(1, "needs_decision", merge1, 30)] } as never);
+  route.state.record = started;
+  click(menuItem(host, "Skip Cleaner"));
+  await tick();
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "skip-stage", expectedStageId: "merge", expectedAttempt: 0 }]);
+  expect(receiptTexts(host)).toEqual(["Skip Cleaner was not sent: a newer attempt of Cleaner waits now."]);
+
+  route.state.record = null;
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Retry Cleaner"));
+  await tick();
+  expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "merge", expectedAttempt: 0 });
+  expect(receiptTexts(host).at(-1)).toBe("Retrying Cleaner in «Restore search results after the index rebuild»");
 });

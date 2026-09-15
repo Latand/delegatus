@@ -9,17 +9,25 @@ import type { PipelineStage } from "./types";
  * `override-stage` with `expectedStageDigest` refuses with 409 `STAGE_CHANGED`
  * when the stage no longer has it.
  *
- * It covers exactly what an override can change, as the stage would start
- * with it:
+ * It covers the stored stage fields an override writes, which are what the
+ * stage's first attempt snapshots and starts with (`newAttempt` clones
+ * `effectiveRole`; the spawn renders from that snapshot):
  *   - the reassembled prompt as stored (wiring tokens included);
  *   - the account pin, with an absent, `null` or blank pin all meaning "none",
  *     as `override-stage` itself treats them;
  *   - the role reference, with its parameters in key order, and no parameters
  *     the same as empty ones;
- *   - the resolved runtime (`effectiveRole` engine, model, effort, access),
- *     with an absent model or effort the same as the engine default (`null`).
- * Values that mean the same stage digest the same; any change an override can
- * make digests differently. The `v` field versions this canonical form.
+ *   - the stored `effectiveRole`: role id, engine, model, effort, access and
+ *     prompt scaffold, with an absent model, effort or scaffold the same as
+ *     `null`.
+ * Values that mean the same stored stage digest the same; any stored change
+ * digests differently, including an override that re-resolves the same role
+ * against an edited role registry and only its scaffold moves. A registry
+ * edit that no override has applied changes nothing stored, so it neither
+ * moves the digest nor changes what the stage would start with.
+ *
+ * `v` versions this canonical form: v2 added the effective role id and
+ * scaffold.
  */
 export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole">): string {
   const account = typeof stage.account === "string" && stage.account.trim() ? stage.account.trim() : null;
@@ -28,15 +36,17 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
     : null;
   const runtime = stage.effectiveRole;
   return JSON.stringify({
-    v: 1,
+    v: 2,
     "prompt": stage.prompt,
     account,
     role: stage.role ? { roleId: stage.role.roleId, params } : null,
     runtime: {
+      roleId: runtime.roleId ?? null,
       engine: runtime.engine,
       model: runtime.model ?? null,
       effort: runtime.effort ?? null,
       access: runtime.access ?? null,
+      promptScaffold: runtime.promptScaffold ?? null,
     },
   });
 }

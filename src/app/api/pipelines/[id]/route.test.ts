@@ -39,6 +39,9 @@ mock.module("@/lib/pipelines/engine", () => ({
     if ((body as { repoDir?: string }).repoDir === "/blocked") {
       return { error: "Git metadata is not writable: /blocked/.git", status: 403, code: "git_metadata_unwritable", field: "repoDir", path: "/blocked/.git" };
     }
+    if ((body as { expectedAttempt?: unknown }).expectedAttempt === -1) {
+      return { error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet", status: 400, field: "expectedAttempt" };
+    }
     if ((body as { expectedStageDigest?: string }).expectedStageDigest === "0".repeat(64)) {
       return { error: "the stage changed since it was read; read it again before overriding it", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
     }
@@ -65,6 +68,22 @@ test("pipeline GET returns the full record for a known id", async () => {
   expect(response.status).toBe(200);
   /* #1695 C7: each stage's digest rides along, for a guarded override-stage. */
   expect(await response.json()).toEqual({ ok: true, pipeline, stageDigests: { build: stageDigest(pipeline.stages[0] as never) } });
+});
+
+test("pipeline PATCH forwards a malformed guard's field without a code", async () => {
+  const response = await PATCH(
+    new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH",
+      headers: { host: "127.0.0.1" },
+      body: JSON.stringify({ action: "retry-stage", expectedStageId: "build", expectedAttempt: -1 }),
+    }),
+    { params: Promise.resolve({ id: "pipeline-1" }) },
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({
+    error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet",
+    field: "expectedAttempt",
+  });
 });
 
 test("pipeline PATCH forwards a guard refusal's code and field", async () => {

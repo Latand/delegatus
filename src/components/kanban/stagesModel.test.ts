@@ -103,6 +103,8 @@ test("pipeline actions carry the engine's own refusals", () => {
   expect(parked["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "verify", attempt: 2 });
   /* Implement's last recorded attempt is an adopted helper (3): the expected attempt is its own latest, 2. */
   expect(byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "implement", state: "running" } } as unknown as Pipeline)["retry-stage"]).toEqual({ action: "retry-stage", refusal: null, stageId: "implement", attempt: 2 });
+  /* A stage the pipeline waits on before any attempt of its own (a provisioning park) is expected as attempt 0. */
+  expect(byAction({ ...retrying, state: "needs_decision", cursor: { stageId: "merge", state: "pending" } } as unknown as Pipeline)["skip-stage"]).toEqual({ action: "skip-stage", refusal: null, stageId: "merge", attempt: 0 });
   expect(byAction({ ...retrying, state: "paused" } as Pipeline).resume).toEqual({ action: "resume", refusal: null, stageId: null, attempt: null });
   const ended = byAction({ ...retrying, state: "completed" } as Pipeline);
   expect([ended.pause!.refusal, ended["retry-stage"]!.refusal, ended.close!.refusal]).toEqual(["ended", "ended", "ended"]);

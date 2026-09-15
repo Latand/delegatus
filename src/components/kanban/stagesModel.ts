@@ -124,7 +124,7 @@ export interface PipelineActionOption {
   refusal: "draft" | "ended" | "no-decision" | "other-stage" | null;
   /** The stage retry and skip act on: the one the pipeline waits on. */
   stageId: string | null;
-  /** The `n` of that stage's latest own attempt, which retry and skip expect. */
+  /** The `n` of that stage's latest own attempt, which retry and skip expect; `0` when it has none yet. */
   attempt: number | null;
 }
 
@@ -139,7 +139,7 @@ export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[
   const draft = pipeline.state === "draft";
   const general = draft ? "draft" : ended ? "ended" : null;
   const decisionStage = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
-  const attempt = decisionStage ? latestAttempt(pipeline, decisionStage)?.n ?? null : null;
+  const attempt = decisionStage ? latestAttempt(pipeline, decisionStage)?.n ?? 0 : null;
   return [
     pipeline.state === "paused"
       ? { action: "resume", refusal: null, stageId: null, attempt: null }

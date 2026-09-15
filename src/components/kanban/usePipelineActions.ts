@@ -35,7 +35,7 @@ export interface PipelineActionIntent {
   /** Retry and skip: the stage the operator chose, as the pipeline showed it. */
   stageId: string | null;
   stageName: string | null;
-  /** Retry and skip: the `n` of that stage's latest own attempt, as the pipeline showed it. */
+  /** Retry and skip: the `n` of that stage's latest own attempt as the pipeline showed it, `0` for none yet. */
   expectedAttempt: number | null;
 }
 

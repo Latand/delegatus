@@ -15,11 +15,11 @@ test("the digest is a SHA-256 hex over the canonical stage configuration", () =>
   const digest = stageDigest(stage());
   expect(isStageDigest(digest)).toBe(true);
   expect(JSON.parse(stageDigestInput(stage()))).toEqual({
-    v: 1,
+    v: 2,
     "prompt": "{{prev.output}}\n\nBuild it.",
     account: "account-a",
     role: { roleId: "builder", params: { depth: 2, lens: "correctness" } },
-    runtime: { engine: "codex", model: "gpt-5.6", effort: "high", access: "read-write" },
+    runtime: { roleId: "builder", engine: "codex", model: "gpt-5.6", effort: "high", access: "read-write", promptScaffold: null },
   });
   expect(stageDigests([stage(), stage({ id: "review", prompt: "Review." })])).toEqual({ build: digest, review: stageDigest(stage({ prompt: "Review." })) });
 });
@@ -30,6 +30,7 @@ test("values that mean the same stage digest the same", () => {
   expect(stageDigest(stage({ account: "   ", role: { roleId: "builder" } }))).toBe(base);
   expect(stageDigest(stage({ role: { roleId: "builder", params: { lens: "correctness", depth: 2 } } }))).toBe(stageDigest(stage()));
   expect(stageDigest(stage({ account: " account-a " }))).toBe(stageDigest(stage()));
+  expect(stageDigest(stage({ effectiveRole: { ...stage().effectiveRole, promptScaffold: undefined as never } }))).toBe(stageDigest(stage()));
   /* Fields an override cannot change do not move it. */
   expect(stageDigest(stage({ next: "review", id: "other" } as Partial<PipelineStage>))).toBe(stageDigest(stage()));
 });
@@ -48,6 +49,9 @@ test("every change an override can make digests differently", () => {
     stage({ effectiveRole: { ...stage().effectiveRole, model: null } }),
     stage({ effectiveRole: { ...stage().effectiveRole, effort: "xhigh" } }),
     stage({ effectiveRole: { ...stage().effectiveRole, access: "read-only" } }),
+    /* The role registry changed and an override re-resolved the same role: only the stored scaffold moved. */
+    stage({ effectiveRole: { ...stage().effectiveRole, promptScaffold: "Builder guidance, revised" } }),
+    stage({ effectiveRole: { ...stage().effectiveRole, roleId: null } }),
   ].map(stageDigest);
   expect(changed).not.toContain(base);
   expect(new Set(changed).size).toBe(changed.length);

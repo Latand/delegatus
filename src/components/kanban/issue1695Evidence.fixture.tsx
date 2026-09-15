@@ -597,8 +597,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if ((body.action === "retry-stage" || body.action === "skip-stage") && body.expectedStageId !== undefined) {
         const waiting = record.state === "needs_decision" ? record.cursor?.stageId ?? null : null;
         if (waiting !== body.expectedStageId) return stageChanged("expectedStageId", `the pipeline waits on ${waiting ?? "no stage"}, not ${String(body.expectedStageId)}`);
-        const latest = record.runs.find((run) => run.stageId === waiting)?.attempts.findLast((entry) => !entry.historical)?.n ?? null;
-        if (body.expectedAttempt !== undefined && latest !== body.expectedAttempt) return stageChanged("expectedAttempt", `${waiting} waits on attempt ${latest ?? "none"}`);
+        const latest = record.runs.find((run) => run.stageId === waiting)?.attempts.findLast((entry) => !entry.historical)?.n ?? 0;
+        if (body.expectedAttempt !== undefined && latest !== body.expectedAttempt) return stageChanged("expectedAttempt", `${waiting} waits on ${latest ? `attempt ${latest}` : "no attempt of its own"}`);
       }
       /* The engine's preconditions for what the board sends (`patchPipeline`). */
       const ended = record.state === "completed" || record.state === "closed";

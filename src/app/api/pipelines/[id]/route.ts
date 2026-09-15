@@ -59,7 +59,10 @@ export async function PATCH(
     const result = await patchPipeline(id, body);
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not update pipeline",
-      ...(result.code ? { code: result.code, field: result.field, path: result.path } : {}),
+      /* A malformed guard names its field without a code: each travels on its own. */
+      ...(result.code ? { code: result.code } : {}),
+      ...(result.field ? { field: result.field } : {}),
+      ...(result.path ? { path: result.path } : {}),
       /* #1026: a draft stage edit runs the same batched stage validation the
          create path does, so its caller gets the same field-level list. */
       ...(result.violations?.length ? { violations: result.violations } : {}),

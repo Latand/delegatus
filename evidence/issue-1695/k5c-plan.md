@@ -36,8 +36,9 @@ K5 is not complete until the server refuses both atomically.
 
 - Request: optional `expectedStageDigest: string`.
 - Digest: SHA-256 (hex) over the canonical JSON of the target stage's
-  `{ prompt, account, role, runtime: { engine, model, effort, access } }` as stored, with keys in a fixed
-  order and absent values as `null`. `stageDigest.ts` is the one definition; the route and the engine use it.
+  `{ prompt, account, role, runtime: { roleId, engine, model, effort, access, promptScaffold } }` as stored,
+  with keys in a fixed order and absent values as `null` (canonical v2; the review of the first head added
+  the effective role id and scaffold). `stageDigest.ts` is the one definition; the route and the engine use it.
 - Answer when it does not match: `409 { code: "STAGE_CHANGED", field: "expectedStageDigest", error }`,
   checked after the existing "stage not found" and "stage has already started" refusals, so a started stage
   still answers the existing 409 unchanged.
@@ -49,7 +50,7 @@ K5 is not complete until the server refuses both atomically.
 ### `retry-stage` and `skip-stage`
 
 - Request: optional `expectedStageId: string` and `expectedAttempt: number` (the `n` of the waiting stage's
-  latest own attempt, as the caller saw it). `stageId` keeps its existing meaning on `retry-stage` (the
+  latest own attempt, as the caller saw it, or `0` when it saw none yet; `null` is malformed). `stageId` keeps its existing meaning on `retry-stage` (the
   launch-receipt retry, paired with `launchId`) and is not reused.
 - Checked inside the mutation, before the survivor, orphan, flow-close and reset steps:
   `pipeline.state === "needs_decision"`, `cursor.stageId === expectedStageId`, and the cursor stage's latest

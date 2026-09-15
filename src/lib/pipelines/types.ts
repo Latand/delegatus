@@ -451,8 +451,9 @@ export type PatchPipelineRequest = {
       which on retry-stage names a launch-receipt retry. */
   expectedStageId?: string;
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
-      attempt the caller saw. A different latest attempt answers 409
-      `STAGE_CHANGED`. */
+      attempt the caller saw, or `0` when it saw none yet (a provisioning park).
+      A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
+      non-integers are malformed. */
   expectedAttempt?: number;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
