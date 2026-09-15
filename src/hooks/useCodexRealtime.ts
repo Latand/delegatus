@@ -6,8 +6,10 @@ import { setVoiceConnected, setVoiceSpeaking } from "@/lib/audio/app";
 import type { Speaker } from "@/lib/audio/ambientLoop";
 import { speakingFromLines } from "@/lib/audio/speech";
 import { codexRealtimeClient, type CodexRealtimeLine, type CodexRealtimeSnapshot } from "@/lib/realtime/codexRealtimeClient";
-import type { RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
+import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
 import type { HostAxis, RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
+
+const EMPTY_ACKS: readonly string[] = [];
 
 const IDLE = {
   phase: "idle" as const, lines: [], error: null, startedAt: null,
@@ -32,7 +34,7 @@ export interface RealtimeSurface {
   updateWorkerProgress(turnId: string, progress: string, running: boolean): void;
   reconcileWorkerDeliveries(
     deliveries: readonly RuntimeVoiceDelivery[],
-    options?: { authoritative?: boolean },
+    options?: { authoritative?: boolean; ready?: boolean },
   ): void;
   /** #1629: the app-server's own transcript, merged into the panel beside what
       the data channel delivered. */
@@ -162,6 +164,8 @@ export function useCodexRealtime(
   /* #1629: the runtime's own verdict on the host behind the call. `unknown`
      while no projection has arrived, which asserts nothing either way. */
   backingHost: VoiceBackingHost = "unknown",
+  deferredVoiceRevision?: number,
+  acknowledgedVoiceIds: readonly string[] = EMPTY_ACKS,
 ) {
   const client = useMemo(
     () => enabled && conversationId.startsWith("conversation_") ? clientFactory(conversationId) : null,
@@ -176,9 +180,75 @@ export function useCodexRealtime(
     if (!client || !workerTurnId || !workerProgress) return;
     client.updateWorkerProgress(workerTurnId, workerProgress, workerRunning);
   }, [client, snapshot.phase, workerProgress, workerRunning, workerTurnId]);
+  const [preparingVoice, setPreparingVoice] = useState<string | null>(null);
+  const startEpoch = useRef(0);
+  const startPending = useRef(false);
+  const bodyKey = `${conversationId}:${deferredVoiceRevision ?? "full"}`;
+  const [bodyState, setBodyState] = useState<{ key: string; deliveries: RuntimeVoiceDelivery[]; acknowledged: string[] } | null>(null);
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const requestRef = useRef<{ key: string; promise: Promise<RuntimeVoiceDelivery[]> } | null>(null);
+  const currentKey = useRef(bodyKey);
+  currentKey.current = bodyKey;
+  useEffect(() => () => { startEpoch.current += 1; startPending.current = false; }, [client, bodyKey]);
+  const bodiesReady = deferredVoiceRevision === undefined || bodyState?.key === bodyKey;
+  const mergedDeliveries = useMemo(() => {
+    const acknowledged = new Set([...acknowledgedVoiceIds, ...(bodyState?.key === bodyKey ? bodyState.acknowledged : [])]);
+    // The summary retains every pending delivery/response id. Streamed
+    // acknowledgments remove those ids, so a hydrated body can never revive
+    // work after the bounded tombstone tail has rolled over.
+    const recovered = new Map((bodyState?.key === bodyKey ? bodyState.deliveries : []).map(delivery => [delivery.deliveryId, delivery]));
+    return workerDeliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)).map(delivery => {
+      const body = recovered.get(delivery.deliveryId);
+      if (!body) return delivery;
+      const responses = new Map(body.responses.map(response => [response.responseId, response]));
+      return { ...delivery, responses: delivery.responses.map(response => response.text ? response : responses.get(response.responseId) ?? response) };
+    });
+  }, [bodyKey, bodyState, workerDeliveries, acknowledgedVoiceIds]);
+  const hydrateBodies = () => {
+    if (deferredVoiceRevision === undefined) return Promise.resolve([...workerDeliveries]);
+    if (bodyState?.key === bodyKey) return Promise.resolve(bodyState.deliveries);
+    if (requestRef.current?.key === bodyKey) return requestRef.current.promise;
+    const promise = (async () => {
+      const response = await fetch(`/api/runtime/snapshot?voiceFor=${encodeURIComponent(conversationId)}`);
+      if (!response.ok) throw new Error("Voice delivery recovery is unavailable");
+      const value = await response.json() as { sessions?: Array<{ conversationId: string; revision: number; voiceDeliveries?: RuntimeVoiceDelivery[]; voiceDeliverySnapshotRevision?: number; acknowledgedVoiceDeliveryIds?: string[] }> };
+      const session = value.sessions?.find(session => session.conversationId === conversationId);
+      if (!session || session.voiceDeliverySnapshotRevision !== undefined || session.revision < deferredVoiceRevision)
+        throw new Error("Voice delivery recovery is incomplete");
+      const acknowledged = new Set(session.acknowledgedVoiceDeliveryIds ?? []);
+      const deliveries = normalizeVoiceDeliveries(session.voiceDeliveries).filter(delivery => !acknowledged.has(delivery.deliveryId));
+      if (currentKey.current === bodyKey) {
+        setBodyState({ key: bodyKey, deliveries, acknowledged: [...acknowledged] });
+        setBodyError(null);
+      }
+      return deliveries;
+    })();
+    requestRef.current = { key: bodyKey, promise };
+    void promise.catch(error => { if (currentKey.current === bodyKey) setBodyError(error instanceof Error ? error.message : "Voice delivery recovery failed"); })
+      .finally(() => { if (requestRef.current?.promise === promise) requestRef.current = null; });
+    return promise;
+  };
   useEffect(() => {
-    client?.reconcileWorkerDeliveries(workerDeliveries, { authoritative: true });
-  }, [client, snapshot.phase, workerDeliveries]);
+    // An omitted body is unknown, never an authoritative empty queue. A
+    // reconnect snapshot re-arms hydration even for an already active call.
+    if (!bodiesReady) {
+      client?.reconcileWorkerDeliveries([], { ready: false });
+      if (snapshot.phase === "idle" || snapshot.phase === "error") return;
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let delay = 1000;
+      const recover = () => { void hydrateBodies().catch(() => {
+        if (cancelled) return;
+        timer = setTimeout(recover, delay);
+        delay = Math.min(30_000, delay * 2);
+      }); };
+      recover();
+      return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    }
+    client?.reconcileWorkerDeliveries(mergedDeliveries, { authoritative: true, ready: true });
+    // hydrateBodies joins one request per snapshot identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, snapshot.phase, bodyKey, bodiesReady, mergedDeliveries]);
   useEffect(() => {
     client?.reconcileCanonicalTranscript(canonicalTranscript);
   }, [canonicalTranscript, client]);
@@ -192,13 +262,36 @@ export function useCodexRealtime(
 
   return {
     ...snapshot,
+    phase: preparingVoice === bodyKey && startPending.current ? "connecting" as const : snapshot.phase,
+    error: snapshot.error ?? bodyError,
     /* Read at render time rather than stored: the stream appears with the
        `live` phase, which already re-renders this subtree. */
     micStream: client?.micStream() ?? null,
     toggleMic: () => client?.toggleMic(),
     toggleOutput: () => client?.toggleOutput(),
     realtimeSession: () => client?.realtimeSession() ?? null,
-    start: () => client?.start() ?? Promise.resolve(),
-    stop: () => client?.stop() ?? Promise.resolve(),
+    start: async () => {
+      if (!client || startPending.current || snapshot.phase === "connecting" || snapshot.phase === "live") return;
+      const key = bodyKey;
+      const epoch = ++startEpoch.current;
+      startPending.current = true;
+      setPreparingVoice(bodyKey);
+      try {
+        const deliveries = await hydrateBodies();
+        if (currentKey.current !== key || startEpoch.current !== epoch) return;
+        // A call starts only after its pending canonical outputs are known.
+        const acknowledged = new Set(acknowledgedVoiceIds);
+        client.reconcileWorkerDeliveries(deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), { authoritative: true, ready: true });
+        await client.start();
+      } finally {
+        if (startEpoch.current === epoch) { startPending.current = false; setPreparingVoice(null); }
+      }
+    },
+    stop: () => {
+      startEpoch.current += 1;
+      startPending.current = false;
+      setPreparingVoice(null);
+      return client?.stop() ?? Promise.resolve();
+    },
   };
 }

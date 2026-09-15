@@ -475,6 +475,7 @@ class CodexRealtimeClient {
   private events: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private workerDeliveriesReady = true;
   private readonly pendingWorkerDeliveries = new Map<string, RuntimeVoiceDelivery>();
   private readonly acknowledgedWorkerDeliveries = new Set<string>();
   /* Announced only when the HOST has confirmed the write, never on enqueue. The
@@ -726,8 +727,10 @@ class CodexRealtimeClient {
 
   reconcileWorkerDeliveries(
     value: readonly RuntimeVoiceDelivery[] | null | undefined,
-    options: { authoritative?: boolean } = {},
+    options: { authoritative?: boolean; ready?: boolean } = {},
   ): void {
+    if (options.ready !== undefined) this.workerDeliveriesReady = options.ready;
+    if (!this.workerDeliveriesReady) return;
     const deliveries = normalizeVoiceDeliveries(value);
     if (options.authoritative) {
       const current = new Set(deliveries.map((delivery) => delivery.deliveryId));
@@ -745,7 +748,7 @@ class CodexRealtimeClient {
   }
 
   private flushWorkerDeliveries(): void {
-    if (this.snapshot.phase !== "live" || this.pendingWorkerDeliveries.size === 0) return;
+    if (!this.workerDeliveriesReady || this.snapshot.phase !== "live" || this.pendingWorkerDeliveries.size === 0) return;
     if (this.workerDeliveryFlush) {
       this.workerDeliveryWakeEpoch = this.epoch;
       return;
@@ -762,7 +765,7 @@ class CodexRealtimeClient {
   }
 
   private async deliverPendingWorkerResponses(): Promise<void> {
-    while (this.snapshot.phase === "live") {
+    while (this.workerDeliveriesReady && this.snapshot.phase === "live") {
       const delivery = this.pendingWorkerDeliveries.values().next().value as RuntimeVoiceDelivery | undefined;
       if (!delivery) return;
       let body: Record<string, unknown>;

@@ -329,7 +329,9 @@ export class RuntimeJournal {
   private readonly secretKey: Buffer;
   private readonly waiters = new Set<() => void>();
   private fault: string | null = null;
-  private snapshotCache: { changes: number; expiresAt: number | null; json: string } | null = null;
+  // Only the full and summary representations are retained. Targeted voice
+  // reads must not evict either hot representation or accumulate per-card JSON.
+  private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
   private receiptSweepCursor = 0;
 
   constructor(filename: string, options: RuntimeJournalOptions = {}) {
@@ -1015,7 +1017,7 @@ export class RuntimeJournal {
     return this.snapshotAt(this.now());
   }
 
-  private snapshotAt(now: number): RuntimeSnapshot {
+  private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
       const snapshot: RuntimeSnapshot = {
@@ -1025,7 +1027,7 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues().map((session) => ({
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => ({
           ...session,
           // Only a running turn has live text to resume. Re-normalizing here
           // also caps legacy rows to the 64 KiB UTF-8 tail; omittedChars is the
@@ -1062,15 +1064,15 @@ export class RuntimeJournal {
       to remember to invalidate. The time expiry covers the only projection
       whose visibility changes without a write. serverTime inside the cached
       frame dates from the last rebuild; no consumer reads it. */
-  snapshotJson(): string {
+  snapshotJson(voiceBodiesFor?: readonly string[]): string {
+    const scope = JSON.stringify(voiceBodiesFor ?? null);
     const changes = this.totalChanges();
     const now = this.now();
-    if (this.snapshotCache?.changes === changes
-      && (this.snapshotCache.expiresAt === null || now < this.snapshotCache.expiresAt)) {
-      return this.snapshotCache.json;
-    }
-    const json = JSON.stringify(this.snapshotAt(now));
-    this.snapshotCache = { changes, expiresAt: this.snapshotEdgeExpiry(now), json };
+    const cached = this.snapshotCaches.get(scope);
+    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) return cached.json;
+    const json = JSON.stringify(this.snapshotAt(now, voiceBodiesFor));
+    if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
+      this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
     return json;
   }
 
@@ -2480,9 +2482,18 @@ export class RuntimeJournal {
     return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => JSON.parse(row.state_json) as T);
   }
 
-  private snapshotSessionValues(): RuntimeSession[] {
-    const active = this.db.query<{ state_json: string }, [string, string, string]>(`
-      SELECT state_json
+  private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
+    // SQLite removes the heavy bodies before they cross into JS. The original
+    // entity, receipts, tombstones and full snapshot API remain unchanged.
+    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN id = ? THEN state_json ELSE json_set(state_json,
+      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
+        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
+          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
+        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
+      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
+    const selected = voiceBodiesFor?.[0] ?? "";
+    const active = this.db.query<{ state_json: string }, (string | number)[]>(`
+      SELECT ${projection}
       FROM entities
       WHERE kind = ?
         AND (
@@ -2490,15 +2501,15 @@ export class RuntimeJournal {
           OR json_extract(state_json, '$.host') NOT IN (?, ?)
         )
       ORDER BY id
-    `).all("session", "dead", "unhosted");
-    const inactive = this.db.query<{ state_json: string }, [string, string, string, number]>(`
-      SELECT state_json
+    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted");
+    const inactive = this.db.query<{ state_json: string }, (string | number)[]>(`
+      SELECT ${projection}
       FROM entities
       WHERE kind = ?
         AND json_extract(state_json, '$.host') IN (?, ?)
       ORDER BY checkpoint_seq DESC, id DESC
       LIMIT ?
-    `).all("session", "dead", "unhosted", RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
+    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted", RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
     return [...active, ...inactive]
       .map((row) => JSON.parse(row.state_json) as RuntimeSession)
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));

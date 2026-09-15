@@ -15,6 +15,10 @@ export async function GET(request: Request): Promise<NextResponse> {
   if (!runtimeEventsEnabled()) {
     return NextResponse.json({ error: "runtime events are disabled", code: RUNTIME_PLANE_ABSENT }, { status: 503 });
   }
+  const url = new URL(request.url);
+  const voiceFor = url.searchParams.get("voiceFor");
+  if (voiceFor !== null && (!voiceFor || voiceFor.length > 256)) return NextResponse.json({ error: "invalid conversation" }, { status: 400 });
+  const summary = url.searchParams.get("view") === "summary";
   const client = runtimeHostClient();
   if (!client) {
     return NextResponse.json({ error: "runtime host socket is unavailable", code: RUNTIME_PLANE_ABSENT }, { status: 503 });
@@ -23,7 +27,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({
       // The request signal reaches the runtime host, so a disconnected caller
       // cancels its socket wait instead of leaving late host work behind.
-      ...await client.snapshot(request.signal),
+      ...await client.snapshot(request.signal, summary || voiceFor ? { voiceBodiesFor: voiceFor ? [voiceFor] : [] } : undefined),
       structuredHostsEnabled: structuredHostsEnabled(),
       structuredStartup: structuredStartupAxis(),
     }, { headers: { "cache-control": "no-store" } });

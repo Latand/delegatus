@@ -493,6 +493,8 @@ export interface RuntimeSession {
   /** Canonical terminal assistant items retained independently from the
       bounded live UI projection until Live Mode acknowledges delivery. */
   voiceDeliveries?: RuntimeVoiceDelivery[];
+  /** Bodies omitted only on the opted-in browser summary; hydrate before voice reconciliation. */
+  voiceDeliverySnapshotRevision?: number;
   /** The canonical realtime transcript this session has published (#1629), as a
       bounded tail. Distinct from `voiceDeliveries`, which is worker output being
       spoken INTO the call. */

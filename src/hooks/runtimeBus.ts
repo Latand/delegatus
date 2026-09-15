@@ -28,7 +28,7 @@ import {
 } from "@/components/runtime/runtimeModel";
 import { rolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 
-export const SNAPSHOT_URL = "/api/runtime/snapshot";
+export const SNAPSHOT_URL = "/api/runtime/snapshot?view=summary";
 export const STREAM_URL = "/api/runtime/stream";
 
 /** Fired on `window` whenever the tab's SSE transport re-subscribes (connection
