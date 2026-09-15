@@ -66,10 +66,19 @@ const OVERRIDES: Record<string, unknown> = {
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request) => {
     const url = String(input);
+    if (url.startsWith("/api/board")) {
+      const board = {
+        schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {}, explicitManual: boardManual,
+        prefs: { manual: boardManual, hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
+      };
+      return { ok: true, status: 200, json: async () => ({ board }), text: async () => JSON.stringify({ board }) };
+    }
     const body = url.startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   }) as unknown as typeof fetch,
 };
+/** Paths the stored board pins by hand. */
+let boardManual: string[] = [];
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
 
@@ -89,6 +98,7 @@ let roots: Root[] = [];
 let projectCounter = 0;
 let PROJECT = "launch-claim-0";
 beforeEach(() => {
+  boardManual = [];
   roots = [];
   projectCounter += 1;
   PROJECT = `launch-claim-${projectCounter}`;
@@ -202,9 +212,15 @@ test("a failed-delivery launch record on a scanned transcript path never hides t
 });
 
 test("a pathless terminal receipt is still shelved and never becomes a board card", async () => {
-  const host = mount([pathlessReceipt("launch-claim-2")]);
+  /* A real conversation beside it, so the Board is drawn, and the receipt pinned to the board by hand, so a tile
+     for it would appear if launch history did not claim it. */
+  const beside = "/claude-projects/repo-fixture/conversation-beside.jsonl";
+  boardManual = ["spawn:launch-claim-2"];
+  const host = mount([{ ...conversationWithFailedLaunchRecord(beside), spawn: undefined } as FileEntry, pathlessReceipt("launch-claim-2")]);
+  expect(await waitFor(() => host.querySelector(`[data-kanban-board] [data-member="${beside}"]`) !== null)).toBe(true);
   await settle();
 
-  expect(host.querySelector('[data-scheme-node="spawn:launch-claim-2"]')).toBeNull();
+  expect(host.querySelector('[data-kanban-board] [data-member="spawn:launch-claim-2"]')).toBeNull();
+  expect(host.querySelector('[data-kanban-board] [data-link-path="spawn:launch-claim-2"]')).toBeNull();
   expect(host.querySelector('[data-testid="launch-history"]')).not.toBeNull();
 });

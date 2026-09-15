@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
 
@@ -181,5 +181,7 @@ export function useOverlay<T>() {
       return null;
     });
   }, []);
-  return { open, setOpen, close };
+  /* One object while nothing opens or closes, so handlers that list the overlay among their inputs keep their
+     identity and memoized cards and readers do not re-render on every board render. */
+  return useMemo(() => ({ open, setOpen, close }), [open, close]);
 }

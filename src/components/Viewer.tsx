@@ -212,8 +212,10 @@ export function Viewer() {
      and nowhere else, with no frame of the previous project's answer. */
   const [orchestratorOpenProject, setOrchestratorOpenProject] = useState(OVERVIEW);
   /* The kanban face seats the orchestrator above its own columns (#1695 K3);
-     the dock stays closed under it so one conversation has one composer. */
-  const [kanbanFace, setKanbanFace] = useState(false);
+     the dock stays closed under it so one conversation has one composer. The
+     desktop board is the kanban, so the dock waits until the dashboard says a
+     project shows something else: the panel mounts once, where it is shown. */
+  const [kanbanFace, setKanbanFace] = useState(true);
   if (orchestratorOpenProject !== project) {
     setOrchestratorOpenProject(project);
     setOrchestratorOpen(dockOpenFor(project));

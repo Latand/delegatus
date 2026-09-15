@@ -221,6 +221,18 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
       {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
+      {/* Supersedence lineage (#383), as the pane's own header carries it: the retired predecessor's history is one
+          click away, and the Viewer opens the `#c=` link in place. */}
+      {file.continues ? (
+        <a
+          href={"#c=" + encodeURIComponent(file.continues.conversationId)}
+          data-continues-chip=""
+          className="ch-continues"
+          title={t("lineage.continuesTitle", { round: file.continues.round })}
+        >
+          {t("lineage.continues", { round: file.continues.round })}
+        </a>
+      ) : null}
     </>
   );
   const menuButton = (

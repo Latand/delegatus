@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 import { en } from "./en";
 import { uk } from "./uk";
@@ -91,6 +91,8 @@ export type TFunction = (key: MessageKey, params?: Record<string, string | numbe
 /** Reactive locale + translator. Components re-render when the locale flips. */
 export function useLocale(): { locale: Locale; t: TFunction; setLocale: (l: Locale) => void } {
   const locale = useSyncExternalStore(subscribe, getLocale, () => "en" as Locale);
-  const t: TFunction = (key, params) => translate(locale, key, params);
+  /* One function per locale: a component that lists `t` among a memo's inputs rebuilds only when the language
+     changes, never on every render. */
+  const t = useCallback<TFunction>((key, params) => translate(locale, key, params), [locale]);
   return { locale, t, setLocale };
 }

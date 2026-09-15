@@ -36,7 +36,7 @@ import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type T
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
-import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderStop, type ReaderView } from "./KanbanReaders";
+import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
@@ -426,6 +426,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* A conversation a pane shows is mounted in that pane, unless it has the window. */
   const sheetSlots = useMemo(() => new Set(sheetPanes.flatMap((pane) => (pane.readerKey && pane.readerKey !== fullReader ? [pane.readerKey] : []))), [sheetPanes, fullReader]);
 
+  /* A reader's owner is rebuilt with the model; while it names the same card, title and stage, the reader keeps
+     the object it had, so a model rebuild does not re-render every open reader. */
+  const ownerCache = useRef(new Map<string, ReaderOwner>());
+  const stableOwner = (key: string, next: ReaderOwner): ReaderOwner => {
+    const previous = ownerCache.current.get(key);
+    if (previous && previous.cardId === next.cardId && previous.cardTitle === next.cardTitle
+      && previous.stage?.pipeline === next.stage?.pipeline && previous.stage?.stage === next.stage?.stage) return previous;
+    ownerCache.current.set(key, next);
+    return next;
+  };
   const readerViews = useMemo<ReaderView[]>(() => {
     const views: ReaderView[] = openReaders.flatMap((reader) => {
       const owner = owners.get(reader.key);
@@ -439,7 +449,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         folded: reader.folded && fullReader !== reader.key && !inSheet,
         full: fullReader === reader.key,
         inSheet,
-        owner: owner && card ? { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage } : null,
+        owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
       }];
     });
     if (looseReader && !views.some((view) => view.readerKey === looseReader.key)) {
@@ -458,7 +468,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           folded: false,
           full: fullReader === pane.readerKey,
           inSheet: fullReader !== pane.readerKey,
-          owner: { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } },
+          owner: stableOwner(pane.readerKey, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } }),
         });
       }
     }
@@ -1861,6 +1871,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const addAgentRef = useRef(props.onAddAgent);
   addAgentRef.current = props.onAddAgent;
   const addAgentToCard = useCallback((card: KanbanCardModel) => addAgentRef.current?.({ id: card.id, task: card.task, title: card.title }), []);
+  /* The dashboard hands a fresh callback on each of its renders; readers get one that stays the same. */
+  const spawnRetryRef = useRef(props.onSpawnRetry);
+  spawnRetryRef.current = props.onSpawnRetry;
+  const spawnRetry = useCallback((file: FileEntry) => spawnRetryRef.current?.(file), []);
   const draftCloseRef = useRef(props.onDraftClose);
   draftCloseRef.current = props.onDraftClose;
   const draftSpawnedRef = useRef(props.onDraftSpawned);
@@ -2074,7 +2088,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onClose={closeReaderFor}
         onFull={toggleFull}
         onMenu={openReaderMenu}
-        onSpawnRetry={props.onSpawnRetry}
+        onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
       />
 
       {openMenu && menu.open ? (

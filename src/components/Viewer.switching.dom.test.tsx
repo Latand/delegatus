@@ -434,8 +434,20 @@ async function mountViewer(project: string): Promise<HTMLElement> {
   return currentHost;
 }
 
-const node = (host: HTMLElement, path: string) => host.querySelector(`[data-scheme-node="${path}"]`);
-const ringed = (host: HTMLElement, path: string) => (node(host, path)?.querySelector(":scope > .ring-2") ?? null) !== null;
+/* The desktop board is the kanban (#1695): each conversation has a card, and its transcript shows in the reader
+   opened on it. The desktop profile opens, as remembered readers, the three conversations the scheme drew as
+   panes, so every step below measures the same transcripts. */
+const readerOf = (host: HTMLElement, path: string) => Array.from(host.querySelectorAll("[data-kanban-reader]"))
+  .find((reader) => reader.matches(`[data-link-path="${path}"]`) || reader.querySelector(`[data-link-path="${path}"]`) !== null) ?? null;
+/** The focus the Board moves: into the conversation's reader. */
+const focusedOn = (host: HTMLElement, path: string) => {
+  const reader = readerOf(host, path);
+  return Boolean(reader && document.activeElement && reader.contains(document.activeElement as unknown as Node));
+};
+const cardOf = (host: HTMLElement, path: string) => readerOf(host, path)?.closest<HTMLElement>("[data-kanban-card]") ?? null;
+function rememberReaders(project: string, entries: ReadonlyArray<{ path: string; conversationId?: string | null }>): void {
+  dom.localStorage.setItem(`llv:kanban-readers:v1:${project}`, JSON.stringify(entries.map((entry) => ({ key: entry.conversationId ?? entry.path, path: entry.path, folded: false }))));
+}
 /* A conversation pane on either surface: the board card's section and the
    phone's focused pane both carry the transcript path as their link target. */
 const pane = (host: HTMLElement, path: string) => host.querySelector(`[data-link-path="${path}"]`);
@@ -477,6 +489,8 @@ async function clickAnchor(anchor: HTMLAnchorElement): Promise<{ handledInApp: b
 const painted = (host: HTMLElement, paths: string[]) => paths.every((path) => feedRows(host, path) > 0);
 
 async function mountAlphaDesktop(): Promise<{ host: HTMLElement; paint: Milestone }> {
+  rememberReaders("alpha", [SHORT, LONG, TOOLS]);
+  rememberReaders("beta", [BETA_A, BETA_B]);
   const host = await mountViewer("alpha");
   const paint = await until(() => painted(host, [SHORT.path, LONG.path, TOOLS.path]));
   return { host, paint };
@@ -484,17 +498,20 @@ async function mountAlphaDesktop(): Promise<{ host: HTMLElement; paint: Mileston
 
 /* ── desktop ────────────────────────────────────────────────────────────── */
 
-test("desktop: an in-app «Open conversation» link focuses the card without rebuilding the board", async () => {
+test("desktop: an in-app «Open conversation» link focuses the target's reader without rebuilding the board", async () => {
   dom.localStorage.setItem(`${OPEN_KEY}:alpha`, "1");
   const { host, paint } = await mountAlphaDesktop();
   const boot = probe.snapshot();
   expect(boot.mounts.ProjectDashboardView ?? 0).toBe(1);
-  expect(boot.mounts.OrchestratorDock ?? 0).toBe(1);
+  /* On the Board the orchestrator is the seat above the columns: its panel mounts once, there, and the dock,
+     which would give the same conversation a second composer, never mounts. */
+  expect(boot.mounts.KanbanSeat ?? 0).toBe(1);
   expect(boot.mounts.OrchestratorPanel ?? 0).toBe(1);
-  record("desktop", "mount → three cards painted (cold)", paint, `NodeShell mounts ${boot.mounts.NodeShell ?? 0}, LogFeed renders ${boot.renders.LogFeed ?? 0}`);
+  expect(boot.mounts.OrchestratorDock ?? 0).toBe(0);
+  record("desktop", "mount → three readers painted (cold)", paint, `KanbanReader mounts ${boot.mounts.KanbanReader ?? 0}, LogFeed renders ${boot.renders.LogFeed ?? 0}`);
 
-  /* The lineage chip on the long card deep-links the short one. */
-  const chip = node(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement | null;
+  /* The lineage chip in the long conversation deep-links the short one. */
+  const chip = readerOf(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement | null;
   expect(chip).not.toBeNull();
   beginStep();
   let sawSkeleton = false;
@@ -502,43 +519,43 @@ test("desktop: an in-app «Open conversation» link focuses the card without reb
   sawSkeleton ||= skeleton(host);
   const highlight = await until(() => {
     sawSkeleton ||= skeleton(host);
-    return ringed(host, SHORT.path);
+    return focusedOn(host, SHORT.path);
   });
   const after = probe.snapshot();
   const otherFeedRenders = [LONG.path, TOOLS.path].reduce((sum, path) => sum + probe.rendersFor("LogFeed", path), 0);
-  record("desktop", "«Open conversation» link → target ringed", highlight,
-    `in-app ${handledInApp ? "yes" : "no (hash navigation)"}; skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; dock mounts +${after.mounts.OrchestratorDock ?? 0}; orchestrator panel mounts +${after.mounts.OrchestratorPanel ?? 0}; NodeShell mounts +${after.mounts.NodeShell ?? 0}; other cards' LogFeed renders ${otherFeedRenders}; /api/files requests ${requests.filter((url) => url.startsWith("/api/files")).length}`);
+  record("desktop", "«Open conversation» link → target reader focused", highlight,
+    `in-app ${handledInApp ? "yes" : "no (hash navigation)"}; skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; seat mounts +${after.mounts.KanbanSeat ?? 0}; dock mounts +${after.mounts.OrchestratorDock ?? 0}; orchestrator panel mounts +${after.mounts.OrchestratorPanel ?? 0}; KanbanReader mounts +${after.mounts.KanbanReader ?? 0}; other readers' LogFeed renders ${otherFeedRenders}; /api/files requests ${requests.filter((url) => url.startsWith("/api/files")).length}`);
 
-  /* Issue #1432 acceptance: no dashboard remount, no orchestrator panel
-     reload, no card rebuild, and the highlight lands in the same flush. */
+  /* Issue #1432 acceptance on the Board: no dashboard remount, no orchestrator panel reload, no reader rebuilt,
+     and the focus lands in the same flush. */
   expect(handledInApp).toBe(true);
   expect(sawSkeleton).toBe(false);
   expect(after.mounts.ProjectDashboardView ?? 0).toBe(0);
+  expect(after.mounts.KanbanSeat ?? 0).toBe(0);
   expect(after.mounts.OrchestratorDock ?? 0).toBe(0);
   expect(after.mounts.OrchestratorPanel ?? 0).toBe(0);
-  expect(after.mounts.NodeShell ?? 0).toBe(0);
+  expect(after.mounts.KanbanReader ?? 0).toBe(0);
   expect(highlight.virtualMs).toBe(0);
   /* The URL still carries the deep link, so reload and share keep working. */
   expect(dom.location.hash).toBe(`#c=${encodeURIComponent(SHORT.conversationId)}`);
-  /* Focusing one card must not re-render the feeds of the others. */
+  /* Focusing one conversation must not re-render the feeds of the others. */
   expect(otherFeedRenders).toBe(0);
 });
 
 test("desktop: a cross-project link switches the project, then focuses — from the last known catalog", async () => {
   const { host } = await mountAlphaDesktop();
-  /* A focus has already happened in this session: the lineage chip on the
-     long card ringed the short one. The cross-project open below must still
-     move, which it did not while the request nonce restarted after the
-     project switch cleared the request (the real-browser profile's sequence). */
-  await clickAnchor(node(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement);
-  await until(() => ringed(host, SHORT.path));
+  /* A focus has already happened in this session: the lineage chip in the long conversation focused the short
+     one. The cross-project open below must still move, which it did not while the request nonce restarted after
+     the project switch cleared the request (the real-browser profile's sequence). */
+  await clickAnchor(readerOf(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement);
+  await until(() => focusedOn(host, SHORT.path));
   /* Visit beta once so its board is known, then come back. */
   await click(railButton(host, "beta")!);
   await until(() => painted(host, [BETA_A.path, BETA_B.path]));
   beginStep();
   const filesBefore = requests.filter((url) => url.startsWith("/api/files")).length;
 
-  const chip = node(host, BETA_B.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement | null;
+  const chip = readerOf(host, BETA_B.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement | null;
   expect(chip).not.toBeNull();
   let sawSkeleton = false;
   const { handledInApp } = await clickAnchor(chip!);
@@ -550,17 +567,18 @@ test("desktop: a cross-project link switches the project, then focuses — from 
     sawSkeleton ||= skeleton(host);
     return painted(host, [SHORT.path, LONG.path, TOOLS.path]);
   });
-  const highlight = await until(() => ringed(host, TOOLS.path));
+  const highlight = await until(() => focusedOn(host, TOOLS.path));
   const after = probe.snapshot();
   record("desktop", "cross-project link → rail switched", switched, `in-app ${handledInApp ? "yes" : "no"}`);
-  record("desktop", "cross-project link → alpha cards painted from cache", { virtualMs: switched.virtualMs + boardPaint.virtualMs, workMs: boardPaint.workMs }, `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; LogFeed renders ${after.renders.LogFeed ?? 0}; /api/files requests +${requests.filter((url) => url.startsWith("/api/files")).length - filesBefore}`);
-  record("desktop", "cross-project link → target ringed", { virtualMs: switched.virtualMs + boardPaint.virtualMs + highlight.virtualMs, workMs: highlight.workMs });
+  record("desktop", "cross-project link → alpha readers painted from cache", { virtualMs: switched.virtualMs + boardPaint.virtualMs, workMs: boardPaint.workMs }, `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${after.mounts.ProjectDashboardView ?? 0}; LogFeed renders ${after.renders.LogFeed ?? 0}; /api/files requests +${requests.filter((url) => url.startsWith("/api/files")).length - filesBefore}`);
+  record("desktop", "cross-project link → target reader focused", { virtualMs: switched.virtualMs + boardPaint.virtualMs + highlight.virtualMs, workMs: highlight.workMs });
 
   expect(handledInApp).toBe(true);
   expect(sawSkeleton).toBe(false);
   expect(after.mounts.ProjectDashboardView ?? 0).toBe(0);
   expect(switched.virtualMs).toBe(0);
   expect(boardPaint.virtualMs).toBe(0);
+  expect(highlight.virtualMs).toBe(0);
   expect(dom.location.hash).toBe(`#c=${encodeURIComponent(TOOLS.conversationId)}`);
 });
 
@@ -578,7 +596,7 @@ test("desktop: a project switch paints the revisited board synchronously and nev
   });
   const firstVisit = probe.snapshot();
   record("desktop", "project switch (first visit) → rail highlight", railFirst);
-  record("desktop", "project switch (first visit) → cards painted (cold)", firstPaint, `skeleton ${sawSkeleton ? "shown while /api/board loads" : "never"}; dashboard mounts +${firstVisit.mounts.ProjectDashboardView ?? 0}; NodeShell mounts ${firstVisit.mounts.NodeShell ?? 0}`);
+  record("desktop", "project switch (first visit) → readers painted (cold)", firstPaint, `skeleton ${sawSkeleton ? "shown while /api/board loads" : "never"}; dashboard mounts +${firstVisit.mounts.ProjectDashboardView ?? 0}; KanbanReader mounts ${firstVisit.mounts.KanbanReader ?? 0}`);
 
   /* Revisit: everything is known — the board, the tails, the parsed feeds. */
   beginStep();
@@ -591,7 +609,7 @@ test("desktop: a project switch paints the revisited board synchronously and nev
   });
   const revisit = probe.snapshot();
   record("desktop", "project switch (revisit) → rail highlight", railBack);
-  record("desktop", "project switch (revisit) → cards painted from cache", revisitPaint, `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${revisit.mounts.ProjectDashboardView ?? 0}; NodeShell mounts ${revisit.mounts.NodeShell ?? 0}; LogFeed renders ${revisit.renders.LogFeed ?? 0}`);
+  record("desktop", "project switch (revisit) → readers painted from cache", revisitPaint, `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${revisit.mounts.ProjectDashboardView ?? 0}; KanbanReader mounts ${revisit.mounts.KanbanReader ?? 0}; LogFeed renders ${revisit.renders.LogFeed ?? 0}`);
   /* A fresh catalog does not gate any of this: the files feed is global. */
   const catalogRequests = requests.filter((url) => url.startsWith("/api/files")).length;
 
@@ -604,32 +622,34 @@ test("desktop: a project switch paints the revisited board synchronously and nev
   expect(catalogRequests).toBe(1);
 });
 
-test("desktop: moving the focus between cards re-renders only the cards whose ring changed", async () => {
+test("desktop: moving the focus between readers re-renders only the readers whose focus changed", async () => {
   const { host } = await mountAlphaDesktop();
-  /* First move through the in-app link channel (the long card's chip focuses
-     the short one), second move by clicking another card on the board. Both
-     are gestures the board answers without a network round trip. */
-  const chip = node(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement;
+  /* First move through the in-app link channel (the long conversation's chip focuses the short one), second move
+     by clicking into another reader on the board. Both are gestures the board answers without a network round trip. */
+  const chip = readerOf(host, LONG.path)?.querySelector("a[data-continues-chip]") as HTMLAnchorElement;
   await clickAnchor(chip);
-  await until(() => ringed(host, SHORT.path));
+  await until(() => focusedOn(host, SHORT.path));
   beginStep();
-  /* Second move: the switchboard-style select of another card on the board. */
-  const toolsCard = node(host, TOOLS.path)!;
+  const toolsReader = readerOf(host, TOOLS.path) as HTMLElement;
   await act(async () => {
-    dispatch(toolsCard, new dom.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
-    dispatch(toolsCard, new dom.MouseEvent("click", { bubbles: true, cancelable: true }));
+    dispatch(toolsReader, new dom.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+    dispatch(toolsReader, new dom.MouseEvent("click", { bubbles: true, cancelable: true }));
+    toolsReader.focus();
   });
   await flush();
   const after = probe.snapshot();
-  record("desktop", "focus moves short → tool-heavy (click on card)", { virtualMs: 0, workMs: realNowMs() - stepStartedAt },
-    `NodeShell renders ${after.renders.NodeShell ?? 0} (${Object.entries(after.byPath).filter(([key]) => key.startsWith("NodeShell:")).length} cards); LogFeed renders ${after.renders.LogFeed ?? 0}; BranchPane renders ${after.renders.BranchPane ?? 0}; dashboard renders ${after.renders.ProjectDashboardView ?? 0}`);
-  /* The long card is neither the previous nor the new focus: nothing about it
-     changed on screen, so it must not have rendered. */
-  expect(probe.rendersFor("NodeShell", LONG.path)).toBe(0);
+  record("desktop", "focus moves short → tool-heavy (click into its reader)", { virtualMs: 0, workMs: realNowMs() - stepStartedAt },
+    `KanbanCard renders ${after.renders.KanbanCard ?? 0}; KanbanReader renders ${after.renders.KanbanReader ?? 0}; LogFeed renders ${after.renders.LogFeed ?? 0}; BranchPane renders ${after.renders.BranchPane ?? 0}; dashboard renders ${after.renders.ProjectDashboardView ?? 0}`);
+  expect(focusedOn(host, TOOLS.path)).toBe(true);
+  /* The long conversation is neither the previous nor the new focus: nothing about it changed on screen, so it
+     must not have rendered. */
+  expect(probe.rendersFor("KanbanReader", LONG.path)).toBe(0);
   expect(probe.rendersFor("LogFeed", LONG.path)).toBe(0);
+  /* Nothing about any card changed: the board's model is not rebuilt, and no card re-renders. */
+  expect(after.renders.KanbanCard ?? 0).toBe(0);
 });
 
-test("desktop: a fresh tail record on one card leaves the other cards' panes untouched", async () => {
+test("desktop: a fresh tail record in one reader leaves the other readers' panes untouched", async () => {
   const { host } = await mountAlphaDesktop();
   const rowsBefore = feedRows(host, SHORT.path);
   const firstRow = pane(host, SHORT.path)!.querySelector("[data-feed-key]");
@@ -639,32 +659,35 @@ test("desktop: a fresh tail record on one card leaves the other cards' panes unt
   const fresh = await until(() => feedRows(host, SHORT.path) > rowsBefore);
   const after = probe.snapshot();
   const otherFeedRenders = [LONG.path, TOOLS.path].reduce((sum, path) => sum + probe.rendersFor("LogFeed", path), 0);
-  record("desktop", "fresh tail record → appended to the short card", fresh,
-    `LogFeed renders ${after.renders.LogFeed ?? 0}; other cards' LogFeed renders ${otherFeedRenders}; NodeShell renders ${after.renders.NodeShell ?? 0}; first row node preserved ${pane(host, SHORT.path)!.querySelector("[data-feed-key]") === firstRow ? "yes" : "no"}`);
+  record("desktop", "fresh tail record → appended to the short reader", fresh,
+    `LogFeed renders ${after.renders.LogFeed ?? 0}; other readers' LogFeed renders ${otherFeedRenders}; KanbanReader renders ${after.renders.KanbanReader ?? 0}; first row node preserved ${pane(host, SHORT.path)!.querySelector("[data-feed-key]") === firstRow ? "yes" : "no"}`);
   expect(fresh.virtualMs).toBeLessThanOrEqual(PROMPT_RECONNECT_MS + RTT_MS + 5);
-  expect(pane(host, SHORT.path)!.querySelector("[data-feed-key]")).toBe(firstRow);
+  expect(pane(host, SHORT.path)!.querySelector("[data-feed-key]") === firstRow).toBe(true);
   expect(otherFeedRenders).toBe(0);
 });
 
-test("desktop: an Arrow key moves the ring to the neighbour card and re-renders nothing else", async () => {
+test("desktop: an Arrow key moves the focus to the neighbour card and re-renders nothing else", async () => {
   const { host } = await mountAlphaDesktop();
-  const shortCard = node(host, SHORT.path)!;
-  await act(async () => {
-    dispatch(shortCard, new dom.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
-    dispatch(shortCard, new dom.MouseEvent("click", { bubbles: true, cancelable: true }));
-  });
-  await until(() => ringed(host, SHORT.path));
+  const shortCard = cardOf(host, SHORT.path)!;
+  expect(shortCard).not.toBeNull();
+  await act(async () => { shortCard.focus(); });
   beginStep();
-  await keydown("ArrowRight");
-  const moved = await until(() => !ringed(host, SHORT.path) && [LONG.path, TOOLS.path].some((path) => ringed(host, path)));
+  await act(async () => {
+    dispatch(shortCard, new dom.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  const focusedCard = (document.activeElement as unknown as HTMLElement | null)?.closest?.("[data-kanban-card]") ?? null;
+  const moved = focusedCard !== null && focusedCard !== shortCard;
   const after = probe.snapshot();
-  const target = [LONG.path, TOOLS.path].find((path) => ringed(host, path))!;
-  const untouched = [LONG.path, TOOLS.path].find((path) => path !== target)!;
-  record("desktop", "ArrowRight → ring moves to the neighbour card", moved,
-    `NodeShell renders ${after.renders.NodeShell ?? 0}; LogFeed renders ${after.renders.LogFeed ?? 0}; untouched card NodeShell renders ${probe.rendersFor("NodeShell", untouched)}; dashboard renders ${after.renders.ProjectDashboardView ?? 0}`);
-  expect(moved.virtualMs).toBe(0);
-  expect(probe.rendersFor("NodeShell", untouched)).toBe(0);
+  const targetPath = [LONG.path, TOOLS.path].find((path) => cardOf(host, path) === focusedCard) ?? null;
+  const untouched = [LONG.path, TOOLS.path].find((path) => path !== targetPath)!;
+  record("desktop", "ArrowDown → focus moves to the neighbour card", { virtualMs: 0, workMs: realNowMs() - stepStartedAt },
+    `moved ${moved ? "yes" : "no"}; KanbanReader renders ${after.renders.KanbanReader ?? 0}; LogFeed renders ${after.renders.LogFeed ?? 0}; untouched reader LogFeed renders ${probe.rendersFor("LogFeed", untouched)}; dashboard renders ${after.renders.ProjectDashboardView ?? 0}`);
+  expect(moved).toBe(true);
+  expect(targetPath).not.toBeNull();
+  expect(probe.rendersFor("KanbanReader", untouched)).toBe(0);
   expect(probe.rendersFor("LogFeed", untouched)).toBe(0);
+  expect(probe.rendersFor("LogFeed", SHORT.path)).toBe(0);
 });
 
 test("desktop: a cold deep link from the URL still resolves a beyond-cap conversation", async () => {

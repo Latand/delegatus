@@ -1908,10 +1908,13 @@ function ProjectDashboardView({
      from anywhere opens as a reader in its card. */
   const kanbanLeaf = !isMobile && desktopBoardLeaf;
   const kanbanSeat = useKanbanSeat(project);
+  /* While the board is still loading, its face is taken to be the Board it almost always is, so the orchestrator
+     dock does not mount a panel for one commit that the Board's seat then takes over. */
+  const kanbanFaceReported = !isMobile && (kanbanLeaf || !boardReady);
   useLayoutEffect(() => {
-    onKanbanFace?.(kanbanLeaf);
-  }, [kanbanLeaf, onKanbanFace]);
-  useLayoutEffect(() => () => onKanbanFace?.(false), [onKanbanFace]);
+    onKanbanFace?.(kanbanFaceReported);
+  }, [kanbanFaceReported, onKanbanFace]);
+  useLayoutEffect(() => () => onKanbanFace?.(true), [onKanbanFace]);
   const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "list"] : ["kanban"];
   /* Which conversations the phone board is showing, in the order it shows them,
      as a signature so the presence effect below compares BY VALUE — a fresh

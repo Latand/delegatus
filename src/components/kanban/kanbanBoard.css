@@ -451,6 +451,8 @@
 .kb .reader .ch-dot.tone-danger { background: var(--color-danger); }
 .kb .reader .ch-dot.tone-accent { background: var(--color-accent); }
 .kb .reader .ch-dot.live { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
+.kb .reader .ch-continues { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent); background: var(--color-accent-soft); color: var(--color-accent); font-size: var(--text-caption); font-weight: 600; white-space: nowrap; }
+.kb .reader .ch-continues:hover { border-color: var(--color-accent); }
 .kb .reader .ch-title { min-width: 0; font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .reader .icon-btn.sm { width: 24px; height: 24px; }
 .kb .reader .icon-btn.sm svg { width: 14px; height: 14px; }
