@@ -8,8 +8,10 @@ import { RUNTIME_HOST_UNAVAILABLE_CODE as SERVER_RUNTIME_HOST_UNAVAILABLE_CODE }
 import {
   RUNTIME_HOST_UNAVAILABLE_CODE,
   accountStanding,
+  cancelSubject,
   ConversationCancels,
   ConversationSwitches,
+  heldCancel,
   postSwitchCancel,
   switchCancelTarget,
   parseProjectPolicy,
@@ -276,8 +278,18 @@ test("a cancel's answer: done on 200, refused on a 4xx or the pre-write 503, unk
   expect(await postSwitchCancel("conversation_a", { action: "withdraw", operationId: "op-1" }, answer(500, { error: "internal" }))).toEqual({ kind: "unknown" });
   expect(await postSwitchCancel("conversation_a", { action: "cancel", expectedRevision: 2 }, async () => { throw new TypeError("Failed to fetch"); })).toEqual({ kind: "unknown" });
   const cancels = new ConversationCancels();
-  expect(cancels.begin("conversation_a", "account-g")).toBe(true);
-  expect(cancels.begin("conversation_a", "account-g")).toBe(false);
+  const waiting = { intentId: "intent-1", phase: "waiting-turn", targetAccountId: "account-g", revision: 2 } as ConversationMigration;
+  const subject = cancelSubject({ action: "cancel", expectedRevision: 2 }, waiting)!;
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(true);
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(false);
   cancels.lost("conversation_a");
-  expect(cancels.get("conversation_a")).toEqual({ target: "account-g", phase: "unknown" });
+  expect(cancels.get("conversation_a")).toEqual({ target: "account-g", subject, phase: "unknown" });
+  /* The unanswered cancel holds its own switch, and no other: the same revision under another intent is another switch. */
+  expect(heldCancel(cancels.get("conversation_a"), subject)).toMatchObject({ phase: "unknown" });
+  const later = cancelSubject({ action: "cancel", expectedRevision: 2 }, { ...waiting, intentId: "intent-2" });
+  expect(heldCancel(cancels.get("conversation_a"), later)).toBeNull();
+  expect(heldCancel(cancels.get("conversation_a"), null)).toBeNull();
+  expect(cancels.begin("conversation_a", "account-g", later!)).toBe(true);
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(false);
+  expect(cancelSubject({ action: "withdraw", operationId: "op-1" }, null)).toBe("operation:op-1");
 });

@@ -70,7 +70,7 @@ const hostRequests: Array<Record<string, unknown>> = [];
 let hostAnswer: "queued" | "lost" | { status: number; error: string } = "queued";
 /* The conversation migration route (#1705): cancels and withdrawals, answered as `migrationAnswer` says. */
 const migrationRequests: Array<{ conversationId: string; body: Record<string, unknown> }> = [];
-let migrationAnswer: "ok" | "lost" | { status: number; error?: string; code?: string } = "ok";
+let migrationAnswer: "ok" | "replayed" | "lost" | { status: number; error?: string; code?: string } = "ok";
 /* Every write the board sent, in order. */
 const writes: string[] = [];
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -89,7 +89,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     writes.push(`migration:${String(body.action)}`);
     if (migrationAnswer === "lost") throw new TypeError("Failed to fetch");
     if (typeof migrationAnswer === "object") return json({ ...(migrationAnswer.error ? { error: migrationAnswer.error } : {}), ...(migrationAnswer.code ? { code: migrationAnswer.code } : {}) }, migrationAnswer.status);
-    return json(body.action === "withdraw" ? { withdraw: "withdrawn" } : { id: decodeURIComponent(migrationRoute[1]!), migration: { phase: "rolled-back" } });
+    const conversation = { id: decodeURIComponent(migrationRoute[1]!), migration: { phase: "rolled-back" } };
+    return json(body.action === "withdraw"
+      ? { withdraw: migrationAnswer === "replayed" ? "replayed" : "withdrawn", conversation }
+      : { cancel: migrationAnswer === "replayed" ? "replayed" : "cancelled", conversation });
   }
   if (url === "/api/conversation-host") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -428,7 +431,7 @@ test("a switch the migration record reports shows for every page: waiting with m
   await openPicker(host, conversationChip(host));
   expect(kv(host).at(-1)).toEqual(["Pending", "Account C · waits for the current turn to end"]);
   expect(picker(host)!.querySelector("[data-account-pending]")?.getAttribute("data-account-source")).toBe("record");
-  expect(notes(host)[0]).toBe("Messages sent meanwhile are held for the switch.");
+  expect(notes(host)[0]).toBe("Messages sent now are held. Cancel delivers them on the current account; if the switch completes, they are not delivered and have to be sent again.");
   /* Still waiting for its turn: cancellable by the record's revision. */
   expect(picker(host)!.querySelector("[data-account-cancel]")?.getAttribute("data-account-cancel")).toBe("cancel");
   expect(rows(host).find((entry) => entry.id === "account-g")?.disabled).toBe(false);
@@ -577,7 +580,7 @@ test("a cancel with no answer, or a server error after it may have run, locks th
     expect(receiptTexts(host).at(-1)).toBe("Cancelling the switch to Account C got no answer. It may have been cancelled; this page won't send it again. Account G was not requested.");
     await openPicker(host, conversationChip(host));
     expect(kv(host).at(-1)).toEqual(["Pending", "Account C · the cancel got no answer"]);
-    expect(notes(host)).toContain("The cancel may or may not have reached the server, and this page can't tell. Nothing more is sent from here; reloading the page ends this page's lock.");
+    expect(notes(host)).toContain("The cancel may or may not have reached the server, and this page can't tell. Nothing more is sent from here for this switch; the lock ends once it no longer shows as pending, or on reload.");
     expect(picker(host)!.querySelector("[data-account-cancel]")).toBeNull();
     expect(rows(host).every((entry) => entry.disabled)).toBe(true);
     click(row(host, "account-e"));
@@ -589,6 +592,59 @@ test("a cancel with no answer, or a server error after it may have run, locks th
     migrationRequests.length = 0;
     writes.length = 0;
   }
+});
+
+test("an unanswered cancel locks only the switch it named: once that switch is gone a later switch offers Cancel again, even at the same revision", async () => {
+  migrationAnswer = "lost";
+  const { host, update } = mount(searchPipeline(), [build, { ...verify, migration: waitingC() }]);
+  await tick();
+  await openVerify(host);
+  await openPicker(host, conversationChip(host));
+  click(picker(host)!.querySelector("[data-account-cancel]"));
+  await tick(40);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account C cancel not confirmed");
+
+  /* The record shows C's switch rolled back. Nothing says this page's cancel did it, so no success is shown; the lock ends. */
+  update({ files: [build, { ...verify, migration: waitingC({ phase: "rolled-back" }) }] });
+  await tick(20);
+  expect(chipText(conversationChip(host))).toBe("Account A");
+  expect(receiptTexts(host).some((text) => text.startsWith("Cancelled"))).toBe(false);
+
+  /* A later switch to G, from another page, happens to carry the same revision under its own intent. */
+  update({ files: [build, { ...verify, migration: waitingC({ intentId: "intent-2", targetAccountId: "account-g", targetLabel: "account-g" }) }] });
+  await tick(20);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account G after this turn");
+  await openPicker(host, conversationChip(host));
+  expect(kv(host).at(-1)?.[1]).not.toContain("cancel got no answer");
+  expect(notes(host).some((note) => note.startsWith("The cancel may or may not"))).toBe(false);
+  migrationAnswer = "ok";
+  click(picker(host)!.querySelector('[data-account-cancel="cancel"]'));
+  await tick(40);
+  expect(migrationRequests).toHaveLength(2);
+  expect(migrationRequests.at(-1)?.body).toEqual({ action: "cancel", expectedRevision: 2 });
+  expect(receiptTexts(host).at(-1)).toBe("Cancelled the switch to Account G for Verifier");
+});
+
+test("the same cancel answered as a replay reads as cancelled, and a switch that already ended reads as no longer pending, never as started", async () => {
+  migrationAnswer = "replayed";
+  const first = mount(searchPipeline(), [build, { ...verify, migration: waitingC() }]);
+  await tick();
+  await openVerify(first.host);
+  await openPicker(first.host, conversationChip(first.host));
+  click(picker(first.host)!.querySelector("[data-account-cancel]"));
+  await tick(40);
+  expect(receiptTexts(first.host).at(-1)).toBe("Cancelled the switch to Account C for Verifier");
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
+  document.body.replaceChildren();
+
+  migrationAnswer = { status: 409, error: "the switch is no longer pending", code: "SWITCH_NOT_PENDING" };
+  const second = mount(searchPipeline(), [build, { ...verify, migration: waitingC() }]);
+  await tick();
+  await openVerify(second.host);
+  await openPicker(second.host, conversationChip(second.host));
+  click(picker(second.host)!.querySelector("[data-account-cancel]"));
+  await tick(40);
+  expect(receiptTexts(second.host).at(-1)).toBe("The switch to Account C is no longer pending");
 });
 
 test("a cancel refused before anything was written (the journal unreadable) offers Retry, which sends it again only when chosen", async () => {

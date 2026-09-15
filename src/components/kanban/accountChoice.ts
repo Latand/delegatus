@@ -299,16 +299,43 @@ export function switchCancelTarget(input: {
     : null;
 }
 
+/**
+ * Which switch a cancel names, beyond the body it sends: a migration revision
+ * alone repeats across a conversation's switches, so a record is named by its
+ * intent, revision and target, and a queued switch by its operation.
+ */
+export function cancelSubject(target: CancelTarget | null, migration: ConversationMigration | null | undefined): string | null {
+  if (!target) return null;
+  if (target.action === "withdraw") return `operation:${target.operationId}`;
+  return `record:${migration?.intentId ?? ""}:${target.expectedRevision}:${migration?.targetAccountId ?? ""}`;
+}
+
 /** A cancel of a pending switch this page sent, until it settles. */
 export interface CancelRequest {
   target: string | null;
+  /** The switch it cancels (`cancelSubject`). */
+  subject: string;
   phase: "sending" | "unknown";
 }
 
+/**
+ * The cancel this page still holds against the switch the board shows now. One
+ * in flight is shown as it is. One that got no answer locks only the switch it
+ * named: once the board no longer shows that switch as cancellable (rolled
+ * back, started, or replaced by another), the lock ends, and nothing is
+ * claimed about how it ended.
+ */
+export function heldCancel(cancel: CancelRequest | null, subject: string | null): CancelRequest | null {
+  if (!cancel) return null;
+  return cancel.phase === "sending" || cancel.subject === subject ? cancel : null;
+}
+
 export class ConversationCancels extends Store<CancelRequest> {
-  begin(key: string, target: string | null): boolean {
-    if (this.get(key)) return false;
-    this.set(key, { target, phase: "sending" });
+  /** One cancel per conversation at a time; one with no answer keeps only its own switch from a second. */
+  begin(key: string, target: string | null, subject: string): boolean {
+    const existing = this.get(key);
+    if (existing && (existing.phase === "sending" || existing.subject === subject)) return false;
+    this.set(key, { target, subject, phase: "sending" });
     return true;
   }
 

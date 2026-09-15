@@ -301,7 +301,7 @@ browserTest("#1695 K6a: account chips and pickers on waiting and running stages,
       const lost = await page.evaluate((selector) => document.querySelector(selector)?.querySelector(".when")?.textContent ?? null, VERIFY_CHIP);
       const requests = await hook(page, (evidence) => evidence.accountRequests.length);
       flows.recordedAndLost = { recorded, source, cancelRequests, cancelledChip, started, lost, requests, receipts: await receipts(page) };
-      if (!recorded?.chip.pending || source !== "record" || !recorded.notes.includes("Messages sent meanwhile are held for the switch.") || !recorded.cancel) failures.push(`recorded switch: ${JSON.stringify({ recorded, source })}`);
+      if (!recorded?.chip.pending || source !== "record" || !recorded.notes.includes("Messages sent now are held. Cancel delivers them on the current account; if the switch completes, they are not delivered and have to be sent again.") || !recorded.cancel) failures.push(`recorded switch: ${JSON.stringify({ recorded, source })}`);
       if (JSON.stringify(cancelRequests.map((entry) => entry.body)) !== JSON.stringify([{ action: "cancel", expectedRevision: 2 }]) || cancelledChip !== "Account A") failures.push(`cancel: ${JSON.stringify({ cancelRequests, cancelledChip })}`);
       if (!started || started.cancel || !started.rows.every((row) => row.disabled) || !started.notes.includes("Too late to cancel: the switch has started.")) failures.push(`started switch: ${JSON.stringify(started)}`);
       if (lost !== "not confirmed" || requests !== 1) failures.push(`lost switch: ${JSON.stringify({ lost, requests })}`);
