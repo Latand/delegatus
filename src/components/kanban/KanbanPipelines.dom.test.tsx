@@ -186,7 +186,9 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   expect(nodes.map((node) => node.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   expect(nodes.map((node) => node.querySelector(".pstate")?.textContent)).toEqual(["passed", "passed", "running", "waiting"]);
   expect(nodes[2]!.className).toContain("tone-active");
-  expect(nodes[3]!.getAttribute("aria-disabled")).toBe("true");
+  /* A waiting stage opens its first message (K5b), so its node is a live control. */
+  expect(nodes[3]!.getAttribute("aria-disabled")).toBeNull();
+  expect(nodes[3]!.getAttribute("aria-label")).toContain("Open its first message");
   expect(nodes[0]!.querySelector(".pdetail")?.textContent).toBe("attempt 2");
   expect(nodes[2]!.querySelector(".pdetail")?.textContent).toBe("attempt 2 · 2 retries");
   expect([...nodes[1]!.querySelectorAll(".rchip")].map((chip) => chip.textContent)).toEqual(["R1 ✓"]);

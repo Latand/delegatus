@@ -17,6 +17,7 @@ import { useProcessKill } from "@/components/TaskHeader";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { cleanTitle, fmtAge } from "@/components/utils";
 
+import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
 
 /**
@@ -162,20 +163,6 @@ export function ReaderSlot({ placement, readerKey }: { placement: ReaderPlacemen
   return <div ref={ref} className="reader-slot" data-reader-slot={readerKey} />;
 }
 
-const svgProps = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
-const CollapseGlyph = () => <svg {...svgProps}><path d="m17 11-5-5-5 5" /><path d="m17 18-5-5-5 5" /></svg>;
-const ExpandGlyph = () => <svg {...svgProps}><path d="m7 6 5 5 5-5" /><path d="m7 13 5 5 5-5" /></svg>;
-const MaximizeGlyph = () => <svg {...svgProps}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>;
-const MinimizeGlyph = () => <svg {...svgProps}><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg>;
-const CloseGlyph = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
-const MoreGlyph = () => (
-  <svg {...svgProps}>
-    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-  </svg>
-);
-const BranchGlyph = () => <svg {...svgProps}><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 4-6 3-10 7" /></svg>;
 
 const DOT_TONE: Record<string, string> = { success: "tone-success", warning: "tone-warning", danger: "tone-danger", accent: "tone-accent", neutral: "tone-neutral" };
 
@@ -191,6 +178,8 @@ export interface ReaderView {
   folded: boolean;
   /** The reader has the whole window. */
   full: boolean;
+  /** The reader stands in a Stages pane, whose head names the stage and its state. */
+  inSheet?: boolean;
   owner: ReaderOwner | null;
 }
 
@@ -212,7 +201,7 @@ export interface ReaderStop {
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, owner, now, onFold, onClose, onFull, onMenu }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -225,6 +214,64 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
   const needs = row.dot === "warning";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  const identity = (
+    <>
+      {engine ? <span className={`ch-engine ${engine}`}>{engine === "claude" ? "Claude" : "Codex"}</span> : null}
+      {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
+      {engine ? (
+        <AccountBadge
+          engine={engine}
+          accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
+          file={file}
+          runtimeSession={runtime?.session ?? null}
+        />
+      ) : null}
+      {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
+    </>
+  );
+  const menuButton = (
+    <button
+      type="button"
+      className="icon-btn sm"
+      aria-haspopup="menu"
+      aria-label={t("kanban.readerActions")}
+      data-reader-menu={readerKey}
+      onClick={(event) => onMenu(readerKey, event.currentTarget, { state: kill.state, reason: kill.reason })}
+    >
+      <MoreGlyph />
+    </button>
+  );
+  /* In a Stages pane the pane's head names the stage, its state and its
+     collapse; the conversation keeps its identity row and its own actions. */
+  if (inSheet) {
+    return (
+      <BranchPane
+        file={file}
+        tasks={[]}
+        isRoot={false}
+        chrome={{
+          header: (
+            <div className="conv-head">
+              <div className="ch-meta pane-id">
+                {identity}
+                <span className="spacer" />
+                {menuButton}
+              </div>
+            </div>
+          ),
+          className: `reader conv in-sheet${needs ? " needs" : ""}`,
+          attributes: {
+            tabIndex: "-1",
+            "data-kanban-reader": readerKey,
+            "data-folded": "0",
+            "data-in-sheet": "1",
+            role: "region",
+            "aria-label": t("kanban.readerAria", { title, state: stateWord }),
+          },
+        }}
+      />
+    );
+  }
   const header = (
     <>
       <div className="conv-head">
@@ -256,16 +303,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               {full ? <MinimizeGlyph /> : <MaximizeGlyph />}
             </button>
           )}
-          <button
-            type="button"
-            className="icon-btn sm"
-            aria-haspopup="menu"
-            aria-label={t("kanban.readerActions")}
-            data-reader-menu={readerKey}
-            onClick={(event) => onMenu(readerKey, event.currentTarget, { state: kill.state, reason: kill.reason })}
-          >
-            <MoreGlyph />
-          </button>
+          {menuButton}
           <button
             type="button"
             className="icon-btn sm"
@@ -283,17 +321,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
               {stateWord}
               <span className="num"> · {fmtAge(file.mtime)}</span>
             </span>
-            {engine ? <span className={`ch-engine ${engine}`}>{engine === "claude" ? "Claude" : "Codex"}</span> : null}
-            {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
-            {engine ? (
-              <AccountBadge
-                engine={engine}
-                accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
-                file={file}
-                runtimeSession={runtime?.session ?? null}
-              />
-            ) : null}
-            {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
+            {identity}
             {file.worktree ? (
               <span className="ch-tree" title={t("branch.worktree", { name: file.worktree })}>
                 <BranchGlyph />

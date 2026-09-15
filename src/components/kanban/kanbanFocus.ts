@@ -18,6 +18,11 @@ import { KANBAN_STATUSES, type KanbanCard, type KanbanModel } from "./kanbanMode
  */
 
 /** A reader or card must show at least this much of itself to count as seen. */
+/** A value quoted for an attribute selector, where the page has no `CSS.escape`. */
+export function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
 export const ARRIVAL_MIN_VISIBLE_PX = 48;
 
 export interface ConversationOwner {

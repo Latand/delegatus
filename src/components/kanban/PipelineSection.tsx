@@ -9,23 +9,23 @@ import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
 import { attemptArrivals, edgeFired, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
+import { ChevronRight, MaximizeGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { stageDraftable, type PipelineActionKind } from "./stagesModel";
 
 /* A card's pipeline, as the approved prototype draws it (`renderPipeline`,
    `graph.js`, `pastAttempts`): a header with the pipeline's state and where it
    is, then either the stage graph or its one-line summary, and below the
    card's current work a quiet disclosure of what came before. */
 
-const svgProps = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
-const GraphGlyph = () => (
+export const GraphGlyph = () => (
   <svg {...svgProps}><rect x="3" y="4" width="6" height="5" rx="1.5" /><rect x="15" y="4" width="6" height="5" rx="1.5" /><rect x="9" y="15" width="6" height="5" rx="1.5" /><path d="M9 6.5h6M18 9v2.5a2 2 0 0 1-2 2h-1.5M6 9v2.5a2 2 0 0 0 2 2h1.5" /></svg>
 );
 const ListGlyph = () => (
   <svg {...svgProps}><path d="M8 6h13M8 12h13M8 18h13" /><circle cx="3.5" cy="6" r="1" fill="currentColor" /><circle cx="3.5" cy="12" r="1" fill="currentColor" /><circle cx="3.5" cy="18" r="1" fill="currentColor" /></svg>
 );
-const ChevronRight = () => <svg {...svgProps} className="chev"><path d="m9 6 6 6-6 6" /></svg>;
 
 /* The role glyphs of the prototype; a role it has no glyph for draws the builder's. */
-const ROLE_GLYPH: Record<string, React.ReactNode> = {
+export const ROLE_GLYPH: Record<string, React.ReactNode> = {
   builder: <><path d="m14.7 6.3 3 3-8.4 8.4H6.3v-3z" /><path d="m13 8 3 3" /></>,
   reviewer: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
   verifier: <><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z" /><path d="m9 12 2 2 4-4" /></>,
@@ -67,14 +67,22 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
 
 export const graphStateWord = (t: TFunction, state: StageChipState) => t(`kanban.graphState.${state}`);
 
-export function PipelineSection({ summary, open, selected, onToggle, onOpenStage }: {
+export function stageRoleId(stage: PipelineStage): string {
+  return stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
+}
+
+export function PipelineSection({ summary, open, selected, acting, onToggle, onOpenStage, onOpenSheet, onMenu }: {
   summary: KanbanPipeline;
   /** The operator's choice for this card, or null for the default: the summary. */
   open: boolean | null;
-  /** Stage ids whose conversation is open on the card. */
+  /** Stage ids whose conversation or first message is open on the card. */
   selected: ReadonlySet<string>;
+  /** The pipeline action this page sent and the server has not answered. */
+  acting: PipelineActionKind | null;
   onToggle: (open: boolean) => void;
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
+  onOpenSheet: (pipeline: Pipeline) => void;
+  onMenu: (pipeline: Pipeline, anchor: HTMLElement) => void;
 }) {
   const { t } = useLocale();
   const { pipeline } = summary;
@@ -108,6 +116,7 @@ export function PipelineSection({ summary, open, selected, onToggle, onOpenStage
         <span className="kind">{t("kanban.pipeline")}</span>
         <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
         <span className="progress">{progress}</span>
+        {acting ? <span className="acting" role="status" data-pipeline-acting={acting}>{t(`kanban.pipelineAct.pending.${acting}`)}</span> : null}
         <span className="grow" />
         <button
           type="button"
@@ -119,6 +128,27 @@ export function PipelineSection({ summary, open, selected, onToggle, onOpenStage
           onClick={() => onToggle(!showGraph)}
         >
           {showGraph ? <ListGlyph /> : <GraphGlyph />}
+        </button>
+        <button
+          type="button"
+          className="btn quiet expand-stages"
+          aria-label={t("kanban.stages.expandAria", { count: pipeline.stages.length })}
+          title={t("kanban.stages.expandTitle")}
+          data-open-stages={pipeline.id}
+          onClick={() => onOpenSheet(pipeline)}
+        >
+          <MaximizeGlyph />
+          <span>{t("kanban.stages.button")}</span>
+        </button>
+        <button
+          type="button"
+          className="icon-btn sm"
+          aria-label={t("kanban.pipelineAct.menu")}
+          aria-haspopup="menu"
+          data-pipeline-menu={pipeline.id}
+          onClick={(event) => onMenu(pipeline, event.currentTarget)}
+        >
+          <MoreGlyph />
         </button>
       </div>
       <div className="graph-slot" ref={slot} data-graph={pipeline.id} data-open={showGraph ? "1" : "0"}>
@@ -149,7 +179,7 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
     const state = graphStateWord(t, entry.state);
     /* A chip opens what a click reaches: the stage's latest own attempt's conversation. */
     const current = latestAttempt(pipeline, entry.stage.id);
-    const openable = Boolean(current?.agentPath || current?.conversationId);
+    const openable = Boolean(current?.agentPath || current?.conversationId) || stageDraftable(pipeline, entry.stage.id);
     const className = `pchip tone-${STAGE_TONE[entry.state]} st-${entry.state}${branch ? " side" : ""}${selected.has(entry.stage.id) ? " selected" : ""}`;
     const body = (
       <>
@@ -201,13 +231,17 @@ const LIVE_EDGE_MS = 2_400;
  * earlier stage runs in its own lane. An edge is marked live only when a new
  * attempt arrives that it activated.
  */
-export function PipelineGraph({ summary, names, available, selected, onOpenStage, force }: {
+export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView }: {
   summary: KanbanPipeline;
   names: ReadonlyMap<string, string>;
   available: number;
   selected: ReadonlySet<string>;
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
   force?: "LR" | "TB";
+  /** The Stages sheet's graph: every node brings its pane into view. */
+  navigate?: boolean;
+  /** Stages whose pane the sheet's lane shows. */
+  inView?: ReadonlySet<string>;
 }) {
   const { t } = useLocale();
   const { pipeline, views } = summary;
@@ -300,7 +334,9 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const word = graphStateWord(t, state);
           const attempt = view?.attempt ?? null;
           const conversation = Boolean(attempt?.conversationId || attempt?.agentPath);
-          const roleId = stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
+          const draftable = !attempt && stageDraftable(pipeline, stage.id);
+          const openable = navigate || conversation || draftable;
+          const roleId = stageRoleId(stage);
           const engine = attempt?.effectiveRole.engine ?? stage.effectiveRole.engine;
           const isSelected = selected.has(stage.id);
           const rounds = view?.rounds ?? [];
@@ -318,20 +354,23 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             t("kanban.graph.nodeAria", { stage: nameOf(stage.id), engine: engine === "codex" ? "Codex" : "Claude", state: word }),
             attempts ? t("kanban.graph.attempt", { n: attempts }) : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
-            conversation ? (isSelected ? t("kanban.graph.conversationOpen") : t("kanban.graph.openConversation")) : t("kanban.graph.noConversation"),
+            navigate
+              ? (isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane"))
+              : conversation ? (isSelected ? t("kanban.graph.conversationOpen") : t("kanban.graph.openConversation"))
+                : draftable ? (isSelected ? t("kanban.graph.draftOpen") : t("kanban.graph.openDraft")) : t("kanban.graph.noConversation"),
           ].filter(Boolean).join(". ");
           return (
             <button
               key={stage.id}
               type="button"
-              className={`pnode tone-${STAGE_TONE[state]} st-${state} role-${roleId}${stage.kind === "review-loop" ? " review" : ""}${isSelected ? " selected" : ""}${conversation ? "" : " no-conv"}${state === "running" || state === "reviewing" ? " pulse" : ""}`}
+              className={`pnode tone-${STAGE_TONE[state]} st-${state} role-${roleId}${stage.kind === "review-loop" ? " review" : ""}${isSelected ? " selected" : ""}${openable ? "" : " no-conv"}${inView?.has(stage.id) ? " in-view" : ""}${state === "running" || state === "reviewing" ? " pulse" : ""}`}
               data-stage={stage.id}
               style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
               aria-pressed={isSelected}
-              aria-disabled={conversation ? undefined : true}
+              aria-disabled={openable ? undefined : true}
               aria-label={aria}
-              title={conversation ? undefined : state === "pending" ? t("kanban.graph.waitingTitle") : t("kanban.graph.noConversationTitle")}
-              onClick={() => { if (conversation) onOpenStage(pipeline, stage); }}
+              title={openable ? undefined : state === "pending" ? t("kanban.graph.waitingTitle") : t("kanban.graph.noConversationTitle")}
+              onClick={() => { if (openable) onOpenStage(pipeline, stage); }}
             >
               <span className="pport in" aria-hidden="true" />
               {layout.topology.branching.has(stage.id) ? (
