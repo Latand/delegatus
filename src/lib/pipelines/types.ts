@@ -306,6 +306,10 @@ export type PipelineCreationReceipt = {
   requestDigest: string;
   callerConversationId: string | null;
   claimedAt: string;
+  /** When the create transaction stored this pipeline, and always later than
+      every stamp already stored, so stamps are ordered as they committed and
+      the operations feed can discover them with a resumable cursor. */
+  recordedAt?: string;
 };
 
 /** Durable receipt of finished-attempt host reaping (#574, #1123). Each stage

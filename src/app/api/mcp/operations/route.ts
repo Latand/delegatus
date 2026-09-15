@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   MCP_OPERATIONS_MAX_LIMIT,
+  parseCreationsCursor,
   readMcpOperations,
   type McpOperationsPage,
   type McpPipelineCreation,
@@ -19,8 +20,9 @@ export const dynamic = "force-dynamic";
  * the MCP receipt rows and the stamped pipelines (#1695 C5, C8). `project` is
  * required; `after` is the cursor a previous page returned, and without it the
  * newest rows answer; `limit` is clamped to 1..50; `unresolved` lists up to 50
- * sequences the reader still holds as pending or unknown, answered in
- * `refreshed`. Nothing is claimed, settled or replayed here.
+ * sequences the reader still holds as pending or unknown; `creationsAfter` is
+ * the creations cursor a previous page returned. Nothing is claimed, settled
+ * or replayed here.
  */
 export async function GET(req: NextRequest): Promise<NextResponse<McpOperationsPage | ApiError>> {
   const params = req.nextUrl.searchParams;
@@ -39,6 +41,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<McpOperationsP
   if (unresolved.length > MCP_OPERATIONS_MAX_LIMIT) {
     return NextResponse.json({ error: `unresolved takes at most ${MCP_OPERATIONS_MAX_LIMIT} sequences per request` }, { status: 400 });
   }
+  const creationsAfter = params.get("creationsAfter")?.trim() || null;
+  if (creationsAfter !== null && !parseCreationsCursor(creationsAfter)) {
+    return NextResponse.json({ error: "creationsAfter must be the cursor a previous page returned" }, { status: 400 });
+  }
   const rawLimit = params.get("limit");
   const limit = rawLimit && /^\d+$/.test(rawLimit) ? Number(rawLimit) : MCP_OPERATIONS_MAX_LIMIT;
   const creations = new Map<string, McpPipelineCreation>();
@@ -49,6 +55,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<McpOperationsP
         pipelineId: pipeline.id,
         project: canonicalProject(pipeline.project),
         claimedAt: pipeline.creationReceipt.claimedAt,
+        recordedAt: pipeline.creationReceipt.recordedAt ?? null,
       });
     }
   } catch {
@@ -57,9 +64,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<McpOperationsP
   let db: ReturnType<typeof openMcpReceiptsReadOnly> = null;
   try {
     db = openMcpReceiptsReadOnly();
-    return NextResponse.json(readMcpOperations(db, { project, after, limit, unresolved: unresolved.map(Number) }, { creations }), {
-      headers: { "Cache-Control": "no-store" },
-    });
+    const page = readMcpOperations(db, { project, after, limit, unresolved: unresolved.map(Number), creationsAfter }, { creations });
+    return NextResponse.json(page, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "MCP receipts unreadable" }, { status: 500 });
   } finally {

@@ -236,7 +236,8 @@ function isCreationReceipt(value: unknown): value is PipelineCreationReceipt {
   return receipt.tool === "create_pipeline"
     && typeof receipt.requestDigest === "string" && Boolean(receipt.requestDigest)
     && isNullableString(receipt.callerConversationId)
-    && typeof receipt.claimedAt === "string";
+    && typeof receipt.claimedAt === "string"
+    && (receipt.recordedAt === undefined || typeof receipt.recordedAt === "string");
 }
 
 function isUnconfirmedHost(value: unknown): value is PipelineUnconfirmedHost {

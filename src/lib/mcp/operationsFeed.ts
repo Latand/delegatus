@@ -11,8 +11,9 @@ import {
 /**
  * The read-only operations feed (#1695 C5): what `create_pipeline` and
  * `update_task` calls did, read from the MCP receipt rows that already decide
- * their idempotency. Nothing here claims, settles, replays or rewrites a
- * receipt, and no arguments or result bodies leave this module.
+ * their idempotency and from the pipelines their creations stamped. Nothing
+ * here claims, settles, replays or rewrites anything, and no arguments or
+ * result bodies leave this module.
  */
 
 export const MCP_OPERATIONS_MAX_LIMIT = 50;
@@ -21,12 +22,6 @@ export const MCP_OPERATIONS_MAX_LIMIT = 50;
     is 30 s; a claim still unanswered after four of them has most likely lost
     its process, and nothing can prove it did not, so it reads unknown. */
 export const MCP_OPERATION_PENDING_LEASE_MS = 120_000;
-
-/** A creation stamped on a pipeline in the reader's project is answered again
-    in `refreshed` while its claim is younger than this, so a reader whose
-    cursor passed the row before the pipeline was stamped still sees it land.
-    Older creations are already on the board as cards. */
-export const MCP_OPERATION_CREATION_WINDOW_MS = 10 * 60_000;
 
 const MAX_REFUSAL_CHARS = 200;
 
@@ -59,9 +54,15 @@ export interface McpOperationsPage {
   /** More matching rows follow `after`. */
   hasMore: boolean;
   /** The current state of each requested unresolved sequence in this project,
-      and of this project's recently stamped creations at or before `after`,
+      and of the creations stamped into this project after `creationsAfter`,
       without the rows already in `operations`. */
   refreshed: McpOperation[];
+  /** Pass back unchanged: the last stamped creation this reader has been
+      answered. Stamps are ordered as they committed, so every later stamp is
+      after it, however late it comes. */
+  creationsAfter: string;
+  /** More stamped creations follow `creationsAfter`. */
+  creationsHasMore: boolean;
 }
 
 export interface McpOperationsRequest {
@@ -72,6 +73,9 @@ export interface McpOperationsRequest {
   /** Sequences the reader still holds as pending or unknown. At most 50 are
       read per page; a reader holding more sends the rest on later pages. */
   unresolved?: readonly number[];
+  /** The cursor a previous page returned. Absent, the reader starts at the
+      newest stamp: creations stamped before it are cards already. */
+  creationsAfter?: string | null;
 }
 
 /** A stored pipeline stamped with a creation receipt (C8). */
@@ -79,6 +83,9 @@ export interface McpPipelineCreation {
   pipelineId: string;
   project: string;
   claimedAt: string;
+  /** The stamp's commit-ordered time; a stamp without one is never discovered,
+      though it still scopes its row. */
+  recordedAt: string | null;
 }
 
 export interface McpOperationsOptions {
@@ -96,6 +103,26 @@ type ReceiptRow = {
   caller_json: string | null;
   target_json: string | null;
 };
+
+type CreationKey = { at: number; digest: string };
+
+const START_OF_CREATIONS: CreationKey = { at: 0, digest: "" };
+
+function compareCreationKeys(left: CreationKey, right: CreationKey): number {
+  return left.at - right.at || (left.digest < right.digest ? -1 : left.digest > right.digest ? 1 : 0);
+}
+
+export function formatCreationsCursor(key: CreationKey): string {
+  return `${key.at}:${key.digest}`;
+}
+
+/** Reads a `creationsAfter` cursor, or answers null for anything else. */
+export function parseCreationsCursor(value: string): CreationKey | null {
+  const separator = value.indexOf(":");
+  if (separator <= 0) return null;
+  const at = Number(value.slice(0, separator));
+  return /^\d+$/.test(value.slice(0, separator)) && Number.isSafeInteger(at) ? { at, digest: value.slice(separator + 1) } : null;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -188,20 +215,38 @@ function unresolvedSequences(values: readonly number[] | undefined): number[] {
 
 /**
  * One page of a project's operations, ascending by sequence, with the current
- * state of the unresolved rows the reader asks about. A row belongs to the
- * project when its recorded caller, its claimed target, its result's target or
- * a pipeline stamped with its digest is in it.
+ * state of the unresolved rows the reader asks about and the next creations
+ * stamped into the project. A row belongs to the project when its recorded
+ * caller, its claimed target, its result's target or a pipeline stamped with
+ * its digest is in it.
  */
 export function readMcpOperations(
   db: BunDatabase | null,
   request: McpOperationsRequest,
   options: McpOperationsOptions = {},
 ): McpOperationsPage {
-  const empty = { operations: [], after: request.after ?? 0, hasMore: false, refreshed: [] };
+  const creations = options.creations ?? new Map<string, McpPipelineCreation>();
+  const projectCreations = [...creations].filter(([, creation]) => creation.project === request.project);
+  /* Discovery walks the project's stamps in commit order from the reader's
+     cursor, at most a page at a time, so every stamp is answered once the
+     reader has paged up to it, however late it was stamped. */
+  const stamps = projectCreations
+    .map(([digest, creation]): CreationKey | null => {
+      const at = Date.parse(creation.recordedAt ?? "");
+      return Number.isFinite(at) && at >= 0 ? { at, digest } : null;
+    })
+    .filter((key): key is CreationKey => key !== null)
+    .sort(compareCreationKeys);
+  const cursor = request.creationsAfter ? parseCreationsCursor(request.creationsAfter) : null;
+  const undiscovered = cursor ? stamps.filter((key) => compareCreationKeys(key, cursor) > 0) : [];
+  const discovered = undiscovered.slice(0, MCP_OPERATIONS_MAX_LIMIT);
+  const creationsHasMore = undiscovered.length > discovered.length;
+  const creationsAfter = formatCreationsCursor(cursor ? discovered.at(-1) ?? cursor : stamps.at(-1) ?? START_OF_CREATIONS);
+
+  const empty = { operations: [], after: request.after ?? 0, hasMore: false, refreshed: [], creationsAfter: request.creationsAfter && cursor ? request.creationsAfter : formatCreationsCursor(START_OF_CREATIONS), creationsHasMore: false };
   if (!db) return empty;
   const limit = clampLimit(request.limit);
   const now = options.now ?? Date.now();
-  const creations = options.creations ?? new Map<string, McpPipelineCreation>();
   const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map((column) => column.name));
   if (!columns.size) return empty;
   /* A database no MCP process has migrated yet lacks the claim columns. */
@@ -211,7 +256,6 @@ export function readMcpOperations(
   const field = (column: string, path: string) => `(CASE WHEN json_valid(${column}) THEN json_extract(${column}, '${path}') END)`;
   const toolFilter = MCP_OPERATION_TOOLS.map(() => "receipt_key LIKE ? ESCAPE '\\'").join(" OR ");
   const toolPatterns = MCP_OPERATION_TOOLS.map((tool) => `${tool.replaceAll("_", "\\_")}:%`);
-  const projectCreations = [...creations].filter(([, creation]) => creation.project === request.project);
   /* The stamped-pipeline digests scope rows before any paging, so a creation
      proven only by its pipeline is never filtered out of that project. */
   const scope = `(
@@ -249,23 +293,17 @@ export function readMcpOperations(
     const operations = operationsOf(rows);
     const after = hasMore ? rows.at(-1)!.sequence : Math.max(maxSequence, request.after ?? 0);
     /* Reconciliation is bounded and read-only: the sequences the reader still
-       holds unresolved, plus this project's recently stamped creations. A row
-       that settled after the cursor passed it is answered here, by the same
-       sequence and digest, and newer rows keep paging independently. */
+       holds unresolved, and the next stamped creations after its creations
+       cursor. Both are answered by the same sequence and digest, and newer rows
+       keep paging independently. */
     const unresolved = unresolvedSequences(request.unresolved);
-    const recentCreations = projectCreations
-      .filter(([, creation]) => now - Date.parse(creation.claimedAt) <= MCP_OPERATION_CREATION_WINDOW_MS)
-      .sort(([, left], [, right]) => Date.parse(right.claimedAt) - Date.parse(left.claimedAt))
-      .slice(0, MCP_OPERATIONS_MAX_LIMIT)
-      .map(([digest]) => digest);
-    if (!unresolved.length && !recentCreations.length) return { operations, after, hasMore, refreshed: [] };
+    if (!unresolved.length && !discovered.length) return { operations, after, hasMore, refreshed: [], creationsAfter, creationsHasMore };
     const listed = new Set(operations.map((operation) => operation.sequence));
     const refreshed = operationsOf(db.query<ReceiptRow, (string | number)[]>(`${select}
-      AND sequence <= ?
-      AND (sequence IN (SELECT value FROM json_each(?)) OR digest IN (SELECT value FROM json_each(?)))
+      AND ((sequence <= ? AND sequence IN (SELECT value FROM json_each(?))) OR digest IN (SELECT value FROM json_each(?)))
       ORDER BY sequence ASC LIMIT ?`)
-      .all(...filters, after, JSON.stringify(unresolved), JSON.stringify(recentCreations), MCP_OPERATIONS_MAX_LIMIT * 2))
+      .all(...filters, after, JSON.stringify(unresolved), JSON.stringify(discovered.map((key) => key.digest)), MCP_OPERATIONS_MAX_LIMIT * 2))
       .filter((operation) => !listed.has(operation.sequence));
-    return { operations, after, hasMore, refreshed };
+    return { operations, after, hasMore, refreshed, creationsAfter, creationsHasMore };
   })();
 }

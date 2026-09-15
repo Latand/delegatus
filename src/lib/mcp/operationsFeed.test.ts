@@ -6,7 +6,6 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 
 import {
-  MCP_OPERATION_CREATION_WINDOW_MS,
   MCP_OPERATION_PENDING_LEASE_MS,
   readMcpOperations,
   type McpOperation,
@@ -27,8 +26,10 @@ afterEach(() => {
 });
 
 const NOW = 1_780_000_000_000;
+const MINUTE = 60_000;
 const MANAGER: McpOperationCaller = { kind: "worker", conversationId: "conversation_manager", project: "alpha" };
 const BETA_TASK: McpOperationTarget = { project: "beta", taskId: "task-beta", pipelineId: null };
+const EMPTY_CREATIONS = { creationsAfter: "0:", creationsHasMore: false };
 
 function receiptsFile(): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-operations-"));
@@ -65,6 +66,15 @@ function settle(db: Database, key: string, result: unknown): void {
   db.query("UPDATE mcp_receipts SET result_json = ? WHERE receipt_key = ?").run(JSON.stringify(result), key);
 }
 
+function creation(pipelineId: string, project: string, recordedAt: number | null): McpPipelineCreation {
+  return {
+    pipelineId,
+    project,
+    claimedAt: new Date(NOW - MINUTE).toISOString(),
+    recordedAt: recordedAt === null ? null : new Date(recordedAt).toISOString(),
+  };
+}
+
 function stubBindings(overrides: Partial<McpToolBindings>): McpToolBindings {
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({})])) as unknown as McpToolBindings;
   return Object.assign(bindings, overrides);
@@ -74,6 +84,8 @@ function receiptKeys(db: Database): Map<number, string> {
   return new Map(db.query<{ sequence: number; receipt_key: string }, []>("SELECT sequence, receipt_key FROM mcp_receipts").all()
     .map((row) => [row.sequence, row.receipt_key]));
 }
+
+const sequences = (operations: McpOperation[]) => operations.map((operation) => operation.sequence);
 
 test("an operations-feed claim records the server-derived caller and the validated target, and hands its binding the claimed receipt", async () => {
   const file = receiptsFile();
@@ -210,7 +222,7 @@ test("while calls are held, pending and unknown rows name their claimed targets;
     project: "alpha",
     after: alpha.after,
     limit: 50,
-    unresolved: alpha.operations.map((operation) => operation.sequence),
+    unresolved: sequences(alpha.operations),
   }, { now: NOW + 2_000 });
   expect(settled.operations).toEqual([]);
   expect(view(settled.refreshed)).toEqual([
@@ -258,9 +270,7 @@ test("a row belongs to a project by its caller, its claimed target, its result's
   insert(db, { key: "update_task:elsewhere", caller: beta, result: { ok: true, taskId: "t3", task: { id: "t3", project: "beta" } } });
   insert(db, { key: "send_message:alpha", caller: MANAGER, result: { ok: true } });
   insert(db, { key: "createXpipeline:lookalike", caller: MANAGER, result: { ok: true } });
-  const creations = new Map<string, McpPipelineCreation>([
-    ["digest-create_pipeline:stamped", { pipelineId: "p5", project: "alpha", claimedAt: new Date(NOW).toISOString() }],
-  ]);
+  const creations = new Map([["digest-create_pipeline:stamped", creation("p5", "alpha", NOW)]]);
 
   const alpha = readMcpOperations(db, { project: "alpha", after: 0, limit: 50 }, { now: NOW, creations });
   expect(alpha.operations.map((operation) => operation.requestDigest)).toEqual([
@@ -284,19 +294,19 @@ test("pages are ascending: the newest rows without a cursor, then forward with h
   insert(db, { key: "update_task:other", caller: { ...MANAGER, project: "beta" }, result: { ok: true } });
 
   const tail = readMcpOperations(db, { project: "alpha", after: null, limit: 2 }, { now: NOW });
-  expect(tail.operations.map((operation) => operation.sequence)).toEqual([4, 5]);
+  expect(sequences(tail.operations)).toEqual([4, 5]);
   expect(tail).toMatchObject({ after: 6, hasMore: false, refreshed: [] });
 
   const first = readMcpOperations(db, { project: "alpha", after: 0, limit: 2 }, { now: NOW });
-  expect(first.operations.map((operation) => operation.sequence)).toEqual([1, 2]);
+  expect(sequences(first.operations)).toEqual([1, 2]);
   expect(first).toMatchObject({ after: 2, hasMore: true });
   const second = readMcpOperations(db, { project: "alpha", after: first.after, limit: 2 }, { now: NOW });
-  expect(second.operations.map((operation) => operation.sequence)).toEqual([3, 4]);
+  expect(sequences(second.operations)).toEqual([3, 4]);
   const last = readMcpOperations(db, { project: "alpha", after: second.after, limit: 2 }, { now: NOW });
-  expect(last.operations.map((operation) => operation.sequence)).toEqual([5]);
+  expect(sequences(last.operations)).toEqual([5]);
   expect(last).toMatchObject({ after: 6, hasMore: false });
   expect(readMcpOperations(db, { project: "alpha", after: last.after, limit: 2 }, { now: NOW }))
-    .toEqual({ operations: [], after: 6, hasMore: false, refreshed: [] });
+    .toEqual({ operations: [], after: 6, hasMore: false, refreshed: [], ...EMPTY_CREATIONS });
 
   expect(readMcpOperations(db, { project: "alpha", after: 0, limit: 500 }, { now: NOW }).operations).toHaveLength(5);
   expect(readMcpOperations(db, { project: "alpha", after: 0, limit: 0 }, { now: NOW }).operations).toHaveLength(1);
@@ -314,7 +324,7 @@ test("an unresolved row the cursor has passed is answered when it settles, by th
   expect(first.after).toBe(3);
   /* Nothing new and nothing asked: the cursor stays and nothing repeats. */
   expect(readMcpOperations(db, { project: "alpha", after: first.after, limit: 50 }, { now: NOW }))
-    .toEqual({ operations: [], after: 3, hasMore: false, refreshed: [] });
+    .toEqual({ operations: [], after: 3, hasMore: false, refreshed: [], ...EMPTY_CREATIONS });
 
   settle(db, "update_task:lost", { ok: true, taskId: "task-beta", task: { id: "task-beta", project: "beta" } });
   settle(db, "create_pipeline:running", { ok: false, error: "stages[0].kind: stage kind must be run or review-loop" });
@@ -375,7 +385,7 @@ test("more than 50 unresolved rows are all observed settling in bounded batches 
   }
 
   const third = poll();
-  expect(third.operations.map((operation) => operation.sequence)).toEqual([61, 62, 63]);
+  expect(sequences(third.operations)).toEqual([61, 62, 63]);
   expect(third.refreshed).toHaveLength(50);
   expect(unresolved.size).toBe(10);
   const fourth = poll();
@@ -390,40 +400,92 @@ test("more than 50 unresolved rows are all observed settling in bounded batches 
   db.close();
 });
 
-test("a creation proven only by its stamped pipeline reaches that pipeline's project before paging, even after its cursor passed the row, and nobody else", () => {
+test("creations stamped after the project's cursor passed their rows are all discovered, 51 and more over resumable pages, however late, while newer rows flow and nobody else learns of them", () => {
   const { db } = seededDatabase();
-  insert(db, { key: "create_pipeline:unanswered", digest: "digest-unanswered", caller: null, claimedAt: NOW - 1_000 });
-  insert(db, { key: "create_pipeline:errored", digest: "digest-errored", caller: null, result: { ok: false, error: "deadline" }, claimedAt: NOW - 1_000 });
-  insert(db, { key: "create_pipeline:old", digest: "digest-old", caller: null, result: { ok: false, error: "deadline" }, claimedAt: NOW - MCP_OPERATION_CREATION_WINDOW_MS - 1 });
+  /* 52 creations with no caller and no target: odd ones never answered, even ones refused. */
+  for (let index = 1; index <= 52; index += 1) {
+    insert(db, {
+      key: `create_pipeline:c${index}`,
+      digest: `digest-c${index}`,
+      caller: null,
+      claimedAt: NOW - MINUTE,
+      ...(index % 2 ? {} : { result: { ok: false, error: "MCP tool deadline exceeded" } }),
+    });
+  }
 
-  /* Before the pipelines are stamped nothing ties the rows to beta, and beta's cursor passes them. */
-  const before = readMcpOperations(db, { project: "beta", after: null, limit: 50 }, { now: NOW });
-  expect(before).toEqual({ operations: [], after: 3, hasMore: false, refreshed: [] });
+  /* Before any stamp nothing ties the rows to beta, and beta's cursors pass all of them. */
+  const first = readMcpOperations(db, { project: "beta", after: null, limit: 50 }, { now: NOW });
+  expect(first).toEqual({ operations: [], after: 52, hasMore: false, refreshed: [], ...EMPTY_CREATIONS });
 
-  const creations = new Map<string, McpPipelineCreation>([
-    ["digest-unanswered", { pipelineId: "pipe-u", project: "beta", claimedAt: new Date(NOW - 1_000).toISOString() }],
-    ["digest-errored", { pipelineId: "pipe-e", project: "beta", claimedAt: new Date(NOW - 1_000).toISOString() }],
-    ["digest-old", { pipelineId: "pipe-o", project: "beta", claimedAt: new Date(NOW - MCP_OPERATION_CREATION_WINDOW_MS - 1).toISOString() }],
-  ]);
-  const later = readMcpOperations(db, { project: "beta", after: before.after, limit: 50 }, { now: NOW, creations });
-  expect(later.operations).toEqual([]);
-  expect(later.refreshed.map((operation) => [operation.sequence, operation.state, operation.target, operation.callerConversationId])).toEqual([
-    [1, "accepted", { project: "beta", taskId: null, pipelineId: "pipe-u" }, null],
-    [2, "accepted", { project: "beta", taskId: null, pipelineId: "pipe-e" }, null],
-  ]);
+  /* 51 are stamped into beta, in the reverse of their claim order; beta comes back twenty minutes later. */
+  const creations = new Map<string, McpPipelineCreation>();
+  for (let index = 51; index >= 1; index -= 1) creations.set(`digest-c${index}`, creation(`pipe-${index}`, "beta", NOW + (52 - index)));
+  for (let index = 1; index <= 3; index += 1) {
+    insert(db, { key: `update_task:new${index}`, caller: { ...MANAGER, project: "beta" }, result: { ok: true, taskId: `n${index}`, task: { id: `n${index}`, project: "beta" } } });
+  }
+  const seen = new Map<number, McpOperation>();
+  let after: number | null = first.after;
+  let creationsAfter = first.creationsAfter;
+  const poll = (now: number) => {
+    const page = readMcpOperations(db, { project: "beta", after, limit: 50, creationsAfter }, { now, creations });
+    for (const operation of [...page.operations, ...page.refreshed]) seen.set(operation.sequence, operation);
+    after = page.after;
+    creationsAfter = page.creationsAfter;
+    return page;
+  };
 
-  /* A reader paging from the start meets all three before the limit applies. */
-  const fresh = readMcpOperations(db, { project: "beta", after: 0, limit: 2 }, { now: NOW, creations });
-  expect(fresh.operations.map((operation) => [operation.sequence, operation.state])).toEqual([[1, "accepted"], [2, "accepted"]]);
-  expect(fresh.hasMore).toBeTrue();
-  expect(readMcpOperations(db, { project: "beta", after: fresh.after, limit: 2 }, { now: NOW, creations }).operations
-    .map((operation) => [operation.sequence, operation.target?.pipelineId])).toEqual([[3, "pipe-o"]]);
+  const second = poll(NOW + 20 * MINUTE);
+  expect(sequences(second.operations)).toEqual([53, 54, 55]);
+  expect(second.refreshed).toHaveLength(50);
+  expect(second.creationsHasMore).toBeTrue();
+  /* Stamp order, not claim order: sequence 1 was stamped last, so it comes on the next page. */
+  expect(sequences(second.refreshed)).not.toContain(1);
+  const third = poll(NOW + 21 * MINUTE);
+  expect(sequences(third.refreshed)).toEqual([1]);
+  expect(third.creationsHasMore).toBeFalse();
+  const settledCursor = third.creationsAfter;
+  expect(poll(NOW + 22 * MINUTE)).toMatchObject({ operations: [], refreshed: [], creationsAfter: settledCursor, creationsHasMore: false });
+
+  /* Sequence 52 is stamped a day later, behind every cursor beta holds. */
+  creations.set("digest-c52", creation("pipe-52", "beta", NOW + 24 * 60 * MINUTE));
+  const late = poll(NOW + 24 * 60 * MINUTE + MINUTE);
+  expect(sequences(late.refreshed)).toEqual([52]);
+
+  const created = [...seen.values()].filter((operation) => operation.tool === "create_pipeline")
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((operation) => [operation.sequence, operation.requestDigest, operation.state, operation.target, operation.callerConversationId]);
+  expect(created).toEqual(Array.from({ length: 52 }, (_value, offset) => {
+    const index = offset + 1;
+    return [index, `digest-c${index}`, "accepted", { project: "beta", taskId: null, pipelineId: `pipe-${index}` }, null];
+  }));
 
   for (const project of ["alpha", "gamma"]) {
-    const page = readMcpOperations(db, { project, after: 0, limit: 50, unresolved: [1, 2, 3] }, { now: NOW, creations });
+    const page = readMcpOperations(db, { project, after: 0, limit: 50, unresolved: [1, 2, 3], creationsAfter: "0:" }, { now: NOW, creations });
     expect(page.operations).toEqual([]);
     expect(page.refreshed).toEqual([]);
+    expect(page.creationsHasMore).toBeFalse();
   }
+  db.close();
+});
+
+test("a reader without a creations cursor starts at the newest stamp, and a stamp without a recorded time still scopes its row", () => {
+  const { db } = seededDatabase();
+  insert(db, { key: "create_pipeline:old", digest: "digest-old", caller: null });
+  insert(db, { key: "create_pipeline:unordered", digest: "digest-unordered", caller: null });
+  insert(db, { key: "create_pipeline:new", digest: "digest-new", caller: null });
+  const creations = new Map<string, McpPipelineCreation>([
+    ["digest-old", creation("pipe-old", "beta", NOW)],
+    ["digest-unordered", creation("pipe-unordered", "beta", null)],
+  ]);
+
+  const fresh = readMcpOperations(db, { project: "beta", after: 3, limit: 50 }, { now: NOW, creations });
+  expect(fresh).toEqual({ operations: [], after: 3, hasMore: false, refreshed: [], creationsAfter: `${NOW}:digest-old`, creationsHasMore: false });
+  expect(sequences(readMcpOperations(db, { project: "beta", after: 0, limit: 50 }, { now: NOW, creations }).operations)).toEqual([1, 2]);
+
+  creations.set("digest-new", creation("pipe-new", "beta", NOW + 1));
+  const next = readMcpOperations(db, { project: "beta", after: fresh.after, limit: 50, creationsAfter: fresh.creationsAfter }, { now: NOW, creations });
+  expect(next.refreshed.map((operation) => [operation.sequence, operation.target?.pipelineId])).toEqual([[3, "pipe-new"]]);
+  expect(next.creationsAfter).toBe(`${NOW + 1}:digest-new`);
   db.close();
 });
 
@@ -437,7 +499,7 @@ test("no argument or result body leaves the feed", () => {
   });
   const page = readMcpOperations(db, { project: "alpha", after: 0, limit: 50, unresolved: [1] }, { now: NOW });
   expect(JSON.stringify(page)).not.toContain("SECRET-");
-  expect(Object.keys(page).sort()).toEqual(["after", "hasMore", "operations", "refreshed"]);
+  expect(Object.keys(page).sort()).toEqual(["after", "creationsAfter", "creationsHasMore", "hasMore", "operations", "refreshed"]);
   const keys: (keyof McpOperation)[] = [
     "sequence", "tool", "requestDigest", "claimedAt", "callerConversationId", "callerProject", "state", "target", "refusal",
   ];
@@ -450,7 +512,8 @@ test("a database no MCP process has migrated, and one that does not exist yet, b
   const file = receiptsFile();
   expect(openMcpReceiptsReadOnly(file)).toBeNull();
   expect(fs.existsSync(file)).toBeFalse();
-  expect(readMcpOperations(null, { project: "alpha", after: 7, limit: 50 })).toEqual({ operations: [], after: 7, hasMore: false, refreshed: [] });
+  expect(readMcpOperations(null, { project: "alpha", after: 7, limit: 50 }))
+    .toEqual({ operations: [], after: 7, hasMore: false, refreshed: [], ...EMPTY_CREATIONS });
 
   const legacy = new Database(file, { create: true, strict: true });
   legacy.exec(`

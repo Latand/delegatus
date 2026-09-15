@@ -4390,6 +4390,13 @@ export async function createPipelineFromRequest(
     }
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, loadTasks());
     if (taskLinkError) return { error: taskLinkError, status: 400 };
+    if (pipeline.creationReceipt) {
+      /* C8 discovery order: mutations are serialized, so a stamp later than
+         every stored stamp commits after them, and a reader's creations cursor
+         can never pass a stamp that commits after it read. */
+      const latest = pipelines.reduce((max, candidate) => Math.max(max, Date.parse(candidate.creationReceipt?.recordedAt ?? "") || 0), 0);
+      pipeline.creationReceipt.recordedAt = new Date(Math.max(Date.parse(ports.now()) || 0, latest + 1)).toISOString();
+    }
     pipelines.push(pipeline);
     persist();
     return { pipeline };
