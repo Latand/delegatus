@@ -86,3 +86,17 @@ test("stopping during body hydration cannot start a call when the read finishes"
   expect(view.starts()).toBe(0);
   expect(view.api().phase).toBe("idle");
 });
+
+
+test("an acknowledgment arriving during hydration cannot be replayed by the start-click closure", async () => {
+  const view = harness();
+  let resolve!: (response: Response) => void;
+  globalThis.fetch = (() => new Promise<Response>(done => { resolve = done; })) as unknown as typeof fetch;
+  await view.render([stub], 4);
+  let starting!: Promise<void>;
+  await act(() => { starting = view.api().start(); });
+  await view.render([], 4);
+  await act(async () => { resolve(Response.json({ sessions: [{ conversationId: "conversation_example", revision: 4, voiceDeliveries: [delivery] }] })); await starting; });
+  expect(view.starts()).toBe(1);
+  expect(view.reconciled.every(rows => rows.length === 0)).toBe(true);
+});

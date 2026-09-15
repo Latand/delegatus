@@ -186,10 +186,12 @@ export function useCodexRealtime(
   const bodyKey = `${conversationId}:${deferredVoiceRevision ?? "full"}`;
   const [bodyState, setBodyState] = useState<{ key: string; deliveries: RuntimeVoiceDelivery[]; acknowledged: string[] } | null>(null);
   const [bodyError, setBodyError] = useState<string | null>(null);
-  const requestRef = useRef<{ key: string; promise: Promise<RuntimeVoiceDelivery[]> } | null>(null);
+  const requestRef = useRef<{ key: string; promise: Promise<{ deliveries: RuntimeVoiceDelivery[]; acknowledged: string[] }> } | null>(null);
   const currentKey = useRef(bodyKey);
   currentKey.current = bodyKey;
   useEffect(() => () => { startEpoch.current += 1; startPending.current = false; }, [client, bodyKey]);
+  const latestVoice = useRef({ deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds });
+  latestVoice.current = { deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds };
   const bodiesReady = deferredVoiceRevision === undefined || bodyState?.key === bodyKey;
   const mergedDeliveries = useMemo(() => {
     const acknowledged = new Set([...acknowledgedVoiceIds, ...(bodyState?.key === bodyKey ? bodyState.acknowledged : [])]);
@@ -205,8 +207,8 @@ export function useCodexRealtime(
     });
   }, [bodyKey, bodyState, workerDeliveries, acknowledgedVoiceIds]);
   const hydrateBodies = () => {
-    if (deferredVoiceRevision === undefined) return Promise.resolve([...workerDeliveries]);
-    if (bodyState?.key === bodyKey) return Promise.resolve(bodyState.deliveries);
+    if (deferredVoiceRevision === undefined) return Promise.resolve({ deliveries: [...workerDeliveries], acknowledged: [...acknowledgedVoiceIds] });
+    if (bodyState?.key === bodyKey) return Promise.resolve(bodyState);
     if (requestRef.current?.key === bodyKey) return requestRef.current.promise;
     const promise = (async () => {
       const response = await fetch(`/api/runtime/snapshot?voiceFor=${encodeURIComponent(conversationId)}`);
@@ -221,7 +223,7 @@ export function useCodexRealtime(
         setBodyState({ key: bodyKey, deliveries, acknowledged: [...acknowledged] });
         setBodyError(null);
       }
-      return deliveries;
+      return { deliveries, acknowledged: [...acknowledged] };
     })();
     requestRef.current = { key: bodyKey, promise };
     void promise.catch(error => { if (currentKey.current === bodyKey) setBodyError(error instanceof Error ? error.message : "Voice delivery recovery failed"); })
@@ -277,11 +279,18 @@ export function useCodexRealtime(
       startPending.current = true;
       setPreparingVoice(bodyKey);
       try {
-        const deliveries = await hydrateBodies();
+        const recovered = await hydrateBodies();
         if (currentKey.current !== key || startEpoch.current !== epoch) return;
-        // A call starts only after its pending canonical outputs are known.
-        const acknowledged = new Set(acknowledgedVoiceIds);
-        client.reconcileWorkerDeliveries(deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), { authoritative: true, ready: true });
+        // Events can acknowledge or append deliveries while the GET is in
+        // flight. Read the current id set here, never the start-click closure.
+        const current = latestVoice.current;
+        const acknowledged = new Set([...current.acknowledged, ...recovered.acknowledged]);
+        const bodies = new Map(recovered.deliveries.map(delivery => [delivery.deliveryId, delivery]));
+        const deliveries = current.deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)).map(delivery => {
+          const responses = new Map(bodies.get(delivery.deliveryId)?.responses.map(response => [response.responseId, response]) ?? []);
+          return { ...delivery, responses: delivery.responses.map(response => response.text ? response : responses.get(response.responseId) ?? response) };
+        });
+        client.reconcileWorkerDeliveries(deliveries, { authoritative: true, ready: true });
         await client.start();
       } finally {
         if (startEpoch.current === epoch) { startPending.current = false; setPreparingVoice(null); }
