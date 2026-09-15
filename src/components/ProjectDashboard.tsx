@@ -262,14 +262,12 @@ function ProjectViewTabs({
   value,
   onChange,
   floating = false,
-  embedded = false,
   inline = false,
   modes = ["kanban", "list"],
 }: {
   value: DesktopView;
   onChange: (next: DesktopView) => void;
   floating?: boolean;
-  embedded?: boolean;
   /** Drawn in a toolbar row of its own (the kanban board's bar): the chip, in flow. */
   inline?: boolean;
   /** The views this project can show on the desktop: the Board, and Conversations when there are any. */
@@ -283,11 +281,9 @@ function ProjectViewTabs({
   return (
     <div
       data-project-view-tabs
-      className={embedded
-        ? "inline-flex shrink-0 items-center gap-0.5"
-        : `z-30 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-1 ${
-          floating ? "absolute left-3 top-3" : inline ? "" : "mx-3 mt-3 self-start"
-        }`}
+      className={`z-30 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-1 ${
+        floating ? "absolute left-3 top-3" : inline ? "" : "mx-3 mt-3 self-start"
+      }`}
     >
       {modes.map((mode) => (
         <button
@@ -532,14 +528,9 @@ function ProjectDashboardView({
   };
   const [drafts, setDrafts] = useState<string[]>([]);
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
-  /* Desktop `+ Task`: bump drops the inline sticky composer in a free slot on
-     the board (pinned near the button). */
-  const [newTaskNonce, setNewTaskNonce] = useState(0);
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
   const [mobileTaskSheet, setMobileTaskSheet] = useState<TaskSheetView | null>(null);
-  /* Place-on-map: the unplaced task whose next board click pins it. */
-  const [placeTask, setPlaceTask] = useState<BoardTask | null>(null);
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -1244,26 +1235,12 @@ function ProjectDashboardView({
     revealPipeline(pending);
   }, [pipelines, project]);
 
-  /* Desktop `+ Task`: drop the inline sticky composer in a free slot near the
-     button (the board resolves the world anchor + findFreeSlot). Voice, images
-     and a deadline all live in that on-board composer. */
-  const addTask = () => {
-    onUserNavigate?.();
-    setNewTaskNonce((n) => n + 1);
-  };
   /* The phone's task sheet: «New task» opens the create view, «Tasks» the list. */
   const openMobileTasks = (view: TaskSheetView) => {
     onUserNavigate?.();
     mobileNav.closeSheet();
     setMobileTaskSheet(view);
   };
-  /* `place on map`: close the panel focus into board placement mode; the next
-     canvas click pins the card exactly where clicked (identity unchanged). */
-  const placeOnMap = (task: BoardTask) => {
-    board.setTaskPanelOpen(false);
-    setPlaceTask(task);
-  };
-
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
@@ -1365,18 +1342,6 @@ function ProjectDashboardView({
     if (isWorkflowDraftId(id)) clearWorkflowDraftStorage(id);
     else clearDraftStorage(id);
     persistDrafts(drafts.filter((item) => item !== id));
-  };
-
-  /* «Send» on a task card, new-agent flavor: a fresh draft pane lands on the
-     scheme seeded with the task text as its first prompt — the user picks the
-     engine and directory and launches it. Nothing runs until they do. */
-  const openTaskDraft = (task: BoardTask) => {
-    onUserNavigate?.();
-    const id = newDraftId();
-    setDraftText(id, task.text);
-    setDraftCwd(id, initialDraftCwd);
-    persistDrafts([...drafts, id]);
-    pendingFocusRef.current = "draft::" + id;
   };
 
   /* Retry affordance for a failed pathless launch receipt: a fresh draft pane

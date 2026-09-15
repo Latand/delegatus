@@ -221,3 +221,21 @@ test("a “show on board” the server refuses is told to the operator, not swal
 
   expect(dom.document.body.textContent).toContain("300 task bands");
 });
+
+test("the panel's new task creates once through the shared draft, with its request id, and closes", async () => {
+  const host = mount([]);
+  const open = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("new task")) as HTMLButtonElement;
+  flushSync(() => open.click());
+  const field = host.querySelector('textarea[aria-label="Task text"]') as HTMLTextAreaElement;
+  const key = Object.keys(field).find((name) => name.startsWith("__reactProps$"))!;
+  flushSync(() => (field as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!.onChange({ target: { value: "Write the release checklist" } }));
+  const form = field.closest("form")!;
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as never));
+  for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const creates = patches.filter((entry) => entry.url === "/api/tasks");
+  expect(creates).toHaveLength(1);
+  expect(creates[0]!.body).toMatchObject({ project: "repo-board", text: "Write the release checklist", placement: "unplaced" });
+  expect(typeof (creates[0]!.body as { clientRequestId?: unknown }).clientRequestId).toBe("string");
+  expect(host.querySelector('textarea[aria-label="Task text"]')).toBeNull();
+});

@@ -1,13 +1,12 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect } from "react";
 
 import { DraftAgentPane } from "@/components/DraftAgentPane";
-import { createTask } from "@/components/tasks/taskApi";
 import { TaskComposer } from "@/components/tasks/TaskComposer";
+import { useTaskCreateDraft } from "@/components/tasks/useTaskCreateDraft";
 import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
 import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
-import { useTaskDraft } from "@/hooks/useTaskDraft";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -62,53 +61,19 @@ export function CardDrafts({ ids }: { ids: readonly string[] }) {
 /**
  * `+ Task`: an inline card at the top of Inbox (plan §12). The full shared
  * composer (text, voice, images, deadline) over the project's own task draft,
- * so text started here is the same draft the Tasks panel shows. The create
- * carries the draft's request id, so a double press or a retry after a lost
- * answer resolves to one task; a refusal keeps the text and says why.
+ * so text started here is the same draft the Tasks panel shows, and the same
+ * create (`useTaskCreateDraft`): one task per request id, and a refusal keeps
+ * the text and says why.
  */
 export function KanbanTaskComposer({ project, onCreated, onCancel }: { project: string; onCreated: (task: BoardTask) => void; onCancel: () => void }) {
   const { t } = useLocale();
-  const saveRef = useRef<(text?: string) => void | Promise<void>>(() => {});
-  const draft = useTaskDraft(project, (overrideText) => saveRef.current(overrideText));
+  /* The kanban places no task on a map: its column is its status. */
+  const draft = useTaskCreateDraft(project, { placement: "unplaced" }, onCreated);
   const { composer } = draft;
 
   useEffect(() => {
     composer.inputRef.current?.focus();
   }, [composer.inputRef]);
-
-  const save = async (overrideText?: string) => {
-    const text = (overrideText ?? composer.textRef.current).trim();
-    if (composer.busy || composer.voiceSending) return;
-    if (!text) {
-      composer.setStatus({ kind: "err", text: t("tasks.composerNeedsText") });
-      return;
-    }
-    composer.setBusy(true);
-    composer.setStatus(null);
-    try {
-      /* The kanban places no task on a map: its column is its status. */
-      const created = await createTask({
-        project,
-        text,
-        placement: "unplaced",
-        dueAt: draft.dueAt,
-        dueTz: draft.dueTz,
-        attachments: draft.stagedAttachments(),
-        clientRequestId: draft.getRequestId(),
-      });
-      if ("error" in created) {
-        composer.setStatus({ kind: "err", text: created.error });
-        return;
-      }
-      draft.reset();
-      onCreated(created.task);
-    } finally {
-      composer.setBusy(false);
-    }
-  };
-  useEffect(() => {
-    saveRef.current = save;
-  });
 
   return (
     <form
