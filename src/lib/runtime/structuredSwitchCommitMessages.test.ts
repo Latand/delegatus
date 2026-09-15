@@ -359,6 +359,28 @@ test("admissions in the same millisecond keep their order, and records without a
     .toEqual(["legacy, admitted first", "legacy, admitted second", "first", "second", "third"]);
 });
 
+test("an attempt is refused while an earlier admission waits in the same generation, and nothing else gates it", async () => {
+  const fixture = await switchWaitingForTurn();
+  await turnEndsAndSwitchCommits(fixture);
+  const generationId = fixture.registry.conversation(fixture.id)!.generations.at(-1)!.id;
+  const earlier = send(fixture.registry, fixture.id, "admitted first", "gate-earlier");
+  const later = send(fixture.registry, fixture.id, "admitted second", "gate-later");
+  const otherGeneration = send(fixture.registry, fixture.id, "assigned to an older generation", "gate-older");
+  const legacyHeld = send(fixture.registry, fixture.id, "held with an unproven owner", "gate-held");
+  mutate(fixture.registry, (file) => {
+    Object.assign(file.heldDeliveries[otherGeneration.id]!, { generationId: "older-generation" });
+    Object.assign(file.heldDeliveries[legacyHeld.id]!, { state: "held", generationId: null, assignedAt: null });
+    /* Without a sequence both order before `later`, so only their state and generation keep them from gating it. */
+    delete file.heldDeliveries[otherGeneration.id]!.admissionSeq;
+    delete file.heldDeliveries[legacyHeld.id]!.admissionSeq;
+  });
+  expect(fixture.registry.beginDeliveryAttempt(later.id, generationId)).toBeNull();
+  expect(snapshotOf(fixture, later.id)).toMatchObject({ state: "assigned", attempts: 0 });
+  expect(fixture.registry.beginDeliveryAttempt(earlier.id, generationId)).toMatchObject({ state: "delivery-uncertain", attempts: 1 });
+  /* An earlier admission that has begun its attempt no longer gates the claim; the actuation section orders their commands. */
+  expect(fixture.registry.beginDeliveryAttempt(later.id, generationId)).toMatchObject({ state: "delivery-uncertain", attempts: 1 });
+});
+
 const CONVERSATION_SESSION = "native-successor";
 
 function journalFor(fixture: Switch): { journal: RuntimeJournal; file: string; order: () => string[] } {
