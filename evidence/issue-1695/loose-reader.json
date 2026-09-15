@@ -1,0 +1,50 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "scheme": "light",
+  "cases": [
+    {
+      "name": "focus handoff show",
+      "reviewerOpened": "reader",
+      "resolution": "exact",
+      "windowAfter": false,
+      "targetPresent": true,
+      "underTarget": "target"
+    },
+    {
+      "name": "resumed focus handoff show",
+      "reviewerOpened": "reader",
+      "resolution": "exact",
+      "windowAfter": false,
+      "targetPresent": true,
+      "underTarget": "target"
+    },
+    {
+      "name": "focus handoff open",
+      "reviewerOpened": "reader",
+      "resolution": "reader",
+      "windowAfter": false,
+      "targetPresent": true,
+      "underTarget": "target"
+    },
+    {
+      "name": "#c= link",
+      "reviewerOpened": "reader",
+      "resolution": null,
+      "windowAfter": false,
+      "targetPresent": true,
+      "underTarget": "target"
+    },
+    {
+      "name": "pipeline link",
+      "reviewerOpened": "reader",
+      "resolution": null,
+      "windowAfter": false,
+      "targetPresent": true,
+      "underTarget": "target"
+    }
+  ],
+  "failures": []
+}
