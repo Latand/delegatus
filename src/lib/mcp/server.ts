@@ -3175,7 +3175,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   conversation_migration: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().min(1),
-    action: z.enum(["reseat", "retry", "rollback", "cancel", "withdraw"]).describe("cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one answers SWITCH_CLAIMED with the revision to cancel it by."),
+    action: z.enum(["reseat", "retry", "rollback", "cancel", "withdraw"]).describe("cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies, and the same cancel again answers cancel: replayed. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one is refused with code SWITCH_CLAIMED and expectedRevision, the revision to cancel it by once its migration exists (null before)."),
     expectedRevision: z.number().int().min(0).optional().describe("The migration's revision: required by retry, rollback and cancel."),
     operationId: z.string().min(1).optional().describe("withdraw: the queued reconfigure operation."),
     transcriptPath: z.string().optional(),

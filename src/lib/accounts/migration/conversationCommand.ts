@@ -57,6 +57,15 @@ async function readRuntimeOperation(operationId: string): Promise<RuntimeOperati
   }
 }
 
+/** Work after a committed write: its failure is left to the next queue or migration pass. */
+async function settleAfterCommit(work: () => unknown): Promise<void> {
+  try {
+    await work();
+  } catch {
+    // The committed answer stands.
+  }
+}
+
 const deliveryPort = createMigrationDeliveryPort();
 const IN_FLIGHT_PHASES = new Set(["requested", "waiting-turn", "preparing", "successor-starting", "verifying"]);
 
@@ -174,23 +183,31 @@ export async function applyConversationMigration(
       return { status: 404, body: { error: "reconfigure operation is unknown for this conversation", code: "OPERATION_UNKNOWN" } };
     }
     if (SETTLED_OPERATION_STATUSES.has(read.receipt.status)) {
+      /* The same withdrawal again, after the queue failed the operation it withdrew: the switch is cancelled. */
+      if (registry.reconfigureCancelled(conversationId, operationId)) {
+        return { status: 200, body: { withdraw: "replayed", conversation: registry.conversation(conversationId) } };
+      }
       return { status: 409, body: { error: "the reconfigure has already settled", code: "SWITCH_SETTLED", status: read.receipt.status } };
     }
     const withdrawal = registry.withdrawConversationReconfigure(conversationId, operationId);
     if (withdrawal.kind === "claimed") {
+      /* The revision to cancel by exists only once this switch's own migration does. */
+      const owned = withdrawal.conversation.reconfigure?.operationId === operationId
+        && registry.reconfigureOwnedCancellableSwitch(conversationId);
       return {
         status: 409,
         body: {
           error: "the queue has already claimed this switch; cancel it with the migration's revision",
           code: "SWITCH_CLAIMED",
-          expectedRevision: withdrawal.conversation.migration?.revision ?? null,
+          expectedRevision: owned ? withdrawal.conversation.migration?.revision ?? null : null,
         },
       };
     }
     if (withdrawal.kind === "settled") {
       return { status: 409, body: { error: "the reconfigure has already settled", code: "SWITCH_SETTLED" } };
     }
-    await (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    /* The withdrawal is durable; the queue notices it on its next pass even if this kick fails. */
+    await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
     return { status: 200, body: { withdraw: withdrawal.kind, conversation: withdrawal.conversation } };
   }
 
@@ -201,18 +218,22 @@ export async function applyConversationMigration(
     || (command.action === "rollback" && registryForCommand().reconfigureOwnedCancellableSwitch(conversationId))) {
     /* #1705: a claimed switch, guarded by revision and phase. A rollback of a reconfigure-owned switch still
        waiting for its turn is this cancel, so the queue cannot request the switch again. */
+    const registry = registryForCommand();
+    let cancelled;
     try {
-      const registry = registryForCommand();
-      const conversation = registry.cancelConversationSwitch(conversationId, command.expectedRevision as number);
-      await (dependencies.kick ?? kickStructuredDeliveryQueue)();
-      await drainHeldDeliveries(conversation.id, dependencies.deliveryPort ?? deliveryPort, registry);
-      return { status: 200, body: conversation as unknown as Record<string, unknown> };
+      cancelled = registry.cancelConversationSwitch(conversationId, command.expectedRevision as number);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.includes("revision")) return { status: 409, body: { error: "migration revision is stale", code: "MIGRATION_STALE" } };
       if (message.includes("started")) return { status: 409, body: { error: "the switch has already started", code: "SWITCH_STARTED" } };
+      if (message.includes("no longer pending")) return { status: 409, body: { error: "the switch is no longer pending", code: "SWITCH_NOT_PENDING" } };
       return { status: 404, body: { error: "conversation has no switch to cancel" } };
     }
+    /* The cancel is committed. Kicking the queue and delivering what it re-armed are follow-ups: a failure
+       there leaves them to the next pass, and never turns the cancel into a refusal. */
+    await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
+    await settleAfterCommit(() => drainHeldDeliveries(cancelled.conversation.id, dependencies.deliveryPort ?? deliveryPort, registry));
+    return { status: 200, body: { cancel: cancelled.kind, conversation: cancelled.conversation } };
   }
   if (command.action === "rollback") {
     try {

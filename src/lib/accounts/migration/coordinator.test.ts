@@ -2706,8 +2706,11 @@ describe("durable account migration coordinator", () => {
       deliveredAt: null,
       error: null,
     }) as unknown as (typeof snapshot.heldDeliveries)[string];
-    snapshot.heldDeliveries["owned-by-rollback"] =
-      heldRecord("owned-by-rollback", new Date(Date.parse(rolledBackAt) - 60 * 60_000).toISOString());
+    snapshot.heldDeliveries["owned-by-rollback"] = {
+      ...heldRecord("owned-by-rollback", new Date(Date.parse(rolledBackAt) - 60 * 60_000).toISOString()),
+      /* Held by the migration that rolled back, as the registry records it since #1705. */
+      fencedBy: snapshot.conversations[conversation.id]!.migration!.operationId,
+    };
     snapshot.heldDeliveries["held-after-rollback"] = heldRecord("held-after-rollback", new Date().toISOString());
     fs.writeFileSync(store.filename, JSON.stringify(snapshot));
     return { store: new AgentRegistry(store.filename), conversation };

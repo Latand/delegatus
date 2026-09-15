@@ -9935,7 +9935,10 @@ test("expectedAttempt 0 states a stage with no attempt of its own: it retries a 
   expect((await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
 });
 
-test("a stage conversation switched to another account settles on its own verdict and never takes its fail edge (#1695 K6)", async () => {
+/* Engine scope only (#1695 K6b): the conversation's path, host availability and the successor's turns are
+   given to the engine here, and no registry migration, commit or delivery runs. The integration, a real
+   switch whose successor turn is started by the message held for it, needs #1709 (K6c). */
+test("the engine keeps a switched stage's attempt running across an unavailable host inside the grace, follows its new path, and settles on the successor's verdict without the fail edge (#1695 K6b)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null, onFail: { to: "recover", maxRounds: 1 } },

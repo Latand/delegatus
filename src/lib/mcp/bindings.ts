@@ -3504,7 +3504,16 @@ async function conversationMigration(args: McpToolArgs, dependencies: ViewerMcpD
     path: text(args.transcriptPath) || text(args.path),
     ...(typeof args.operationId === "string" ? { operationId: args.operationId } : {}),
   });
-  if ("error" in result.body && typeof result.body.error === "string") throw new Error(result.body.error);
+  if ("error" in result.body && typeof result.body.error === "string") {
+    /* #1705: a refusal carries what to do next, the claimed switch's code and the revision to cancel it by. */
+    const body = result.body as { error: string; code?: unknown; expectedRevision?: unknown };
+    throw new McpToolRefusal(body.error, {
+      error: body.error,
+      status: result.status,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(typeof body.expectedRevision === "number" || body.expectedRevision === null ? { expectedRevision: body.expectedRevision } : {}),
+    });
+  }
   const conversation = result.body.conversation
     ?? (typeof result.body.id === "string" && result.body.id.startsWith("conversation_") ? result.body : undefined);
   return redactPayload({

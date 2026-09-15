@@ -325,6 +325,8 @@ test("a stale rolled-back intent settles without cancelling post-rollback delive
     contentDigest: null,
     artifactPaths: [],
     state: "held",
+    /* Held by the migration that rolled back, as the registry records it since #1705. */
+    fencedBy: snapshot.conversations[conversation.id]!.migration!.operationId,
     generationId: null,
     attempts: 0,
     assignedAt: null,
@@ -364,11 +366,20 @@ test("the sweep still settles a delivery the rolled-back migration owned (issue 
     contentDigest: null,
     artifactPaths: [],
     state: "held",
+    /* Held by the migration that rolled back, as the registry records it since #1705. */
+    fencedBy: snapshot.conversations[conversation.id]!.migration!.operationId,
     generationId: null,
     attempts: 0,
     assignedAt: null,
     deliveredAt: null,
     error: null,
+  } as unknown as (typeof snapshot.heldDeliveries)[string];
+  /* A record from before fences existed, under an engine-wide intent: nothing proves which migration held it. */
+  snapshot.heldDeliveries["unproven-legacy-hold"] = {
+    ...snapshot.heldDeliveries["owned-by-rollback"]!,
+    id: "unproven-legacy-hold",
+    clientMessageId: "unproven-legacy-hold",
+    fencedBy: undefined,
   } as unknown as (typeof snapshot.heldDeliveries)[string];
   fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
   const reopened = new AgentRegistry(registry.filename);
@@ -386,6 +397,8 @@ test("the sweep still settles a delivery the rolled-back migration owned (issue 
       error: expect.stringContaining("rolled back"),
     });
     expect(reopened.snapshot().heldDeliveries[fresh.id]).toMatchObject({ state: "assigned", error: null });
+    /* Left as it is, payload and all, rather than cancelled on an assumed owner (#1705). */
+    expect(reopened.snapshot().heldDeliveries["unproven-legacy-hold"]).toMatchObject({ state: "held", text: "queued before the rollback", error: null });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

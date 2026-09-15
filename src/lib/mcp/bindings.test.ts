@@ -1884,7 +1884,7 @@ test("conversation_migration delegates to the revision-fenced migration command 
   expect((result.receipt as { operationId: string }).operationId).toBe(migrationOperationId);
 });
 
-test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal throws its words (#1705)", async () => {
+test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal carries its words, code and revision (#1705)", async () => {
   const requests: unknown[] = [];
   const bindings = viewerMcpBindings(undefined, undefined, {
     applyConversationMigration: async (request: { action: string }) => {
@@ -1895,8 +1895,11 @@ test("conversation_migration passes a withdrawal's operation id and a cancel's r
     },
   } as never);
 
-  await expect(bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" }))
-    .rejects.toThrow("the queue has already claimed this switch");
+  const refusal = await bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" })
+    .then(() => null, (error: unknown) => error as { name?: string; message?: string; details?: unknown } | null);
+  expect(refusal?.name).toBe("McpToolRefusal");
+  expect(refusal?.message).toContain("the queue has already claimed this switch");
+  expect(refusal?.details).toMatchObject({ status: 409, code: "SWITCH_CLAIMED", expectedRevision: 3 });
   const cancelled = await bindings.conversation_migration({ clientRequestId: "cancel-1705", conversationId: "conversation_1705", action: "cancel", expectedRevision: 3 });
   expect(requests).toEqual([
     { conversationId: "conversation_1705", action: "withdraw", expectedRevision: undefined, path: "", operationId: "reconfigure-to-b" },

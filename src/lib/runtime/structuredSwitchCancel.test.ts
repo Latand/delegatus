@@ -4,13 +4,14 @@ import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, reconcileMigrations, type HeldDeliveryPort } from "@/lib/accounts/migration/coordinator";
 import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
 import { emptyLaunchProfile, type HeldDelivery, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
-import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
+import { AgentRegistry, type RegistryConversation, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
-import { setBoardFileForTests } from "@/lib/board/store";
+import { boardFor, setBoardFileForTests } from "@/lib/board/store";
 import { procBackend } from "@/lib/proc";
+import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure } from "./structuredReconfigure";
@@ -189,8 +190,10 @@ test("cancelling a claimed switch that waits for the turn rolls it back, settles
   const held = delivery(fixture, fixture.deliveries.held!.id);
   const migration = registry.conversation(id)!.migration!;
 
-  const cancelled = registry.cancelConversationSwitch(id, migration.revision);
+  const answer = registry.cancelConversationSwitch(id, migration.revision);
+  const cancelled = answer.conversation;
 
+  expect(answer.kind).toBe("cancelled");
   expect(cancelled.migration?.phase).toBe("rolled-back");
   expect(cancelled.reconfigure?.operationId).toBe(fixture.effect.operationId);
   expect(String(cancelled.reconfigure?.status)).toBe("cancelled");
@@ -307,13 +310,40 @@ test("the migration route: cancel needs expectedRevision and rolls back a waitin
   expect(registry.conversation(id)!.migration?.phase).toBe("waiting-turn");
 
   const cancelled = await applyConversationMigration({ conversationId: id, action: "cancel", expectedRevision: revision }, dependencies);
-  expect(cancelled.status).toBe(200);
+  expect(cancelled).toMatchObject({ status: 200, body: { cancel: "cancelled" } });
   expect(registry.conversation(id)!.migration?.phase).toBe("rolled-back");
   expect(String(registry.conversation(id)!.reconfigure?.status)).toBe("cancelled");
   expect(kicks).toHaveLength(1);
-  /* A second cancel of the same switch is stale, never a second rollback. */
+  /* The same cancel again, from a page that did not see the first: the switch is cancelled, and nothing is written twice. */
+  const before = registry.snapshot();
   const again = await applyConversationMigration({ conversationId: id, action: "cancel", expectedRevision: revision }, dependencies);
-  expect(again.status).toBe(409);
+  expect(again).toMatchObject({ status: 200, body: { cancel: "replayed" } });
+  expect(registry.snapshot().conversations[id]).toEqual(before.conversations[id]);
+  expect(failedDeliveries(fixture)).toEqual([]);
+});
+
+test("a cancel of a switch that ended without one is refused as no longer pending, never as started", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const revision = registry.conversation(id)!.migration!.revision;
+  /* A newer switch back to the source retired it: rolled back, and not by a cancel. */
+  await fixture.apply({ ...fixture.effect, operationId: "reconfigure-back-to-a", accountId: "account-a", eventSeq: 8 });
+  expect(registry.conversation(id)!.migration?.phase).toBe("rolled-back");
+
+  const answer = await applyConversationMigration({ conversationId: id, action: "cancel", expectedRevision: revision }, { registry: () => registry, kick: () => {} } as never);
+  expect(answer).toMatchObject({ status: 409, body: { code: "SWITCH_NOT_PENDING" } });
+});
+
+test("a committed cancel answers cancelled even when kicking the queue or delivering what it re-armed throws", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const answer = await applyConversationMigration({ conversationId: id, action: "cancel", expectedRevision: registry.conversation(id)!.migration!.revision }, {
+    registry: () => registry,
+    kick: () => { throw new Error("runtime host socket closed"); },
+    deliveryPort: { deliver: async () => { throw new Error("delivery port unavailable"); } },
+  } as never);
+  expect(answer).toMatchObject({ status: 200, body: { cancel: "cancelled" } });
+  expect(registry.conversation(id)!.migration?.phase).toBe("rolled-back");
 });
 
 test("the migration route withdraws a queued switch only after reading it from the runtime journal", async () => {
@@ -338,6 +368,8 @@ test("the migration route withdraws a queued switch only after reading it from t
   expect(kicks).toHaveLength(2);
   expect(registry.reconfigureCancelled(id, fixture.effect.operationId)).toBe(true);
   await expect(fixture.apply()).rejects.toThrow(/cancel/);
+  /* The queue has failed the withdrawn operation; the same withdrawal again still answers that it is cancelled. */
+  expect(await route(receipt("failed", { reason: "cancelled" }))).toMatchObject({ status: 200, body: { withdraw: "replayed" } });
 });
 
 test("a withdrawal of a switch the queue already claimed is refused with the migration's revision to cancel it by", async () => {
@@ -387,16 +419,159 @@ test("a newer switch that fails before it creates a migration gives back the del
   expect(failedDeliveries(fixture)).toEqual([]);
 });
 
-test("a held record from before fencedBy existed is re-armed by the cancel of the conversation's switch", async () => {
+type MutableRegistry = { mutate<T>(fn: (file: RegistryFile) => T): T };
+
+/** One pass of what runs on its own while nobody acts: the migration tick, then the reaper's delivery hygiene. */
+async function migrationTickAndReaper(registry: AgentRegistry, port: HeldDeliveryPort = { deliver: async () => "held" }): Promise<void> {
+  await reconcileMigrations(successorProvider(path.join(sandbox, "tick-never.jsonl")), port, registry, {
+    remapBoardPaths: (project) => boardFor(project),
+    transferBoardPathPlacements: () => {},
+  });
+  terminalizeStaleUndeliverableHeldDeliveries(registry);
+}
+
+test("a held record from before fencedBy existed, admitted after the switch's own intent began, is re-armed by its cancel", async () => {
   const fixture = await pendingSwitch();
   const { registry, id } = fixture;
   const heldId = fixture.deliveries.held!.id;
-  /* Simulate the legacy row: no owner recorded. */
-  (registry as unknown as { mutate<T>(fn: (file: { heldDeliveries: Record<string, HeldDelivery> }) => T): T })
-    .mutate((file) => { delete file.heldDeliveries[heldId]!.fencedBy; });
-  expect(delivery(fixture, heldId).fencedBy ?? null).toBeNull();
+  const intentId = registry.conversation(id)!.migration!.intentId;
+  /* The legacy row: no owner recorded, admitted a second after the switch's conversation intent began. */
+  (registry as unknown as MutableRegistry).mutate((file) => {
+    const row = file.heldDeliveries[heldId]!;
+    delete row.fencedBy;
+    row.createdAt = new Date(Date.parse(file.migrationIntents[intentId]!.createdAt) + 1000).toISOString();
+  });
   registry.cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
-  expect(delivery(fixture, heldId).state).toBe("assigned");
+  expect(delivery(fixture, heldId)).toMatchObject({ state: "assigned", text: fixture.deliveries.held!.text });
+});
+
+test("a held record whose owner cannot be proven is left as it is by the cancel, the migration tick and the reaper", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const heldId = fixture.deliveries.held!.id;
+  const intentId = registry.conversation(id)!.migration!.intentId;
+  /* A legacy row admitted before the switch's intent began could have been held by an earlier migration. */
+  (registry as unknown as MutableRegistry).mutate((file) => {
+    const row = file.heldDeliveries[heldId]!;
+    delete row.fencedBy;
+    row.createdAt = new Date(Date.parse(file.migrationIntents[intentId]!.createdAt) - 1000).toISOString();
+  });
+  const legacy = delivery(fixture, heldId);
+  registry.cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  await migrationTickAndReaper(registry);
+  expect(delivery(fixture, heldId)).toEqual(legacy);
+});
+
+test("a held delivery fenced by another operation is not the cancelled switch's: the cancel, the migration tick and the reaper leave it as it is", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const heldId = fixture.deliveries.held!.id;
+  (registry as unknown as MutableRegistry).mutate((file) => { file.heldDeliveries[heldId]!.fencedBy = "another-switch"; });
+  const foreign = delivery(fixture, heldId);
+  registry.cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  expect(delivery(fixture, heldId)).toEqual(foreign);
+  await migrationTickAndReaper(registry);
+  expect(delivery(fixture, heldId)).toEqual(foreign);
+});
+
+for (const answer of ["held", "delivery-uncertain"] as const) {
+  test(`after a cancel through the route whose drain answers ${answer}, the migration tick and the reaper keep the deliveries from before the switch and the re-armed one`, async () => {
+    const fixture = await pendingSwitch();
+    const { registry, id } = fixture;
+    const port: HeldDeliveryPort = { deliver: async () => answer };
+    const cancelled = await applyConversationMigration(
+      { conversationId: id, action: "cancel", expectedRevision: registry.conversation(id)!.migration!.revision },
+      { registry: () => registry, kick: () => {}, deliveryPort: port } as never,
+    );
+    expect(cancelled.status).toBe(200);
+    const settled = (deliveryId: string): { state: string; text: string } => {
+      const row = delivery(fixture, deliveryId);
+      return { state: row.state, text: row.text };
+    };
+    /* What the route's own drain left: an attempt answered `held` goes back to assigned, one answered uncertain stays uncertain. */
+    const expected = {
+      before: { state: answer === "held" ? "assigned" : "delivery-uncertain", text: fixture.deliveries.before.text },
+      uncertain: { state: "delivery-uncertain", text: fixture.deliveries.uncertain.text },
+      held: { state: answer === "held" ? "assigned" : "delivery-uncertain", text: fixture.deliveries.held!.text },
+    };
+    const now = () => ({ before: settled(fixture.deliveries.before.id), uncertain: settled(fixture.deliveries.uncertain.id), held: settled(fixture.deliveries.held!.id) });
+    expect(now()).toEqual(expected);
+
+    await migrationTickAndReaper(registry, port);
+    await migrationTickAndReaper(registry, port);
+
+    expect(now()).toEqual(expected);
+    expect(failedDeliveries(fixture)).toEqual([]);
+  });
+}
+
+/** Starts a switch to account C that claims, then waits in its account check until `release` is called. */
+function switchToCStoppedBeforeItsMigration(fixture: PendingSwitch) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let claimed!: () => void;
+  const reachedCheck = new Promise<void>((resolve) => { claimed = resolve; });
+  const root = path.dirname(fixture.registryFile);
+  const running = applyStructuredReconfigure({ ...fixture.effect, operationId: "reconfigure-to-c", accountId: "account-c", eventSeq: 8 }, {
+    registry: fixture.registry,
+    validateAccount: async () => { claimed(); await gate; },
+    resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: root, engine })) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+    migrate: (conversationId, _target, store, ownsOperation, reconfigureOperationId) =>
+      advanceConversationMigration(conversationId, store, successorProvider(path.join(root, "successor.jsonl")), { ownsOperation, reconfigureOperationId, deferBoardRepair: true }),
+  });
+  return { running, reachedCheck, release };
+}
+
+for (const restart of [false, true]) {
+  test(`a switch to a third account keeps the held delivery through the migration tick${restart ? ", a registry reload" : ""} and the reaper, until the migration it creates adopts it`, async () => {
+    const fixture = await pendingSwitch();
+    const { id } = fixture;
+    const held = delivery(fixture, fixture.deliveries.held!.id);
+    const toC = switchToCStoppedBeforeItsMigration(fixture);
+    await toC.reachedCheck;
+    /* The gap: B's migration is rolled back and C has none yet. */
+    expect(fixture.registry.conversation(id)!.migration).toMatchObject({ phase: "rolled-back", targetId: "account-b" });
+    expect(fixture.registry.conversation(id)!.reconfigure).toMatchObject({ operationId: "reconfigure-to-c", status: "applying", keepsHeldFrom: held.fencedBy });
+
+    const during = restart ? new AgentRegistry(fixture.registryFile) : fixture.registry;
+    /* A withdrawal of C now is too late, and B's retired migration is no revision to cancel C by. */
+    const withdrawn = await applyConversationMigration({ conversationId: id, action: "withdraw", operationId: "reconfigure-to-c" }, {
+      registry: () => during,
+      kick: () => {},
+      operationStatus: async () => ({ operationId: "reconfigure-to-c", replayed: false, receipt: { operationId: "reconfigure-to-c", idempotencyKey: "reconfigure-to-c", conversationId: id, kind: "reconfigure", status: "applying", at: "2026-07-21T10:00:40.000Z", revision: 2 } }),
+    } as never);
+    expect(withdrawn).toMatchObject({ status: 409, body: { code: "SWITCH_CLAIMED", expectedRevision: null } });
+    await migrationTickAndReaper(during);
+    await migrationTickAndReaper(during);
+    expect(delivery({ ...fixture, registry: during }, held.id)).toEqual(held);
+
+    toC.release();
+    expect(await toC.running).toBe("pending");
+    const after = fixture.registry.conversation(id)!;
+    expect(after.migration).toMatchObject({ phase: "waiting-turn", targetId: "account-c" });
+    expect(after.reconfigure?.keepsHeldFrom).toBeUndefined();
+    const adopted = delivery(fixture, held.id);
+    expect({ state: adopted.state, text: adopted.text, operationId: adopted.command.operationId, fencedBy: adopted.fencedBy })
+      .toEqual({ state: "held", text: held.text, operationId: held.command.operationId, fencedBy: after.migration!.operationId });
+    expect(failedDeliveries(fixture)).toEqual([]);
+  });
+}
+
+test("a retry that gives the migration a new operation identity keeps the delivery the failed attempt held", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const held = delivery(fixture, fixture.deliveries.held!.id);
+  const failed = registry.conversation(id)!.migration!;
+  /* The attempt failed recoverably, and its intent moved on to a new revision: the retry mints a new operation. */
+  (registry as unknown as MutableRegistry).mutate((file) => {
+    file.conversations[id]!.migration = { ...failed, phase: "failed-recoverable" };
+    file.migrationIntents[failed.intentId]!.revision += 1;
+  });
+  const retried = registry.retryConversationMigration(id).migration!;
+  expect(retried.operationId).not.toBe(failed.operationId);
+  expect(delivery(fixture, held.id)).toMatchObject({ state: "held", text: held.text, fencedBy: retried.operationId });
 });
 
 test("the coordinator does not advance a cancelled switch", async () => {
