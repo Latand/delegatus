@@ -670,8 +670,9 @@ test("desktop: an Arrow key moves the ring to the neighbour card and re-renders 
 test("desktop: a cold deep link from the URL still resolves a beyond-cap conversation", async () => {
   dom.location.hash = `#c=${encodeURIComponent(GAMMA.conversationId)}`;
   const host = await mountViewer("beta");
-  const resolved = await until(() => node(host, GAMMA.path) !== null);
-  record("desktop", "cold URL deep link (beyond cap) → card on board", resolved, `/api/files requests ${requests.filter((url) => url.startsWith("/api/files")).length}`);
+  /* The desktop board is the kanban (#1695): the conversation opens as a reader in its card. */
+  const resolved = await until(() => host.querySelector("[data-kanban-board]") !== null && pane(host, GAMMA.path) !== null);
+  record("desktop", "cold URL deep link (beyond cap) → reader on the board", resolved, `/api/files requests ${requests.filter((url) => url.startsWith("/api/files")).length}`);
   expect(currentRail(host).startsWith("alpha")).toBe(true);
   expect(dom.location.hash).toBe(`#c=${encodeURIComponent(GAMMA.conversationId)}`);
   expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();

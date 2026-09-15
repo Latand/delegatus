@@ -228,10 +228,24 @@ test("desktop: the readiness strip renders inline with no shelf modal, no bar an
   await settle();
 });
 
-test("desktop and mobile global pipeline actions submit the operator draft shape", async () => {
+test("the desktop has no + Pipeline of its own, and the phone's New pipeline submits the operator draft shape", async () => {
   const previousFetch = globalThis.fetch;
   try {
-    for (const surface of ["desktop", "mobile"] as const) {
+    /* Pipelines are created by agents through MCP (#1695); their drafts and stages are edited on the Board. */
+    mobile = false;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const body = String(input).startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const desktop = mount();
+    expect(await waitFor(() => q(desktop, '[data-testid="task-readiness"]') !== null)).toBe(true);
+    expect(desktop.querySelector(`[aria-label="${translate("en", "dash.newPipeline")}"]`)).toBeNull();
+    expect(desktop.querySelector(`[aria-label="${translate("en", "pipelineBuilder.createDraftAria")}"]`)).toBeNull();
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+
+    for (const surface of ["mobile"] as const) {
       mobile = surface === "mobile";
       const posts: Array<Record<string, unknown>> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -253,16 +267,11 @@ test("desktop and mobile global pipeline actions submit the operator draft shape
       }) as typeof fetch;
 
       const host = mount();
-      if (surface === "mobile") {
-        /* ⋯ on the bar, then the «New pipeline» row (mobile v2 lane 1). */
-        flushSync(() => (host.querySelector('[data-mobile2-open="menu"]') as HTMLButtonElement).click());
-        const pipelineItem = host.querySelector('[data-mobile2-menu-row="new-pipeline"]') as HTMLButtonElement;
-        expect(pipelineItem).not.toBeNull();
-        flushSync(() => pipelineItem.click());
-      } else {
-        const pipelineButton = host.querySelector(`[aria-label="${translate("en", "dash.newPipeline")}"]`) as HTMLButtonElement;
-        flushSync(() => pipelineButton.click());
-      }
+      /* ⋯ on the bar, then the «New pipeline» row (mobile v2 lane 1). */
+      flushSync(() => (host.querySelector('[data-mobile2-open="menu"]') as HTMLButtonElement).click());
+      const pipelineItem = host.querySelector('[data-mobile2-menu-row="new-pipeline"]') as HTMLButtonElement;
+      expect(pipelineItem).not.toBeNull();
+      flushSync(() => pipelineItem.click());
 
       expect(await waitFor(() => host.querySelector('[data-pipeline-picker-state="ready"]') !== null)).toBe(true);
       const blank = [...host.querySelectorAll<HTMLButtonElement>("button")]
