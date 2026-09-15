@@ -410,6 +410,15 @@ const evidence = {
   refuseNextPipelinePatch: null as { status: number; error: string } | null,
   /* The next pipeline write finds this stage started: the engine's race. */
   startStageOnNextPatch: null as { pipelineId: string; stageId: string } | null,
+  /* The next pipeline write is carried out and its answer is lost on the way back. */
+  loseNextPipelineAnswer: false,
+  /* Another client acts first: the pipeline now waits on this stage. */
+  moveCursor(pipelineId: string, stageId: string) {
+    const index = pipelines.findIndex((entry) => entry.id === pipelineId);
+    if (index < 0) return;
+    pipelines[index] = { ...pipelines[index]!, cursor: { stageId, state: "running", input: null, activatedBy: null } } as Pipeline;
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
   /* Another client saves a stage's prompt; this page learns it on its next read. */
   writeStagePromptQuietly(pipelineId: string, stageId: string, prompt: string) {
     const record = pipelines.find((entry) => entry.id === pipelineId);
@@ -581,6 +590,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         return json({ error: "unsupported in the evidence fixture" }, 400);
       }
       pipelines[index] = record;
+      if (evidence.loseNextPipelineAnswer) {
+        evidence.loseNextPipelineAnswer = false;
+        throw new TypeError("Failed to fetch");
+      }
       return json({ pipeline: record });
     }
   }

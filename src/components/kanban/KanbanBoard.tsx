@@ -24,22 +24,24 @@ import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orc
 import { cleanTitle } from "@/components/utils";
 
 import { HiddenTray } from "./HiddenTray";
-import { KanbanCard, MoreGlyph, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
+import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
+import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
 import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, type AssignmentPorts } from "./kanbanAssignments";
-import { allCards, cardAnchors, cardOnScreen, conversationOwners, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
+import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
-import { stageDraftable, stageNames } from "./PipelineSection";
+import { stageNames } from "./PipelineSection";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
 import { StagesSheet, type SheetPane } from "./StagesSheet";
-import { currentStageId, pipelineActionOptions, shownAttempt, stageNotStarted, type PipelineActionKind, type PipelineActionOption } from "./stagesModel";
+import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
+import { usePipelineActions } from "./usePipelineActions";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
@@ -153,10 +155,6 @@ function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
   }
 }
 
-function cssEscape(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
-}
-
 /** Whether search leaves this card on the board. */
 function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
   return model.columns[card.status].shown.some((shown) => shown.id === card.id) || model.unlinkedShown.some((shown) => shown.id === card.id);
@@ -252,7 +250,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const pipelinePorts = props.pipelinePorts ?? browserPipelinePorts;
   const [stageDrafts] = useState(() => new StageDrafts());
   const draftsVersion = useSyncExternalStore(stageDrafts.subscribe, stageDrafts.version, stageDrafts.version);
-  const [acting, setActing] = useState<ReadonlyMap<string, PipelineActionKind>>(() => new Map());
   const [stagePanels, setStagePanels] = useState<ReadonlyMap<string, StagePanel>>(() => new Map());
   const [sheet, setSheet] = useState<SheetTarget | null>(null);
   /* Pane folds and attempt choices outlive one opening of the sheet, as the prototype's do. */
@@ -1005,7 +1002,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         label,
         why: busy ? t("kanban.pipelineAct.busy", { action: t(`kanban.pipelineAct.pending.${busy}`) }) : refusalWhy(option) ?? why,
         disabled: Boolean(busy) || option.refusal !== null,
-        onSelect: () => runPipelineAction.current(pipeline.id, title, option, stageName),
+        onSelect: () => startPipelineAction({ pipelineId: pipeline.id, title, action: option.action, stageId: option.stageId, stageName }),
       };
     };
     const retry = options.get("retry-stage")!;
@@ -1247,6 +1244,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [move]);
 
   /* ── Keys: undo, find ────────────────────────────────────────────────── */
+  /* The Stages sheet stands over the board: while it is open, no key the
+     board answers reaches behind it. */
+  const sheetOpen = useRef(false);
+  sheetOpen.current = sheet !== null;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1256,12 +1257,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (event.key === "/") {
         /* Outside the board `/` stays the Viewer's global search. Inside it,
            it finds a task, and the Viewer's window listener must not open
-           the search palette over the field it just focused. */
+           the search palette over the field it just focused. Under the open
+           sheet it does neither. */
         if (!inBoard) return;
         event.preventDefault();
         event.stopPropagation();
-        rootRef.current?.querySelector<HTMLInputElement>("[data-kanban-search]")?.focus();
+        if (!sheetOpen.current) rootRef.current?.querySelector<HTMLInputElement>("[data-kanban-search]")?.focus();
       } else if (event.key === "u" || event.key === "U") {
+        if (sheetOpen.current) return;
         if (!inBoard && target !== document.body) return;
         const undo = latestUndo.current;
         if (!undo || !receiptsRef.current.some((receipt) => receipt.id === undo.receiptId)) return;
@@ -1388,6 +1391,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const panel = stagePanels.get(key);
     if (panel) menu.setOpen({ anchor, value: { kind: "stage", cardId: panel.cardId, pipelineId: panel.pipelineId, stageId: panel.stageId, from: "panel" } });
   }, [stagePanels, menu]);
+  /* A draft the stage's record makes moot goes, wherever it was open: the
+     stage started with its words, or its words were never changed. */
+  useEffect(() => {
+    const byId = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
+    for (const [key, draft] of stageDrafts.entries()) {
+      const pipeline = byId.get(draft.pipelineId);
+      if (pipeline) stageDrafts.settleFromStage(key, pipeline);
+    }
+  }, [pipelines, draftsVersion, stageDrafts]);
   /* When a waiting stage starts, its panel becomes that conversation's reader,
      folded as the panel was. A draft the start overtook keeps the panel, which
      says the draft was not delivered, until the operator lets it go. A panel
@@ -1403,7 +1415,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         next = withEntry(next, key, undefined);
         continue;
       }
-      if (stageNotStarted(summary.pipeline, stage.id) || stageDrafts.get(stageDraftKey(panel.pipelineId, panel.stageId))) continue;
+      const draft = stageDrafts.get(stageDraftKey(panel.pipelineId, panel.stageId));
+      if (stageNotStarted(summary.pipeline, stage.id) || (draft && draftOutcome(summary.pipeline, stage.id, draft) !== "included")) continue;
       const attempt = latestAttempt(summary.pipeline, stage.id);
       const file = attempt ? (attempt.agentPath ? filesByPath.get(attempt.agentPath) : undefined) ?? (attempt.conversationId ? filesByConversation.get(attempt.conversationId) : undefined) : undefined;
       /* The attempt's conversation is not on the board yet: the panel waits for it. */
@@ -1446,7 +1459,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
           const root = rootRef.current;
           const card = root?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`);
           const button = card?.querySelector<HTMLElement>(`[data-open-stages="${cssEscape(pipelineId)}"]`);
-          const back = opener?.isConnected && opener !== document.body && root?.contains(opener) ? opener : button ?? card;
+          const back = opener?.isConnected && opener !== document.body && root?.contains(opener)
+            ? opener
+            : button ?? card ?? root?.querySelector<HTMLElement>(".board-frame");
           back?.focus({ preventScroll: true });
         });
       }
@@ -1455,8 +1470,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, []);
   /* A pipeline no card holds any more takes its sheet with it. */
   useEffect(() => {
-    if (sheet && !sheetSummary) setSheet(null);
-  }, [sheet, sheetSummary]);
+    if (sheet && !sheetSummary) closeSheet();
+  }, [sheet, sheetSummary, closeSheet]);
   const foldPanes = useCallback((pipelineId: string, stageIds: readonly string[], folded: boolean) => {
     setPaneFolds((current) => {
       const next = new Set(current);
@@ -1468,32 +1483,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, []);
 
-  /* ── Pipeline actions over the pipeline route ─────────────────────────── */
-  /* One action per pipeline at a time; its receipt says what the server did,
-     and a refusal keeps its words beside a Retry. */
-  const actingRef = useRef(acting);
-  actingRef.current = acting;
-  const runPipelineAction = useRef<(pipelineId: string, title: string, option: PipelineActionOption, stageName: string | null) => void>(() => {});
-  runPipelineAction.current = (pipelineId, title, option, stageName) => {
-    if (actingRef.current.has(pipelineId)) return;
-    const { action } = option;
-    setActing((current) => withEntry(current, pipelineId, action));
-    /* The engine acts on the stage the pipeline waits on; a stage id on
-       retry-stage would ask for a launch-receipt retry instead. */
-    void pipelinePorts.patch(pipelineId, { action }).then((result) => {
-      setActing((current) => withEntry(current, pipelineId, undefined));
-      const values = { title, stage: stageName ?? "" };
-      if (result.ok) {
-        show(t(`kanban.pipelineAct.done.${action}`, values));
-        return;
-      }
-      show(
-        t("kanban.pipelineAct.failed", { action: t(`kanban.pipelineAct.label.${action}`, values), error: result.error }),
-        { label: t("kanban.retry"), run: () => runPipelineAction.current(pipelineId, title, option, stageName) },
-        { error: true },
-      );
-    });
-  };
+  /* ── Pipeline actions over the pipeline route (`usePipelineActions`) ──── */
+  const { acting, start: startPipelineAction } = usePipelineActions(pipelinePorts, show, t);
   const actingByCard = useMemo(() => {
     const byCard = new Map<string, string>();
     if (!acting.size) return byCard;

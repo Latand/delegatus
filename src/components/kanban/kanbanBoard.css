@@ -773,6 +773,16 @@
 .kb .bstatus.waiting { color: var(--color-warning); }
 .kb .bstatus.ended { color: var(--color-muted); }
 .kb .draft-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); text-align: center; }
+.kb .bstatus.starting { color: var(--color-accent); }
+.kb .bstatus.started, .kb .bstatus.ended { color: var(--color-muted); }
+.kb .draft-added { align-self: flex-end; max-width: 75%; font-size: var(--text-label); color: var(--color-muted); margin-top: -4px; }
+.kb .draft-added summary { list-style: none; display: flex; align-items: center; gap: 4px; cursor: pointer; border-radius: 4px; padding: 1px 4px; min-height: 22px; text-align: left; }
+.kb .draft-added summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .draft-added summary::-webkit-details-marker { display: none; }
+.kb .draft-added summary:hover { background: var(--surface-well); color: var(--color-secondary); }
+.kb .draft-added summary .chev { width: 12px; height: 12px; flex-shrink: 0; transition: transform var(--motion-fast); }
+.kb .draft-added[open] summary .chev { transform: rotate(90deg); }
+.kb .draft-added .added-text { margin: 4px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-caption) / 1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: var(--radius-control); }
 .kb .draft-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--text-label); padding: 6px 8px; margin-top: 6px; border-radius: var(--radius-control); white-space: normal; text-align: left; }
 .kb .draft-notice.info { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .draft-notice.error { background: var(--color-danger-soft); color: var(--color-danger); }
@@ -813,7 +823,7 @@
 @media (pointer: coarse) {
   .kb .navchip { height: 44px; }
   .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .btn.expand-stages, .kb .pane-strip { min-height: 44px; }
-  .kb .msg.user.draft .bedit, .kb .draft-acts .btn, .kb .draft-notice button { min-height: 44px; min-width: 44px; }
+  .kb .msg.user.draft .bedit, .kb .draft-acts .btn, .kb .draft-notice button, .kb .draft-added summary { min-height: 44px; min-width: 44px; }
   .kb .msg.user.draft .bubble { padding-right: 80px; }
 }
 @media (prefers-reduced-motion: reduce) {

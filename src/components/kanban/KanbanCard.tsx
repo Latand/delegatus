@@ -12,6 +12,7 @@ import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit } from "./CardInlineText";
+import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
 import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
@@ -26,19 +27,7 @@ import type { PipelineActionKind } from "./stagesModel";
    activity line, the compact pipeline summary, conversation tiles, and the
    footer whose status pill is the one place status changes. */
 
-const svgProps = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
-export const ChevronDown = () => <svg {...svgProps} className="chev"><path d="m6 9 6 6 6-6" /></svg>;
-export const ChevronRight = () => <svg {...svgProps} className="chev"><path d="m9 6 6 6-6 6" /></svg>;
-export const MoreGlyph = () => (
-  <svg {...svgProps}>
-    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-  </svg>
-);
-
-export const CloseGlyph = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
-export const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
 /** The hue each colour name is drawn with; the name is what the board says. */
 export const TASK_COLOR_HEX: Record<TaskColor, string> = {

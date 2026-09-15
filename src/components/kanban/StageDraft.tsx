@@ -4,12 +4,14 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import { stagePromptExtra, stageReceivesPrevOutput } from "@/components/pipelines/pipelineModel";
+import { renderStagePrompt } from "@/lib/pipelines/prompts";
+import { buildStagePrompt, stagePromptExtra, stageReceivesPrevOutput } from "@/components/pipelines/pipelineModel";
 
+import { BranchGlyph, ChevronRight, CloseGlyph, CollapseGlyph, ExpandGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { graphOrder } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { stageDraftKey, type StageDraft, type StageDrafts } from "./stageDrafts";
-import { draftFacts, stageNotStarted } from "./stagesModel";
+import { draftFacts, draftOutcome, neverLaunched, pipelineEnded, stageDraftable, stageNotStarted, stageWiringIndex } from "./stagesModel";
 
 /*
  * A stage that has not started, drawn as the conversation it will become
@@ -19,23 +21,10 @@ import { draftFacts, stageNotStarted } from "./stagesModel";
  * a composer that opens when the stage starts.
  */
 
-const svgProps = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
 const PencilGlyph = () => <svg {...svgProps}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
 const ClockGlyph = () => <svg {...svgProps}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
 const SendGlyph = () => <svg {...svgProps}><path d="m5 12 14-7-5 14-2.5-5.5z" /></svg>;
-const CollapseGlyph = () => <svg {...svgProps}><path d="m17 11-5-5-5 5" /><path d="m17 18-5-5-5 5" /></svg>;
-const ExpandGlyph = () => <svg {...svgProps}><path d="m7 6 5 5 5-5" /><path d="m7 13 5 5 5-5" /></svg>;
-const CloseGlyph = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
-const MoreGlyph = () => (
-  <svg {...svgProps}>
-    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-  </svg>
-);
-const BranchGlyph = () => <svg {...svgProps}><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 4-6 3-10 7" /></svg>;
 
-const ENDED = new Set(["completed", "closed"]);
 
 export function useStageDraft(drafts: StageDrafts, key: string): StageDraft | null {
   return useSyncExternalStore(drafts.subscribe, () => drafts.get(key), () => null);
@@ -60,12 +49,13 @@ export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
     facts.then ? t("kanban.draft.then", { stage: nameOf(facts.then) }) : t("kanban.draft.last"),
     facts.onFail ? t("kanban.draft.onFail", { stage: nameOf(facts.onFail.to), max: facts.onFail.max }) : null,
   ].filter(Boolean).join(" · ");
-  const ended = ENDED.has(pipeline.state);
+  const ended = pipelineEnded(pipeline);
   return (
     <>
       <div className="feed draft-feed" role="log" aria-label={t("kanban.draft.feedAria", { stage: name })}>
         <div className="msg event"><i className="edot" aria-hidden="true" /><span>{when}</span></div>
         <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} />
+        <AddedAtStart pipeline={pipeline} stage={stage} />
         <p className="draft-note">
           {ended
             ? t("kanban.draft.noteEnded")
@@ -96,8 +86,15 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
   const draft = useStageDraft(drafts, key);
   const stored = stagePromptExtra(stage.prompt);
   const saved = drafts.saved(key);
-  const ended = ENDED.has(pipeline.state);
-  const editable = !ended && stageNotStarted(pipeline, stage.id);
+  const ended = pipelineEnded(pipeline);
+  const editable = stageDraftable(pipeline, stage.id);
+  const attempts = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts ?? [];
+  /* What the status line may claim: nothing is delivered before the stage
+     starts, and once it has an attempt only its transcript would show the
+     first message arrived. */
+  const status = !attempts.length
+    ? ended ? "ended" : "waiting"
+    : ended && attempts.every(neverLaunched) ? "ended" : ended ? "started" : "starting";
   const field = useRef<HTMLTextAreaElement>(null);
   const edit = useRef<HTMLButtonElement>(null);
   const editing = Boolean(draft);
@@ -126,7 +123,8 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
   }, [draft?.text]);
 
   const saving = draft?.phase === "saving";
-  const canSave = Boolean(draft) && !saving && draft!.text.trim() !== "" && draft!.text.trim() !== draft!.base.trim();
+  /* Empty words are a real edit (the stage keeps only its wiring), so only an unchanged draft has nothing to save. */
+  const canSave = Boolean(draft) && !saving && stagePromptExtra(draft!.text) !== stagePromptExtra(draft!.base);
   const save = (keepMine = false) => {
     hadFocus.current = true;
     void drafts.save(key, ports, { keepMine });
@@ -140,8 +138,8 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
   return (
     <div className={`msg user draft${editing ? " editing" : ""}`} data-draft-message={key}>
       <div className="bubble">
-        {draft?.phase === "started" ? (
-          <UndeliveredDraft draft={draft} draftKey={key} name={name} drafts={drafts} onOpenConversation={null} />
+        {draft?.phase === "started" || draft?.phase === "ended" ? (
+          <DraftLeftover kind={draft.phase === "ended" ? "ended" : "undelivered"} draft={draft} draftKey={key} name={name} drafts={drafts} onOpenConversation={null} />
         ) : draft ? (
           <>
             <textarea
@@ -169,6 +167,12 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
                 <span className="msg-text">{t("kanban.draft.changed", { theirs: draft.theirs ?? "" })}</span>
                 <button type="button" onClick={cancel}>{t("kanban.useTheirs")}</button>
                 <button type="button" onClick={() => save(true)}>{t("kanban.keepMine")}</button>
+              </div>
+            ) : null}
+            {draft.phase === "unconfirmed" ? (
+              <div className="draft-notice warn" role="status" data-draft-unconfirmed="">
+                <span className="msg-text">{t("kanban.draft.unconfirmed")}</span>
+                <button type="button" onClick={() => void drafts.check(key, ports)}>{t("kanban.pipelineAct.checkAgain")}</button>
               </div>
             ) : null}
             {draft.phase === "failed" ? (
@@ -205,10 +209,10 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
           </>
         )}
       </div>
-      <span className={`bstatus ${ended ? "ended" : "waiting"}`} role="status">
+      <span className={`bstatus ${status}`} role="status" data-draft-status={status}>
         <ClockGlyph />
         <span>
-          {ended ? t("kanban.draft.statusEnded") : t("kanban.draft.status")}
+          {t(status === "ended" ? "kanban.draft.statusEnded" : status === "starting" ? "kanban.draft.statusStarting" : status === "started" ? "kanban.draft.stateStarted" : "kanban.draft.status")}
           {saved ? t("kanban.draft.edited", { time: clockTime(saved) }) : ""}
         </span>
       </span>
@@ -217,10 +221,44 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
 }
 
 /**
- * A draft whose stage started before it was saved: the stage runs on the
- * words it held, and this says so beside the text, which stays copyable.
+ * What the controller puts around the first message when the stage starts
+ * (binding correction 2, plan §6.7): one folded line naming the parts, which
+ * unfolds to them as `renderStagePrompt` writes them today, with the previous
+ * stage's output not produced yet.
  */
-export function UndeliveredDraft({ draft, draftKey, name, drafts, onOpenConversation }: {
+export function AddedAtStart({ pipeline, stage }: { pipeline: Pipeline; stage: PipelineStage }) {
+  const { t } = useLocale();
+  const index = stageWiringIndex(pipeline, stage.id);
+  const wiring = buildStagePrompt(stage.prompt, "", index);
+  const relayed = index > 0 || stageReceivesPrevOutput(wiring);
+  const role = stage.effectiveRole;
+  const parts = [
+    relayed ? t("kanban.draft.added.prev") : null,
+    t("kanban.draft.added.task"),
+    t("kanban.draft.added.spec"),
+    role.promptScaffold ? t("kanban.draft.added.scaffold") : role.roleId ? t("kanban.draft.added.preset") : null,
+    t("kanban.draft.added.access"),
+    t("kanban.draft.added.verdict"),
+  ].filter(Boolean).join(" · ");
+  const text = renderStagePrompt(pipeline, { ...stage, prompt: wiring }, role, relayed ? t("kanban.draft.added.notYet") : "");
+  return (
+    <details className="draft-added" data-draft-added={`${pipeline.id}:${stage.id}`}>
+      <summary title={t("kanban.draft.added.head", { parts })}>
+        <ChevronRight />
+        <span>{t("kanban.draft.added.head", { parts })}</span>
+      </summary>
+      <pre className="added-text">{text}</pre>
+    </details>
+  );
+}
+
+/**
+ * A draft its stage can no longer take, beside its words, which stay
+ * copyable: the stage started with other words, or the pipeline ended before
+ * the stage ever started.
+ */
+export function DraftLeftover({ kind, draft, draftKey, name, drafts, onOpenConversation }: {
+  kind: "undelivered" | "ended";
   draft: StageDraft;
   draftKey: string;
   name: string;
@@ -229,8 +267,8 @@ export function UndeliveredDraft({ draft, draftKey, name, drafts, onOpenConversa
 }) {
   const { t } = useLocale();
   return (
-    <div className="draft-notice warn undelivered" role="alert" data-draft-undelivered={draftKey}>
-      <span className="msg-text">{t("kanban.draft.undelivered", { stage: name })}</span>
+    <div className={`draft-notice warn ${kind}`} role="alert" {...(kind === "ended" ? { "data-draft-ended": draftKey } : { "data-draft-undelivered": draftKey })}>
+      <span className="msg-text">{t(kind === "ended" ? "kanban.draft.endedBeforeStart" : "kanban.draft.undelivered", { stage: name })}</span>
       <blockquote className="kept">{draft.text}</blockquote>
       <span className="acts">
         <button
@@ -241,7 +279,7 @@ export function UndeliveredDraft({ draft, draftKey, name, drafts, onOpenConversa
         >
           {t("kanban.draft.copy")}
         </button>
-        {onOpenConversation ? <button type="button" onClick={onOpenConversation}>{t("kanban.past.open")}</button> : null}
+        {onOpenConversation && kind === "undelivered" ? <button type="button" onClick={onOpenConversation}>{t("kanban.past.open")}</button> : null}
         <button type="button" onClick={() => drafts.drop(draftKey)}>{t("kanban.discard")}</button>
       </span>
     </div>
@@ -274,13 +312,14 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(drafts, draftKey);
   const started = !stageNotStarted(pipeline, stage.id);
+  const outcome = draft && draft.phase !== "saving" ? draftOutcome(pipeline, stage.id, draft) : null;
   const order = graphOrder(pipeline);
   const k = order.findIndex((entry) => entry.id === stage.id) + 1;
   const roleId = stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
   const engine = stage.effectiveRole.engine;
   const title = `${name} · ${cardTitle}`;
   const stored = stagePromptExtra(stage.prompt);
-  const stateWord = ENDED.has(pipeline.state) ? t("kanban.draft.stateEnded") : started ? t("kanban.draft.stateStarted") : t("kanban.draft.state");
+  const stateWord = pipelineEnded(pipeline) ? t("kanban.draft.stateEnded") : started ? t("kanban.draft.stateStarted") : t("kanban.draft.state");
   return (
     <section
       className={`stage-detail reader conv draft role-${roleId}${folded ? " folded" : ""}`}
@@ -332,8 +371,8 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
         <button type="button" className="rlatest" onClick={() => onFold(false)}>
           {t("kanban.draft.foldedLine", { words: stored || t("kanban.draft.onlyWiring") })}
         </button>
-      ) : started && draft && draft.phase !== "saving" ? (
-        <UndeliveredDraft draft={draft} draftKey={draftKey} name={name} drafts={drafts} onOpenConversation={onOpenConversation} />
+      ) : draft && (outcome === "undelivered" || outcome === "ended-before-start") ? (
+        <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={drafts} onOpenConversation={onOpenConversation} />
       ) : (
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={drafts} ports={ports} />
       )}

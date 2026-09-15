@@ -27,11 +27,16 @@ import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
  *     stage's wiring token with the words; a stage that starts during the save
  *     keeps the words, marked not delivered, and becomes the reader when let
  *     go; words saved elsewhere stop the save until Keep mine;
+ *   - one folded "Added when it starts" line under each waiting stage's first
+ *     message, in the card panel and every waiting pane, unfolding to what
+ *     `renderStagePrompt` adds (binding correction 2);
  *   - Pause and Resume over the pipeline route with the pending chip, the
- *     receipt, and a refusal with Retry;
+ *     receipt, and a refusal with Retry; a lost answer reported as not
+ *     confirmed with a Check again that only reads; a refused skip whose
+ *     Retry finds the pipeline waiting on another stage and sends nothing;
  *   - the reader open on a card is the same mounted conversation in its pane
- *     and back, composer text included; Escape returns focus to Stages;
- *     arrow keys step the lane.
+ *     and back, composer text included; the board's "/" stays behind the
+ *     open sheet; Escape returns focus to Stages; arrow keys step the lane.
  *
  * Measurements go to `evidence/issue-1695/k5b.json`; frames to
  * `.artifacts/issue-1695/`, which is not committed.
@@ -54,7 +59,7 @@ interface SheetMeasure {
   graphNodes: number;
   lanePos: string;
   focusedPane: string | null;
-  panes: Array<{ stage: string; width: number; folded: boolean; attempts: string[]; draft: boolean; status: string | null; composerDisabled: boolean | null; reader: boolean }>;
+  panes: Array<{ stage: string; width: number; folded: boolean; attempts: string[]; draft: boolean; status: string | null; composerDisabled: boolean | null; reader: boolean; added: string | null }>;
 }
 
 /** The sheet, read the same way from either page. */
@@ -80,6 +85,7 @@ const measureSheet = (page: Page) => page.evaluate((): SheetMeasure | null => {
       status: pane.querySelector(".bstatus") ? text(pane.querySelector(".bstatus")) : null,
       composerDisabled: pane.querySelector<HTMLTextAreaElement>(".pane-conv.draft textarea") ? Boolean(pane.querySelector<HTMLTextAreaElement>(".pane-conv.draft textarea")?.disabled) : null,
       reader: Boolean(pane.querySelector("[data-kanban-reader], .feed")),
+      added: pane.querySelector("[data-draft-added] summary") ? text(pane.querySelector("[data-draft-added] summary")) : null,
     })),
   };
 });
@@ -96,6 +102,7 @@ const measureDetail = (page: Page, selector: string) => page.evaluate((root) => 
     event: text(panel.querySelector(".msg.event")),
     engine: text(panel.querySelector(".ch-engine")),
     composerDisabled: Boolean(panel.querySelector<HTMLTextAreaElement>(".composer2 textarea")?.disabled),
+    added: panel.querySelector("[data-draft-added] summary") ? text(panel.querySelector("[data-draft-added] summary")) : null,
     width: Math.round(panel.getBoundingClientRect().width),
   };
 }, selector);
@@ -107,6 +114,8 @@ type Hook = { evidence: {
   refuseNextPipelinePatch: { status: number; error: string } | null;
   startStageOnNextPatch: { pipelineId: string; stageId: string } | null;
   writeStagePromptQuietly: (pipelineId: string, stageId: string, prompt: string) => void;
+  loseNextPipelineAnswer: boolean;
+  moveCursor: (pipelineId: string, stageId: string) => void;
 } };
 
 async function boardReady(page: Page) {
@@ -179,6 +188,7 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
         const waiting = sheet.panes.filter((pane) => pane.draft);
         if (waiting.map((pane) => pane.stage).join() !== "review-ui,verify,docs,merge") failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
         if (waiting.some((pane) => pane.status !== "Waiting for stage start · not delivered" || pane.composerDisabled !== true)) failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
+        if (waiting.some((pane) => !pane.added?.startsWith("Added when it starts: previous stage output · pinned task · spec · "))) failures.push(`stages ${scheme}: added-at-start lines ${JSON.stringify(waiting.map((pane) => pane.added))}`);
         if (sheet.panes.filter((pane) => !pane.draft).some((pane) => !pane.reader)) failures.push(`stages ${scheme}: a started pane holds no conversation ${JSON.stringify(sheet.panes)}`);
         if (sheet.focusedPane !== "build-ui") failures.push(`stages ${scheme}: focus on ${sheet.focusedPane}`);
         if (!sheet.progress.startsWith("8 stages · ")) failures.push(`stages ${scheme}: progress ${sheet.progress}`);
@@ -224,6 +234,18 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
       frames["stage-details"] = { production: detail };
       if (detail?.bubble !== "Check both anchors against the published notes before approving." || detail.status !== "Waiting for stage start · not delivered" || !detail.edit || !detail.composerDisabled) failures.push(`stage details: ${JSON.stringify(detail)}`);
       if (detail?.event !== "Starts when Builder passes · last stage") failures.push(`stage details event: ${detail?.event}`);
+      if (detail?.added !== "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract") failures.push(`stage details added line: ${detail?.added}`);
+      await page.click(`${panel} [data-draft-added] summary`);
+      await page.waitForTimeout(250);
+      const added = await page.evaluate((selector) => {
+        const details = document.querySelector<HTMLDetailsElement>(`${selector} [data-draft-added]`);
+        const pre = details?.querySelector<HTMLElement>(".added-text");
+        return { open: details?.open ?? false, text: pre?.textContent ?? "", height: Math.round(pre?.getBoundingClientRect().height ?? 0) };
+      }, panel);
+      await shot(page, "production", "stage-details-added", "light");
+      flows.addedAtStart = { summary: detail?.added, open: added.open, height: added.height, head: added.text.split("\n").slice(0, 3) };
+      if (!added.open || !added.text.startsWith("[previous stage output: not produced yet]\n\nPinned task:\nRepair old links in the release notes") || !added.text.includes("Finish the completed turn with one fenced JSON object")) failures.push(`added at start: ${JSON.stringify(added).slice(0, 400)}`);
+      await page.click(`${panel} [data-draft-added] summary`);
 
       await page.click(`${panel} [data-draft-edit]`);
       await page.waitForSelector(`${panel} textarea.draft-edit`);
@@ -324,11 +346,50 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
       await shot(page, "production", "pipeline-refused", "light");
       await page.click("[data-kanban-receipt].error .act");
       await page.waitForSelector(`${section} .pstate-chip[data-pstate="running"]`, { timeout: 5_000 });
+      /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
+      await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
+      await page.click(`${section} [data-pipeline-menu]`);
+      await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt].error .msg")].some((node) => node.textContent?.includes("is not confirmed")), undefined, { timeout: 5_000 });
+      await page.waitForTimeout(350);
+      const unknown = await page.evaluate(() => {
+        const receipt = [...document.querySelectorAll("[data-kanban-receipt].error")].find((node) => node.querySelector(".msg")?.textContent?.includes("is not confirmed"));
+        return { text: receipt?.querySelector(".msg")?.textContent ?? null, action: receipt?.querySelector(".act")?.textContent ?? null };
+      });
+      await shot(page, "production", "pipeline-unconfirmed", "light");
+      const readsBefore = await page.evaluate(() => (window as unknown as Hook).evidence.pipelineReads.length);
+      await page.locator("[data-kanban-receipt].error", { hasText: "is not confirmed" }).locator(".act").click();
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].some((node) => node.textContent === "«Redesign attachment upload for large files» is paused now"), undefined, { timeout: 5_000 });
+      const readsAfter = await page.evaluate(() => (window as unknown as Hook).evidence.pipelineReads.length);
       const sent = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.map((patch) => patch.body));
-      flows.pipelineActions = { pending, pausedReceipt, refused, sent };
+      flows.pipelineActions = { pending, pausedReceipt, refused, unknown, checkReads: readsAfter - readsBefore, sent };
+      if (unknown.text !== "Pause for «Redesign attachment upload for large files» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again." || unknown.action !== "Check again") failures.push(`lost answer: ${JSON.stringify(unknown)}`);
+      if (readsAfter - readsBefore !== 1) failures.push(`check again read ${readsAfter - readsBefore} times`);
       if (pending !== "Pausing…" || pausedReceipt !== "Paused «Redesign attachment upload for large files»") failures.push(`pause: ${JSON.stringify({ pending, pausedReceipt })}`);
       if (refused !== "Resume was refused: the runtime host did not answer") failures.push(`refused resume: ${refused}`);
-      if (JSON.stringify(sent) !== JSON.stringify([{ action: "pause" }, { action: "resume" }, { action: "resume" }])) failures.push(`pipeline writes: ${JSON.stringify(sent)}`);
+      if (JSON.stringify(sent) !== JSON.stringify([{ action: "pause" }, { action: "resume" }, { action: "resume" }, { action: "pause" }])) failures.push(`pipeline writes: ${JSON.stringify(sent)}`);
+    });
+
+    await production("light", "moved cursor", async (page) => {
+      const section = `${card("t-links")} .stage-section`;
+      await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
+      await page.click(`${section} [data-pipeline-menu]`);
+      await page.locator('.menu [role="menuitem"]', { hasText: "Skip Builder" }).first().click();
+      await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
+      const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
+      await page.evaluate(() => (window as unknown as Hook).evidence.moveCursor("p-links", "review"));
+      await page.click("[data-kanban-receipt].error .act");
+      await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].some((node) => node.textContent?.includes("was not sent")), undefined, { timeout: 5_000 });
+      await page.waitForTimeout(350);
+      const notSent = await page.locator("[data-kanban-receipt] .msg", { hasText: "was not sent" }).textContent();
+      await shot(page, "production", "pipeline-moved-cursor", "light");
+      const writes = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.map((patch) => patch.body));
+      const reads = await page.evaluate(() => (window as unknown as Hook).evidence.pipelineReads.length);
+      flows.movedCursor = { refused, notSent, writes, reads };
+      if (refused !== "Skip Builder was refused: the stage worktree has uncommitted changes") failures.push(`moved cursor, refusal: ${refused}`);
+      if (notSent !== "Skip Builder was not sent: the pipeline now waits on Reviewer.") failures.push(`moved cursor, retry: ${notSent}`);
+      if (JSON.stringify(writes) !== JSON.stringify([{ action: "skip-stage" }]) || reads !== 2) failures.push(`moved cursor, requests: ${JSON.stringify({ writes, reads })}`);
     });
 
     await production("light", "persistent reader and keys", async (page) => {
@@ -356,6 +417,12 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
         focused: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null,
         current: document.querySelector<HTMLElement>('.gsheet [data-nav-stage][aria-current="true"]')?.dataset.navStage ?? null,
       }));
+      await page.keyboard.press("/");
+      await page.waitForTimeout(200);
+      const slash = await page.evaluate(() => ({
+        search: document.activeElement?.hasAttribute("data-kanban-search") ?? false,
+        open: Boolean(document.querySelector(".gsheet")),
+      }));
       await page.keyboard.press("Escape");
       await page.waitForSelector(".gsheet", { state: "detached", timeout: 5_000 });
       await page.waitForTimeout(200);
@@ -367,7 +434,8 @@ browserTest("#1695 K5b: the Stages sheet, waiting stages' first messages and pip
           focus: document.activeElement?.hasAttribute("data-open-stages") ?? false,
         };
       }, { selector: reader, cardSelector: card("t-upload") });
-      flows.persistentReader = { inPane, stepped, back };
+      flows.persistentReader = { inPane, stepped, slash, back };
+      if (slash.search || !slash.open) failures.push(`slash under the sheet: ${JSON.stringify(slash)}`);
       if (inPane.probe !== 1695 || inPane.draft !== "Keep this draft while the stages open." || inPane.inCard) failures.push(`reader in pane: ${JSON.stringify(inPane)}`);
       if (stepped.focused !== "review-ui" || stepped.current !== "review-ui") failures.push(`arrow key: ${JSON.stringify(stepped)}`);
       if (back.probe !== 1695 || back.draft !== "Keep this draft while the stages open." || !back.focus) failures.push(`reader back on card: ${JSON.stringify(back)}`);

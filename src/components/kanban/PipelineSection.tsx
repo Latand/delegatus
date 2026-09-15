@@ -9,28 +9,19 @@ import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
 import { attemptArrivals, edgeFired, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
-import { stageNotStarted, type PipelineActionKind } from "./stagesModel";
+import { ChevronRight, MaximizeGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { stageDraftable, type PipelineActionKind } from "./stagesModel";
 
 /* A card's pipeline, as the approved prototype draws it (`renderPipeline`,
    `graph.js`, `pastAttempts`): a header with the pipeline's state and where it
    is, then either the stage graph or its one-line summary, and below the
    card's current work a quiet disclosure of what came before. */
 
-export const svgProps = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
 export const GraphGlyph = () => (
   <svg {...svgProps}><rect x="3" y="4" width="6" height="5" rx="1.5" /><rect x="15" y="4" width="6" height="5" rx="1.5" /><rect x="9" y="15" width="6" height="5" rx="1.5" /><path d="M9 6.5h6M18 9v2.5a2 2 0 0 1-2 2h-1.5M6 9v2.5a2 2 0 0 0 2 2h1.5" /></svg>
 );
 const ListGlyph = () => (
   <svg {...svgProps}><path d="M8 6h13M8 12h13M8 18h13" /><circle cx="3.5" cy="6" r="1" fill="currentColor" /><circle cx="3.5" cy="12" r="1" fill="currentColor" /><circle cx="3.5" cy="18" r="1" fill="currentColor" /></svg>
-);
-const ChevronRight = () => <svg {...svgProps} className="chev"><path d="m9 6 6 6-6 6" /></svg>;
-export const MaximizeGlyph = () => <svg {...svgProps}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>;
-export const MoreGlyph = () => (
-  <svg {...svgProps}>
-    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
-  </svg>
 );
 
 /* The role glyphs of the prototype; a role it has no glyph for draws the builder's. */
@@ -75,13 +66,6 @@ export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: 
 }
 
 export const graphStateWord = (t: TFunction, state: StageChipState) => t(`kanban.graphState.${state}`);
-
-const ENDED = new Set(["completed", "closed"]);
-
-/** A stage whose first message can still be opened and edited: no attempt yet, on a pipeline still going. */
-export function stageDraftable(pipeline: Pipeline, stageId: string): boolean {
-  return !ENDED.has(pipeline.state) && stageNotStarted(pipeline, stageId);
-}
 
 export function stageRoleId(stage: PipelineStage): string {
   return stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");

@@ -11,9 +11,16 @@ import { applyPipelineSnapshot } from "@/hooks/useFiles";
  * (a stage that already started) is told apart from any other failure.
  */
 
+/**
+ * A write's answer. A refusal the route explained is a known outcome. With no
+ * answer at all (the request failed on its way, status 0) or an answer that
+ * carries neither the pipeline nor the route's error, the write may or may not
+ * have happened: `unknown`, which nothing may treat as a refusal or resend
+ * blindly.
+ */
 export type PipelineWriteResult =
   | { ok: true; pipeline: Pipeline }
-  | { ok: false; status: number; error: string; code?: string };
+  | { ok: false; status: number; error: string; code?: string; unknown?: true };
 
 export interface PipelinePorts {
   /** The stored record, or null when it cannot be read. */
@@ -50,9 +57,10 @@ export const browserPipelinePorts: PipelinePorts = {
         if (REFRESH_ACTIONS.has(body.action)) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
         return { ok: true, pipeline: json.pipeline };
       }
-      return { ok: false, status: response.status, error: json?.error ?? `HTTP ${response.status}`, ...(json?.code ? { code: json.code } : {}) };
+      if (response.ok || typeof json?.error !== "string") return { ok: false, status: response.status, error: `HTTP ${response.status}`, unknown: true };
+      return { ok: false, status: response.status, error: json.error, ...(json.code ? { code: json.code } : {}) };
     } catch (error) {
-      return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), unknown: true };
     }
   },
   refresh() {
@@ -62,5 +70,5 @@ export const browserPipelinePorts: PipelinePorts = {
 
 /** The engine's refusal for a stage whose first attempt exists (`override-stage`). */
 export function isAlreadyStarted(result: PipelineWriteResult): boolean {
-  return !result.ok && result.status === 409 && /already started/i.test(result.error);
+  return !result.ok && !result.unknown && result.status === 409 && /already started/i.test(result.error);
 }

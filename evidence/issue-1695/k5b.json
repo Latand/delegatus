@@ -23,7 +23,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-api",
@@ -33,7 +34,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-api",
@@ -43,7 +45,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-ui",
@@ -53,7 +56,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-ui",
@@ -63,7 +67,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "verify",
@@ -73,7 +78,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "docs",
@@ -83,7 +89,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "merge",
@@ -93,7 +100,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       },
@@ -117,7 +125,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-api",
@@ -127,7 +136,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-api",
@@ -137,7 +147,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-ui",
@@ -147,7 +158,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-ui",
@@ -157,7 +169,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "verify",
@@ -167,7 +180,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "docs",
@@ -177,7 +191,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "merge",
@@ -187,7 +202,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           }
         ]
       }
@@ -213,7 +229,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-api",
@@ -223,7 +240,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-api",
@@ -233,7 +251,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-ui",
@@ -243,7 +262,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-ui",
@@ -253,7 +273,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "verify",
@@ -263,7 +284,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "docs",
@@ -273,7 +295,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           },
           {
             "stage": "merge",
@@ -283,7 +306,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       },
@@ -307,7 +331,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-api",
@@ -317,7 +342,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-api",
@@ -327,7 +353,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "build-ui",
@@ -337,7 +364,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review-ui",
@@ -347,7 +375,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "verify",
@@ -357,7 +386,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "docs",
@@ -367,7 +397,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "merge",
@@ -377,7 +408,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           }
         ]
       }
@@ -406,7 +438,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review",
@@ -419,7 +452,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "verify",
@@ -432,7 +466,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "merge",
@@ -442,7 +477,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       },
@@ -469,7 +505,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "review",
@@ -482,7 +519,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "verify",
@@ -495,7 +533,8 @@
             "draft": false,
             "status": null,
             "composerDisabled": null,
-            "reader": true
+            "reader": true,
+            "added": null
           },
           {
             "stage": "merge",
@@ -505,7 +544,8 @@
             "draft": true,
             "status": "Waiting for stage start · not delivered",
             "composerDisabled": true,
-            "reader": true
+            "reader": true,
+            "added": null
           }
         ]
       }
@@ -518,6 +558,7 @@
         "event": "Starts when Builder passes · last stage",
         "engine": "Claude",
         "composerDisabled": true,
+        "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract",
         "width": 426
       },
       "prototype": {
@@ -527,6 +568,7 @@
         "event": "Starts when Implement passes · last stage",
         "engine": "Codex",
         "composerDisabled": true,
+        "added": null,
         "width": 426
       }
     }
@@ -796,6 +838,16 @@
     }
   },
   "flows": {
+    "addedAtStart": {
+      "summary": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract",
+      "open": true,
+      "height": 220,
+      "head": [
+        "[previous stage output: not produced yet]",
+        "",
+        "Pinned task:"
+      ]
+    },
     "saveDraft": {
       "focused": true,
       "saved": {
@@ -806,7 +858,7 @@
           "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog."
         }
       },
-      "status": "Waiting for stage start · not delivered · edited 02:13 AM"
+      "status": "Waiting for stage start · not delivered · edited 03:04 AM"
     },
     "startedDuringSave": {
       "notice": {
@@ -835,6 +887,11 @@
       "pending": "Pausing…",
       "pausedReceipt": "Paused «Redesign attachment upload for large files»",
       "refused": "Resume was refused: the runtime host did not answer",
+      "unknown": {
+        "text": "Pause for «Redesign attachment upload for large files» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again.",
+        "action": "Check again"
+      },
+      "checkReads": 1,
       "sent": [
         {
           "action": "pause"
@@ -844,8 +901,21 @@
         },
         {
           "action": "resume"
+        },
+        {
+          "action": "pause"
         }
       ]
+    },
+    "movedCursor": {
+      "refused": "Skip Builder was refused: the stage worktree has uncommitted changes",
+      "notSent": "Skip Builder was not sent: the pipeline now waits on Reviewer.",
+      "writes": [
+        {
+          "action": "skip-stage"
+        }
+      ],
+      "reads": 2
     },
     "persistentReader": {
       "inPane": {
@@ -856,6 +926,10 @@
       "stepped": {
         "focused": "review-ui",
         "current": "review-ui"
+      },
+      "slash": {
+        "search": false,
+        "open": true
       },
       "back": {
         "probe": 1695,

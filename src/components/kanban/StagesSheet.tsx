@@ -10,13 +10,15 @@ import { roleNameById } from "@/components/builderCopy";
 import { pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 import type { KanbanPipeline } from "./kanbanModel";
-import { GraphGlyph, graphStateWord, MoreGlyph, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId, svgProps } from "./PipelineSection";
+import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
+import { cssEscape } from "./kanbanFocus";
+import { GraphGlyph, graphStateWord, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId } from "./PipelineSection";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
-import { StageDraftFeed, UndeliveredDraft, useStageDraft } from "./StageDraft";
+import { DraftLeftover, StageDraftFeed, useStageDraft } from "./StageDraft";
 import { stageDraftKey, type StageDrafts } from "./stageDrafts";
-import { paneFacts } from "./stagesModel";
+import { draftOutcome, finishedStageIds, neverLaunched, paneFacts, pipelineEnded } from "./stagesModel";
 
 /*
  * Expanded stages (#1695 K5b, prototype `renderSheet` + `renderPane`): every
@@ -31,13 +33,6 @@ import { paneFacts } from "./stagesModel";
 const MinusGlyph = () => <svg {...svgProps}><path d="M5 12h14" /></svg>;
 const PlusGlyph = () => <svg {...svgProps}><path d="M12 5v14M5 12h14" /></svg>;
 const FitGlyph = () => <svg {...svgProps}><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" /></svg>;
-const CloseGlyph = () => <svg {...svgProps}><path d="M18 6 6 18M6 6l12 12" /></svg>;
-const CollapseGlyph = () => <svg {...svgProps}><path d="m17 11-5-5-5 5" /><path d="m17 18-5-5-5 5" /></svg>;
-const ChevronRight = ({ flip = false }: { flip?: boolean }) => <svg {...svgProps} className={`chev${flip ? " flip" : ""}`}><path d="m9 6 6 6-6 6" /></svg>;
-
-function cssEscape(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
-}
 
 /** One pane as the board computed it: which attempt it shows and where that conversation lives. */
 export interface SheetPane {
@@ -175,10 +170,7 @@ export function StagesSheet(props: {
     sheet.current?.querySelector<HTMLElement>(`.pane[data-stage="${cssEscape(next)}"]`)?.focus({ preventScroll: true });
   };
 
-  const finished = panes.filter((pane) => {
-    const view = views.get(pane.stage.id);
-    return view && (view.state === "passed" || view.state === "skipped" || (view.again && view.previous === "passed"));
-  }).map((pane) => pane.stage.id);
+  const finished = finishedStageIds(pipeline, views);
 
   const available = canvasWidth === null ? null : Math.max(0, canvasWidth - 24);
   const dir = canvasWidth !== null && canvasWidth >= 640 ? "LR" : "TB";
@@ -384,8 +376,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const rounds = stage.kind === "review-loop" ? roundsOf(shown, props.flowsById) : [];
   const recorded = shown && (shown.agentPath || shown.conversationId) ? { path: shown.agentPath, conversationId: shown.conversationId } : null;
 
+  /* A pipeline that ended before this stage launched leaves at most an attempt
+     that never ran: the pane still shows the first message it never sent. */
+  const neverRan = !shown || (pipelineEnded(pipeline) && attempts.every(neverLaunched));
+  const outcome = draft && draft.phase !== "saving" ? draftOutcome(pipeline, stage.id, draft) : null;
   let body: React.ReactNode;
-  if (!shown) {
+  if (neverRan) {
     body = (
       <div className="pane-conv draft">
         <div className="ch-meta pane-id">
@@ -466,8 +462,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
           ))}
         </div>
       ) : null}
-      {draft && shown && draft.phase !== "saving" ? (
-        <UndeliveredDraft draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
+      {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
+        <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
       {body}
     </section>

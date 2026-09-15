@@ -1,7 +1,8 @@
+import type { Pipeline } from "@/lib/pipelines/types";
 import { buildStagePrompt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 
 import { isAlreadyStarted, type PipelinePorts } from "./pipelinePorts";
-import { stageNotStarted, stageWiringIndex } from "./stagesModel";
+import { draftOutcome, pipelineEnded, stageNotStarted, stageWiringIndex } from "./stagesModel";
 
 /**
  * The first message of a stage that has not started, edited in place (#1695
@@ -20,11 +21,14 @@ import { stageNotStarted, stageWiringIndex } from "./stagesModel";
  * are two requests. The server's own guard for an unchanged stage (C7:
  * `expectedStageDigest`, 409 `STAGE_CHANGED`) does not exist yet. The engine's
  * guard for a stage that already started does, and it is the one this relies
- * on: a 409 "stage has already started" keeps the text and says it was not
- * delivered.
+ * on: a 409 "stage has already started" keeps the text, and what the stage
+ * started with decides whether the edit made it (`draftOutcome`).
+ *
+ * A write with no answer is `unconfirmed`, never "not saved": Check again
+ * reads the stage and settles it only on what the stage holds.
  */
 
-export type StageDraftPhase = "editing" | "saving" | "changed" | "started" | "failed";
+export type StageDraftPhase = "editing" | "saving" | "changed" | "started" | "ended" | "failed" | "unconfirmed";
 
 export interface StageDraft {
   pipelineId: string;
@@ -61,6 +65,10 @@ export class StageDrafts {
 
   get(key: string): StageDraft | null {
     return this.drafts.get(key) ?? null;
+  }
+
+  entries(): Array<[string, StageDraft]> {
+    return [...this.drafts];
   }
 
   /** When this page last saved the stage's first message. */
@@ -102,8 +110,8 @@ export class StageDrafts {
   async save(key: string, ports: PipelinePorts, options: { keepMine?: boolean } = {}): Promise<void> {
     const draft = this.drafts.get(key);
     if (!draft || draft.phase === "saving") return;
+    /* Empty words are a real edit: the stage keeps only its wiring. */
     const text = draft.text.trim();
-    if (!text) return;
     const base = options.keepMine && draft.theirs !== null ? draft.theirs : draft.base;
     this.set(key, { ...draft, base, phase: "saving", theirs: null, error: null });
     const settle = (next: Partial<StageDraft>) => {
@@ -119,18 +127,19 @@ export class StageDrafts {
       ports.refresh();
       return settle({ phase: "failed", error: { kind: "missing", message: "" } });
     }
-    if (!stageNotStarted(record, stage.id)) {
+    if (!stageNotStarted(record, stage.id) || pipelineEnded(record)) {
       ports.refresh();
-      return settle({ phase: "started" });
+      if (this.settleFromStage(key, record, { text, base }, true)) return;
+      return settle({ phase: draftOutcome(record, stage.id, { text, base }) === "ended-before-start" ? "ended" : "started" });
     }
     const stored = stagePromptExtra(stage.prompt);
-    if (stored === text) {
+    if (stored === stagePromptExtra(text)) {
       /* The stage already holds these words: nothing to write. */
       ports.refresh();
       this.set(key, null);
       return;
     }
-    if (stored !== base) {
+    if (stored !== stagePromptExtra(base)) {
       ports.refresh();
       return settle({ phase: "changed", theirs: stored });
     }
@@ -145,10 +154,47 @@ export class StageDrafts {
       this.set(key, null);
       return;
     }
+    if (result.unknown) return settle({ phase: "unconfirmed" });
     if (isAlreadyStarted(result)) {
       ports.refresh();
       return settle({ phase: "started" });
     }
     settle({ phase: "failed", error: { kind: "write", message: result.error } });
+  }
+
+  /**
+   * Check a write that got no answer, by reading the stage. It settles only
+   * on what the stage holds: these words (saved), a start that froze them in
+   * or out, or an end before the start. Anything else stays unconfirmed; the
+   * read cannot prove the write never ran.
+   */
+  async check(key: string, ports: PipelinePorts): Promise<void> {
+    const draft = this.drafts.get(key);
+    if (!draft || draft.phase !== "unconfirmed") return;
+    const record = await ports.read(draft.pipelineId);
+    const current = this.drafts.get(key);
+    if (!record || current !== draft) return;
+    const stage = record.stages.find((candidate) => candidate.id === draft.stageId);
+    if (!stage) return this.set(key, { ...draft, phase: "failed", error: { kind: "missing", message: "" } });
+    ports.refresh();
+    if (!stageNotStarted(record, stage.id) || pipelineEnded(record)) {
+      if (this.settleFromStage(key, record, draft)) return;
+      return this.set(key, { ...draft, phase: draftOutcome(record, stage.id, draft) === "ended-before-start" ? "ended" : "started" });
+    }
+    if (stagePromptExtra(stage.prompt) === stagePromptExtra(draft.text)) {
+      this.savedAt.set(key, this.clock());
+      this.set(key, null);
+    }
+  }
+
+  /** A draft the stage's record makes moot goes: its words are in, or were
+      never changed. A draft mid-save is its save's to settle. */
+  settleFromStage(key: string, record: Pipeline, draft: { text: string; base: string } | null = null, duringSave = false): boolean {
+    const current = this.drafts.get(key);
+    if (!current || (current.phase === "saving" && !duringSave)) return false;
+    const outcome = draftOutcome(record, current.stageId, draft ?? current);
+    if (outcome !== "included" && outcome !== "untouched") return false;
+    this.set(key, null);
+    return true;
   }
 }

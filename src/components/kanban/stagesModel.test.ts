@@ -4,7 +4,7 @@ import type { PatchPipelineRequest, Pipeline, PipelineStageAttempt } from "@/lib
 
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import { stageDraftKey, StageDrafts } from "./stageDrafts";
-import { currentStageId, draftFacts, finishedStageIds, paneFacts, pipelineActionOptions, shownAttempt, stageNotStarted } from "./stagesModel";
+import { actionObserved, currentStageId, draftFacts, draftOutcome, finishedStageIds, paneFacts, pipelineActionOptions, shownAttempt, stageNotStarted } from "./stagesModel";
 import { stageViews } from "./pipelineGraph";
 
 /* The Stages sheet's pure half and the stage-draft save flow (#1695 K5b), over
@@ -246,4 +246,118 @@ test("a draft saving cannot be edited, dropped or saved twice; unchanged words c
   expect(quiet.patches).toEqual([]);
   expect(same.get(key)).toBeNull();
   expect(same.saved(key)).toBeNull();
+});
+
+/* ── Review follow-ups: what an edit came to, unanswered writes, empty words ── */
+
+const started = (prompt: string, attemptOver: Partial<PipelineStageAttempt> = {}, state = "running") => ({
+  ...withMergePrompt(prompt),
+  state,
+  runs: [...retrying.runs, { stageId: "merge", attempts: [attempt(1, "running", "2026-09-15T10:00:00Z", attemptOver)] }],
+}) as unknown as Pipeline;
+const neverRan = { state: "pending", startedAt: null, conversationId: null, agentPath: null, launchId: null } as unknown as Partial<PipelineStageAttempt>;
+
+test("an edit's outcome is read from the stage: waiting, untouched, included, ended before start, or undelivered", () => {
+  const edit = { text: "Merge after the warm query.", base: "Stage merge." };
+  expect(draftOutcome(retrying, "merge", edit)).toBe("waiting");
+  expect(draftOutcome(retrying, "merge", { text: " Stage merge. ", base: "Stage merge." })).toBe("waiting");
+  expect(draftOutcome(started("{{prev.output}}\n\nStage merge."), "merge", { text: "Stage merge.", base: "Stage merge." })).toBe("untouched");
+  /* The stage's prompt froze with the edit's words in it. */
+  expect(draftOutcome(started("{{prev.output}}\n\nMerge after the  warm query."), "merge", edit)).toBe("included");
+  expect(draftOutcome(started("{{prev.output}}\n\nStage merge."), "merge", edit)).toBe("undelivered");
+  /* Closed while the stage's attempt was still only recorded. */
+  expect(draftOutcome(started("{{prev.output}}\n\nStage merge.", neverRan, "closed"), "merge", edit)).toBe("ended-before-start");
+  expect(draftOutcome({ ...retrying, state: "completed" } as Pipeline, "merge", edit)).toBe("ended-before-start");
+  expect(draftOutcome({ ...retrying, state: "completed" } as Pipeline, "merge", { text: "Stage merge.", base: "Stage merge." })).toBe("untouched");
+  expect(draftOutcome(started("{{prev.output}}\n\nStage merge.", {}, "closed"), "merge", edit)).toBe("undelivered");
+});
+
+test("an unanswered action is observed only in the state it leads to", () => {
+  const parked = { ...retrying, state: "needs_decision", cursor: { stageId: "verify", state: "running" } } as unknown as Pipeline;
+  expect(actionObserved("pause", null, { ...retrying, state: "paused" } as Pipeline)).toBe(true);
+  expect(actionObserved("pause", null, retrying)).toBe(false);
+  expect(actionObserved("resume", null, retrying)).toBe(true);
+  expect(actionObserved("resume", null, { ...retrying, state: "paused" } as Pipeline)).toBe(false);
+  expect(actionObserved("close", null, { ...retrying, state: "closed" } as Pipeline)).toBe(true);
+  expect(actionObserved("retry-stage", "verify", parked)).toBe(false);
+  expect(actionObserved("skip-stage", "verify", { ...parked, cursor: { stageId: "merge", state: "pending" } } as unknown as Pipeline)).toBe(true);
+  expect(actionObserved("retry-stage", "verify", retrying)).toBe(true);
+});
+
+test("empty words are saved as the stage's wiring alone", async () => {
+  const drafts = new StageDrafts();
+  const { ports, patches } = fakePorts([retrying]);
+  drafts.begin("p-search", "merge", "Stage merge.");
+  drafts.edit(key, "   ");
+  await drafts.save(key, ports);
+  expect(patches).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}" }]);
+  expect(drafts.get(key)).toBeNull();
+});
+
+test("a write with no answer is unconfirmed; Check again settles only on what the stage holds and never writes", async () => {
+  const drafts = new StageDrafts(() => 2_000);
+  const route = fakePorts([retrying], [{ ok: false, status: 0, error: "Failed to fetch", unknown: true }]);
+  drafts.begin("p-search", "merge", "Stage merge.");
+  drafts.edit(key, "Merge after the warm query.");
+  await drafts.save(key, route.ports);
+  expect(drafts.get(key)).toMatchObject({ phase: "unconfirmed", text: "Merge after the warm query." });
+
+  /* The stage does not hold the words: still unconfirmed, nothing sent. */
+  await drafts.check(key, route.ports);
+  expect(drafts.get(key)?.phase).toBe("unconfirmed");
+  expect(route.patches).toHaveLength(1);
+
+  /* An unreadable pipeline proves nothing either. */
+  const unread = fakePorts([null]);
+  await drafts.check(key, unread.ports);
+  expect(drafts.get(key)?.phase).toBe("unconfirmed");
+
+  /* The stage holds them: saved. */
+  const landed = fakePorts([withMergePrompt("{{prev.output}}\n\nMerge after the warm query.")]);
+  await drafts.check(key, landed.ports);
+  expect(drafts.get(key)).toBeNull();
+  expect(drafts.saved(key)).toBe(2_000);
+  expect(landed.patches).toEqual([]);
+});
+
+test("a save that finds the stage started with the edit's words drops the draft; one that finds the pipeline ended before the start says so", async () => {
+  const included = new StageDrafts();
+  const first = fakePorts([started("{{prev.output}}\n\nMerge after the warm query.")]);
+  included.begin("p-search", "merge", "Stage merge.");
+  included.edit(key, "Merge after the warm query.");
+  await included.save(key, first.ports);
+  expect(included.get(key)).toBeNull();
+  expect(first.patches).toEqual([]);
+
+  const ended = new StageDrafts();
+  const second = fakePorts([started("{{prev.output}}\n\nStage merge.", neverRan, "closed")]);
+  ended.begin("p-search", "merge", "Stage merge.");
+  ended.edit(key, "Merge after the warm query.");
+  await ended.save(key, second.ports);
+  expect(ended.get(key)?.phase).toBe("ended");
+  expect(second.patches).toEqual([]);
+
+  /* A draft the stage makes moot goes when the board sees the record; one mid-save is its save's. */
+  const moot = new StageDrafts();
+  moot.begin("p-search", "merge", "Stage merge.");
+  expect(moot.settleFromStage(key, started("{{prev.output}}\n\nStage merge."))).toBe(true);
+  expect(moot.get(key)).toBeNull();
+});
+
+test("the browser port calls a write with no answer, or an answer without the route's error, unknown; the route's own refusal stays known", async () => {
+  const { browserPipelinePorts } = await import("./pipelinePorts");
+  const realFetch = globalThis.fetch;
+  const answer = (respond: () => Promise<Response>) => { globalThis.fetch = respond as unknown as typeof fetch; };
+  try {
+    answer(async () => { throw new TypeError("Failed to fetch"); });
+    expect(await browserPipelinePorts.patch("p-search", { action: "pause" })).toEqual({ ok: false, status: 0, error: "Failed to fetch", unknown: true });
+    answer(async () => new Response("<html>Bad gateway</html>", { status: 502 }));
+    expect(await browserPipelinePorts.patch("p-search", { action: "pause" })).toEqual({ ok: false, status: 502, error: "HTTP 502", unknown: true });
+    answer(async () => new Response(JSON.stringify({}), { status: 200 }));
+    expect(await browserPipelinePorts.patch("p-search", { action: "pause" })).toMatchObject({ ok: false, unknown: true });
+    answer(async () => new Response(JSON.stringify({ error: "pipeline is not paused" }), { status: 409 }));
+    expect(await browserPipelinePorts.patch("p-search", { action: "resume" })).toEqual({ ok: false, status: 409, error: "pipeline is not paused" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

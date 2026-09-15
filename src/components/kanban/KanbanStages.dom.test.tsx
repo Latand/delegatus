@@ -161,9 +161,9 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
-  let current = pipeline;
+  let current: Pipeline | null = pipeline;
   let currentFiles = options.files ?? baseFiles;
-  const route = pipelineRoute(() => current);
+  const route = pipelineRoute(() => current ?? pipeline);
   const render = () => flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
@@ -171,7 +171,7 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
       manual={[]}
       files={currentFiles}
       flows={flows}
-      pipelines={[current]}
+      pipelines={current ? [current] : []}
       tasks={[]}
       allTasks={[task("t-search", options.status ?? "assigned", "Restore search results after the index rebuild")]}
       drafts={[]}
@@ -191,7 +191,7 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
   return {
     host,
     route,
-    update(next: Pipeline, nextFiles?: FileEntry[]) {
+    update(next: Pipeline | null, nextFiles?: FileEntry[]) {
       current = next;
       if (nextFiles) currentFiles = nextFiles;
       render();
@@ -519,4 +519,185 @@ test("Escape cancels an edit and hands focus back to Edit; a panel with nothing 
   expect(panel()).toBeNull();
   const reader = card(host).querySelector<HTMLElement>(`[data-kanban-reader="${merge1.conversationId}"]`);
   expect(reader?.getAttribute("data-folded")).toBe("1");
+});
+
+/* ── Review follow-ups ─────────────────────────────────────────────────── */
+
+const parkedOn = (stageId: string) => searchPipeline({ state: "needs_decision", cursor: { stageId, state: "running", input: null, activatedBy: null } } as Partial<Pipeline>);
+
+test("a refused skip's Retry reads the pipeline first: with the cursor moved, nothing is sent and the receipt names the stage it waits on now", async () => {
+  const { host, route } = mount(parkedOn("verify"));
+  await tick();
+  route.state.answers.push({ ok: false, status: 409, error: "the stage worktree has uncommitted changes" });
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Skip Verifier"));
+  await tick();
+  expect(route.reads).toEqual(["p-search"]);
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "skip-stage" }]);
+  const refused = host.querySelector("[data-kanban-receipt].error");
+  expect(refused?.querySelector(".msg")?.textContent).toBe("Skip Verifier was refused: the stage worktree has uncommitted changes");
+  route.state.record = parkedOn("implement");
+  click(refused?.querySelector(".act"));
+  await tick();
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(route.patches).toHaveLength(1);
+  expect(receiptTexts(host)).toEqual(["Skip Verifier was not sent: the pipeline now waits on Builder."]);
+});
+
+test("a skip chosen on a stale menu sends nothing once the read shows another stage waiting, and a sent one is named from that read", async () => {
+  const { host, route } = mount(parkedOn("verify"));
+  await tick();
+  route.state.record = parkedOn("implement");
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Retry Verifier"));
+  await tick();
+  expect(route.patches).toEqual([]);
+  expect(receiptTexts(host)).toEqual(["Retry Verifier was not sent: the pipeline now waits on Builder."]);
+  route.state.record = null;
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Retry Verifier"));
+  await tick();
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "retry-stage" }]);
+  expect(receiptTexts(host).at(-1)).toBe("Retrying Verifier in «Restore search results after the index rebuild»");
+});
+
+test("an action with no answer is not confirmed, never refused; Check again only reads, and says what the pipeline shows", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  route.state.answers.push({ ok: false, status: 0, error: "Failed to fetch", unknown: true });
+  click(card(host).querySelector("[data-pipeline-menu]"));
+  click(menuItem(host, "Pause"));
+  await tick();
+  const receipt = () => host.querySelector("[data-kanban-receipt].error");
+  expect(receipt()?.querySelector(".msg")?.textContent).toBe("Pause for «Restore search results after the index rebuild» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again.");
+  expect(receipt()?.querySelector(".act")?.textContent).toBe("Check again");
+  expect(receiptTexts(host).some((text) => text?.includes("refused"))).toBe(false);
+  click(receipt()?.querySelector(".act"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
+  expect(receipt()?.querySelector(".msg")?.textContent).toBe("Still not confirmed: Pause for «Restore search results after the index rebuild». The pipeline does not show it yet, and nothing was sent again.");
+  route.state.record = searchPipeline({ state: "paused" } as Partial<Pipeline>);
+  click(receipt()?.querySelector(".act"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
+  expect(route.reads).toEqual(["p-search", "p-search"]);
+  expect(receiptTexts(host)).toEqual(["«Restore search results after the index rebuild» is paused now"]);
+});
+
+const openMergePanel = async (host: HTMLElement) => {
+  click(card(host).querySelector('.psummary [data-stage="merge"]'));
+  await tick();
+  return () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
+};
+const mergeStartedWith = (prompt: string, attemptOver: Record<string, unknown> = {}, over: Partial<Pipeline> = {}) => withMergePrompt(
+  searchPipeline(over, { stageId: "merge", attempts: [attempt(1, "running", merge1, 30, attemptOver)] }),
+  prompt,
+);
+
+test("a save with no answer is not confirmed; when the stage starts holding those words the draft goes and the panel becomes its reader", async () => {
+  const { host, route, update } = mount(searchPipeline());
+  await tick();
+  const panel = await openMergePanel(host);
+  click(panel()!.querySelector("[data-draft-edit]"));
+  type(panel()!.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Merge after one warm query.");
+  route.state.answers.push({ ok: false, status: 0, error: "Failed to fetch", unknown: true });
+  click(panel()!.querySelector("[data-draft-save]"));
+  await tick();
+  expect(panel()!.querySelector("[data-draft-unconfirmed] .msg-text")?.textContent).toBe("Not confirmed: no answer came back, so this save may or may not have reached the stage. Your text is kept.");
+  expect(panel()!.textContent).not.toContain("Not saved");
+  update(mergeStartedWith("{{prev.output}}\n\nMerge after one warm query."), [...baseFiles, merge1]);
+  await tick();
+  await tick();
+  expect(panel()).toBeNull();
+  expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
+  expect(card(host).querySelector(`[data-kanban-reader="${idOf(merge1)}"]`)).toBeTruthy();
+});
+
+test("an edit opened and left unchanged goes quietly when its stage starts", async () => {
+  const { host, update } = mount(searchPipeline());
+  await tick();
+  const panel = await openMergePanel(host);
+  click(panel()!.querySelector("[data-draft-edit]"));
+  update(mergeStarted(), [...baseFiles, merge1]);
+  await tick();
+  await tick();
+  expect(panel()).toBeNull();
+  expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
+  expect(card(host).querySelector(`[data-kanban-reader="${idOf(merge1)}"]`)).toBeTruthy();
+});
+
+test("a pipeline closed before its stage launched says the edit was never sent, never that the stage started", async () => {
+  const { host, update } = mount(searchPipeline());
+  await tick();
+  const panel = await openMergePanel(host);
+  click(panel()!.querySelector("[data-draft-edit]"));
+  type(panel()!.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Wait for the alias swap.");
+  const closed = { ...searchPipeline({ state: "closed" } as Partial<Pipeline>, { stageId: "merge", attempts: [attempt(1, "pending", null, 30, { startedAt: null })] }) } as Pipeline;
+  update(closed);
+  await tick();
+  expect(panel()!.querySelector("[data-draft-ended] .msg-text")?.textContent).toBe("The pipeline ended before Cleaner started. Nothing was sent.");
+  expect(panel()!.querySelector("[data-draft-ended] .kept")?.textContent).toBe("Wait for the alias swap.");
+  expect(panel()!.querySelector("[data-draft-undelivered]")).toBeNull();
+  expect(panel()!.textContent).not.toContain("started with");
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  expect(pane(host, "merge")!.querySelector("[data-draft-message] .bstatus")?.textContent).toBe("Never delivered · the pipeline ended before this stage started");
+  expect(pane(host, "merge")!.textContent).not.toContain("Starting the agent's host");
+});
+
+test("clearing a waiting stage's words saves its wiring alone", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  const panel = await openMergePanel(host);
+  click(panel()!.querySelector("[data-draft-edit]"));
+  type(panel()!.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "");
+  expect(panel()!.querySelector<HTMLButtonElement>("[data-draft-save]")?.disabled).toBe(false);
+  key(panel()!.querySelector("textarea.draft-edit"), "Enter", { ctrlKey: true });
+  await tick();
+  expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "override-stage", stageId: "merge", prompt: "{{prev.output}}" }]);
+  expect(panel()!.querySelector("textarea.draft-edit")).toBeNull();
+});
+
+test("one folded line under the first message names what the controller adds at start, in the card panel and the pane, and unfolds to it", async () => {
+  const { host } = mount(searchPipeline());
+  await tick();
+  const panel = await openMergePanel(host);
+  const added = panel()!.querySelector<HTMLDetailsElement>("[data-draft-added]")!;
+  expect(added.open).toBe(false);
+  expect(added.querySelector("summary")?.textContent).toBe("Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract");
+  const text = added.querySelector(".added-text")?.textContent ?? "";
+  expect(text.startsWith("[previous stage output: not produced yet]\n\nPinned task:\nRestore search results\n")).toBe(true);
+  expect(text).toContain("Pinned specification and acceptance criteria:\nNo separate pinned specification was supplied.");
+  expect(text).toContain("Role preset: cleaner (claude/opus, high).");
+  expect(text).toContain('{"status":"pass","findings":[],"confidence":0.9}');
+  expect(text).not.toContain("Merge once the alias swap is verified.");
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  expect(pane(host, "merge")!.querySelector("[data-draft-added] summary")?.textContent).toBe("Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract");
+});
+
+test("while the Stages sheet is open the board's keys stay behind it, and a sheet that closes itself hands focus back", async () => {
+  const { host, update } = mount(searchPipeline());
+  await tick();
+  press(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const search = host.querySelector("[data-kanban-search]");
+  const target = pane(host, "verify")!;
+  target.focus();
+  let reachedWindow = false;
+  const onWindowKey = () => { reachedWindow = true; };
+  window.addEventListener("keydown", onWindowKey);
+  key(target, "/");
+  window.removeEventListener("keydown", onWindowKey);
+  /* Neither the board's search nor the Viewer's window-level search takes it. */
+  expect(reachedWindow).toBe(false);
+  expect(document.activeElement === search).toBe(false);
+  same(document.activeElement, target);
+  expect(sheet(host)).toBeTruthy();
+  /* The pipeline leaves the board: the sheet goes, and focus returns to the card. */
+  update(null);
+  await tick();
+  await tick();
+  expect(sheet(host)).toBeNull();
+  same(document.activeElement, card(host));
 });
