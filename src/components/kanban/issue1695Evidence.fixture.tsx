@@ -24,7 +24,11 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
  * designated. With `?scenario=stages` (K5b) the pipelines scenario also
  * answers the pipeline route: reads, stage prompt overrides and the pipeline
  * actions, with hooks for a refusal, a stage that starts during a save, and
- * a prompt another client saves. Every
+ * a prompt another client saves. With `?scenario=accounts` (K6) the stages
+ * scenario also answers the account routes: the accounts and their limits, the
+ * project's accounts, a conversation's account switch and a stage's account,
+ * with hooks for the migration record, a committed switch, a refusal and a lost
+ * answer. Every
  * request the Viewer makes is answered here; nothing reaches a server, a store
  * or a state directory. Driven by the `issue1695*.browser.test.tsx` files.
  */
@@ -33,7 +37,8 @@ const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
-const STAGES = SCENARIO === "stages";
+const ACCOUNTS = SCENARIO === "accounts";
+const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
@@ -218,6 +223,42 @@ if (STAGES) {
   verify.attempts[0]!.activatedBy = { stageId: "review", attempt: 1, edge: "pass" };
   verify.attempts[1]!.activatedBy = { stageId: "review", attempt: 2, edge: "pass" };
 }
+if (ACCOUNTS) {
+  /* K6: Docs names the account its first turn runs on; Merge leaves it to the project. The running Verify launched on account A. */
+  const uploadDocs = pipelines.find((entry) => entry.id === "p-upload")!.stages.find((entry) => entry.id === "docs")!;
+  uploadDocs.account = "account-c";
+  const searchVerify = (pipelines.find((entry) => entry.id === "p-search")!.runs as unknown as Array<{ stageId: string; attempts: Array<Record<string, unknown>> }>).find((run) => run.stageId === "verify")!;
+  searchVerify.attempts[1]!.accountId = "default";
+}
+
+/* K6: the accounts of each engine, as `GET /api/accounts` answers them, and the project's accounts (#1279). */
+const resetIn = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 60;
+const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number) => ({
+  id, label, kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null,
+  auth: { state: "authenticated", plan },
+  limits: { state: "fresh", session: { usedPercent, resetsAt: resetIn(resetsInMinutes), windowMinutes: 300 }, weekly: null },
+});
+const accountsBody = {
+  claude: {
+    active: "default",
+    accounts: [accountRow("default", "Account A", "Max", 72, 140), accountRow("account-c", "Account C", "Max", 18, 170), accountRow("account-g", "Account G", "Pro", 41, 125), accountRow("account-e", "Account E", "Pro", 100, 80)],
+    mutationLocked: false, migration: null, autoBalance: null,
+  },
+  codex: {
+    active: "default",
+    accounts: [accountRow("default", "Account B", "Pro", 35, 200), accountRow("account-d", "Account D", "Plus", 12, 230)],
+    mutationLocked: false, migration: null, autoBalance: null,
+  },
+};
+/* Claude work in this project may use accounts A, C and E; Codex is unbound. */
+const CLAUDE_ALLOWED = ["default", "account-c", "account-e"];
+const bindingsBody = {
+  project: PROJECT, projectName: PROJECT, bindings: [],
+  engines: {
+    claude: { engine: "claude", restricted: true, allowed: CLAUDE_ALLOWED.map((accountId) => ({ accountId, label: accountId })), carrying: [], outsidePool: [] },
+    codex: { engine: "codex", restricted: false, allowed: accountsBody.codex.accounts.map((row) => ({ accountId: row.id, label: row.label })), carrying: [], outsidePool: [] },
+  },
+};
 
 /* Review flows as the store keeps them: one per bound review stage, with its rounds. */
 const reviewRole = { engine: "codex", model: "gpt-5.6", effort: "high" };
@@ -430,6 +471,40 @@ const evidence = {
   storedPipeline(id: string) {
     return pipelines.find((entry) => entry.id === id) ?? null;
   },
+  /* K6: conversation account switches the board sent, in order. */
+  accountRequests: [] as Array<Record<string, unknown>>,
+  accountAnswerDelayMs: 200,
+  /* The next switch is refused with these words. */
+  refuseNextAccountRequest: null as { status: number; error: string } | null,
+  /* The next switch is queued and its answer is lost on the way back. */
+  loseNextAccountAnswer: false,
+  /* The project's accounts cannot be read. */
+  bindingsUnreadable: false,
+  /* The conversation's migration record, as the files route projects it. */
+  setMigration(pathname: string, migration: Record<string, unknown> | null) {
+    const index = files.findIndex((entry) => entry.path === pathname || entry.conversationId === pathname);
+    if (index < 0) return;
+    const next = { ...files[index]! };
+    if (migration) next.migration = migration as unknown as FileEntry["migration"];
+    else delete next.migration;
+    files[index] = next;
+    window.dispatchEvent(new Event("llv:files-changed"));
+  },
+  /* A committed switch: the transcript continues under the target account's home, the record clears. */
+  commitAccountSwitch(conversationId: string, accountId: string) {
+    const index = files.findIndex((entry) => entry.conversationId === conversationId);
+    if (index < 0) return;
+    const current = files[index]! as FileEntry & { migration?: unknown };
+    const path = `/repo/accounts/${current.engine}/${accountId}/${current.name}`;
+    for (const record of pipelines) {
+      for (const run of record.runs) for (const entry of run.attempts) if (entry.conversationId === conversationId) entry.agentPath = path;
+    }
+    const next = { ...current, path } as FileEntry & { migration?: unknown };
+    delete next.migration;
+    files[index] = next as FileEntry;
+    window.dispatchEvent(new Event("llv:files-changed"));
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
 };
 Object.assign(window, { evidence });
 
@@ -609,6 +684,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if ((record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
         if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
+        /* #1279: a stage may name only an account the project allows; null clears the pin. */
+        if (body.account !== undefined) {
+          const requested = typeof body.account === "string" ? body.account.trim() : "";
+          if (requested && target.effectiveRole.engine === "claude" && !CLAUDE_ALLOWED.includes(requested)) {
+            return json({ error: `claude account ${requested} is not allowed on project ${PROJECT} (allowed: ${CLAUDE_ALLOWED.join(", ")})` }, 409);
+          }
+          if (requested) target.account = requested;
+          else delete target.account;
+        }
       } else if (body.action === "pause") {
         if (record.state === "draft") return json({ error: "draft pipelines can only be started, edited, or deleted" }, 409);
         if (!ended && record.state !== "paused") {
@@ -634,6 +718,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       return json({ pipeline: record });
     }
+  }
+  if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (ACCOUNTS && url.pathname === "/api/account-project-bindings" && method === "GET") {
+    return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(bindingsBody);
+  }
+  if (ACCOUNTS && url.pathname === "/api/conversation-host" && method === "POST") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    evidence.accountRequests.push(body);
+    await new Promise((resolve) => setTimeout(resolve, evidence.accountAnswerDelayMs));
+    if (evidence.refuseNextAccountRequest) {
+      const refusal = evidence.refuseNextAccountRequest;
+      evidence.refuseNextAccountRequest = null;
+      return json({ error: refusal.error }, refusal.status);
+    }
+    if (evidence.loseNextAccountAnswer) {
+      evidence.loseNextAccountAnswer = false;
+      throw new TypeError("Failed to fetch");
+    }
+    const operationId = `account-switch-${evidence.accountRequests.length}`;
+    const file = files.find((entry) => entry.path === body.path);
+    const outside = file?.engine === "claude" && !CLAUDE_ALLOWED.includes(String(body.accountId));
+    return json({ ok: true, structured: true, target: body.conversationId, operationId, receipt: { operationId, status: "queued" }, ...(outside ? { accountOverride: { outsidePool: true, recorded: true } } : {}) }, 202);
   }
   if (url.pathname === "/api/logs" && method === "POST") {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };

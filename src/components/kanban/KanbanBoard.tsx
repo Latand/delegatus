@@ -23,6 +23,7 @@ import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 import { cleanTitle } from "@/components/utils";
 
+import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { MoreGlyph } from "./kanbanGlyphs";
@@ -229,6 +230,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const menu = useOverlay<
     { kind: "status" | "card" | "colour"; cardId: string } | { kind: "column"; status: TaskStatus } | { kind: "tray" } | { kind: "reader"; key: string; stop: ReaderStop } | { kind: "link"; key: string } | { kind: "stop"; key: string }
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
+    | { kind: "account"; target: AccountTarget }
   >();
   const { receipts, show, dismiss } = useReceipts();
   const latestUndo = useRef<{ receiptId: number; run: () => void } | null>(null);
@@ -939,7 +941,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1015,6 +1017,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const forStage = (option: PipelineActionOption): PipelineActionOption => (option.refusal || option.stageId === stage.id ? option : { ...option, refusal: "other-stage" });
       const items: KanbanMenuItem[] = [{ type: "head", label: t("kanban.stages.stageMenuHead", { stage: name }) }];
       if (stageDraftable(pipeline, stage.id)) {
+        const anchor = menu.open?.anchor;
         items.push({
           type: "item",
           label: t("kanban.draft.editMenu"),
@@ -1025,6 +1028,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
             stageDrafts.begin(pipeline.id, stage.id, stagePromptExtra(stage.prompt));
           },
         });
+        /* K6: the first turn's account, chosen in the stage's account picker. */
+        if (anchor) {
+          items.push({
+            type: "item",
+            label: t("kanban.account.menuChoose"),
+            keepFocus: true,
+            onSelect: () => queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "account", target: { kind: "stage", pipelineId: pipeline.id, stageId: stage.id } } })),
+          });
+        }
       }
       items.push(
         item(forStage(retry), t("kanban.stages.retryThis"), t("kanban.pipelineAct.retryWhy")),
@@ -1485,6 +1497,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
   /* ── Pipeline actions over the pipeline route (`usePipelineActions`) ──── */
   const { acting, start: startPipelineAction } = usePipelineActions(pipelinePorts, show, t);
+  /* K6: the account of a waiting stage's first turn, and of a conversation. */
+  const accountChoice = useAccountChoices(pipelinePorts, show, t, useCallback((target: AccountTarget, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "account", target } }), [menu]));
   const actingByCard = useMemo(() => {
     const byCard = new Map<string, string>();
     if (!acting.size) return byCard;
@@ -1697,6 +1711,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
+  const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
+  /* The picker reads the pipeline and the conversation as the board holds them now. */
+  const accountOverlay = (target: AccountTarget, anchor: HTMLElement) => {
+    if (target.kind === "stage") {
+      const pipeline = cards.flatMap((card) => card.pipelines).find((entry) => entry.pipeline.id === target.pipelineId)?.pipeline;
+      const stage = pipeline?.stages.find((entry) => entry.id === target.stageId);
+      if (!pipeline || !stage) return null;
+      return <StageAccountPopover anchor={anchor} onClose={menu.close} pipeline={pipeline} stage={stage} name={stageNames(t, pipeline).get(stage.id) ?? stage.id} />;
+    }
+    const view = readerViews.find((candidate) => candidate.readerKey === target.readerKey);
+    if (!view) return null;
+    const role = view.owner?.stage ? stageNames(t, view.owner.stage.pipeline).get(view.owner.stage.stage.id) ?? null : null;
+    return <ConversationAccountPopover anchor={anchor} onClose={menu.close} file={view.file} name={role ?? conversationName(view)} stageContext={view.owner?.stage ?? null} />;
+  };
   const stopKey = stopOpen && stopOpen.value.kind === "stop" ? stopOpen.value.key : null;
   const stopView = stopKey ? readerViews.find((view) => view.readerKey === stopKey) ?? null : null;
   const linkKey = linkOpen && linkOpen.value.kind === "link" ? linkOpen.value.key : null;
@@ -1795,6 +1823,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   ) : null;
 
   return (
+    <AccountChoiceContext.Provider value={accountChoice}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
       <header className="bar">
         <span className="summary">
@@ -1955,8 +1984,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         />
       ) : null}
       {dragHint ? <div className="drag-hint">{t("kanban.dragHint")}</div> : null}
+      {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
     </div>
+    </AccountChoiceContext.Provider>
   );
 }
 
