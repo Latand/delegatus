@@ -164,6 +164,30 @@ test("+ Task opens a card at the top of Inbox, creates the task once with its re
   expect([...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent)).toContain("Created «Write the migration guide» in Inbox");
 });
 
+test("a created task drawn ahead of the poll leaves with the next tasks payload that does not carry it, and stays with one that does", async () => {
+  taskAnswer = (body) => new Response(JSON.stringify({ task: { ...task("created", "inbox", String(body.text)), placement: body.placement } }), { status: 200, headers: { "content-type": "application/json" } });
+  const stored = [task("a", "inbox", "An older inbox task")];
+  const { host, render } = mount(stored);
+  const create = async (text: string) => {
+    click(host.querySelector("[data-new-task]"));
+    const composer = host.querySelector("[data-kanban-new-task]")!;
+    type(composer.querySelector('textarea[aria-label="Task text"]'), text);
+    flushSync(() => composer.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await settle();
+  };
+  await create("Deleted before the poll");
+  expect(host.querySelector('.card[data-id="task:created"]')).not.toBeNull();
+  /* The next payload has no such task: it was deleted, or moved to another project, before the poll. */
+  render({ allTasks: [...stored] });
+  expect(host.querySelector('.card[data-id="task:created"]')).toBeNull();
+
+  await create("Carried by the poll");
+  expect(host.querySelector('.card[data-id="task:created"]')).not.toBeNull();
+  render({ allTasks: [...stored, task("created", "inbox", "Carried by the poll")] });
+  expect(host.querySelector('.card[data-id="task:created"]')).not.toBeNull();
+  expect(host.querySelectorAll('.card[data-id="task:created"]')).toHaveLength(1);
+});
+
 test("a refused create keeps the text on the new card and says why; Escape closes it without writing", async () => {
   taskAnswer = () => new Response(JSON.stringify({ error: "Project task limit reached" }), { status: 409, headers: { "content-type": "application/json" } });
   const { host } = mount([]);

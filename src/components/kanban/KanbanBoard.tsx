@@ -162,7 +162,7 @@ const EMPTY_FLOWS: Flow[] = [];
 const EMPTY_PIPELINES: Pipeline[] = [];
 const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
 const NO_READERS: readonly OpenReader[] = [];
-const NO_TASKS: readonly BoardTask[] = [];
+const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
   try {
@@ -234,16 +234,22 @@ function useBands(props: KanbanBoardProps) {
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
-  /* `+ Task` (K9a): a task this board created is drawn at once, until the tasks poll carries it. */
-  const [createdTasks, setCreatedTasks] = useState<readonly BoardTask[]>(NO_TASKS);
+  /* `+ Task` (K9a): a task this board created is drawn at once, on the tasks it was created against. The next
+     tasks payload is the authority: it carries the task, or the task is gone (deleted, moved to another project)
+     and so is its card. */
+  const [createdTasks, setCreatedTasks] = useState<ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }>>(NO_CREATED);
   const allTasks = useMemo(() => {
-    const fresh = createdTasks.filter((task) => task.project === project && !storedTasks.some((stored) => stored.id === task.id));
+    const fresh = createdTasks
+      .filter((entry) => entry.basis === storedTasks && entry.task.project === project && !storedTasks.some((stored) => stored.id === entry.task.id))
+      .map((entry) => entry.task);
     return fresh.length ? [...storedTasks, ...fresh] : storedTasks;
   }, [createdTasks, storedTasks, project]);
   useEffect(() => {
-    /* eslint-disable-next-line react-hooks/set-state-in-effect -- drop what the poll now carries */
-    setCreatedTasks((current) => (current.some((task) => storedTasks.some((stored) => stored.id === task.id)) ? current.filter((task) => !storedTasks.some((stored) => stored.id === task.id)) : current));
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- a newer payload retires what was drawn ahead of it */
+    setCreatedTasks((current) => (current.some((entry) => entry.basis !== storedTasks) ? current.filter((entry) => entry.basis === storedTasks) : current));
   }, [storedTasks]);
+  const storedTasksRef = useRef(storedTasks);
+  storedTasksRef.current = storedTasks;
   const [composingTask, setComposingTask] = useState(false);
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
@@ -1864,7 +1870,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, []);
   const taskCreated = useCallback((task: BoardTask) => {
     setComposingTask(false);
-    setCreatedTasks((current) => [...current.filter((entry) => entry.id !== task.id), task]);
+    setCreatedTasks((current) => [...current.filter((entry) => entry.task.id !== task.id), { task, basis: storedTasksRef.current }]);
     show(t("kanban.taskCreated", { title: task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled") }));
     revealCard(`task:${task.id}`, null, false, ".title-trigger");
   }, [show, t, revealCard]);
