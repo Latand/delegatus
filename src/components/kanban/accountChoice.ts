@@ -1,0 +1,355 @@
+import { activeCardMigration, cardMigrationState, migrationTargetName } from "@/lib/accounts/migration";
+import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
+import type { ConversationMigration } from "@/lib/types";
+
+import { isAlreadyStarted, isStageChanged, type PipelinePorts } from "./pipelinePorts";
+import { pipelineEnded, stageNotStarted } from "./stagesModel";
+
+/*
+ * Account choice on the board (#1695 K6, prototype `accountChip` +
+ * `openAccountPicker`), over routes that exist today:
+ *
+ * - A stage that has not started names the account its first turn runs on
+ *   with `override-stage {account}`, guarded by the digest of the read it was
+ *   chosen from (`expectedStageDigest`). The engine refuses an account the
+ *   project's binding does not allow; `null` clears the pin, and the project's
+ *   own selection picks the account at launch.
+ * - A conversation switches with the same `reconfigure` the conversation
+ *   header's account chip sends. The switch waits for the running turn to end;
+ *   an account outside the project's accounts is allowed and recorded as the
+ *   operator's choice (#1279).
+ *
+ * What the board may say about a pending switch comes from what reports it:
+ * the conversation's migration record, or, for a request this page sent, that
+ * request's runtime receipt. A structured switch still queued behind a turn
+ * has no record yet, and nothing tells another page or a reload which account
+ * it targets; this page says the target is known here only. Cancelling or
+ * changing a pending switch is not offered: rolling it back is undone when the
+ * queue retries the switch, and superseding it cancels the messages held for
+ * it (#1705).
+ */
+
+export type AccountEngine = "claude" | "codex";
+
+/** The stage's own pin, with an absent, `null` or blank one all meaning the project's choice. */
+export function stagePin(stage: Pick<PipelineStage, "account">): string | null {
+  return typeof stage.account === "string" && stage.account.trim() ? stage.account.trim() : null;
+}
+
+/* ── The project's accounts (#1279), as `GET /api/account-project-bindings?project=` answers ── */
+
+export interface EnginePolicy {
+  /** False: the project has no binding for this engine and may use every account. */
+  restricted: boolean;
+  allowed: ReadonlySet<string>;
+}
+
+export type ProjectPolicy =
+  | { state: "loading" }
+  /* The record could not be read: the server still decides every choice. */
+  | { state: "unknown" }
+  | { state: "known"; engines: Partial<Record<AccountEngine, EnginePolicy>> };
+
+export function parseProjectPolicy(body: unknown): ProjectPolicy {
+  const engines = (body as { engines?: Record<string, unknown> } | null)?.engines;
+  if (!engines || typeof engines !== "object") return { state: "unknown" };
+  const parsed: Partial<Record<AccountEngine, EnginePolicy>> = {};
+  for (const engine of ["claude", "codex"] as const) {
+    const raw = engines[engine] as { restricted?: unknown; allowed?: unknown } | undefined;
+    if (!raw || typeof raw.restricted !== "boolean" || !Array.isArray(raw.allowed)) continue;
+    const allowed = raw.allowed.flatMap((entry) => {
+      const id = (entry as { accountId?: unknown } | null)?.accountId;
+      return typeof id === "string" ? [id] : [];
+    });
+    parsed[engine] = { restricted: raw.restricted, allowed: new Set(allowed) };
+  }
+  return { state: "known", engines: parsed };
+}
+
+/** Where an account stands against the project's accounts: `unknown` while the record is unread. */
+export function accountStanding(policy: ProjectPolicy, engine: AccountEngine, accountId: string): "inside" | "outside" | "unknown" {
+  if (policy.state !== "known") return "unknown";
+  const engineCase = policy.engines[engine];
+  if (!engineCase) return "unknown";
+  return !engineCase.restricted || engineCase.allowed.has(accountId) ? "inside" : "outside";
+}
+
+/* ── A waiting stage's account ─────────────────────────────────────────── */
+
+export type StageAccountOutcome =
+  | { kind: "saved"; account: string | null }
+  /* The stage already runs on that choice: nothing was written. */
+  | { kind: "same"; account: string | null }
+  /* Not sent: the pipeline, or the digest that guards the write, could not be read. */
+  | { kind: "unread" }
+  | { kind: "missing" }
+  /* The stage has started, or the pipeline ended: its first turn's account is settled. */
+  | { kind: "started" }
+  /* Another client changed the stage after the read; nothing was overwritten. */
+  | { kind: "changed"; account: string | null }
+  | { kind: "refused"; error: string }
+  /* The write got no answer: it may have run. */
+  | { kind: "unknown"; account: string | null };
+
+export interface StageAccountWrite {
+  pipelineId: string;
+  stageId: string;
+  account: string | null;
+  phase: "saving" | "unconfirmed";
+}
+
+export const stageAccountKey = (pipelineId: string, stageId: string) => `${pipelineId}:${stageId}`;
+
+class Store<T> {
+  protected readonly entries = new Map<string, T>();
+  private readonly listeners = new Set<() => void>();
+  private revision = 0;
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  version = (): number => this.revision;
+
+  get(key: string): T | null {
+    return this.entries.get(key) ?? null;
+  }
+
+  protected set(key: string, value: T | null): void {
+    if (value) this.entries.set(key, value);
+    else if (!this.entries.has(key)) return;
+    else this.entries.delete(key);
+    this.revision += 1;
+    for (const listener of this.listeners) listener();
+  }
+}
+
+export class StageAccounts extends Store<StageAccountWrite> {
+  /**
+   * Run the stage's first turn on `account` (`null`: the project's choice).
+   * Resolves with what happened, or null while an earlier choice for the same
+   * stage is still being saved.
+   */
+  async choose(pipelineId: string, stageId: string, account: string | null, ports: PipelinePorts): Promise<StageAccountOutcome | null> {
+    const key = stageAccountKey(pipelineId, stageId);
+    if (this.get(key)?.phase === "saving") return null;
+    this.set(key, { pipelineId, stageId, account, phase: "saving" });
+    const done = (outcome: StageAccountOutcome) => {
+      this.set(key, null);
+      return outcome;
+    };
+
+    const read = await ports.read(pipelineId);
+    const decided = decide(read?.pipeline ?? null, stageId, account, ports);
+    if (decided) return done(decided);
+    const digest = read!.stageDigests[stageId];
+    /* Without the stage's digest the write could not be guarded: nothing is sent. */
+    if (!digest) return done({ kind: "unread" });
+
+    const result = await ports.patch(pipelineId, { action: "override-stage", stageId, account, expectedStageDigest: digest });
+    if (result.ok) return done({ kind: "saved", account });
+    if (result.unknown) {
+      this.set(key, { pipelineId, stageId, account, phase: "unconfirmed" });
+      return { kind: "unknown", account };
+    }
+    if (isStageChanged(result)) {
+      const again = (await ports.read(pipelineId))?.pipeline ?? null;
+      ports.refresh();
+      const stage = again?.stages.find((candidate) => candidate.id === stageId);
+      if (!again || !stage) return done({ kind: "unread" });
+      if (!stageNotStarted(again, stageId) || pipelineEnded(again)) return done({ kind: "started" });
+      const now = stagePin(stage);
+      return done(now === account ? { kind: "saved", account } : { kind: "changed", account: now });
+    }
+    if (isAlreadyStarted(result)) {
+      ports.refresh();
+      return done({ kind: "started" });
+    }
+    return done({ kind: "refused", error: result.error });
+  }
+
+  /**
+   * Check a choice that got no answer by reading the stage. It settles only on
+   * what the stage holds: that account (saved), or a start that settled the
+   * first turn's account without it. Anything else stays unconfirmed.
+   */
+  async check(key: string, ports: PipelinePorts): Promise<StageAccountOutcome | null> {
+    const write = this.get(key);
+    if (!write || write.phase !== "unconfirmed") return null;
+    const record = (await ports.read(write.pipelineId))?.pipeline ?? null;
+    if (this.get(key) !== write) return null;
+    const stage = record?.stages.find((candidate) => candidate.id === write.stageId);
+    if (!record) return { kind: "unknown", account: write.account };
+    if (!stage) {
+      this.set(key, null);
+      return { kind: "missing" };
+    }
+    ports.refresh();
+    if (stagePin(stage) === write.account) {
+      this.set(key, null);
+      return { kind: "saved", account: write.account };
+    }
+    /* An override is refused once the stage has an attempt, so a started stage without the pin never took it. */
+    if (!stageNotStarted(record, stage.id) || pipelineEnded(record)) {
+      this.set(key, null);
+      return { kind: "started" };
+    }
+    return { kind: "unknown", account: write.account };
+  }
+}
+
+/** What a read decides before any write: null when the choice should be written. */
+function decide(pipeline: Pipeline | null, stageId: string, account: string | null, ports: PipelinePorts): StageAccountOutcome | null {
+  if (!pipeline) return { kind: "unread" };
+  const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
+  if (!stage) {
+    ports.refresh();
+    return { kind: "missing" };
+  }
+  if (!stageNotStarted(pipeline, stageId) || pipelineEnded(pipeline)) {
+    ports.refresh();
+    return { kind: "started" };
+  }
+  if (stagePin(stage) === account) {
+    ports.refresh();
+    return { kind: "same", account };
+  }
+  return null;
+}
+
+/* ── A conversation's account switch ───────────────────────────────────── */
+
+/** A switch this page asked for. Held by this page only: nothing projects a queued switch's target. */
+export interface SwitchRequest {
+  target: string;
+  /* `sending`: no answer yet. `accepted`: the route took it. `unknown`: the request got no answer. */
+  phase: "sending" | "accepted" | "unknown";
+  operationId: string | null;
+  /** The receipt status the route answered with, until the runtime reports the operation. */
+  answeredStatus: string | null;
+}
+
+export class ConversationSwitches extends Store<SwitchRequest> {
+  begin(key: string, target: string): boolean {
+    if (this.get(key)) return false;
+    this.set(key, { target, phase: "sending", operationId: null, answeredStatus: null });
+    return true;
+  }
+
+  accept(key: string, operationId: string | null, answeredStatus: string | null): void {
+    const request = this.get(key);
+    if (request) this.set(key, { ...request, phase: "accepted", operationId, answeredStatus });
+  }
+
+  lost(key: string): void {
+    const request = this.get(key);
+    if (request) this.set(key, { ...request, phase: "unknown" });
+  }
+
+  drop(key: string): void {
+    this.set(key, null);
+  }
+}
+
+export type SwitchAnswer =
+  | { kind: "accepted"; operationId: string | null; status: string | null; outsidePool: boolean; recorded: boolean | null }
+  | { kind: "refused"; error: string }
+  | { kind: "unknown" };
+
+export interface SwitchBody {
+  path: string;
+  conversationId: string | null;
+  accountId: string;
+  model: string;
+  effort: string;
+  fast?: boolean;
+}
+
+/** `POST /api/conversation-host {action: "reconfigure"}`, the request the conversation header's account chip sends. */
+export async function postConversationSwitch(body: SwitchBody, fetcher: (input: string, init: RequestInit) => Promise<Response> = (input, init) => globalThis.fetch(input, init)): Promise<SwitchAnswer> {
+  let response: Response;
+  try {
+    response = await fetcher("/api/conversation-host", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "reconfigure", ...body }),
+    });
+  } catch {
+    return { kind: "unknown" };
+  }
+  const json = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    operationId?: string;
+    receipt?: { operationId?: string; status?: string };
+    error?: string;
+    accountOverride?: { outsidePool?: boolean; recorded?: boolean };
+  } | null;
+  if (response.ok && json?.ok) {
+    return {
+      kind: "accepted",
+      operationId: json.operationId ?? json.receipt?.operationId ?? null,
+      status: json.receipt?.status ?? null,
+      outsidePool: json.accountOverride?.outsidePool === true,
+      recorded: typeof json.accountOverride?.recorded === "boolean" ? json.accountOverride.recorded : null,
+    };
+  }
+  /* An answer that explains nothing may or may not have queued the switch. */
+  if (typeof json?.error !== "string") return { kind: "unknown" };
+  return { kind: "refused", error: json.error };
+}
+
+export type SwitchView =
+  | { kind: "none" }
+  | { kind: "sending"; target: string }
+  /* Waits for the running turn to end. `record`: the migration says so, and holds deliveries for it. */
+  | { kind: "waiting"; target: string | null; source: "record" | "page" }
+  | { kind: "switching"; target: string | null; source: "record" | "page" }
+  | { kind: "failed"; target: string | null; reason: string | null }
+  /* This page's request got no answer, or its receipt ended uncertain. */
+  | { kind: "unknown"; target: string };
+
+export type SwitchSettlement =
+  | { kind: "switched"; target: string }
+  | { kind: "failed"; target: string; reason: string | null }
+  | null;
+
+const FAILED_RECEIPTS = new Set(["failed", "rejected", "interrupted"]);
+
+/**
+ * What the board may say about a conversation's account right now, and
+ * whether this page's own request has settled. A switch is reported done only
+ * when the conversation's account is the target.
+ */
+export function switchView(input: {
+  current: string;
+  migration: ConversationMigration | null | undefined;
+  request: SwitchRequest | null;
+  receipt: { status: string; reason?: string | null } | null;
+}): { view: SwitchView; settle: SwitchSettlement } {
+  const { current, request } = input;
+  const live = activeCardMigration(input.migration, current);
+  const card = cardMigrationState(live);
+  const none = { kind: "none" } as const;
+  if (request && request.phase !== "sending" && request.target === current) return { view: none, settle: { kind: "switched", target: request.target } };
+  if (request?.phase === "sending") return { view: { kind: "sending", target: request.target }, settle: null };
+  if (card === "pending") return { view: { kind: "waiting", target: migrationTargetName(live), source: "record" }, settle: null };
+  if (card === "switching") return { view: { kind: "switching", target: migrationTargetName(live), source: "record" }, settle: null };
+  if (card === "failed") {
+    const target = migrationTargetName(live);
+    return {
+      view: { kind: "failed", target, reason: live?.failure ?? null },
+      settle: request ? { kind: "failed", target: request.target, reason: live?.failure ?? null } : null,
+    };
+  }
+  if (!request) return { view: none, settle: null };
+  if (request.phase === "unknown") return { view: { kind: "unknown", target: request.target }, settle: null };
+  const status = input.receipt?.status ?? request.answeredStatus;
+  if (status && FAILED_RECEIPTS.has(status)) return { view: none, settle: { kind: "failed", target: request.target, reason: input.receipt?.reason ?? null } };
+  if (status === "uncertain") return { view: { kind: "unknown", target: request.target }, settle: null };
+  /* Applied, but the conversation does not run on the target yet: the board waits for it to. */
+  if (status === "applying" || status === "applied" || status === "delivered") return { view: { kind: "switching", target: request.target, source: "page" }, settle: null };
+  return { view: { kind: "waiting", target: request.target, source: "page" }, settle: null };
+}

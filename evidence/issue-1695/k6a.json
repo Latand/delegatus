@@ -1,0 +1,886 @@
+{
+  "prototypeCompared": true,
+  "frames": {
+    "account-picker-light": {
+      "production": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ]
+        ],
+        "label": "Switch to",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "outside this project's accounts",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A",
+          "pending": false,
+          "when": ""
+        }
+      },
+      "prototype": {
+        "width": 380,
+        "head": "Account · Verify · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ]
+        ],
+        "label": "Switch to",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 15:20",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "The running turn is never interrupted or moved. The switch waits for it to settle, then this conversation continues on the chosen account. Messages you send meanwhile queue until it lands.",
+          "Not in the product yet: a reseat chooses its account itself (the one with headroom, #97). A manual target needs an account on the reseat request. Waiting for the turn, held messages and Cancel (rollback) exist today."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A",
+          "pending": false,
+          "when": ""
+        }
+      }
+    },
+    "account-picker-dark": {
+      "production": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ]
+        ],
+        "label": "Switch to",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "outside this project's accounts",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A",
+          "pending": false,
+          "when": ""
+        }
+      },
+      "prototype": {
+        "width": 380,
+        "head": "Account · Verify · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ]
+        ],
+        "label": "Switch to",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 15:20",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "The running turn is never interrupted or moved. The switch waits for it to settle, then this conversation continues on the chosen account. Messages you send meanwhile queue until it lands.",
+          "Not in the product yet: a reseat chooses its account itself (the one with headroom, #97). A manual target needs an account on the reseat request. Waiting for the turn, held messages and Cancel (rollback) exist today."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A",
+          "pending": false,
+          "when": ""
+        }
+      }
+    },
+    "account-stage": {
+      "production": {
+        "width": 380,
+        "head": "Account · Reviewer · Claude",
+        "now": [
+          [
+            "First turn on",
+            "Project's choice"
+          ]
+        ],
+        "label": "Run this stage on",
+        "rows": [
+          {
+            "name": "Project's choice",
+            "tag": "chosen",
+            "checked": true,
+            "disabled": false,
+            "meter": false
+          },
+          {
+            "name": "Account A · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "not allowed for this project",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Applies from the stage's first turn. The server refuses an account this project doesn't allow."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Project's choice",
+          "pending": false,
+          "when": ""
+        }
+      },
+      "prototype": {
+        "width": 380,
+        "head": "Account · Review · Codex",
+        "now": [
+          [
+            "First turn on",
+            "Account B · Pro · 44% of 5h"
+          ]
+        ],
+        "label": "Run this stage on",
+        "rows": [
+          {
+            "name": "Account B · Pro",
+            "tag": "chosen",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account F · Pro",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account D · Plus",
+            "tag": "not allowed for this project",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Applies to the stage's first turn. The project's account binding must allow it; the product refuses anything else rather than swapping."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account B",
+          "pending": false,
+          "when": ""
+        }
+      }
+    },
+    "account-pending-light": {
+      "production": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ],
+          [
+            "Pending",
+            "Account G · waits for the current turn to end"
+          ]
+        ],
+        "label": "Accounts",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "pending",
+            "checked": true,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Known to this page only. A reload or another page won't show this switch until the server records it.",
+          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A→Account Gafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      },
+      "prototype": {
+        "width": 380,
+        "head": "Account · Verify · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Pending",
+            "Account G · waits for the current turn to settle"
+          ]
+        ],
+        "label": "Change the pending account",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "pending",
+            "checked": true,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 15:20",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "The running turn is never interrupted or moved. The switch waits for it to settle, then this conversation continues on the chosen account. Messages you send meanwhile queue until it lands.",
+          "Not in the product yet: a reseat chooses its account itself (the one with headroom, #97). A manual target needs an account on the reseat request. Waiting for the turn, held messages and Cancel (rollback) exist today."
+        ],
+        "cancel": true,
+        "chip": {
+          "text": "Account A→Account Gafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      }
+    },
+    "account-pending-dark": {
+      "production": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ],
+          [
+            "Pending",
+            "Account G · waits for the current turn to end"
+          ]
+        ],
+        "label": "Accounts",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "pending",
+            "checked": true,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Known to this page only. A reload or another page won't show this switch until the server records it.",
+          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A→Account Gafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      }
+    }
+  },
+  "comparison": {
+    "account-picker-light": {
+      "width": [
+        380,
+        380
+      ],
+      "summaryKeys": [
+        [
+          "Current turn on",
+          "Stage setting"
+        ],
+        [
+          "Current turn on"
+        ]
+      ],
+      "label": [
+        "Switch to",
+        "Switch to"
+      ],
+      "rows": [
+        4,
+        4
+      ],
+      "meters": [
+        4,
+        4
+      ],
+      "pendingChip": [
+        false,
+        false
+      ],
+      "cancel": [
+        false,
+        false
+      ]
+    },
+    "account-picker-dark": {
+      "width": [
+        380,
+        380
+      ],
+      "summaryKeys": [
+        [
+          "Current turn on",
+          "Stage setting"
+        ],
+        [
+          "Current turn on"
+        ]
+      ],
+      "label": [
+        "Switch to",
+        "Switch to"
+      ],
+      "rows": [
+        4,
+        4
+      ],
+      "meters": [
+        4,
+        4
+      ],
+      "pendingChip": [
+        false,
+        false
+      ],
+      "cancel": [
+        false,
+        false
+      ]
+    },
+    "account-stage": {
+      "width": [
+        380,
+        380
+      ],
+      "summaryKeys": [
+        [
+          "First turn on"
+        ],
+        [
+          "First turn on"
+        ]
+      ],
+      "label": [
+        "Run this stage on",
+        "Run this stage on"
+      ],
+      "rows": [
+        5,
+        3
+      ],
+      "meters": [
+        4,
+        3
+      ],
+      "pendingChip": [
+        false,
+        false
+      ],
+      "cancel": [
+        false,
+        false
+      ]
+    },
+    "account-pending-light": {
+      "width": [
+        380,
+        380
+      ],
+      "summaryKeys": [
+        [
+          "Current turn on",
+          "Stage setting",
+          "Pending"
+        ],
+        [
+          "Current turn on",
+          "Pending"
+        ]
+      ],
+      "label": [
+        "Accounts",
+        "Change the pending account"
+      ],
+      "rows": [
+        4,
+        4
+      ],
+      "meters": [
+        4,
+        4
+      ],
+      "pendingChip": [
+        true,
+        true
+      ],
+      "cancel": [
+        false,
+        true
+      ]
+    },
+    "cancelAbsentOnPurpose": "#1705"
+  },
+  "flows": {
+    "stageAccount": {
+      "before": {
+        "width": 380,
+        "head": "Account · Reviewer · Claude",
+        "now": [
+          [
+            "First turn on",
+            "Project's choice"
+          ]
+        ],
+        "label": "Run this stage on",
+        "rows": [
+          {
+            "name": "Project's choice",
+            "tag": "chosen",
+            "checked": true,
+            "disabled": false,
+            "meter": false
+          },
+          {
+            "name": "Account A · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "not allowed for this project",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": false,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Applies from the stage's first turn. The server refuses an account this project doesn't allow."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Project's choice",
+          "pending": false,
+          "when": ""
+        }
+      },
+      "refusedPatches": 0,
+      "patches": [
+        {
+          "id": "p-links",
+          "body": {
+            "action": "override-stage",
+            "stageId": "review",
+            "account": "account-c",
+            "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
+          }
+        }
+      ],
+      "stored": {
+        "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes before approving.",
+        "account": null
+      },
+      "after": {
+        "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes before approving.",
+        "account": "account-c"
+      },
+      "chip": "Account C",
+      "receipts": [
+        "Reviewer runs on Account C from its first turn"
+      ]
+    },
+    "conversationSwitch": {
+      "pending": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ],
+          [
+            "Pending",
+            "Account G · waits for the current turn to end"
+          ]
+        ],
+        "label": "Accounts",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "pending",
+            "checked": true,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Known to this page only. A reload or another page won't show this switch until the server records it.",
+          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A→Account Gafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      },
+      "requests": [
+        {
+          "action": "reconfigure",
+          "path": "/repo/search-ver-2.jsonl",
+          "conversationId": "conversation_search-ver-2",
+          "accountId": "account-g",
+          "model": "opus",
+          "effort": "low"
+        }
+      ],
+      "waiting": [
+        "Switch to Account G requested for Verifier. It waits for the current turn to end.",
+        "Account G is outside this project's accounts; the switch is recorded as your choice"
+      ],
+      "committed": "Account G",
+      "receipts": [
+        "Switch to Account G requested for Verifier. It waits for the current turn to end.",
+        "Account G is outside this project's accounts; the switch is recorded as your choice",
+        "Verifier now runs on Account G"
+      ]
+    },
+    "recordedAndLost": {
+      "recorded": {
+        "width": 380,
+        "head": "Account · Verifier · Claude",
+        "now": [
+          [
+            "Current turn on",
+            "Account A · Max · 72% of 5h"
+          ],
+          [
+            "Stage setting",
+            "Project's choice"
+          ],
+          [
+            "Pending",
+            "Account C · waits for the current turn to end"
+          ]
+        ],
+        "label": "Accounts",
+        "rows": [
+          {
+            "name": "Account A · Max",
+            "tag": "current",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account C · Max",
+            "tag": "pending",
+            "checked": true,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account G · Pro",
+            "tag": "outside this project's accounts",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          },
+          {
+            "name": "Account E · Pro",
+            "tag": "limit · resets 06:33 AM",
+            "checked": false,
+            "disabled": true,
+            "meter": true
+          }
+        ],
+        "notes": [
+          "Messages sent meanwhile are held for the switch.",
+          "Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.",
+          "The running turn is never interrupted. The switch waits for it to end, then this conversation continues on the chosen account.",
+          "Accounts outside this project's accounts can be chosen for a conversation; the choice is recorded as yours."
+        ],
+        "cancel": false,
+        "chip": {
+          "text": "Account A→Account Cafter this turn",
+          "pending": true,
+          "when": "after this turn"
+        }
+      },
+      "source": "record",
+      "lost": "not confirmed",
+      "requests": 1,
+      "receipts": [
+        "Switching Verifier to Account C got no answer. It may be queued; this page won't send it again."
+      ]
+    }
+  },
+  "failures": []
+}

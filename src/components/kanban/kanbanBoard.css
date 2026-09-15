@@ -829,3 +829,43 @@
 @media (prefers-reduced-motion: reduce) {
   .kb .pane.pane-flash { animation: none; }
 }
+
+/* ── K6: account chip and picker (prototype `accountChip` + `openAccountPicker`) ── */
+.kb .ch-account { height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-secondary); white-space: nowrap; max-width: 100%; }
+.kb .ch-account .cur, .kb .ch-account .to { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.kb .ch-account.acct-trigger { gap: 4px; cursor: pointer; background: var(--surface-card); }
+.kb .ch-account.acct-trigger:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.kb .ch-account.acct-trigger:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.kb .ch-account.acct-trigger .chev { width: 10px; height: 10px; flex: none; }
+.kb .ch-account.acct-trigger.pending { border-color: color-mix(in srgb, var(--color-warning) 60%, var(--border-default)); background: var(--color-warning-soft); color: var(--color-primary); }
+.kb .ch-account.acct-trigger .arrow { color: var(--color-muted); }
+.kb .ch-account.acct-trigger .to { font-weight: 700; }
+.kb .ch-account.acct-trigger .when { color: var(--color-warning); font-weight: 700; }
+.kb .popover.acct-pop { width: 380px; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; max-height: min(78vh, 720px); }
+.kb .popover.acct-pop .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0; }
+.kb .acct-now { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-sunken); }
+.kb .acct-now .kv { display: grid; grid-template-columns: 104px 1fr auto; align-items: center; gap: 8px; font-size: var(--text-ui); }
+.kb .acct-now .k { font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.kb .acct-now .v { color: var(--color-primary); font-weight: 600; min-width: 0; }
+.kb .acct-now .kv.pending { grid-template-columns: 104px 1fr; }
+.kb .acct-now .kv.pending .v { color: var(--color-warning); }
+.kb .acct-now .kv .btn { height: 26px; grid-column: 2; justify-self: start; }
+.kb .acct-now .acct-sub { margin: 0 0 0 112px; font-size: var(--text-label); color: var(--color-secondary); }
+.kb .acct-lbl { font-size: var(--text-label); font-weight: 700; color: var(--color-secondary); }
+.kb .acct-list { display: flex; flex-direction: column; gap: 2px; }
+.kb .acct-row { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "nm tag" "meter use"; gap: 2px 8px; align-items: center; text-align: left; padding: 7px 10px; border-radius: var(--radius-control); border: 1px solid transparent; background: transparent; }
+.kb .acct-row:hover { background: var(--surface-well); }
+.kb .acct-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.kb .acct-row[aria-checked="true"] { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.kb .acct-row[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.kb .acct-row .nm { grid-area: nm; font-size: var(--text-ui); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .acct-row .tag { grid-area: tag; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); text-align: right; }
+.kb .acct-row.current .tag { color: var(--color-success); }
+.kb .acct-row.pending .tag { color: var(--color-warning); }
+.kb .acct-row .meter { grid-area: meter; height: 4px; border-radius: 2px; background: var(--surface-well); overflow: hidden; }
+.kb .acct-row .meter i { display: block; height: 100%; background: var(--color-accent); }
+.kb .acct-row .use { grid-area: use; font-size: var(--text-caption); color: var(--color-muted); text-align: right; }
+.kb .popover.acct-pop .note { margin: 0; padding: 0; font-size: var(--text-label); color: var(--color-secondary); }
+@media (pointer: coarse) {
+  .kb .ch-account.acct-trigger, .kb .acct-row, .kb .acct-now .kv .btn { min-height: 44px; }
+}

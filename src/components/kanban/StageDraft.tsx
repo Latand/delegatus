@@ -7,6 +7,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { renderStagePrompt } from "@/lib/pipelines/prompts";
 import { buildStagePrompt, stagePromptExtra, stageReceivesPrevOutput } from "@/components/pipelines/pipelineModel";
 
+import { StageAccountChip } from "./AccountPicker";
 import { BranchGlyph, ChevronRight, CloseGlyph, CollapseGlyph, ExpandGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { graphOrder } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -360,6 +361,7 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
             <span className="ch-state">{stateWord}</span>
             <span className={`ch-engine ${engine}`}>{engine === "codex" ? "Codex" : "Claude"}</span>
             {stage.effectiveRole.model ? <span className="ch-model">{stage.effectiveRole.effort ? `${stage.effectiveRole.model} · ${stage.effectiveRole.effort}` : stage.effectiveRole.model}</span> : null}
+            <StageAccountChip pipeline={pipeline} stage={stage} />
             {started ? null : <span className="ch-ctx">{t("kanban.draft.noContext")}</span>}
             {pipeline.branch ? (
               <span className="ch-tree" title={t("branch.worktree", { name: pipeline.branch })}>
