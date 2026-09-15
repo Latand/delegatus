@@ -1,4 +1,4 @@
-# K6c plan: messages survive a successful account switch (#1695)
+# K6c plan: messages survive a successful account switch (#1695, #1709)
 
 Status: plan with a failing repro. Nothing is implemented. The fix touches the registry and migration files
 under review in #1708, so it waits for that pull request.
