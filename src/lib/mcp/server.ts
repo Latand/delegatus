@@ -35,6 +35,7 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
+import { isMcpOperationTool, mcpReceiptsDatabasePath, type McpOperationCaller } from "./receiptsDatabase";
 import type { McpToolPolicy } from "./toolAllowlist";
 
 export const MCP_SERVER_NAME = "viewer";
@@ -185,6 +186,16 @@ export interface McpToolCallContext {
   /** #1629: the native work identity this request arrived with, read off the
       protocol envelope rather than the arguments. See {@link McpNativeWork}. */
   nativeWork?: McpNativeWork | null;
+  /** #1695 C8: the receipt an operations-feed tool claimed for this call — its
+      digest, claim time and server-derived caller — so what the call creates
+      carries the identity the feed reports. */
+  receipt?: McpOperationReceipt;
+}
+
+export interface McpOperationReceipt {
+  digest: string;
+  claimedAt: string;
+  caller: McpOperationCaller | null;
 }
 
 /**
@@ -505,7 +516,8 @@ export type ReceiptClaim =
   | { kind: "conflict"; record?: McpReceiptRecord };
 
 export interface McpReceiptStore {
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim | Promise<ReceiptClaim>;
+  /** `caller` is recorded only by a store that serves the operations feed. */
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, caller?: McpOperationCaller): ReceiptClaim | Promise<ReceiptClaim>;
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
 }
 
@@ -1460,7 +1472,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     this.secureFiles();
   }
 
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim {
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, caller?: McpOperationCaller): ReceiptClaim {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const now = this.now();
@@ -1477,10 +1489,10 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       }
       const bindingJson = binding ? JSON.stringify(binding) : null;
       const storageBytes = this.storageBytes(key, digest, null, bindingJson);
-      this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null]>(`
-        INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage)
-        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
-      `).run(key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null);
+      this.db.query<unknown, [string, string, ReceiptRetention, number, number, string | null, string | null, string | null]>(`
+        INSERT INTO mcp_receipts(receipt_key, digest, retention, result_json, storage_bytes, claimed_at, binding_json, stage, caller_json)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
+      `).run(key, digest, retention, storageBytes, now, bindingJson, binding ? "claimed" : null, caller ? JSON.stringify(caller) : null);
       this.pruneBoundedReceipts(now);
       this.db.exec("COMMIT");
       return { kind: "fresh" };
@@ -1651,6 +1663,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       if (!columns.has("binding_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN binding_json TEXT");
       if (!columns.has("stage")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN stage TEXT");
       if (!columns.has("recovery_result_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN recovery_result_json TEXT");
+      /* #1695 C5: the server-derived caller of an operations-feed claim. */
+      if (!columns.has("caller_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN caller_json TEXT");
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -1967,6 +1981,9 @@ export interface McpToolServiceOptions {
       recoverable under the original clientRequestId afterwards. Requires a
       store that {@link supportsMcpRecovery}. */
   recovery?: Partial<Record<McpToolName, McpRecoverableTool>>;
+  /** #1695 C5: resolves the server-derived caller an operations-feed claim
+      records. Absent records none. */
+  operationCaller?: () => McpOperationCaller;
 }
 
 /** The closed outcome vocabulary of original-key recovery (#1490). */
@@ -2047,6 +2064,15 @@ function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller): bool
     && recorded.project === current.project
     && (recorded.conversationId === current.conversationId
       || (recorded.conversationId !== null && (current.predecessors ?? []).includes(recorded.conversationId)));
+}
+
+function resolveOperationCaller(resolve: (() => McpOperationCaller) | undefined): McpOperationCaller | null {
+  if (!resolve) return null;
+  try {
+    return resolve();
+  } catch {
+    return null;
+  }
 }
 
 function identifiedCaller(caller: McpRequestCaller): boolean {
@@ -2579,7 +2605,13 @@ export function createMcpToolService(
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
         const claimStartedAt = performance.now();
-        const claim = await receipts.claim(key, digest, retention);
+        /* #1695 C5: an operations-feed tool records who is calling in its claim,
+           so the operation is attributable while it runs. Attribution never
+           gates the call: a resolver fault records no caller. */
+        const operation = isMcpOperationTool(typedTool);
+        const operationCaller = operation ? resolveOperationCaller(options.operationCaller) : null;
+        const claimedAt = new Date().toISOString();
+        const claim = await receipts.claim(key, digest, retention, undefined, operationCaller ?? undefined);
         phaseDurations.claim = performance.now() - claimStartedAt;
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -2600,7 +2632,8 @@ export function createMcpToolService(
         let settled: McpToolResult;
         const bindingStartedAt = performance.now();
         try {
-          const payload = await bindings[typedTool](effectiveArgs, context);
+          const receipt: McpOperationReceipt | undefined = operation ? { digest, claimedAt, caller: operationCaller } : undefined;
+          const payload = await bindings[typedTool](effectiveArgs, receipt ? { ...context, receipt } : context);
           settled = {
             ...payload,
             ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
@@ -2992,6 +3025,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
     task: z.string().min(1).describe("Board title for the pipeline."),
+    taskId: entityIdSchema.optional().describe("Board task this pipeline is created for; it joins the pipeline's task links."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
@@ -3358,6 +3392,7 @@ export async function startViewerMcpServer(): Promise<void> {
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
+    viewerMcpOperationCaller,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
@@ -3367,11 +3402,11 @@ export async function startViewerMcpServer(): Promise<void> {
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
-    new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+    new SqliteMcpReceiptStore(mcpReceiptsDatabasePath(), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
-    { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
+    { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools(), operationCaller: viewerMcpOperationCaller() },
   );
   const server = createViewerMcpServer(service);
   const transport = new StdioServerTransport();

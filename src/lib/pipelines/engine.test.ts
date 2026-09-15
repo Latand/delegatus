@@ -552,6 +552,32 @@ function harness() {
   };
 }
 
+/* #1695 C8: the receipt is stamped in the create transaction, and one MCP call
+   creates at most one pipeline. */
+test("a create under a stored creation digest answers with that pipeline and stores no second one", async () => {
+  const h = harness();
+  savePipelines([]);
+  const creationReceipt = {
+    tool: "create_pipeline" as const,
+    requestDigest: "d".repeat(64),
+    callerConversationId: "conversation_manager",
+    claimedAt: "2026-09-15T10:00:00.000Z",
+  };
+  const request = { task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages: RUN_STAGES as never, src: "/codex/creator.jsonl" };
+
+  const first = await engineModule.createPipelineFromRequest(request, h.ports, { creationReceipt });
+  const replayed = await engineModule.createPipelineFromRequest(request, h.ports, { creationReceipt });
+  expect(first.pipeline?.creationReceipt).toEqual(creationReceipt);
+  expect(replayed.pipeline?.id).toBe(first.pipeline!.id);
+  expect(loadPipelines().map((pipeline) => [pipeline.id, pipeline.creationReceipt])).toEqual([[first.pipeline!.id, creationReceipt]]);
+
+  const other = await engineModule.createPipelineFromRequest(request, h.ports, { creationReceipt: { ...creationReceipt, requestDigest: "e".repeat(64) } });
+  const unreceipted = await engineModule.createPipelineFromRequest(request, h.ports);
+  expect(new Set([first.pipeline!.id, other.pipeline!.id, unreceipted.pipeline!.id]).size).toBe(3);
+  expect(unreceipted.pipeline?.creationReceipt).toBeUndefined();
+  expect(loadPipelines()).toHaveLength(3);
+});
+
 /** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
 const REMOTE_BRANCH = { publication: "remote-branch" } as const;
 
