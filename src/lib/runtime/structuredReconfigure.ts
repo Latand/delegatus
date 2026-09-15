@@ -17,6 +17,16 @@ class StructuredReconfigureSupersededError extends Error {
   }
 }
 
+/** The operation was withdrawn before its claim, or the switch it owned was cancelled (#1705): it never applies. */
+export class StructuredReconfigureCancelledError extends Error {
+  constructor() {
+    super("cancelled");
+    this.name = "StructuredReconfigureCancelledError";
+  }
+}
+
+const settledElsewhere = (error: unknown) => error instanceof StructuredReconfigureSupersededError || error instanceof StructuredReconfigureCancelledError;
+
 async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
   const { releaseStructuredDeliveryHost } = await import("./structuredDeliveryController");
   return await releaseStructuredDeliveryHost(key);
@@ -96,7 +106,9 @@ export async function applyStructuredReconfigure(
     ...(effect.previousProfile ? { previousProfile: effect.previousProfile } : {}),
     ...(effect.accountId ? { accountId: effect.accountId } : {}),
   });
+  if (claim.kind === "withdrawn") throw new StructuredReconfigureCancelledError();
   if (claim.kind === "stale") throw new StructuredReconfigureSupersededError();
+  if (claim.state.status === "cancelled") throw new StructuredReconfigureCancelledError();
   if (claim.state.status === "applied") return "applied";
   if (claim.state.status === "failed") throw new Error(claim.state.error ?? "structured reconfigure failed");
 
@@ -188,18 +200,29 @@ export async function applyStructuredReconfigure(
       await settle("applied");
       return "applied";
     } catch (error) {
-      if (error instanceof StructuredReconfigureSupersededError) throw error;
+      if (settledElsewhere(error)) throw error;
       await settle("failed", error);
       await restoreCommittedSuccessor(generation.id);
       throw error;
     }
   }
 
+  /* The owner this executor claimed was cancelled while it ran: nothing more is requested or applied. */
+  const ownerCancelled = () => {
+    const owner = registry.conversation(conversationId)?.reconfigure;
+    return owner?.operationId === effect.operationId && owner.revision === effect.eventSeq && owner.status === "cancelled";
+  };
+
   if (switchingAccount) {
-    registry.requestConversationReseat(conversationId, targetAccountId!, {
-      operationId: effect.operationId,
-      revision: effect.eventSeq,
-    });
+    try {
+      registry.requestConversationReseat(conversationId, targetAccountId!, {
+        operationId: effect.operationId,
+        revision: effect.eventSeq,
+      });
+    } catch (error) {
+      if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
+      throw error;
+    }
     const committedSuccessorAfterCapturedPredecessor = (): RegistryConversation["generations"][number] | null => {
       const latest = registry.conversation(conversationId);
       if (!latest) return null;
@@ -235,6 +258,7 @@ export async function applyStructuredReconfigure(
         effect.operationId,
       );
       const owner = registry.conversation(conversationId)?.reconfigure;
+      if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       if (!await ownsOperation()
         || owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq) {
         await cleanupCommittedPredecessorAfterSupersedence();
@@ -253,7 +277,7 @@ export async function applyStructuredReconfigure(
       await settle("applied");
       return "applied";
     } catch (error) {
-      if (error instanceof StructuredReconfigureSupersededError) throw error;
+      if (settledElsewhere(error)) throw error;
       await settle("failed", error);
       if (committedSuccessorId) await restoreCommittedSuccessor(committedSuccessorId);
       throw error;
@@ -275,7 +299,7 @@ export async function applyStructuredReconfigure(
     await settle("applied");
     return "applied";
   } catch (error) {
-    if (error instanceof StructuredReconfigureSupersededError) throw error;
+    if (settledElsewhere(error)) throw error;
     await settle("failed", error);
     await recover({ path: generation.path, conversationId }, {
       registry,

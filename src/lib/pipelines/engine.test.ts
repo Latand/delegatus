@@ -9934,3 +9934,56 @@ test("expectedAttempt 0 states a stage with no attempt of its own: it retries a 
   expect(resets()).toBe(resetsBefore);
   expect((await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
 });
+
+/* Engine scope only (#1695 K6b): the conversation's path, host availability and the successor's turns are
+   given to the engine here, and no registry migration, commit or delivery runs. The integration, a real
+   switch whose successor turn is started by the message held for it, needs #1709 (K6c). */
+test("the engine keeps a switched stage's attempt running across an unavailable host inside the grace, follows its new path, and settles on the successor's verdict without the fail edge (#1695 K6b)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null, onFail: { to: "recover", maxRounds: 1 } },
+    { id: "recover", kind: "run", role: { roleId: "builder" }, prompt: "Recover {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  pinStageHead(h);
+  const stageConversation = loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId!;
+  const sourcePath = "/codex/stage-1.jsonl";
+  const successorPath = "/codex/accounts/account-b/stage-1.jsonl";
+
+  /* The switch waits for a turn boundary: the source's turn ends without a verdict, and its host is
+     released while the successor starts, well inside the grace a dead host gets. */
+  h.durableTurns.set(sourcePath, { turn: "terminal", message: { text: "Halfway through; continuing on the other account.", ts: 5_000_000 } });
+  h.setConversationActive(false);
+  const releasedAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => releasedAt;
+  h.advanceWallClock(60_000);
+  await tickPipelines([entry(sourcePath)], h.ports);
+  let current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts[0]!.state).toBe("running");
+  expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
+
+  /* The switch commits: the conversation continues under its successor generation, hosted and working. */
+  h.ports.pathForConversation = (id) => (id === stageConversation ? successorPath : null);
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(true);
+  h.durableTurns.set(successorPath, { turn: "busy", message: null });
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([{ ...entry(successorPath), activity: "live" }], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", agentPath: successorPath });
+
+  /* The successor's turn ends with the stage's verdict. */
+  h.durableTurns.set(successorPath, { turn: "terminal", message: { text: PASS_TEXT, ts: 5_600_000 } });
+  h.setConversationActive(false);
+  await tickPipelines([entry(successorPath)], h.ports);
+  await tickPipelines([entry(successorPath)], h.ports);
+
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "passed", agentPath: successorPath, conversationId: stageConversation, verdict: { status: "pass" } });
+  expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
+  expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});

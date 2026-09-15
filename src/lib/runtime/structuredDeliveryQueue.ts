@@ -38,6 +38,8 @@ export interface StructuredDeliveryQueuePort {
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
   deferTarget?(conversationId: string): boolean;
+  /** A reconfigure withdrawn before its claim, or whose claimed switch was cancelled (#1705). */
+  reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   transition(
     operationId: string,
@@ -1607,6 +1609,12 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainReconfigure(effect: StructuredReconfigureEffect): Promise<boolean> {
+    /* #1705: a cancelled operation ends now, whatever the turn is doing, with its one terminal transition.
+       The claim checks the same record again in its own transaction. */
+    if (this.port.reconfigureCancelled?.(effect)) {
+      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "cancelled" });
+      return false;
+    }
     const host = this.resolveHost(effect.conversationId);
     if (host) {
       /* A switch is applied at a turn boundary, and an unreadable state is not

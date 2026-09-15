@@ -354,6 +354,11 @@ export interface HeldDelivery {
       before its runtime owner was published. */
   recoveryIntent?: "reclaimed-host" | null;
   state: "held" | "assigned" | "delivered" | "failed" | "delivery-uncertain";
+  /** The operation id of the migration that held this delivery (#1705). Set
+      while `held` because a migration was in flight; a cancel, withdrawal or
+      supersede of that migration touches only the deliveries it fenced. Absent
+      on records written before it existed. */
+  fencedBy?: string | null;
   generationId: string | null;
   attempts: number;
   assignedAt: string | null;

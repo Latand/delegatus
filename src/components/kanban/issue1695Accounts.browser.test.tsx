@@ -6,7 +6,7 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 
 /*
- * Rendered evidence for account choice on the kanban board (#1695 K6a): the
+ * Rendered evidence for account choice on the kanban board (#1695 K6): the
  * real Viewer over `issue1695Evidence.fixture.tsx?scenario=accounts`, with the
  * production stylesheet, in Chromium:
  *
@@ -27,15 +27,17 @@ import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
  *     recorded, the switch sent as the conversation header's `reconfigure`,
  *     then "after this turn" with the target known to this page only (the
  *     fixture runs without a runtime plane, so no session reports it), every
- *     row unavailable, nothing resent while it waits, and "now runs on" only
- *     once the conversation runs on the target;
+ *     nothing resent while it waits, and "now runs on" only once the
+ *     conversation runs on the target;
+ *   - Cancel switch and Change the pending account, as the prototype has them
+ *     (#1705): Change withdraws the queued switch by its operation before the
+ *     new switch is sent; Cancel on a switch the migration record reports
+ *     sends the record's revision; a switch past waiting for its turn offers
+ *     neither;
  *   - a switch the migration record reports, shown to a fresh page; a switch
  *     with no answer, not confirmed and never resent.
  *
- * Cancel and change of a pending switch are not offered (#1705): the evidence
- * records that the prototype's Cancel is absent on purpose.
- *
- * Measurements go to `evidence/issue-1695/k6a.json`; frames to
+ * Measurements go to `evidence/issue-1695/k6.json`; frames to
  * `.artifacts/issue-1695/`, which is not committed.
  */
 
@@ -89,6 +91,7 @@ const LINKS_REVIEW_CHIP = '[data-kanban-board] [data-account-trigger="stage:p-li
 type Hook = { evidence: {
   pipelinePatches: Array<{ id: string; body: Record<string, unknown> }>;
   accountRequests: Array<Record<string, unknown>>;
+  migrationRequests: Array<{ conversationId: string; body: Record<string, unknown> }>;
   loseNextAccountAnswer: boolean;
   storedPipeline: (id: string) => { stages: Array<{ id: string; prompt: string; account?: string | null; effectiveRole: Record<string, unknown> }> } | null;
   setMigration: (pathname: string, migration: Record<string, unknown> | null) => void;
@@ -234,18 +237,26 @@ browserTest("#1695 K6a: account chips and pickers on waiting and running stages,
         await page.waitForTimeout(1_500);
         const requests = await hook(page, (evidence) => evidence.accountRequests);
         const waiting = await receipts(page);
-        await hook(page, (evidence) => evidence.commitAccountSwitch("conversation_search-ver-2", "account-g"));
+        /* Change: the queued switch is withdrawn by its operation before the new account is asked for. */
+        await openPicker(page, VERIFY_CHIP);
+        await page.click('.popover.acct-pop .acct-row[data-account="account-c"]');
+        await page.waitForTimeout(1_500);
+        const migrationRequests = await hook(page, (evidence) => evidence.migrationRequests);
+        const changedRequests = await hook(page, (evidence) => evidence.accountRequests);
+        const changedChip = await page.evaluate((selector) => document.querySelector(selector)?.textContent?.trim() ?? "", VERIFY_CHIP);
+        await hook(page, (evidence) => evidence.commitAccountSwitch("conversation_search-ver-2", "account-c"));
         await page.waitForTimeout(1_500);
         const committed = await page.evaluate((selector) => document.querySelector(selector)?.textContent?.trim() ?? "", VERIFY_CHIP);
-        flows.conversationSwitch = { pending, requests, waiting, committed, receipts: await receipts(page) };
+        flows.conversationSwitch = { pending, requests, waiting, migrationRequests, changedRequests, changedChip, committed, receipts: await receipts(page) };
         if (!pending || !pending.chip.pending || pending.chip.when !== "after this turn") failures.push(`pending switch: chip ${JSON.stringify(pending?.chip)}`);
         if (JSON.stringify(pending?.now.at(-1)) !== JSON.stringify(["Pending", "Account G · waits for the current turn to end"])) failures.push(`pending switch: summary ${JSON.stringify(pending?.now)}`);
-        if (!pending?.rows.every((row) => row.disabled)) failures.push(`pending switch: a row is selectable ${JSON.stringify(pending?.rows)}`);
-        if (pending?.cancel) failures.push("pending switch: a Cancel is offered");
-        if (!pending?.notes.some((note) => note.startsWith("Known to this page only.")) || !pending.notes.some((note) => note.startsWith("Cancelling or changing a pending switch isn't available yet"))) failures.push(`pending switch: notes ${JSON.stringify(pending?.notes)}`);
+        if (!pending?.cancel || pending.label !== "Change the pending account" || pending.rows.filter((row) => !row.disabled).length < 3) failures.push(`pending switch: Cancel and Change ${JSON.stringify({ cancel: pending?.cancel, label: pending?.label, rows: pending?.rows })}`);
+        if (!pending?.notes.some((note) => note.startsWith("Known to this page only."))) failures.push(`pending switch: notes ${JSON.stringify(pending?.notes)}`);
         if (requests.length !== 1 || requests[0]?.action !== "reconfigure" || requests[0]?.accountId !== "account-g" || requests[0]?.conversationId !== "conversation_search-ver-2") failures.push(`pending switch: requests ${JSON.stringify(requests)}`);
         if (!waiting.includes("Account G is outside this project's accounts; the switch is recorded as your choice") || waiting.some((line) => line.includes("now runs on"))) failures.push(`pending switch: receipts ${JSON.stringify(waiting)}`);
-        if (committed !== "Account G" || !(flows.conversationSwitch as { receipts: string[] }).receipts.includes("Verifier now runs on Account G")) failures.push(`pending switch: after commit ${committed} ${JSON.stringify((flows.conversationSwitch as { receipts: string[] }).receipts)}`);
+        if (JSON.stringify(migrationRequests.map((entry) => entry.body)) !== JSON.stringify([{ action: "withdraw", operationId: "account-switch-1" }]) || changedRequests.length !== 2 || changedRequests[1]?.accountId !== "account-c") failures.push(`change: ${JSON.stringify({ migrationRequests, changedRequests })}`);
+        if (!changedChip.includes("Account C")) failures.push(`change: chip ${changedChip}`);
+        if (committed !== "Account C" || !(flows.conversationSwitch as { receipts: string[] }).receipts.includes("Verifier now runs on Account C")) failures.push(`change: after commit ${committed} ${JSON.stringify((flows.conversationSwitch as { receipts: string[] }).receipts)}`);
       });
     }
     await prototype("readers=c-search-ver-2&scrollto=t-search&seat=collapsed", "light", "prototype pending switch", async (page) => {
@@ -270,6 +281,16 @@ browserTest("#1695 K6a: account chips and pickers on waiting and running stages,
       const recorded = await measurePicker(page, VERIFY_CHIP);
       const source = await page.evaluate(() => document.querySelector(".popover.acct-pop [data-account-pending]")?.getAttribute("data-account-source") ?? null);
       await shot(page, "production", "account-recorded", "light");
+      /* Cancel by the record's revision; the fixture's route rolls the switch back. */
+      await page.click(".popover.acct-pop [data-account-cancel]");
+      await page.waitForTimeout(1_500);
+      const cancelRequests = await hook(page, (evidence) => evidence.migrationRequests);
+      const cancelledChip = await page.evaluate((selector) => document.querySelector(selector)?.textContent?.trim() ?? "", VERIFY_CHIP);
+      /* A switch past waiting for its turn offers neither Cancel nor Change. */
+      await hook(page, (evidence) => evidence.setMigration("conversation_search-ver-2", { intentId: "intent-2", trigger: "manual", phase: "preparing", targetAccountId: "account-c", targetLabel: "account-c", failure: null, revision: 3 }));
+      await page.waitForTimeout(1_500);
+      await openPicker(page, VERIFY_CHIP);
+      const started = await measurePicker(page, VERIFY_CHIP);
       await closePicker(page);
       await hook(page, (evidence) => evidence.setMigration("conversation_search-ver-2", null));
       await page.waitForTimeout(1_500);
@@ -279,8 +300,10 @@ browserTest("#1695 K6a: account chips and pickers on waiting and running stages,
       await page.waitForTimeout(1_500);
       const lost = await page.evaluate((selector) => document.querySelector(selector)?.querySelector(".when")?.textContent ?? null, VERIFY_CHIP);
       const requests = await hook(page, (evidence) => evidence.accountRequests.length);
-      flows.recordedAndLost = { recorded, source, lost, requests, receipts: await receipts(page) };
-      if (!recorded?.chip.pending || source !== "record" || !recorded.notes.includes("Messages sent meanwhile are held for the switch.")) failures.push(`recorded switch: ${JSON.stringify({ recorded, source })}`);
+      flows.recordedAndLost = { recorded, source, cancelRequests, cancelledChip, started, lost, requests, receipts: await receipts(page) };
+      if (!recorded?.chip.pending || source !== "record" || !recorded.notes.includes("Messages sent now are held. Cancel delivers them on the current account; if the switch completes, they are not delivered and have to be sent again.") || !recorded.cancel) failures.push(`recorded switch: ${JSON.stringify({ recorded, source })}`);
+      if (JSON.stringify(cancelRequests.map((entry) => entry.body)) !== JSON.stringify([{ action: "cancel", expectedRevision: 2 }]) || cancelledChip !== "Account A") failures.push(`cancel: ${JSON.stringify({ cancelRequests, cancelledChip })}`);
+      if (!started || started.cancel || !started.rows.every((row) => row.disabled) || !started.notes.includes("Too late to cancel: the switch has started.")) failures.push(`started switch: ${JSON.stringify(started)}`);
       if (lost !== "not confirmed" || requests !== 1) failures.push(`lost switch: ${JSON.stringify({ lost, requests })}`);
     });
   } finally {
@@ -309,11 +332,10 @@ browserTest("#1695 K6a: account chips and pickers on waiting and running stages,
       if (Math.abs(ours.width - theirs.width) > 2) failures.push(`${key}: picker width ${ours.width}, prototype ${theirs.width}`);
       if (ours.now[0]?.[0] !== theirs.now[0]?.[0]) failures.push(`${key}: summary ${JSON.stringify(comparison[key])}`);
       if (ours.chip.pending !== theirs.chip.pending) failures.push(`${key}: chip ${JSON.stringify(comparison[key])}`);
+      if (ours.cancel !== theirs.cancel) failures.push(`${key}: Cancel ${JSON.stringify(comparison[key])}`);
     }
-    /* Deliberate: the prototype's Cancel switch rolls back a switch that the queue then re-requests (#1705). */
-    comparison.cancelAbsentOnPurpose = "#1705";
   }
   if (PROTOTYPE && notes.length) failures.push(...notes.map((note) => `prototype not driven: ${note}`));
-  fs.writeFileSync(path.join(EVIDENCE, "k6a.json"), `${JSON.stringify({ prototypeCompared: Boolean(PROTOTYPE), frames, comparison, flows, failures }, null, 2)}\n`);
+  fs.writeFileSync(path.join(EVIDENCE, "k6.json"), `${JSON.stringify({ prototypeCompared: Boolean(PROTOTYPE), frames, comparison, flows, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 900_000);

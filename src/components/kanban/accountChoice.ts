@@ -25,9 +25,15 @@ import { pipelineEnded, stageNotStarted } from "./stagesModel";
  * session's `pendingReconfigure` with the account it targets. Only a request
  * this page sent that neither reports yet (the answer arrived before the
  * projection, or the runtime plane is unavailable) is said to be known to this
- * page alone. Cancelling or changing a pending switch is not offered: rolling
- * it back is undone when the queue retries the switch, and superseding it
- * cancels the messages held for it (#1705).
+ * page alone.
+ *
+ * A pending switch can be cancelled, or changed (a cancel, then a new switch
+ * once the cancel is confirmed), through the conversation migration route
+ * (#1705): `cancel` with the migration's revision while its record is
+ * `requested` or `waiting-turn`, `withdraw` with the operation id while the
+ * switch is still queued without a record. Either keeps the messages held for
+ * the switch. A cancel with no answer locks this page's picker like a switch
+ * with no answer: nothing is sent twice.
  */
 
 export type AccountEngine = "claude" | "codex";
@@ -249,6 +255,126 @@ export class ConversationSwitches extends Store<SwitchRequest> {
   drop(key: string): void {
     this.set(key, null);
   }
+}
+
+/** How a pending switch can be cancelled right now, if at all. */
+export type CancelTarget =
+  | { action: "cancel"; expectedRevision: number }
+  | { action: "withdraw"; operationId: string };
+
+const CANCELLABLE_RECORD_PHASES = new Set(["requested", "waiting-turn"]);
+
+/**
+ * The cancel a pending switch allows, from the same authorities `switchView`
+ * reads: the migration record first (cancellable only while `requested` or
+ * `waiting-turn`, by its revision), then a queued switch the runtime session
+ * reports, then this page's own accepted request (by operation id). A switch
+ * the queue is applying, or one past `waiting-turn`, has none.
+ */
+export function switchCancelTarget(input: {
+  current: string;
+  migration: ConversationMigration | null | undefined;
+  request: SwitchRequest | null;
+  receipt: { status: string } | null;
+  pending?: RuntimePendingSwitch | null;
+}): CancelTarget | null {
+  const live = activeCardMigration(input.migration, input.current);
+  const card = cardMigrationState(live);
+  /* A failed record offers its own Retry and Keep on the conversation banner, not a cancel. */
+  if (live && (card === "pending" || card === "switching" || card === "failed")) {
+    return CANCELLABLE_RECORD_PHASES.has(live.phase) && Number.isInteger(live.revision)
+      ? { action: "cancel", expectedRevision: live.revision! }
+      : null;
+  }
+  const pending = input.pending ?? null;
+  if (pending) {
+    if (!pending.accountId || pending.accountId === input.current) return null;
+    return pending.status === "applying" ? null : { action: "withdraw", operationId: pending.operationId };
+  }
+  const request = input.request;
+  if (request?.phase !== "accepted" || !request.operationId || request.target === input.current) return null;
+  const status = input.receipt?.status ?? request.answeredStatus;
+  return status === null || status === "queued" || status === "pending"
+    ? { action: "withdraw", operationId: request.operationId }
+    : null;
+}
+
+/**
+ * Which switch a cancel names, beyond the body it sends: a migration revision
+ * alone repeats across a conversation's switches, so a record is named by its
+ * intent, revision and target, and a queued switch by its operation.
+ */
+export function cancelSubject(target: CancelTarget | null, migration: ConversationMigration | null | undefined): string | null {
+  if (!target) return null;
+  if (target.action === "withdraw") return `operation:${target.operationId}`;
+  return `record:${migration?.intentId ?? ""}:${target.expectedRevision}:${migration?.targetAccountId ?? ""}`;
+}
+
+/** A cancel of a pending switch this page sent, until it settles. */
+export interface CancelRequest {
+  target: string | null;
+  /** The switch it cancels (`cancelSubject`). */
+  subject: string;
+  phase: "sending" | "unknown";
+}
+
+/**
+ * The cancel this page still holds against the switch the board shows now. One
+ * in flight is shown as it is. One that got no answer locks only the switch it
+ * named: once the board no longer shows that switch as cancellable (rolled
+ * back, started, or replaced by another), the lock ends, and nothing is
+ * claimed about how it ended.
+ */
+export function heldCancel(cancel: CancelRequest | null, subject: string | null): CancelRequest | null {
+  if (!cancel) return null;
+  return cancel.phase === "sending" || cancel.subject === subject ? cancel : null;
+}
+
+export class ConversationCancels extends Store<CancelRequest> {
+  /** One cancel per conversation at a time; one with no answer keeps only its own switch from a second. */
+  begin(key: string, target: string | null, subject: string): boolean {
+    const existing = this.get(key);
+    if (existing && (existing.phase === "sending" || existing.subject === subject)) return false;
+    this.set(key, { target, subject, phase: "sending" });
+    return true;
+  }
+
+  lost(key: string): void {
+    const cancel = this.get(key);
+    if (cancel) this.set(key, { ...cancel, phase: "unknown" });
+  }
+
+  drop(key: string): void {
+    this.set(key, null);
+  }
+}
+
+export type CancelAnswer =
+  | { kind: "cancelled" }
+  /* Refused before anything was written; `retryable` when nothing about the switch was decided (the journal was unreadable). */
+  | { kind: "refused"; code: string | null; error: string; retryable: boolean }
+  | { kind: "unknown" };
+
+/** `POST /api/conversations/:id/migration` with `cancel` or `withdraw`. */
+export async function postSwitchCancel(conversationId: string, target: CancelTarget, fetcher: (input: string, init: RequestInit) => Promise<Response> = (input, init) => globalThis.fetch(input, init)): Promise<CancelAnswer> {
+  let response: Response;
+  try {
+    response = await fetcher(`/api/conversations/${encodeURIComponent(conversationId)}/migration`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(target),
+    });
+  } catch {
+    return { kind: "unknown" };
+  }
+  const json = (await response.json().catch(() => null)) as { error?: unknown; code?: unknown } | null;
+  if (response.ok && json) return { kind: "cancelled" };
+  const error = typeof json?.error === "string" ? json.error : null;
+  const code = typeof json?.code === "string" ? json.code : null;
+  if (error && response.status >= 400 && response.status < 500) return { kind: "refused", code, error, retryable: false };
+  /* The route answers this before it writes anything. */
+  if (error && response.status === 503 && code === "RUNTIME_UNREADABLE") return { kind: "refused", code, error, retryable: true };
+  return { kind: "unknown" };
 }
 
 export type SwitchAnswer =

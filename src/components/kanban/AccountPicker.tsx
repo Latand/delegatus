@@ -13,9 +13,17 @@ import type { RuntimeSession } from "@/components/runtime/runtimeModel";
 import { effectiveProfile } from "@/components/runtimeProfile";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 
+import { requestFilesRefresh } from "@/lib/filesEvents";
+
 import {
   accountStanding,
+  cancelSubject,
+  ConversationCancels,
   ConversationSwitches,
+  heldCancel,
+  postSwitchCancel,
+  switchCancelTarget,
+  type CancelTarget,
   parseProjectPolicy,
   postConversationSwitch,
   StageAccounts,
@@ -58,6 +66,18 @@ export interface AccountChoice {
   checkStage: (input: { pipelineId: string; stageId: string; stageName: string; labelOf: (id: string) => string }) => void;
   switchConversation: (input: { file: FileEntry; conversationId: string | null; target: string; targetLabel: string; name: string; working: boolean }) => void;
   settleSwitch: (key: string, settle: NonNullable<SwitchSettlement>, targetLabel: string, name: string) => void;
+  cancels: ConversationCancels;
+  /** Cancel a pending switch; with `then`, request that switch once the cancel is confirmed (Change). */
+  cancelSwitch: (input: {
+    file: FileEntry;
+    conversationId: string;
+    target: CancelTarget;
+    /** The switch it cancels (`cancelSubject`). */
+    subject: string;
+    pendingLabel: string | null;
+    name: string;
+    then: { account: string; label: string; working: boolean } | null;
+  }) => void;
 }
 
 export const AccountChoiceContext = createContext<AccountChoice | null>(null);
@@ -68,6 +88,7 @@ const noSubscribe = () => () => {};
 export function useAccountChoices(ports: PipelinePorts, show: Show, t: TFunction, open: (target: AccountTarget, anchor: HTMLElement) => void): AccountChoice {
   const stages = useMemo(() => new StageAccounts(), []);
   const switches = useMemo(() => new ConversationSwitches(), []);
+  const cancels = useMemo(() => new ConversationCancels(), []);
   const [policies, setPolicies] = useState<ReadonlyMap<string, ProjectPolicy>>(() => new Map());
   const known = useRef(policies);
   known.current = policies;
@@ -185,9 +206,51 @@ export function useAccountChoices(ports: PipelinePorts, show: Show, t: TFunction
     else show(settle.reason ? t("kanban.account.receipt.failedReason", { name, account: targetLabel, reason: settle.reason }) : t("kanban.account.receipt.failed", { name, account: targetLabel }), undefined, { error: true });
   }, [switches]);
 
+  const cancelSwitch = useCallback<AccountChoice["cancelSwitch"]>((input) => {
+    const key = conversationIdentity(input.file);
+    /* One cancel per conversation at a time; one that got no answer keeps the lock. */
+    if (!cancels.begin(key, input.pendingLabel, input.subject)) return;
+    const run = () => {
+      void postSwitchCancel(input.conversationId, input.target).then((answer) => {
+        const { show, t } = live.current;
+        const account = input.pendingLabel ?? t("kanban.account.anotherAccount");
+        if (answer.kind === "cancelled") {
+          cancels.drop(key);
+          /* This page's own request for the cancelled switch ends with the cancel, not as a failure. */
+          switches.drop(key);
+          show(t("kanban.account.receipt.cancelled", { account, name: input.name }));
+          requestFilesRefresh();
+          if (input.then) {
+            switchConversation({ file: input.file, conversationId: input.conversationId, target: input.then.account, targetLabel: input.then.label, name: input.name, working: input.then.working });
+          }
+          return;
+        }
+        const notRequested = input.then ? ` ${t("kanban.account.receipt.changeNotRequested", { account: input.then.label })}` : "";
+        if (answer.kind === "unknown") {
+          cancels.lost(key);
+          show(`${t("kanban.account.receipt.cancelUnknown", { account })}${notRequested}`, undefined, { error: true });
+          return;
+        }
+        cancels.drop(key);
+        requestFilesRefresh();
+        const text = answer.code === "SWITCH_CLAIMED"
+          ? t("kanban.account.receipt.cancelClaimed", { account })
+          : answer.code === "SWITCH_STARTED"
+            ? t("kanban.account.receipt.cancelStarted", { account })
+            : answer.code === "SWITCH_NOT_PENDING"
+              ? t("kanban.account.receipt.cancelNotPending", { account })
+              : answer.code === "RUNTIME_UNREADABLE"
+                ? t("kanban.account.receipt.cancelUnread", { account })
+                : t("kanban.account.receipt.cancelRefused", { account, error: answer.error });
+        show(`${text}${notRequested}`, answer.retryable ? { label: t("kanban.retry"), run: () => cancelSwitch(input) } : undefined, { error: true });
+      });
+    };
+    run();
+  }, [cancels, switches, switchConversation]);
+
   const openTarget = useCallback((target: AccountTarget, anchor: HTMLElement) => live.current.open(target, anchor), []);
 
-  return useMemo(() => ({ stages, switches, open: openTarget, policy, loadPolicy, chooseStage, checkStage, switchConversation, settleSwitch }), [stages, switches, openTarget, policy, loadPolicy, chooseStage, checkStage, switchConversation, settleSwitch]);
+  return useMemo(() => ({ stages, switches, cancels, open: openTarget, policy, loadPolicy, chooseStage, checkStage, switchConversation, settleSwitch, cancelSwitch }), [stages, switches, cancels, openTarget, policy, loadPolicy, chooseStage, checkStage, switchConversation, settleSwitch, cancelSwitch]);
 }
 
 /* ── Shared reads ───────────────────────────────────────────────────────── */
@@ -228,7 +291,11 @@ export function useConversationSwitch(file: FileEntry, session: RuntimeSession |
   const pending = queued
     ? { operationId: queued.operationId, accountId: queued.accountId ?? null, model: queued.model, effort: queued.effort, status: receiptOf(queued.operationId)?.status ?? null }
     : null;
-  return { key, current, request, ...switchView({ current, migration: file.migration, request, receipt: receiptOf(request?.operationId), pending }) };
+  const stored = useSyncExternalStore(choice?.cancels.subscribe ?? noSubscribe, () => choice?.cancels.get(key) ?? null, () => null);
+  const input = { current, migration: file.migration, request, receipt: receiptOf(request?.operationId), pending };
+  const cancelTarget = switchCancelTarget(input);
+  const subject = cancelSubject(cancelTarget, file.migration);
+  return { key, current, request, cancel: heldCancel(stored, subject), cancelTarget, cancelSubject: subject, ...switchView(input) };
 }
 
 const pendingTarget = (view: SwitchView): string | null => (view.kind === "none" ? null : view.target);
@@ -319,7 +386,7 @@ export function ConversationAccountChip({ file, session, readerKey, name }: { fi
   const engine: AccountEngine = file.engine === "codex" ? "codex" : "claude";
   const accounts = useEngineAccounts(engine);
   const labelOf = labelIn(accounts.accounts);
-  const { key, current, view, settle } = useConversationSwitch(file, session);
+  const { key, current, view, settle, cancel } = useConversationSwitch(file, session);
   const settled = settle ? `${settle.kind}:${settle.target}` : null;
   const settleSwitch = choice?.settleSwitch;
   useEffect(() => {
@@ -328,7 +395,9 @@ export function ConversationAccountChip({ file, session, readerKey, name }: { fi
   }, [settled, key, settleSwitch]);
   const target = pendingTarget(view);
   const to = view.kind === "none" || view.kind === "settings" ? null : target ? labelOf(target) : t("kanban.account.anotherAccount");
-  const when = whenWord(t, view, conversationWorking(file, session));
+  const when = cancel && view.kind !== "none"
+    ? t(cancel.phase === "sending" ? "kanban.account.whenCancelling" : "kanban.account.whenCancelUnknown")
+    : whenWord(t, view, conversationWorking(file, session));
   const label = labelOf(current);
   return (
     <Chip
@@ -524,7 +593,7 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
   const labelOf = labelIn(accounts.accounts);
   const { runtime } = useAgentCapabilities(file);
   const session = runtime?.session ?? null;
-  const { current, view } = useConversationSwitch(file, session);
+  const { current, view, cancel, cancelTarget, cancelSubject: subject } = useConversationSwitch(file, session);
   const project = stageContext?.pipeline.project ?? file.project;
   const { refresh } = accounts;
   const { loadPolicy } = choice;
@@ -542,6 +611,14 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
     : null;
   const pin = stageContext ? stagePin(stageContext.stage) : null;
   const outside = accounts.accounts.filter((account) => accountStanding(policy, engine, account.id) === "outside");
+  const conversationId = session?.conversationId ?? file.conversationId ?? null;
+  /* Cancel and Change exist while the switch can still be cancelled and no cancel of this page is in flight or unanswered. */
+  const canCancel = Boolean(cancelTarget && conversationId && !cancel);
+  const cancelPending = (then: { account: string; label: string } | null) => {
+    if (!cancelTarget || !subject || !conversationId) return;
+    onClose(true);
+    choice.cancelSwitch({ file, conversationId, target: cancelTarget, subject, pendingLabel: target ? labelOf(target) : null, name, then: then ? { ...then, working } : null });
+  };
 
   const rows = accounts.accounts.map((account): RowView => {
     const isCurrent = account.id === current;
@@ -557,14 +634,19 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
       used,
       use,
       checked: pending ? isPending : isCurrent,
-      /* A pending switch can be neither changed nor cancelled without cancelling messages held for it,
-         and an account choice would replace a pending settings change. */
-      disabled: pending || unavailable,
-      title: pending ? t(view.kind === "settings" ? "kanban.account.pendingSettingsTitle" : "kanban.account.pendingTitle") : unavailable ? t("kanban.account.signedOutTitle") : standing === "outside" ? t("kanban.account.outsideTitle") : undefined,
+      /* While a switch is pending an account is chosen only as a Change: the cancel first, then the new switch.
+         Without a cancel the pending switch allows, nothing may replace it, nor a pending settings change. */
+      disabled: (pending && !canCancel) || unavailable,
+      title: pending && !canCancel ? t(view.kind === "settings" ? "kanban.account.pendingSettingsTitle" : "kanban.account.pendingTitle") : unavailable ? t("kanban.account.signedOutTitle") : standing === "outside" ? t("kanban.account.outsideTitle") : undefined,
       onPick: () => {
+        if (pending) {
+          if (isPending) return onClose(true);
+          /* Back to the account it runs on is the cancel alone. */
+          return cancelPending(isCurrent ? null : { account: account.id, label: account.label });
+        }
         onClose(true);
         if (isCurrent) return;
-        choice.switchConversation({ file, conversationId: session?.conversationId ?? file.conversationId ?? null, target: account.id, targetLabel: account.label, name, working });
+        choice.switchConversation({ file, conversationId, target: account.id, targetLabel: account.label, name, working });
       },
     };
   });
@@ -580,13 +662,16 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
       default: return "";
     }
   })();
+  const cancelText = cancel ? t(cancel.phase === "sending" ? "kanban.account.pendingCancelling" : "kanban.account.pendingCancelUnknown", { target: targetName }) : null;
   const pendingNotes = [
     (view.kind === "waiting" || view.kind === "switching") && view.source === "page" ? t("kanban.account.pageOnly") : null,
     view.kind === "waiting" && view.source === "record" ? t("kanban.account.heldNote") : null,
     view.kind === "failed" ? t("kanban.account.failedNote") : null,
     view.kind === "unknown" ? t("kanban.account.unknownNote") : null,
     view.kind === "settings" ? t("kanban.account.settingsNote") : null,
-    view.kind !== "none" && view.kind !== "failed" && view.kind !== "settings" ? t("kanban.account.noCancel") : null,
+    cancel?.phase === "unknown" ? t("kanban.account.cancelUnknownNote") : null,
+    /* A switch the queue is applying, or past waiting for its turn, can no longer be cancelled. */
+    (view.kind === "waiting" || view.kind === "switching") && !cancelTarget && !cancel ? t("kanban.account.tooLateNote") : null,
   ].filter((note): note is string => Boolean(note));
 
   return (
@@ -610,14 +695,19 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
           </div>
         ) : null}
         {pending ? (
-          <div className="kv pending" data-account-pending={view.kind} data-account-source={"source" in view ? view.source : undefined}>
+          <div className="kv pending" data-account-pending={view.kind} data-account-source={"source" in view ? view.source : undefined} data-account-cancel-state={cancel?.phase}>
             <span className="k">{t("kanban.account.pending")}</span>
-            <span className="v">{pendingText}</span>
+            <span className="v">{cancelText ?? pendingText}</span>
+            {canCancel ? (
+              <button type="button" className="btn quiet" data-account-cancel={cancelTarget!.action} onClick={() => cancelPending(null)}>
+                {t("kanban.account.cancelSwitch")}
+              </button>
+            ) : null}
           </div>
         ) : null}
         {pendingNotes.map((note) => <p key={note} className="acct-sub">{note}</p>)}
       </div>
-      <div className="acct-lbl">{pending ? t("kanban.account.accounts") : t("kanban.account.switchTo")}</div>
+      <div className="acct-lbl">{pending ? t(canCancel ? "kanban.account.changePending" : "kanban.account.accounts") : t("kanban.account.switchTo")}</div>
       <AccountList label={t("kanban.account.accounts")} rows={rows} />
       <p className="note">{t(working ? "kanban.account.noteWorking" : "kanban.account.noteIdle")}</p>
       {outside.length ? <p className="note">{t("kanban.account.noteOutside")}</p> : null}

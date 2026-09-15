@@ -8,7 +8,12 @@ import { RUNTIME_HOST_UNAVAILABLE_CODE as SERVER_RUNTIME_HOST_UNAVAILABLE_CODE }
 import {
   RUNTIME_HOST_UNAVAILABLE_CODE,
   accountStanding,
+  cancelSubject,
+  ConversationCancels,
   ConversationSwitches,
+  heldCancel,
+  postSwitchCancel,
+  switchCancelTarget,
   parseProjectPolicy,
   postConversationSwitch,
   StageAccounts,
@@ -238,4 +243,53 @@ test("one request per conversation at a time", () => {
   expect(switches.get("conversation_verify-2")?.phase).toBe("unknown");
   switches.drop("conversation_verify-2");
   expect(switches.get("conversation_verify-2")).toBeNull();
+});
+
+test("a pending switch can be cancelled by the record's revision while it waits for its turn, else by its queued operation; never once applying or started", () => {
+  const queued = (over: Partial<{ operationId: string; accountId: string | null; status: string | null }> = {}) => ({ operationId: "op-queued", accountId: "account-g", model: "opus", effort: "high", status: "queued", ...over });
+  const base = { current: "default", migration: null, request: null, receipt: null, pending: null };
+  expect(switchCancelTarget({ ...base, migration: migration("waiting-turn") })).toEqual({ action: "cancel", expectedRevision: 3 });
+  expect(switchCancelTarget({ ...base, migration: migration("requested") })).toEqual({ action: "cancel", expectedRevision: 3 });
+  for (const phase of ["preparing", "successor-starting", "verifying", "failed-recoverable"]) {
+    expect(switchCancelTarget({ ...base, migration: migration(phase), pending: queued() })).toBeNull();
+  }
+  expect(switchCancelTarget({ ...base, pending: queued() })).toEqual({ action: "withdraw", operationId: "op-queued" });
+  expect(switchCancelTarget({ ...base, pending: queued({ status: "applying" }) })).toBeNull();
+  /* A pending settings change is no switch to cancel here. */
+  expect(switchCancelTarget({ ...base, pending: queued({ accountId: null }) })).toBeNull();
+  expect(switchCancelTarget({ ...base, request: request(), receipt: { status: "queued" } })).toEqual({ action: "withdraw", operationId: "op-1" });
+  expect(switchCancelTarget({ ...base, request: request({ answeredStatus: null }), receipt: null })).toEqual({ action: "withdraw", operationId: "op-1" });
+  expect(switchCancelTarget({ ...base, request: request(), receipt: { status: "applying" } })).toBeNull();
+  expect(switchCancelTarget({ ...base, request: request({ phase: "unknown", operationId: null }) })).toBeNull();
+  expect(switchCancelTarget({ ...base, request: request({ phase: "sending", operationId: null }) })).toBeNull();
+});
+
+test("a cancel's answer: done on 200, refused on a 4xx or the pre-write 503, unknown on anything else", async () => {
+  const answer = (status: number, body: unknown) => async () => new Response(body === undefined ? "" : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const sent: unknown[] = [];
+  expect(await postSwitchCancel("conversation_a", { action: "cancel", expectedRevision: 2 }, async (input, init) => {
+    sent.push([input, JSON.parse(String(init.body))]);
+    return answer(200, { id: "conversation_a" })();
+  })).toEqual({ kind: "cancelled" });
+  expect(sent).toEqual([["/api/conversations/conversation_a/migration", { action: "cancel", expectedRevision: 2 }]]);
+  expect(await postSwitchCancel("conversation_a", { action: "withdraw", operationId: "op-1" }, answer(409, { error: "claimed", code: "SWITCH_CLAIMED" }))).toEqual({ kind: "refused", code: "SWITCH_CLAIMED", error: "claimed", retryable: false });
+  expect(await postSwitchCancel("conversation_a", { action: "withdraw", operationId: "op-1" }, answer(503, { error: "nothing was withdrawn", code: "RUNTIME_UNREADABLE" }))).toEqual({ kind: "refused", code: "RUNTIME_UNREADABLE", error: "nothing was withdrawn", retryable: true });
+  expect(await postSwitchCancel("conversation_a", { action: "withdraw", operationId: "op-1" }, answer(503, { error: "socket closed" }))).toEqual({ kind: "unknown" });
+  expect(await postSwitchCancel("conversation_a", { action: "withdraw", operationId: "op-1" }, answer(500, { error: "internal" }))).toEqual({ kind: "unknown" });
+  expect(await postSwitchCancel("conversation_a", { action: "cancel", expectedRevision: 2 }, async () => { throw new TypeError("Failed to fetch"); })).toEqual({ kind: "unknown" });
+  const cancels = new ConversationCancels();
+  const waiting = { intentId: "intent-1", phase: "waiting-turn", targetAccountId: "account-g", revision: 2 } as ConversationMigration;
+  const subject = cancelSubject({ action: "cancel", expectedRevision: 2 }, waiting)!;
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(true);
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(false);
+  cancels.lost("conversation_a");
+  expect(cancels.get("conversation_a")).toEqual({ target: "account-g", subject, phase: "unknown" });
+  /* The unanswered cancel holds its own switch, and no other: the same revision under another intent is another switch. */
+  expect(heldCancel(cancels.get("conversation_a"), subject)).toMatchObject({ phase: "unknown" });
+  const later = cancelSubject({ action: "cancel", expectedRevision: 2 }, { ...waiting, intentId: "intent-2" });
+  expect(heldCancel(cancels.get("conversation_a"), later)).toBeNull();
+  expect(heldCancel(cancels.get("conversation_a"), null)).toBeNull();
+  expect(cancels.begin("conversation_a", "account-g", later!)).toBe(true);
+  expect(cancels.begin("conversation_a", "account-g", subject)).toBe(false);
+  expect(cancelSubject({ action: "withdraw", operationId: "op-1" }, null)).toBe("operation:op-1");
 });
