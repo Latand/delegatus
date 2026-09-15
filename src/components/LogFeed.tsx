@@ -45,7 +45,7 @@ import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
 import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
-import { speakableAnswer } from "./feed/speakableAnswer";
+import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
@@ -552,6 +552,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
+  const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
 
   /* Lazy raw-record provenance: a tool card resolves its source line(s) from
      the retained window, client-side, with no server round-trip. A line that
@@ -1057,7 +1058,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             {compact ? null : <TaskHeader file={file} />}
             {feed.items.length ? (
               visibleItems.map(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
-                const answer = speakableAnswer(feed.items, visibleStartIndex + visibleIndex);
+                const answer = answerFor(visibleStartIndex + visibleIndex);
                 const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
                 return (
                   /* Session-stable keys: a row keeps its DOM node while the
