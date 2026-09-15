@@ -535,7 +535,7 @@ test("Escape cancels an edit and hands focus back to Edit; a panel with nothing 
   click(panel()!.querySelector("[data-panel-fold]"));
   expect(panel()!.dataset.collapsed).toBe("1");
   click(panel()!.querySelector("[data-panel-menu]"));
-  expect(menuLabels(host).map(([label]) => label)).toEqual(["Edit the first message", "Retry this stage", "Skip this stage", "Show in Stages"]);
+  expect(menuLabels(host).map(([label]) => label)).toEqual(["Edit the first message", "Run on account…", "Retry this stage", "Skip this stage", "Show in Stages"]);
   click(menuItem(host, "Edit the first message"));
   await tick();
   expect(panel()!.dataset.collapsed).toBe("0");

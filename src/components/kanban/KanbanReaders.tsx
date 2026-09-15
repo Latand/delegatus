@@ -3,11 +3,9 @@
 import { memo, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
-import { accountIdFromPath } from "@/lib/accounts/badge";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-import { AccountBadge } from "@/components/AccountBadge";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
 import { stageChipLabel } from "@/components/pipelines/pipelineModel";
@@ -17,6 +15,7 @@ import { useProcessKill } from "@/components/TaskHeader";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { cleanTitle, fmtAge } from "@/components/utils";
 
+import { ConversationAccountChip } from "./AccountPicker";
 import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
 
@@ -218,14 +217,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
     <>
       {engine ? <span className={`ch-engine ${engine}`}>{engine === "claude" ? "Claude" : "Codex"}</span> : null}
       {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
-      {engine ? (
-        <AccountBadge
-          engine={engine}
-          accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
-          file={file}
-          runtimeSession={runtime?.session ?? null}
-        />
-      ) : null}
+      {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
     </>
   );

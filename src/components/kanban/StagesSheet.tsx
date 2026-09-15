@@ -15,6 +15,7 @@ import { cssEscape } from "./kanbanFocus";
 import { GraphGlyph, graphStateWord, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId } from "./PipelineSection";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
+import { StageAccountChip } from "./AccountPicker";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { DraftLeftover, StageDraftFeed, useStageDraft } from "./StageDraft";
 import { stageDraftKey, type StageDrafts } from "./stageDrafts";
@@ -387,6 +388,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <div className="ch-meta pane-id">
           <span className={`ch-engine ${stage.effectiveRole.engine}`}>{engine}</span>
           {stage.effectiveRole.model ? <span className="ch-model">{stage.effectiveRole.effort ? `${stage.effectiveRole.model} · ${stage.effectiveRole.effort}` : stage.effectiveRole.model}</span> : null}
+          <StageAccountChip pipeline={pipeline} stage={stage} />
         </div>
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
       </div>
