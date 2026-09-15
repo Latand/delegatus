@@ -1,10 +1,11 @@
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
@@ -13,6 +14,7 @@ import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { spawnStructuredConversation } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 
@@ -273,18 +275,29 @@ async function recoverCandidate(
       current.accountId,
       current.project,
     );
-    const begun = registry.beginSpawnRequest({
-      engine: current.engine,
-      cwd: current.spec.cwd,
-      transport: "structured",
-      accountId: account.accountId,
-      conversationId: current.conversationId,
-      parentConversationId: current.parentConversationId,
-      purpose: "resume-successor",
-      origin: { kind: "successor" },
-      expectedArtifactPath: current.path,
-      launchProfile: current.spec.launchProfile,
-    });
+    let begun: SpawnBeginResult;
+    try {
+      begun = registry.beginSpawnRequest({
+        engine: current.engine,
+        cwd: current.spec.cwd,
+        transport: "structured",
+        accountId: account.accountId,
+        conversationId: current.conversationId,
+        parentConversationId: current.parentConversationId,
+        purpose: "resume-successor",
+        origin: { kind: "successor" },
+        expectedArtifactPath: current.path,
+        launchProfile: current.spec.launchProfile,
+      });
+    } catch (error) {
+      /* #1716: the lock throws its typed busy refusal from the acquire, before
+         the reservation's transaction is admitted, so this recovery reserved
+         nothing and started nothing and may be tried again. Only this call can
+         say so: the same error raised later in recovery reaches the caller
+         unchanged. */
+      if (error instanceof AccountMutationBusyError) throw new StructuredRecoveryContendedError(error);
+      throw error;
+    }
     if (begun.kind !== "created") throw new Error("structured recovery reservation is unavailable");
     try {
       await assertOwnership();
