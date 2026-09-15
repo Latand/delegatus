@@ -106,9 +106,8 @@ export interface KanbanBoardProps {
   focus?: string | null;
   /** A reader opened: the same seen-stamp opening a conversation leaves. */
   onConversationOpened?: (path: string) => void;
-  /** The project's full conversation catalog (the List view). */
-  onOpenCatalog: () => void;
-  /** Conversations, for a conversation no card holds (a review deck or a worker stack). */
+  /** Conversations, the project's every conversation: for what no card draws (review decks, collapsed workers)
+      and conversations this board's files do not carry. */
   onOpenConversations: () => void;
   /** «+ Agent» in the bar: a draft on a card of its own, a task in the making (K9a). */
   onNewAgent?: () => void;
@@ -234,7 +233,7 @@ function useBands(props: KanbanBoardProps) {
 
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useLocale();
-  const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenCatalog, onOpenConversations, onConversationOpened } = props;
+  const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
   /* `+ Task` (K9a): a task this board created is drawn at once, until the tasks poll carries it. */
   const [createdTasks, setCreatedTasks] = useState<readonly BoardTask[]>(NO_TASKS);
   const allTasks = useMemo(() => {
@@ -371,7 +370,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* One reader at a time may take the whole window; it is the same reader,
      moved, and goes back into its card when it leaves. */
   const [fullReader, setFullReader] = useState<string | null>(null);
+  /* A conversation no card holds (a review round in a deck, a collapsed worker, an engine's subagent) opens as a
+     reader of its own, in the whole window: the same transcript and composer, for as long as it is open. It is
+     not remembered, and nothing is written to the board. */
+  const [looseReader, setLooseReader] = useState<{ key: string; path: string } | null>(null);
   const toggleFull = useCallback((key: string) => setFullReader((current) => (current === key ? null : key)), []);
+  /* The window is the loose reader's only place: leaving it closes the reader. */
+  useEffect(() => {
+    if (looseReader && fullReader !== looseReader.key) setLooseReader(null);
+  }, [fullReader, looseReader]);
   /* Escape puts it back, unless the key belongs to a field or an open menu.
      Listened for on the document: the reader is a portal, so its key events
      never pass through the overlay in React's tree. */
@@ -435,6 +442,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         owner: owner && card ? { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage } : null,
       }];
     });
+    if (looseReader && !views.some((view) => view.readerKey === looseReader.key)) {
+      const file = filesByIdentity.get(looseReader.key) ?? filesByPath.get(looseReader.path) ?? lastSeenFiles.current.get(looseReader.key);
+      if (file) views.push({ readerKey: looseReader.key, file, folded: false, full: true, owner: null });
+    }
     /* A pane's conversation no card has open is mounted for as long as the pane shows it. */
     if (sheetSummary) {
       const open = new Set(openReaders.map((reader) => reader.key));
@@ -452,7 +463,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, sheetSlots, sheetSummary, sheetPanes]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, looseReader, sheetSlots, sheetSummary, sheetPanes]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1369,10 +1380,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean } = {}) => {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
-    memory.update((readers) => openReader(readers, key, file.path));
+    const owner = ownersRef.current.get(key);
+    if (owner) {
+      memory.update((readers) => openReader(readers, key, file.path));
+    } else {
+      setLooseReader({ key, path: file.path });
+      setFullReader(key);
+    }
     setFocusedReader(key);
     onConversationOpened?.(file.path);
-    const owner = ownersRef.current.get(key);
     revealCard(owner?.cardId ?? "", key, options.focus !== false);
   }, [memory, onConversationOpened, revealCard, disown]);
   const [revealTick, setRevealTick] = useState(0);
@@ -1391,6 +1407,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [revealTick, placement]);
   const ownersRef = useRef(owners);
   ownersRef.current = owners;
+  const anchorsRef = useRef(anchors);
+  anchorsRef.current = anchors;
   const modelRef = useRef(model);
   modelRef.current = model;
   const modeRef = useRef(mode);
@@ -1569,6 +1587,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     disown(key);
     const cardId = ownersRef.current.get(key)?.cardId;
     setFullReader((current) => (current === key ? null : current));
+    setLooseReader((current) => (current?.key === key ? null : current));
     memory.update((readers) => closeReader(readers, key));
     if (cardId) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
   }, [memory, disown]);
@@ -1583,6 +1602,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (cardsByIdRef.current.has(cardId)) revealCard(cardId);
       return;
     }
+    /* A pipeline link: the card that holds the pipeline, revealed and focused. */
+    if (focusTarget.startsWith("group::pipeline::")) {
+      const cardId = anchorsRef.current.get(focusTarget);
+      if (cardId) {
+        revealCard(cardId);
+        focusCard(cardId);
+      }
+      return;
+    }
     if (focusTarget.startsWith("draft::")) {
       const id = focusTarget.slice("draft::".length);
       const holder = [...cardsByIdRef.current.values()].find((card) => card.drafts.includes(id));
@@ -1591,9 +1619,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     const file = filesByPath.get(focusTarget);
     if (!file) return;
-    if (ownersRef.current.has(conversationIdentity(file))) openReaderFor(file);
-    /* A conversation no card holds (in a review deck, a worker stack or a draft) is listed in Conversations. */
-    else onOpenConversations();
+    /* On its card, or, for a conversation no card holds, as a reader of its own in the window. */
+    openReaderFor(file);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
   }, [focusTarget]);
 
@@ -1692,15 +1719,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [presenceSignature, selection, focusedPath]);
 
   /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
-  const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project), [model, anchors, project]);
+  /* Conversations no card holds resolve too: a handoff opens them as a reader of their own. */
+  const looseAnchors = useMemo(() => new Set(files.filter((file) => !owners.has(conversationIdentity(file))).map((file) => file.path)), [files, owners]);
+  const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project, looseAnchors), [model, anchors, project, looseAnchors]);
   useEffect(() => focusHandoffBus.setBoard({
     project,
     index: focusIndex,
     moveTo: (destination) => {
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
       const cardId = anchor ? anchors.get(anchor) : undefined;
-      if (!cardId) return false;
-      const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
+      const loosePath = !cardId ? destination.anchorKeys.find((key) => looseAnchors.has(key)) ?? (destination.path && looseAnchors.has(destination.path) ? destination.path : undefined) : undefined;
+      if (!cardId && !loosePath) return false;
+      /* A conversation no card holds has one surface, its reader, for `show` as for `open`. */
+      const file = loosePath ? filesByPath.get(loosePath) : destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file) {
         const key = conversationIdentity(file);
         const requestId = destination.requestId ?? "";
@@ -1711,7 +1742,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           handoffOwned.current.set(requestId, { key, restore: before ? "fold" : "close" });
         }
         openReaderFor(file, { focus: false, handoff: true });
-      } else {
+      } else if (cardId) {
         revealCard(cardId);
       }
       return true;
@@ -1720,6 +1751,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
     arrival: (destination) => {
       const root = rootRef.current;
       if (!root) return null;
+      const loosePath = destination.anchorKeys.find((key) => looseAnchors.has(key) && !anchors.has(key)) ?? (destination.path && looseAnchors.has(destination.path) ? destination.path : undefined);
+      if (loosePath) {
+        const loose = filesByPath.get(loosePath);
+        return loose && readerArrived(root, placement.slotOf(conversationIdentity(loose))) ? (destination.intent === "open" ? "reader" : "visible") : null;
+      }
       const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
       if (file && readerArrived(root, placement.slotOf(conversationIdentity(file)))) return "reader";
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
@@ -1736,7 +1772,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         memory.update((readers) => closeReader(readers, owned.key));
       }
     },
-  }), [project, focusIndex, anchors, filesByPath, openReaderFor, revealCard, memory, placement]);
+  }), [project, focusIndex, anchors, looseAnchors, filesByPath, openReaderFor, revealCard, memory, placement]);
 
   /* ── What the board is not drawing: hidden groups, empty tasks off the
      board, and conversations closed on it ─────────────────────────────── */
@@ -1867,7 +1903,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onOpenMember: openReaderFor,
         onOpenStage: openStage,
         onFocusCard: focusCard,
-        onOpenCatalog,
         onOpenConversations,
         onStartEdit: startEdit,
         onEditDraft: editDraft,
@@ -2104,7 +2139,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
-  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenCatalog" | "onOpenConversations"
+  | "onToggleCollapsed" | "onStatusMenu" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"

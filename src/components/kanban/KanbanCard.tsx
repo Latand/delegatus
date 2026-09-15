@@ -133,7 +133,6 @@ export interface KanbanCardProps {
   onOpenMember: (file: FileEntry) => void;
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage, cardId: string) => void;
   onFocusCard: (cardId: string) => void;
-  onOpenCatalog: () => void;
   onOpenConversations: () => void;
   /** The title or description being edited on this card, with its draft. */
   editing: { field: "title" | "description"; draft: string } | null;
@@ -446,7 +445,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             </button>
           ))}
           {card.notLoaded ? (
-            <button type="button" className="ref quiet" onClick={props.onOpenCatalog}>
+            <button type="button" className="ref quiet" onClick={props.onOpenConversations}>
               {t("kanban.notLoaded", { count: card.notLoaded })}
             </button>
           ) : null}

@@ -138,7 +138,6 @@ function mount(pipelines: Pipeline[], status: TaskStatus = "assigned") {
       loaded
       catalogFailures={0}
       selection={new Set()}
-      onOpenCatalog={() => {}}
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={idlePorts}
@@ -286,7 +285,7 @@ test("a review stage with five rounds draws the latest round and a count of the 
   flushSync(() => root.render(
     <KanbanBoard project="fixture" groups={[]} manual={[]} files={files} flows={manyRounds} pipelines={[record]} tasks={[]}
       allTasks={[task("t-search", "assigned", "Restore search results after the index rebuild")]} drafts={[]} now={NOW} loaded catalogFailures={0}
-      selection={new Set()} onOpenCatalog={() => {}} onOpenConversations={() => {}} seatRefs={null} mutationPorts={idlePorts} />,
+      selection={new Set()} onOpenConversations={() => {}} seatRefs={null} mutationPorts={idlePorts} />,
   ));
   await tick();
   click(toggle(host));

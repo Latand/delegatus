@@ -117,7 +117,6 @@ function mount(tasks: BoardTask[], extra: Extra = {}) {
       loaded
       catalogFailures={0}
       selection={new Set()}
-      onOpenCatalog={() => {}}
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={inertPorts}

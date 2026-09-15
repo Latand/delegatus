@@ -151,7 +151,6 @@ function mount(tasks: BoardTask[], options: { ports?: TaskMutationPorts; seat?: 
         loaded
         catalogFailures={0}
         selection={new Set()}
-        onOpenCatalog={() => {}}
         onOpenConversations={() => {}}
         seatRefs={seat}
         closedPaths={options.closed}

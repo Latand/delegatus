@@ -212,7 +212,6 @@ function mount(pipeline: Pipeline, files: FileEntry[] = [build, verify]) {
       loaded
       catalogFailures={0}
       selection={new Set()}
-      onOpenCatalog={() => {}}
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={idlePorts}

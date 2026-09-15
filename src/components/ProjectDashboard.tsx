@@ -543,10 +543,6 @@ function ProjectDashboardView({
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
-  /* The canvas builder (#136): the draft pipeline whose group panel auto-opens
-     right after `+ Пайплайн` drops it, so the operator lands in the builder with
-     no hunting for its chip. */
-  const [builderPipelineId, setBuilderPipelineId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   /* Jump targets the scheme would otherwise skip (a stalled root builds no
      automatic group; a stalled branch hides inside a mini stack) materialize
@@ -1208,6 +1204,14 @@ function ProjectDashboardView({
     openTaskOnBoard(task.id);
   };
 
+  /* A pipeline link (an MCP call card's chip, #1695): the desktop Board reveals and focuses the card that holds
+     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal. */
+  const revealPipeline = (id: string) => {
+    if (isMobile) return;
+    onUserNavigate?.();
+    flashNode(`group::pipeline::${id}`);
+  };
+
   useEffect(() => {
     const navigate = (rawEvent: Event) => {
       const detail = (rawEvent as CustomEvent<{ kind?: string; id?: string }>).detail;
@@ -1226,8 +1230,7 @@ function ProjectDashboardView({
         gotoProject(pipeline.project);
         return;
       }
-      onUserNavigate?.();
-      setBuilderPipelineId(id);
+      revealPipeline(id);
     };
     window.addEventListener("llv:mcp-navigate", navigate);
     return () => window.removeEventListener("llv:mcp-navigate", navigate);
@@ -1238,7 +1241,7 @@ function ProjectDashboardView({
     if (!pending || !pipelines.some((pipeline) => pipeline.id === pending && pipeline.project === project)) return;
     sessionStorage.removeItem("llvPipelineFocus");
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- cross-project MCP link reveal */
-    setBuilderPipelineId(pending);
+    revealPipeline(pending);
   }, [pipelines, project]);
 
   /* Desktop `+ Task`: drop the inline sticky composer in a free slot near the
@@ -1285,6 +1288,13 @@ function ProjectDashboardView({
     setOpenedConversation(null);
     setTransientView(null);
     board.setDesktopBoard("kanban", "scheme");
+  };
+
+  /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
+     which would otherwise keep the Board it opened in front of the list the operator just asked for. */
+  const openConversationsForOneLook = () => {
+    setOpenedConversation(null);
+    setTransientView("list");
   };
 
   /* randomUUID needs a secure context; LAN http access gets the fallback. */
@@ -2262,7 +2272,7 @@ function ProjectDashboardView({
           onCreate={addPipelineDraft}
           onCreated={(pipeline) => {
             setTemplatePickerOpen(false);
-            setBuilderPipelineId(pipeline.id);
+            revealPipeline(pipeline.id);
           }}
         />
       ) : null}
@@ -2485,8 +2495,7 @@ function ProjectDashboardView({
                 seat={(boardId, seatRead) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
                 )}
-                onOpenCatalog={() => setTransientView("list")}
-                onOpenConversations={() => setTransientView("list")}
+                onOpenConversations={openConversationsForOneLook}
                 onNewAgent={addDraft}
                 onAddAgent={addBandAgentDraft}
                 onDraftClose={removeDraft}
