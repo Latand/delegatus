@@ -1,7 +1,9 @@
-# K6b plan: a lossless Cancel for account switches (#1695, #1705)
+# K6b plan: Cancel and Change for a pending account switch (#1695, #1705)
 
 Status: implemented in the K6b pull request, on top of K6a (#1707, merged). The prepared tests below went
-green with it; the pull request lists what else was added. K6a shipped the account chips and pickers without
+green with it; the pull request lists what else was added, and "Review follow-ups" below what its independent
+review changed. K6b covers cancelling a switch. What a switch that completes does to the messages sent for it
+is #1709 (K6c), and K6 is not complete without it. K6a shipped the account chips and pickers without
 Cancel or Change and reports a queued structured switch from the runtime session's `pendingReconfigure`, which
 the runtime journal already projects for every page.
 
@@ -45,23 +47,34 @@ The defects, each reproduced in isolated tests on main 098932f8 (#1705):
 - **Record the owner.** When `holdDelivery` or a retry placement holds a delivery because a migration is in
   flight, it records `fencedBy: migration.operationId` in the same transaction.
 - **Rightful deliveries.** A cancel, withdrawal or supersede touches only deliveries that are `held` and
-  `fencedBy` the migration being retired. A legacy `held` row without `fencedBy` counts as fenced by the
-  conversation's in-flight migration, the only thing that holds a delivery.
+  that the migration being retired held (`migrationHeldDelivery`):
+  - a delivery `fencedBy` that migration's operation; a fence naming any other operation is not its own;
+  - a legacy `held` row without `fencedBy` only when the migration's intent is the conversation's own and the
+    row was admitted after that intent began. Any other legacy row is left exactly as it is.
   - Deliveries `assigned` to the source generation, `delivery-uncertain`, `delivered` or `failed` are never
     touched.
+- **The rolled-back sweep counts only that residue.** The migration tick, the reaper and a stopped intent fail
+  a rolled-back migration's deliveries only when that migration held them, and only inside #972's
+  latest-admission window. After a cancel, a delivery assigned before the switch or an uncertain one stays for
+  its own delivery or journal settlement.
 - **Re-arm preserves the payload.** It sets `state: assigned` and `generationId` to the source generation.
   It keeps `text`, images, `command.operationId`, `clientMessageId` and `attempts`, so the delivery keeps its
   idempotency identity and reaches its one terminal outcome through the ordinary delivery path. Nothing in
   K6b writes `failed` to a delivery.
-- **Supersede to another account adopts.** The fenced deliveries stay `held`, and `fencedBy` moves to the new
-  migration inside the `requestConversationReseat` transaction that creates it. If the superseding
-  reconfigure ends before it creates a migration (withdrawn, failed preflight, cancelled), its settlement
-  re-arms the deliveries still fenced by a migration no longer in flight.
+- **Supersede to another account keeps, then adopts.** The claim of the newer switch retires the old migration
+  and records `keepsHeldFrom`, the retired operation, on its own reconfigure state. Until its migration exists
+  (after its account check), no sweep takes those deliveries, and the record survives a registry reload. The
+  `requestConversationReseat` transaction that creates its migration moves their `fencedBy` to it. If the newer
+  switch ends before it creates a migration (failed preflight, a settings change or a switch back), they go
+  back to the source, or to a migration another request put in flight.
+- **Replacement and retry keep them too.** A migration that replaces an in-flight one, and a retry that mints a
+  new operation identity, move the held deliveries of the one they replace under the new operation.
 - **Supersede back to the source account** retires the migration like a cancel: fenced deliveries are
   re-armed, never failed.
 - **Unchanged: a switch that commits.** `commitSuccessor` still ends the deliveries left pending at commit with
-  "its owning account migration committed; send again" (covered by `registry.reseat.test.ts`). K6b changes only
-  what a cancel, withdrawal, supersede or failure does to them.
+  "its owning account migration committed; send again", and empties their text (covered by
+  `registry.reseat.test.ts`). That loss is #1709, for K6c. K6b changes only what a cancel, withdrawal,
+  supersede or failure does to them.
 
 ### 2. Withdrawing a queued switch, atomically against its claim
 - **Registry.** `withdrawConversationReconfigure(conversationId, operationId)` runs in one transaction:
@@ -91,7 +104,9 @@ The defects, each reproduced in isolated tests on main 098932f8 (#1705):
   - it sets `rolled-back`, stops the conversation-scoped intent and applies `migrationOptOut` as rollback does;
   - if the intent carries the `reconfigure:` request id of the applying reconfigure, it settles that
     reconfigure `cancelled` (a new terminal status) and restores its `previousProfile`;
-  - it re-arms the deliveries fenced by that migration (1).
+  - it re-arms the deliveries that migration held (1);
+  - the same cancel again, for a switch this revision already cancelled, answers `replayed` and writes nothing,
+    and a rolled-back migration that no cancel ended throws "switch is no longer pending".
 - **Queue retry.** The claim replays a `cancelled` owner, and `applyStructuredReconfigure` rejects without a
   reseat. The operation fails once as `cancelled`.
 - **Coordinator.** A coordinator advancing concurrently finds `rolled-back` in its expected-phase check and
@@ -109,12 +124,17 @@ Additive changes, with no existing guard weakened:
   without a non-empty `operationId`, and it never touches a migration.
   - The route first reads the operation from the runtime host. It must be a `reconfigure` of this
     conversation in `queued` or `applying`; otherwise 404 or 409. Unreadable gives 503, with nothing written.
-  - An operation already claimed answers 409 `SWITCH_CLAIMED`, with the migration revision once one exists.
+  - An operation already claimed answers 409 `SWITCH_CLAIMED`, with `expectedRevision` once the switch's own
+    migration exists and `null` before.
+  - The same withdrawal again answers `replayed`, also after the queue failed the withdrawn operation.
+- **After a committed cancel or withdrawal**, a failure to kick the queue or deliver what was re-armed is left
+  to the next pass and never changes the answer.
 - **`rollback`** keeps its guard. For a reconfigure-owned migration in `requested` or `waiting-turn` it runs
   the cancel of 3, so the MCP tool's rollback stops being undone (#1705). In every other phase it is unchanged.
 - **Codes.** 400 malformed, 404 unknown conversation or operation, 409 with `code` (`MIGRATION_STALE`,
-  `SWITCH_STARTED`, `SWITCH_CLAIMED`), 503 runtime unreadable.
-- **MCP.** `conversation_migration` gains `cancel` and `withdraw`, with `operationId` described in its schema.
+  `SWITCH_STARTED`, `SWITCH_NOT_PENDING`, `SWITCH_CLAIMED`), 503 runtime unreadable.
+- **MCP.** `conversation_migration` gains `cancel` and `withdraw`, with `operationId` described in its schema;
+  its refusal carries `code` and `expectedRevision`.
 
 ### 5. Client (kanban board)
 - The picker's Pending row offers **Cancel switch**:
@@ -123,15 +143,21 @@ Additive changes, with no existing guard weakened:
   - none from `preparing` onwards.
 - A 409 `SWITCH_CLAIMED` reads again and offers the claimed cancel once the record shows.
 - **Change** is a Cancel followed by a new switch once the cancel is confirmed.
-- Unknown outcomes stay read-only and are never resent.
+- Unknown outcomes stay read-only and are never resent. The lock names its switch (intent, revision and target,
+  or operation) and ends once the board no longer shows that switch as cancellable, without claiming the
+  cancel succeeded; a later switch is not locked by it.
+- While a recorded switch waits, the picker says messages sent now are held, that Cancel delivers them on the
+  current account, and that they are not delivered if the switch completes (#1709).
 
 ### Dropped
 A separate `pendingSwitch` projection: `pendingReconfigure` in the runtime session is already the durable
 pending target.
 
 ## Regression required for K6 completion
-A stage conversation whose account is switched settles its stage on its own verdict with no `onFail`
-activation:
+K6b adds this at engine scope only: the test gives the engine the conversation's new path, host availability
+and the successor's turns, and runs no registry migration, commit or delivery. The integration, a real switch
+whose successor turn is started by the message held for it, comes with K6c (#1709). A stage conversation whose
+account is switched settles its stage on its own verdict with no `onFail` activation:
 - its attempt keeps its conversation id across the successor generation;
 - the verdict lands in the successor transcript;
 - the stage passes, the fail edge's round count stays 0, and no stage starts from `onFail`.
@@ -176,3 +202,12 @@ Cases:
 ## Review
 DATA bar: registry, runtime queue and delivery. An independent review of the implementation head is required
 before merge, spawned by the root. This lane launches no reviewer or helper.
+
+The review of 04d53556 found no P0. Its follow-ups, with focused tests only:
+- **P2, the sweep after a cancel.** It failed pre-switch assigned and uncertain deliveries; the sweep now counts
+  only what the migration held.
+- **P2, the supersede gap.** A tick, the reaper or a restart before the newer switch's migration existed failed
+  the kept deliveries; `keepsHeldFrom` now protects them.
+- **P3, the owner filter.** It never filtered; it is now narrow, with legacy rows proven or left alone.
+- **P3, the cancel lock** is bound to its switch. **P3, repeats and errors after commit** answer truthfully.
+  **P3, MCP** carries code and revision. **P3, the engine regression** is renamed to its scope.
