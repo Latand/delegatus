@@ -221,10 +221,12 @@ export function useConversationSwitch(file: FileEntry, session: RuntimeSession |
   const key = conversationIdentity(file);
   const request = useSyncExternalStore(choice?.switches.subscribe ?? noSubscribe, () => choice?.switches.get(key) ?? null, () => null);
   const current = session?.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path);
-  const receipt = request?.operationId
-    ? session?.recentReceipts.find((candidate) => candidate.operationId === request.operationId && candidate.kind === "reconfigure") ?? null
-    : null;
-  return { key, current, request, ...switchView({ current, migration: file.migration, request, receipt }) };
+  const receiptOf = (operationId: string | null | undefined) => (operationId
+    ? session?.recentReceipts.find((candidate) => candidate.operationId === operationId && candidate.kind === "reconfigure") ?? null
+    : null);
+  const queued = session?.pendingReconfigure ?? null;
+  const pending = queued ? { operationId: queued.operationId, accountId: queued.accountId ?? null, status: receiptOf(queued.operationId)?.status ?? null } : null;
+  return { key, current, request, ...switchView({ current, migration: file.migration, request, receipt: receiptOf(request?.operationId), pending }) };
 }
 
 const pendingTarget = (view: SwitchView): string | null => (view.kind === "none" ? null : view.target);

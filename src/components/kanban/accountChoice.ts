@@ -19,14 +19,15 @@ import { pipelineEnded, stageNotStarted } from "./stagesModel";
  *   an account outside the project's accounts is allowed and recorded as the
  *   operator's choice (#1279).
  *
- * What the board may say about a pending switch comes from what reports it:
- * the conversation's migration record, or, for a request this page sent, that
- * request's runtime receipt. A structured switch still queued behind a turn
- * has no record yet, and nothing tells another page or a reload which account
- * it targets; this page says the target is known here only. Cancelling or
- * changing a pending switch is not offered: rolling it back is undone when the
- * queue retries the switch, and superseding it cancels the messages held for
- * it (#1705).
+ * What the board may say about a pending switch comes from what reports it,
+ * for every page: the conversation's migration record once the switch has
+ * one, or, while a structured switch still waits behind a turn, the runtime
+ * session's `pendingReconfigure` with the account it targets. Only a request
+ * this page sent that neither reports yet (the answer arrived before the
+ * projection, or the runtime plane is unavailable) is said to be known to this
+ * page alone. Cancelling or changing a pending switch is not offered: rolling
+ * it back is undone when the queue retries the switch, and superseding it
+ * cancels the messages held for it (#1705).
  */
 
 export type AccountEngine = "claude" | "codex";
@@ -301,12 +302,22 @@ export async function postConversationSwitch(body: SwitchBody, fetcher: (input: 
   return { kind: "refused", error: json.error };
 }
 
+export type SwitchSource = "record" | "runtime" | "page";
+
+/** A structured switch the runtime session reports as queued or applying, with its operation's receipt status. */
+export interface RuntimePendingSwitch {
+  operationId: string;
+  accountId: string | null;
+  status: string | null;
+}
+
 export type SwitchView =
   | { kind: "none" }
   | { kind: "sending"; target: string }
-  /* Waits for the running turn to end. `record`: the migration says so, and holds deliveries for it. */
-  | { kind: "waiting"; target: string | null; source: "record" | "page" }
-  | { kind: "switching"; target: string | null; source: "record" | "page" }
+  /* Waits for the running turn to end. `record`: the migration says so, and holds deliveries for it.
+     `runtime`: the runtime session's pending reconfigure says so. `page`: only this page's request does. */
+  | { kind: "waiting"; target: string | null; source: SwitchSource }
+  | { kind: "switching"; target: string | null; source: SwitchSource }
   | { kind: "failed"; target: string | null; reason: string | null }
   /* This page's request got no answer, or its receipt ended uncertain. */
   | { kind: "unknown"; target: string };
@@ -328,6 +339,7 @@ export function switchView(input: {
   migration: ConversationMigration | null | undefined;
   request: SwitchRequest | null;
   receipt: { status: string; reason?: string | null } | null;
+  pending?: RuntimePendingSwitch | null;
 }): { view: SwitchView; settle: SwitchSettlement } {
   const { current, request } = input;
   const live = activeCardMigration(input.migration, current);
@@ -344,11 +356,17 @@ export function switchView(input: {
       settle: request ? { kind: "failed", target: request.target, reason: live?.failure ?? null } : null,
     };
   }
-  if (!request) return { view: none, settle: null };
-  if (request.phase === "unknown") return { view: { kind: "unknown", target: request.target }, settle: null };
+  /* A reconfigure that names another account, as the runtime session projects it for every page. */
+  const pending = input.pending?.accountId && input.pending.accountId !== current ? input.pending : null;
+  const runtime: SwitchView | null = pending
+    ? { kind: pending.status === "applying" ? "switching" : "waiting", target: pending.accountId, source: "runtime" }
+    : null;
+  if (!request) return { view: runtime ?? none, settle: null };
+  if (request.phase === "unknown") return { view: runtime ?? { kind: "unknown", target: request.target }, settle: null };
   const status = input.receipt?.status ?? request.answeredStatus;
-  if (status && FAILED_RECEIPTS.has(status)) return { view: none, settle: { kind: "failed", target: request.target, reason: input.receipt?.reason ?? null } };
-  if (status === "uncertain") return { view: { kind: "unknown", target: request.target }, settle: null };
+  if (status && FAILED_RECEIPTS.has(status)) return { view: runtime ?? none, settle: { kind: "failed", target: request.target, reason: input.receipt?.reason ?? null } };
+  if (status === "uncertain") return { view: runtime ?? { kind: "unknown", target: request.target }, settle: null };
+  if (runtime) return { view: runtime, settle: null };
   /* Applied, but the conversation does not run on the target yet: the board waits for it to. */
   if (status === "applying" || status === "applied" || status === "delivered") return { view: { kind: "switching", target: request.target, source: "page" }, settle: null };
   return { view: { kind: "waiting", target: request.target, source: "page" }, settle: null };

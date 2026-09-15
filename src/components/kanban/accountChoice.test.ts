@@ -196,6 +196,25 @@ test("the migration record speaks for every page: waiting for the turn, switchin
   expect(switchView({ current: "default", migration: migration("rolled-back"), request: null, receipt: null }).view).toEqual({ kind: "none" });
 });
 
+test("a structured switch queued behind a turn is reported for every page by the runtime session's pending reconfigure, ahead of this page's own request", () => {
+  const queued = (over: Partial<{ operationId: string; accountId: string | null; status: string | null }> = {}) => ({ operationId: "op-1", accountId: "account-g", status: "queued", ...over });
+  expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued() })).toEqual({ view: { kind: "waiting", target: "account-g", source: "runtime" }, settle: null });
+  expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ status: "applying" }) }).view).toEqual({ kind: "switching", target: "account-g", source: "runtime" });
+  /* A reconfigure that keeps the account, or names the one it runs on, is no switch. */
+  expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ accountId: null }) }).view).toEqual({ kind: "none" });
+  expect(switchView({ current: "account-g", migration: null, request: null, receipt: null, pending: queued() }).view).toEqual({ kind: "none" });
+  /* This page's own request is no longer the only witness. */
+  expect(switchView({ current: "default", migration: null, request: request(), receipt: { status: "queued" }, pending: queued() }).view).toEqual({ kind: "waiting", target: "account-g", source: "runtime" });
+  expect(switchView({ current: "default", migration: null, request: request({ phase: "unknown", operationId: null }), receipt: null, pending: queued() })).toEqual({ view: { kind: "waiting", target: "account-g", source: "runtime" }, settle: null });
+  /* Another client's newer switch superseded this page's: the page's request settles failed, the newer one shows. */
+  expect(switchView({ current: "default", migration: null, request: request({ target: "account-c" }), receipt: { status: "failed", reason: "superseded" }, pending: queued({ operationId: "op-2" }) })).toEqual({
+    view: { kind: "waiting", target: "account-g", source: "runtime" },
+    settle: { kind: "failed", target: "account-c", reason: "superseded" },
+  });
+  /* Once the migration record exists, it speaks. */
+  expect(switchView({ current: "default", migration: migration("preparing"), request: null, receipt: null, pending: queued() }).view).toEqual({ kind: "switching", target: "account-g", source: "record" });
+});
+
 test("one request per conversation at a time", () => {
   const switches = new ConversationSwitches();
   expect(switches.begin("conversation_verify-2", "account-g")).toBe(true);
