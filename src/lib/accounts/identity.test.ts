@@ -173,3 +173,18 @@ describe("issue 569: launch routes resolve to the canonical live conversation", 
     expect(currentConversationFile([placeholder], "conversation_9f374e8a")).toBe(placeholder);
   });
 });
+
+
+test("immutable projection indexes preserve scalar identity precedence across revisions", async () => {
+  const { conversationFileIndex, currentConversationFile } = await import("./identity");
+  const files = [
+    { path: "spawn:pending", conversationId: "conversation-one" },
+    { path: "/repo/old.jsonl", conversationId: "conversation-one", migratedTo: "/repo/new.jsonl" },
+    { path: "/repo/new.jsonl", conversationId: "conversation-one" },
+  ] as FileEntry[];
+  expect(conversationFileIndex(files).currentByConversation.get("conversation-one")).toBe(currentConversationFile(files, "conversation-one") ?? undefined);
+  expect(conversationFileIndex(files)).toBe(conversationFileIndex(files));
+  const next = files.slice(0, 2);
+  expect(conversationFileIndex(next).currentByConversation.get("conversation-one")).toBe(next[1]);
+  expect(conversationFileIndex(next)).not.toBe(conversationFileIndex(files));
+});

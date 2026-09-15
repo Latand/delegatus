@@ -136,6 +136,8 @@ export interface KanbanBoardProps {
   mutationPorts?: TaskMutationPorts;
   assignmentPorts?: AssignmentPorts;
   /** Where open readers are remembered; this browser's storage by default. */
+  /** Shared geometry from the dashboard; standalone consumers derive it here. */
+  layout?: SchemeLayout;
   readerStorage?: Pick<Storage, "getItem" | "setItem"> | null;
   /** The pipeline routes; the browser's own by default. */
   pipelinePorts?: PipelinePorts;
@@ -218,11 +220,11 @@ function useBands(props: KanbanBoardProps) {
   const layout = useMemo(() => {
     const built = reconcileLayoutNodes(
       previousLayout.current,
-      buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
+      props.layout ?? buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
     );
     previousLayout.current = built;
     return built;
-  }, [groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
+  }, [props.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
   const projection = useMemo(() => projectTaskWorkflows([...allTasks], pipelines, flows, files, project), [allTasks, pipelines, flows, files, project]);
   const bands = useMemo(
     () => buildTaskBands(layout, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }),
@@ -2230,8 +2232,12 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
       {...cardProps}
     />
   );
-  const active = status === "assigned" ? shown.filter((card) => !card.idle) : shown;
-  const idle = status === "assigned" ? shown.filter((card) => card.idle) : [];
+  // Keep the existing idle divider only around a trailing idle suffix. It
+  // must never move an older or unknown-work card above newer execution.
+  let split = shown.length;
+  if (status === "assigned") while (split > 0 && shown[split - 1]!.idle) split -= 1;
+  const active = shown.slice(0, split);
+  const idle = shown.slice(split);
   const unlinked = status === "inbox" ? model.unlinkedShown : [];
   const empty = shown.length === 0 && unlinked.length === 0 && !newTask;
   return (

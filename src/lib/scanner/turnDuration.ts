@@ -9,11 +9,12 @@ type RecordLike = Record<string, unknown>;
 // v5: meta/command user records no longer open windows (issue #406) — persisted
 // v4 boundaries could start before the real initiating prompt.
 const turnBoundaryCache = globalCache<[number, number, TurnBoundary | null]>("last-turn-v5");
-const recentTurnWindowsCache = globalCache<[number, number, RecentTurnWindows]>("recent-turn-windows-v3");
+const recentTurnWindowsCache = globalCache<[number, number, RecentTurnWindows]>("recent-turn-windows-v4");
 
 export interface RecentTurnWindows {
   windows: TurnBoundary[];
   assistantMessagesAtMs?: number[];
+  lastAgentWorkAt?: number | null;
   prefixTruncated: boolean;
   complete: boolean;
 }
@@ -106,14 +107,17 @@ export function recentTurnWindowsFromRecords(records: RecordLike[], codex: boole
 export function recentTurnActivityFromRecords(
   records: RecordLike[],
   codex: boolean,
-): Pick<RecentTurnWindows, "windows" | "assistantMessagesAtMs"> {
+): Pick<RecentTurnWindows, "windows" | "assistantMessagesAtMs" | "lastAgentWorkAt"> {
   const assistantMessages = new Set<number>();
+  let lastAgentWorkAt: number | null = null;
   for (const record of records) {
     const atMs = turnRecordTimestamp(record.timestamp);
     if (atMs === null) continue;
     if (visibleAssistantMessage(record, codex)) assistantMessages.add(atMs);
+    if (isAgentWorkRecord(record, codex)) lastAgentWorkAt = Math.max(lastAgentWorkAt ?? 0, atMs);
   }
   return {
+    lastAgentWorkAt,
     windows: recentTurnWindowsFromRecords(records, codex),
     assistantMessagesAtMs: [...assistantMessages].sort((left, right) => left - right),
   };
@@ -167,4 +171,26 @@ export function lastAssistantMessageAtFor(entry: FileEntry): number | null | und
   const last = recent.assistantMessagesAtMs?.at(-1);
   if (typeof last === "number") return last;
   return recent.prefixTruncated ? undefined : null;
+}
+
+/** Work evidence shares the existing bounded tail parse and revision cache. */
+export function isAgentWorkRecord(record: RecordLike, codex: boolean): boolean {
+  if (codex) {
+    const payload = recordValue(record.payload) ?? {};
+    const kind = stringValue(payload.type);
+    if (record.type === "response_item") return (kind === "message" && payload.role === "assistant")
+      || ["reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "web_search_call", "local_shell_call"].includes(kind ?? "");
+    return record.type === "event_msg" && ["agent_message", "agent_reasoning", "exec_command_begin", "exec_command_end", "mcp_tool_call_begin", "mcp_tool_call_end"].includes(kind ?? "");
+  }
+  if (record.isApiErrorMessage === true) return false;
+  const message = recordValue(record.message) ?? {};
+  if (message.model === "<synthetic>") return false;
+  if (record.type === "assistant") return typeof message.content === "string" ? Boolean(message.content.trim())
+    : recordsValue(message.content).some(part => ["text", "thinking", "tool_use"].includes(String(part.type)));
+  return record.type === "user" && recordsValue(message.content).some(part => part.type === "tool_result");
+}
+
+export function lastAgentWorkAtFor(entry: FileEntry): number | null | undefined {
+  const recent = recentTurnWindowsFor(entry);
+  return recent.lastAgentWorkAt ?? (recent.prefixTruncated ? undefined : null);
 }

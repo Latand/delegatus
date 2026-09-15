@@ -75,7 +75,7 @@ function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files]);
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, query: options.query, statusOverrides: options.overrides, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, statusOverrides: options.overrides, now: NOW });
 }
 
 test("every stored task is a card in exactly one column or counted off the board, at a thousand tasks", () => {
@@ -158,26 +158,16 @@ test("the projection alone stays inside its budget at a thousand tasks", () => {
   expect(performance.now() - started).toBeLessThan(160);
 });
 
-test("cards order by needs-you, then activity, then the most recent update", () => {
-  const working = file(1, { authoritativeTurn: { state: "busy", source: "lifecycle", terminalAt: null }, activity: "live" } as Partial<FileEntry>);
-  const waiting = file(2, { waitingInput: { since: NOW - 60 } } as Partial<FileEntry>);
-  const quiet = file(3);
-  const tasks = [
-    task("old", "assigned", [], { updatedAt: "2026-09-14T09:00:00.000Z" }),
-    task("recent", "assigned", [], { updatedAt: "2026-09-14T11:00:00.000Z" }),
-    task("busy", "assigned", [working.path]),
-    task("owed", "assigned", [waiting.path]),
-    task("still", "assigned", [quiet.path]),
-  ];
-  const result = model(tasks, [working, waiting, quiet]);
-  const order = result.columns.assigned.cards.map((card) => card.task!.id);
-  expect(order[0]).toBe("owed");
-  expect(order[1]).toBe("busy");
-  expect(order.indexOf("recent")).toBeLessThan(order.indexOf("old"));
-  const busy = result.columns.assigned.cards.find((card) => card.task!.id === "busy")!;
-  expect(busy.working).toBe(1);
-  const idle = result.columns.assigned.cards.filter((card) => card.idle).map((card) => card.task!.id);
-  expect(idle.sort()).toEqual(["old", "recent"]);
+test("columns sort by agent work, ignore metadata, and put unknown work last with stable ties", () => {
+  const files = [file(1, { lastAgentWorkAt: 1000, activity: "live" }), file(2, { lastAgentWorkAt: 2000 }), file(3, { lastAgentWorkAt: 3000 }), file(4)];
+  const rows = [task("old", "assigned", [files[0]!.path]), task("recent", "assigned", [files[1]!.path]),
+    task("group", "assigned", [files[0]!.path, files[2]!.path]), task("never-b", "assigned", [files[3]!.path]), task("never-a", "assigned")];
+  const order = (rows: BoardTask[]) => model(rows, files).columns.assigned.cards.map(card => card.task!.id);
+  expect(order(rows)).toEqual(["group", "recent", "old", "never-a", "never-b"]);
+  expect(order(rows.map(row => ({ ...row, text: "Renamed", updatedAt: "2099-01-01T00:00:00Z" })))).toEqual(order(rows));
+  files[0] = { ...files[0]!, lastAgentWorkAt: 4000 };
+  expect(order(rows).slice(0, 2)).toEqual(["group", "old"]);
+  expect(model([task("other", "blocked", [files[2]!.path])], files).columns.blocked.cards[0]?.task?.id).toBe("other");
 });
 
 test("search narrows what is shown and never what is counted", () => {

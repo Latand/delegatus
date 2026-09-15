@@ -266,6 +266,10 @@ export interface FileEntry {
       no such message; absent means the derivation has not run or a truncated
       prefix prevents that conclusion. */
   lastAssistantMessageAt?: number | null;
+  /** Latest observed assistant/reasoning/tool execution timestamp, in epoch
+      milliseconds. User messages, lifecycle/usage and metadata never advance
+      it. Null/absent means no work timestamp is known from the bounded tail. */
+  lastAgentWorkAt?: number | null;
   /** Best-effort TUI scrape fallback for prompts without a transcript protocol. */
   waitingInput: WaitingInput | null;
   /** Live pane wall or fresh structured account exhaustion. */
@@ -404,6 +408,8 @@ export interface ProjectCatalogEntry {
 }
 
 export interface FilesResponse {
+  /** Board-only read: execution bodies remain on targeted full endpoints. */
+  readProjection?: "board-summary";
   files: FileEntry[];
   /** Rows added only to resolve the current deep-link pin, including closure. */
   pinOverlayPaths?: string[];

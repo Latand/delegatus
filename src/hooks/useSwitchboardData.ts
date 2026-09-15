@@ -82,11 +82,15 @@ export function useSwitchboardData(
   now: number,
   archived: ReadonlySet<string> = EMPTY_ARCHIVED,
   flows: Flow[] = EMPTY_FLOWS,
+  enabled = true,
 ): SwitchboardData {
   const { locale } = useLocale();
+  const claimed = useMemo(() => claimedReviewerPaths(flows, files), [flows, files]);
+  const counts = useMemo(() => descendantCounts(files), [files]);
+  const flowByImpl = useMemo(() => flowByImplementer(flows.filter((flow) => !isDirectReviewFlow(flow))), [flows]);
   return useMemo(() => {
+    if (!enabled) return EMPTY_DATA;
     const t: TFunction = (key, params) => translate(locale, key, params);
-    const counts = descendantCounts(files);
     const latestByFile = new Map<string, ActionEvent>();
     for (const event of events) {
       const prev = latestByFile.get(event.file);
@@ -97,8 +101,6 @@ export function useSwitchboardData(
        never surface as standalone cards. Direct review groups (issue #325)
        claim their reviewers the same way, but they are synthetic read-model
        flows — the status-line/attention override stays with REAL flows only. */
-    const flowByImpl = flowByImplementer(flows.filter((flow) => !isDirectReviewFlow(flow)));
-    const claimed = claimedReviewerPaths(flows, files);
     const normalized = query.trim().toLowerCase();
     const base = files
       .filter(
@@ -153,8 +155,10 @@ export function useSwitchboardData(
     const recent = base.filter((item) => item.kind === "recent").sort(recentBucketSort);
     const older = base.filter((item) => item.kind === "older").sort(recentBucketSort);
     return { waiting, working, recent, older, livePreview: working.slice(0, 3) };
-  }, [files, events, query, now, archived, flows, locale]);
+  }, [files, events, query, now, archived, flowByImpl, claimed, counts, locale, enabled]);
 }
 
 const EMPTY_ARCHIVED: ReadonlySet<string> = new Set();
 const EMPTY_FLOWS: Flow[] = [];
+
+const EMPTY_DATA: SwitchboardData = { waiting: [], working: [], recent: [], older: [], livePreview: [] };

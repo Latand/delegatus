@@ -104,6 +104,7 @@ export interface KanbanCard {
   /** Nothing on it: no conversation, no active pipeline, nothing owed. */
   idle: boolean;
   updatedAtMs: number;
+  lastAgentWorkAtMs: number;
   searchText: string;
   /** The task's colour label, when it names one this build knows. */
   color: TaskColor | null;
@@ -262,11 +263,9 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
   return reference.conversationId ?? reference.path;
 }
 
-/** Needs you first, then activity, then the most recently updated. */
+/** Columns keep their status; display order follows actual agent execution. */
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
-  return Number(b.needsYou) - Number(a.needsYou)
-    || b.activity - a.activity
-    || b.updatedAtMs - a.updatedAtMs
+  return b.lastAgentWorkAtMs - a.lastAgentWorkAtMs
     || a.id.localeCompare(b.id);
 }
 
@@ -278,8 +277,14 @@ export function cardMatches(card: KanbanCard, query: string): boolean {
 export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const { bands, tasks, pipelines, projection, statusOverrides, now } = input;
   const knownConversations = new Set<string>();
+  const workByIdentity = new Map<string, number>();
   for (const file of input.files ?? []) {
     knownConversations.add(file.path);
+    const at = file.lastAgentWorkAt;
+    if (typeof at === "number" && Number.isFinite(at) && at > 0) {
+      for (const key of [file.path, file.conversationId].filter((key): key is string => Boolean(key)))
+        workByIdentity.set(key, Math.max(workByIdentity.get(key) ?? 0, at));
+    }
     if (file.conversationId) knownConversations.add(file.conversationId);
   }
   const query = input.query ?? "";
@@ -384,6 +389,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       activity: working + provisioning,
       idle: members.length === 0 && mirrors.length === 0 && !activePipeline && !needsYou && otherSurfaces === 0 && drafts.length === 0,
       updatedAtMs,
+      lastAgentWorkAtMs: Math.max(0,
+        ...[...members, ...mirrors].map(member => member.file.lastAgentWorkAt ?? 0).filter(Number.isFinite),
+        ...[...identities].map(id => workByIdentity.get(id) ?? 0)),
       searchText: [title, description, ...members.map((member) => member.file.title ?? ""), ...summaries.map((summary) => summary.pipeline.task)]
         .join("\n")
         .toLowerCase(),

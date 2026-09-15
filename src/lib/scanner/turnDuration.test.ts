@@ -597,7 +597,7 @@ test("a truncated transcript prefix reports the gap and never fabricates a turn 
       waitingInput: null,
     } satisfies FileEntry;
 
-    expect(recentTurnWindowsFor(entry)).toEqual({
+    expect(recentTurnWindowsFor(entry)).toMatchObject({
       prefixTruncated: true,
       complete: true,
       assistantMessagesAtMs: [
@@ -612,4 +612,26 @@ test("a truncated transcript prefix reports the gap and never fabricates a turn 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+
+test("work timestamps include tool and assistant execution while ignoring user and metadata writes", async () => {
+  const { recentTurnActivityFromRecords } = await import("./turnDuration");
+  const at = (n: number) => new Date(n * 1000).toISOString();
+  const claude = [
+    { type: "user", timestamp: at(1), message: { content: "Start" } },
+    { type: "assistant", timestamp: at(2), message: { content: [{ type: "tool_use", name: "Read" }] } },
+    { type: "user", timestamp: at(3), message: { content: [{ type: "tool_result", content: "result" }] } },
+    { type: "user", timestamp: at(9), message: { content: "Follow-up" } },
+    { type: "ai-title", timestamp: at(10), aiTitle: "Renamed" },
+  ];
+  expect(recentTurnActivityFromRecords(claude, false).lastAgentWorkAt).toBe(3000);
+  expect(recentTurnActivityFromRecords([claude[0]!], false).lastAgentWorkAt).toBeNull();
+  const codex = [
+    { type: "response_item", timestamp: at(4), payload: { type: "function_call", name: "exec" } },
+    { type: "event_msg", timestamp: at(5), payload: { type: "agent_message", message: "Finished" } },
+    { type: "event_msg", timestamp: at(20), payload: { type: "token_count" } },
+    { type: "event_msg", timestamp: at(30), payload: { type: "user_message", message: "Next" } },
+  ];
+  expect(recentTurnActivityFromRecords(codex, true).lastAgentWorkAt).toBe(5000);
 });
