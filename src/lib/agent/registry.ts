@@ -428,7 +428,8 @@ export type ConversationReconfigureProfile = Pick<LaunchProfile, "model" | "effo
 export interface ConversationReconfigureState {
   operationId: string;
   revision: number;
-  status: "applying" | "applied" | "failed";
+  /* `cancelled`: a cancel of the switch it owned ended it (#1705); it never applies. */
+  status: "applying" | "applied" | "failed" | "cancelled";
   profile: ConversationReconfigureProfile;
   previousProfile: ConversationReconfigureProfile;
   accountId: string | null;
@@ -445,7 +446,29 @@ export interface ConversationReconfigureClaim {
 
 export type ConversationReconfigureClaimResult =
   | { kind: "claimed" | "replayed"; state: ConversationReconfigureState; conversation: RegistryConversation }
-  | { kind: "stale"; state: ConversationReconfigureState | null; conversation: RegistryConversation };
+  | { kind: "stale"; state: ConversationReconfigureState | null; conversation: RegistryConversation }
+  /* The operation was withdrawn before any claim (#1705): nothing was written. */
+  | { kind: "withdrawn"; state: ConversationReconfigureState | null; conversation: RegistryConversation };
+
+/** A queued reconfigure withdrawn before the queue claimed it (#1705). */
+export interface ConversationReconfigureWithdrawal {
+  operationId: string;
+  at: string;
+}
+
+export type ConversationReconfigureWithdrawalResult =
+  | { kind: "withdrawn" | "replayed"; conversation: RegistryConversation }
+  /* The registry already owns the operation: nothing is written. */
+  | { kind: "claimed" | "settled"; conversation: RegistryConversation };
+
+/** How many withdrawals a conversation remembers; older operations have long settled in the journal. */
+const RECONFIGURE_WITHDRAWAL_LIMIT = 20;
+
+/** Phases in which a migration fences deliveries. */
+const IN_FLIGHT_MIGRATION_PHASES: ReadonlySet<ConversationMigration["phase"]> = new Set(["waiting-turn", "requested", "preparing", "successor-starting", "verifying"]);
+
+/** Phases a claimed switch may still be cancelled in: nothing has been created for the successor yet. */
+const CANCELLABLE_SWITCH_PHASES: ReadonlySet<ConversationMigration["phase"]> = new Set(["requested", "waiting-turn"]);
 
 export type ConversationReconfigureSettlement =
   | { kind: "settled" | "replayed"; state: ConversationReconfigureState; conversation: RegistryConversation }
@@ -507,6 +530,8 @@ export interface RegistryConversation {
   pinnedAccountId?: string | null;
   /** Durable compare-and-set owner for live structured profile changes. */
   reconfigure?: ConversationReconfigureState | null;
+  /** Reconfigure operations withdrawn before their claim (#1705), newest last. */
+  reconfigureWithdrawals?: ConversationReconfigureWithdrawal[];
   migration: ConversationMigration | null;
   /** Explicit Stop/Keep decision for one target at one routing revision. */
   migrationOptOut: { targetId: string; updatedAt: string } | null;
@@ -1182,10 +1207,57 @@ function reconfigureMigrationRequestId(owner: { operationId: string; revision: n
   return `reconfigure:${owner.operationId}:${owner.revision}`;
 }
 
+/**
+ * Deliveries a retired migration fenced go back to the source generation
+ * with everything they carried (#1705): text, images, command and client
+ * identity, and attempts. Only `held` deliveries that migration fenced move,
+ * with a record from before `fencedBy` existed, or one fenced by a migration
+ * no longer on the conversation, counted as the retired migration's own.
+ * Deliveries assigned before it, uncertain or terminal ones are untouched,
+ * and nothing is failed. A delivery with no source generation to go to stays
+ * held.
+ */
+function rearmFencedDeliveries(
+  file: RegistryFile,
+  conversation: RegistryConversation,
+  retiredOperationId: string | null,
+  assignedAt: string,
+): void {
+  const current = conversation.generations.at(-1);
+  if (!current) return;
+  const active = conversation.migration && IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase)
+    ? conversation.migration.operationId
+    : null;
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (resolveConversationAlias(file, delivery.conversationId) !== conversation.id || delivery.state !== "held") continue;
+    const owner = delivery.fencedBy ?? null;
+    if (owner !== null && owner !== retiredOperationId && owner === active) continue;
+    delivery.state = "assigned";
+    delivery.fencedBy = null;
+    delivery.generationId = current.id;
+    delivery.assignedAt = assignedAt;
+    delivery.deliveredAt = null;
+    delivery.error = null;
+    syncDeliveryOperationOwnerState(file, delivery);
+  }
+}
+
+/** Held deliveries of a retired migration adopted by the migration that replaces it (#1705). */
+function adoptFencedDeliveries(file: RegistryFile, conversation: RegistryConversation): void {
+  const migration = conversation.migration;
+  if (!migration || !IN_FLIGHT_MIGRATION_PHASES.has(migration.phase)) return;
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (resolveConversationAlias(file, delivery.conversationId) !== conversation.id || delivery.state !== "held") continue;
+    if (delivery.fencedBy === migration.operationId) continue;
+    delivery.fencedBy = migration.operationId;
+  }
+}
+
 function retireReconfigureOwnedMigration(
   file: RegistryFile,
   conversation: RegistryConversation,
   owner: ConversationReconfigureState,
+  heldDeliveries: "rearm" | "keep" = "rearm",
 ): void {
   const migration = conversation.migration;
   if (!migration || ["committed", "rolled-back", "failed-recoverable"].includes(migration.phase)) return;
@@ -1203,7 +1275,6 @@ function retireReconfigureOwnedMigration(
   }
   queueAbandonedMigrationCleanup(file, conversation, changedAt);
   abandonPendingContinuityPaths(conversation);
-  terminalizeCancelledMigrationDeliveries(file, conversation, STOPPED_MIGRATION_DELIVERY_REASON);
   conversation.migration = {
     ...migration,
     phase: "rolled-back",
@@ -1212,6 +1283,8 @@ function retireReconfigureOwnedMigration(
     errorCode: null,
     updatedAt: changedAt,
   };
+  /* A newer switch to another account keeps them held, for the migration it creates to adopt. */
+  if (heldDeliveries === "rearm") rearmFencedDeliveries(file, conversation, migration.operationId, changedAt);
   conversation.updatedAt = changedAt;
   advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
 }
@@ -1534,7 +1607,7 @@ function normalizeConversationReconfigure(value: unknown): ConversationReconfigu
   if (!current || !previous
     || typeof candidate.operationId !== "string" || !candidate.operationId
     || !Number.isSafeInteger(candidate.revision) || candidate.revision! < 0
-    || (candidate.status !== "applying" && candidate.status !== "applied" && candidate.status !== "failed")) return null;
+    || (candidate.status !== "applying" && candidate.status !== "applied" && candidate.status !== "failed" && candidate.status !== "cancelled")) return null;
   return {
     operationId: candidate.operationId,
     revision: candidate.revision!,
@@ -1544,6 +1617,17 @@ function normalizeConversationReconfigure(value: unknown): ConversationReconfigu
     accountId: typeof candidate.accountId === "string" ? candidate.accountId : null,
     error: typeof candidate.error === "string" ? candidate.error : null,
   };
+}
+
+function normalizeReconfigureWithdrawals(value: unknown): ConversationReconfigureWithdrawal[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is ConversationReconfigureWithdrawal => Boolean(item)
+      && typeof (item as ConversationReconfigureWithdrawal).operationId === "string"
+      && (item as ConversationReconfigureWithdrawal).operationId.length > 0
+      && typeof (item as ConversationReconfigureWithdrawal).at === "string")
+    .map((item) => ({ operationId: item.operationId, at: item.at }))
+    .slice(-RECONFIGURE_WITHDRAWAL_LIMIT);
 }
 
 function normalizeConversation(value: RegistryConversation, policy?: McpGrantPolicy): RegistryConversation {
@@ -1619,6 +1703,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
       ? (value as Partial<RegistryConversation>).pinnedAccountId
       : null,
     reconfigure: normalizeConversationReconfigure((value as Partial<RegistryConversation>).reconfigure),
+    reconfigureWithdrawals: normalizeReconfigureWithdrawals((value as Partial<RegistryConversation>).reconfigureWithdrawals),
     migration,
     migrationOptOut,
     supersededBy,
@@ -1750,6 +1835,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : legacyDigest,
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
+    fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
     generationId: imagesCorrupt ? null : value.generationId ?? null,
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
     assignedAt: imagesCorrupt ? null : value.assignedAt ?? null,
@@ -1822,6 +1908,7 @@ function placeDeliveryForRetryInFile(
       .includes(conversation.migration.phase);
   if (migrationBlocksDelivery) {
     delivery.state = "held";
+    delivery.fencedBy = conversation.migration!.operationId;
     delivery.generationId = null;
     delivery.assignedAt = null;
     delivery.deliveredAt = null;
@@ -6180,6 +6267,10 @@ export class AgentRegistry {
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) throw new Error("viewer conversation is unknown");
       const current = conversation.reconfigure ?? null;
+      /* #1705: checked in the same transaction a withdrawal writes in, so exactly one of them wins. */
+      if (conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === claim.operationId)) {
+        return { kind: "withdrawn" as const, state: current ? clone(current) : null, conversation: clone(conversation) };
+      }
       if (current && (current.revision > claim.revision
         || (current.revision === claim.revision && current.operationId !== claim.operationId))) {
         return { kind: "stale" as const, state: clone(current), conversation: clone(conversation) };
@@ -6200,7 +6291,10 @@ export class AgentRegistry {
         if (continuesMigrationTarget && !returnsToMigrationSource) {
           transferReconfigureOwnedMigration(file, conversation, current, claim);
         } else {
-          retireReconfigureOwnedMigration(file, conversation, current);
+          /* A switch to yet another account keeps the fenced deliveries held for the migration it creates;
+             anything else (back to the source, a settings change) re-arms them to the source. */
+          const switchesElsewhere = claim.accountId !== undefined && claim.accountId !== generation.accountId;
+          retireReconfigureOwnedMigration(file, conversation, current, switchesElsewhere ? "keep" : "rearm");
         }
       }
       const previousProfile = current?.status === "applying"
@@ -6253,8 +6347,106 @@ export class AgentRegistry {
       current.status = status;
       current.error = status === "failed" ? error : null;
       conversation.updatedAt = now();
+      /* Deliveries a superseded migration kept held for this owner go back to the source when it ends without one. */
+      if (!conversation.migration || !IN_FLIGHT_MIGRATION_PHASES.has(conversation.migration.phase)) {
+        rearmFencedDeliveries(file, conversation, null, conversation.updatedAt);
+      }
       return { kind: "settled" as const, state: clone(current), conversation: clone(conversation) };
     });
+  }
+
+  /**
+   * Withdraw a reconfigure the queue has not claimed (#1705). One transaction:
+   * an operation the registry already owns is answered as `claimed` (still
+   * applying) or `settled`, and nothing is written; otherwise the withdrawal
+   * is recorded, and `claimConversationReconfigure` refuses the operation in
+   * its own transaction. Whichever commits first decides; the loser changes
+   * nothing.
+   */
+  withdrawConversationReconfigure(id: ViewerConversationId, operationId: string): ConversationReconfigureWithdrawalResult {
+    if (!operationId) throw new Error("reconfigure operation id is required");
+    return this.mutate((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      if (!conversation) throw new Error("viewer conversation is unknown");
+      const current = conversation.reconfigure ?? null;
+      if (current?.operationId === operationId) {
+        return { kind: current.status === "applying" ? "claimed" as const : "settled" as const, conversation: clone(conversation) };
+      }
+      const withdrawals = conversation.reconfigureWithdrawals ?? [];
+      if (withdrawals.some((withdrawal) => withdrawal.operationId === operationId)) {
+        return { kind: "replayed" as const, conversation: clone(conversation) };
+      }
+      const at = now();
+      conversation.reconfigureWithdrawals = [...withdrawals, { operationId, at }].slice(-RECONFIGURE_WITHDRAWAL_LIMIT);
+      conversation.updatedAt = at;
+      return { kind: "withdrawn" as const, conversation: clone(conversation) };
+    });
+  }
+
+  /** Whether a reconfigure operation was cancelled: withdrawn before its claim, or claimed and then cancelled. */
+  reconfigureCancelled(id: ViewerConversationId, operationId: string): boolean {
+    const snapshot = this.readOnlySnapshot();
+    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+    if (!conversation) return false;
+    if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
+    return Boolean(conversation.reconfigureWithdrawals?.some((withdrawal) => withdrawal.operationId === operationId));
+  }
+
+  /**
+   * Cancel a claimed switch before anything is created for its successor
+   * (#1705), in one transaction guarded by the migration's revision and phase:
+   * a stale revision throws "migration revision is stale", a switch past
+   * `waiting-turn` throws "switch has already started", and neither changes
+   * anything. The migration is rolled back and its conversation-scoped intent
+   * stopped; the reconfigure that owns it is settled `cancelled` and its
+   * previous profile restored, so a retry of that operation never applies;
+   * and the deliveries that migration fenced are re-armed to the source
+   * (`rearmFencedDeliveries`).
+   */
+  cancelConversationSwitch(id: ViewerConversationId, expectedRevision: number): RegistryConversation {
+    return this.mutate((file) => {
+      const conversation = file.conversations[resolveConversationAlias(file, id)];
+      const migration = conversation?.migration;
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !migration || !generation) throw new Error("conversation has no migration");
+      if (migration.revision !== expectedRevision) throw new Error("migration revision is stale");
+      if (!CANCELLABLE_SWITCH_PHASES.has(migration.phase)) throw new Error("switch has already started");
+      const cancelledAt = now();
+      const paths = new Set([generation.path].filter((pathname): pathname is string => Boolean(pathname)));
+      const signature = migrationReadinessSignature(file, conversation.engine, paths);
+      queueAbandonedMigrationCleanup(file, conversation, cancelledAt);
+      const route = file.engineRouting[conversation.engine];
+      if (route.activeAccountId === migration.targetId) {
+        conversation.migrationOptOut = { targetId: migration.targetId, updatedAt: cancelledAt };
+      }
+      const intent = file.migrationIntents[migration.intentId];
+      const owner = conversation.reconfigure ?? null;
+      if (intent?.scope === "conversation" && intent.state !== "stopped") {
+        intent.state = "stopped";
+        intent.stoppedAt = cancelledAt;
+        intent.updatedAt = cancelledAt;
+      }
+      if (owner?.status === "applying" && intent?.requestIds.includes(reconfigureMigrationRequestId(owner))) {
+        owner.status = "cancelled";
+        owner.error = null;
+        writeConversationLaunchProfile(file, conversation, generation, owner.previousProfile);
+      }
+      conversation.migration = { ...migration, phase: "rolled-back", error: null, errorCode: null, updatedAt: cancelledAt };
+      rearmFencedDeliveries(file, conversation, migration.operationId, cancelledAt);
+      conversation.updatedAt = cancelledAt;
+      advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
+      return clone(conversation);
+    });
+  }
+
+  /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
+  reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
+    const snapshot = this.readOnlySnapshot();
+    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+    const migration = conversation?.migration;
+    const owner = conversation?.reconfigure;
+    if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
+    return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
   }
 
   canonicalPath(artifactPath: string): string {
@@ -6501,6 +6693,7 @@ export class AgentRegistry {
       const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
       queueAbandonedMigrationCleanup(file, conversation, changedAt);
       conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+      adoptFencedDeliveries(file, conversation);
       conversation.updatedAt = changedAt;
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
@@ -6603,6 +6796,7 @@ export class AgentRegistry {
       const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
       queueAbandonedMigrationCleanup(file, conversation, changedAt);
       conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+      adoptFencedDeliveries(file, conversation);
       conversation.updatedAt = changedAt;
       file.conversationRevision[conversation.engine] += 1;
       file.engineRouting[conversation.engine].revision += 1;
@@ -7069,10 +7263,12 @@ export class AgentRegistry {
         if (recoveryIntent) delivery.recoveryIntent = recoveryIntent;
         if (migrationBlocksDelivery) {
           delivery.state = "held";
+          delivery.fencedBy = conversation!.migration!.operationId;
           delivery.generationId = null;
           delivery.assignedAt = null;
         } else if (current) {
           delivery.state = "assigned";
+          delivery.fencedBy = null;
           delivery.generationId = current.id;
           delivery.assignedAt = now();
         } else {

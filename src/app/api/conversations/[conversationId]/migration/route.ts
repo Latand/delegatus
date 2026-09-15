@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest, { params }: { params: Promise<{ conversationId: string }> }) {
   const rejected = rejectCrossOrigin(req);
   if (rejected) return rejected;
-  let body: { action?: unknown; expectedRevision?: unknown; path?: unknown };
+  let body: { action?: unknown; expectedRevision?: unknown; path?: unknown; operationId?: unknown };
   try {
     body = await req.json() as typeof body;
   } catch {
@@ -21,6 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
     action: typeof body.action === "string" ? body.action : "",
     expectedRevision: typeof body.expectedRevision === "number" ? body.expectedRevision : undefined,
     path: body.path as string | undefined,
+    operationId: body.operationId,
   });
   return NextResponse.json(result.body, { status: result.status });
 }

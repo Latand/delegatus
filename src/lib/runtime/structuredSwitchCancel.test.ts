@@ -104,6 +104,7 @@ function successorProvider(successorPath: string, onCreate?: () => void): Succes
 
 interface PendingSwitch {
   registry: AgentRegistry;
+  registryFile: string;
   id: RegistryConversation["id"];
   sourceGenerationId: string;
   effect: StructuredReconfigureEffect;
@@ -166,6 +167,7 @@ async function pendingSwitch(options: { claim?: boolean } = {}): Promise<Pending
   }
   return {
     registry,
+    registryFile: path.join(root, "registry.json"),
     id: admitted.id,
     sourceGenerationId: source.id,
     effect,
@@ -182,6 +184,7 @@ const failedDeliveries = (fixture: PendingSwitch) => Object.values(fixture.regis
 type Planned = AgentRegistry & {
   cancelConversationSwitch(id: RegistryConversation["id"], expectedRevision: number): RegistryConversation;
   withdrawConversationReconfigure(id: RegistryConversation["id"], operationId: string): { kind: "withdrawn" | "replayed" | "claimed" | "settled" };
+  reconfigureCancelled(id: RegistryConversation["id"], operationId: string): boolean;
 };
 const planned = (registry: AgentRegistry) => registry as Planned;
 
@@ -237,8 +240,8 @@ test("a switch withdrawn before the queue claims it is never claimed: no profile
   const fixture = await pendingSwitch({ claim: false });
   const { registry, id } = fixture;
 
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId)).toEqual({ kind: "withdrawn" });
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId)).toEqual({ kind: "replayed" });
+  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("withdrawn");
+  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("replayed");
 
   await expect(fixture.apply()).rejects.toThrow(/cancel/);
   const after = registry.conversation(id)!;
@@ -251,7 +254,7 @@ test("a switch withdrawn before the queue claims it is never claimed: no profile
 test("a withdrawal that arrives after the claim writes nothing and leaves the switch to a claimed cancel", async () => {
   const fixture = await pendingSwitch();
   const { registry, id } = fixture;
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId)).toEqual({ kind: "claimed" });
+  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("claimed");
   const after = registry.conversation(id)!;
   expect(after.migration?.phase).toBe("waiting-turn");
   expect(after.reconfigure?.status).toBe("applying");
@@ -291,7 +294,14 @@ test("a newer switch back to the source account re-arms the held delivery with i
 test("the migration route: cancel needs expectedRevision and rolls back a waiting switch; withdraw needs an operation id; rollback keeps its guard", async () => {
   const fixture = await pendingSwitch();
   const { registry, id } = fixture;
-  const dependencies = { registry: () => registry };
+  const delivered: string[] = [];
+  const kicks: number[] = [];
+  const dependencies = {
+    registry: () => registry,
+    kick: () => { kicks.push(1); },
+    /* Records what a drain hands to delivery; nothing reaches a host. */
+    deliveryPort: { deliver: async ({ delivery }: { delivery: HeldDelivery }) => { delivered.push(delivery.id); return "held" as const; } },
+  } as never;
   const revision = registry.conversation(id)!.migration!.revision;
 
   expect(await applyConversationMigration({ conversationId: id, action: "rollback" }, dependencies)).toMatchObject({ status: 400 });
@@ -307,4 +317,115 @@ test("the migration route: cancel needs expectedRevision and rolls back a waitin
   expect(cancelled.status).toBe(200);
   expect(registry.conversation(id)!.migration?.phase).toBe("rolled-back");
   expect(String(registry.conversation(id)!.reconfigure?.status)).toBe("cancelled");
+  expect(kicks).toHaveLength(1);
+  /* A second cancel of the same switch is stale, never a second rollback. */
+  const again = await applyConversationMigration({ conversationId: id, action: "cancel", expectedRevision: revision }, dependencies);
+  expect(again.status).toBe(409);
+});
+
+test("the migration route withdraws a queued switch only after reading it from the runtime journal", async () => {
+  const fixture = await pendingSwitch({ claim: false });
+  const { registry, id } = fixture;
+  const receipt = (status: string, over: Record<string, unknown> = {}) => ({ operationId: fixture.effect.operationId, replayed: false, receipt: { operationId: fixture.effect.operationId, idempotencyKey: fixture.effect.operationId, conversationId: id, kind: "reconfigure", status, at: "2026-07-21T10:00:20.000Z", revision: 1, ...over } });
+  const kicks: number[] = [];
+  const route = (read: unknown) => applyConversationMigration({ conversationId: id, action: "withdraw", operationId: fixture.effect.operationId }, {
+    registry: () => registry,
+    kick: () => { kicks.push(1); },
+    operationStatus: async () => read,
+  } as never);
+
+  expect(await route("unreadable")).toMatchObject({ status: 503, body: { code: "RUNTIME_UNREADABLE" } });
+  expect(await route(null)).toMatchObject({ status: 404 });
+  expect(await route(receipt("queued", { kind: "send" }))).toMatchObject({ status: 404 });
+  expect(await route(receipt("failed"))).toMatchObject({ status: 409, body: { code: "SWITCH_SETTLED" } });
+  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
+
+  expect(await route(receipt("queued"))).toMatchObject({ status: 200, body: { withdraw: "withdrawn" } });
+  expect(await route(receipt("queued"))).toMatchObject({ status: 200, body: { withdraw: "replayed" } });
+  expect(kicks).toHaveLength(2);
+  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(true);
+  await expect(fixture.apply()).rejects.toThrow(/cancel/);
+});
+
+test("a withdrawal of a switch the queue already claimed is refused with the migration's revision to cancel it by", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const answer = await applyConversationMigration({ conversationId: id, action: "withdraw", operationId: fixture.effect.operationId }, {
+    registry: () => registry,
+    kick: () => {},
+    operationStatus: async () => ({ operationId: fixture.effect.operationId, replayed: false, receipt: { operationId: fixture.effect.operationId, idempotencyKey: fixture.effect.operationId, conversationId: id, kind: "reconfigure", status: "queued", at: "2026-07-21T10:00:20.000Z", revision: 1 } }),
+  } as never);
+  expect(answer).toMatchObject({ status: 409, body: { code: "SWITCH_CLAIMED", expectedRevision: registry.conversation(id)!.migration!.revision } });
+  expect(registry.conversation(id)!.migration?.phase).toBe("waiting-turn");
+  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
+});
+
+test("a rollback through the route of a reconfigure-owned switch still waiting for its turn is the cancel: the queue's retry stays rolled back", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const answer = await applyConversationMigration({ conversationId: id, action: "rollback", expectedRevision: registry.conversation(id)!.migration!.revision }, {
+    registry: () => registry,
+    kick: () => {},
+    deliveryPort: { deliver: async () => "held" as const },
+  } as never);
+  expect(answer.status).toBe(200);
+  await expect(fixture.apply()).rejects.toThrow(/cancel/);
+  expect(registry.conversation(id)!.migration?.phase).toBe("rolled-back");
+  expect(registry.conversation(id)!.generations.at(-1)?.accountId).toBe("account-a");
+});
+
+test("a newer switch that fails before it creates a migration gives back the deliveries it kept held, payload intact", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const held = delivery(fixture, fixture.deliveries.held!.id);
+  const failing = applyStructuredReconfigure({ ...fixture.effect, operationId: "reconfigure-to-signed-out", accountId: "account-c", eventSeq: 8 }, {
+    registry,
+    validateAccount: async () => { throw new Error("claude account requires authentication"); },
+    resolveAccount: (() => ({})) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+  });
+  await expect(failing).rejects.toThrow(/authentication/);
+  const after = registry.conversation(id)!;
+  expect(after.reconfigure?.status).toBe("failed");
+  const rearmed = delivery(fixture, held.id);
+  expect({ state: rearmed.state, generationId: rearmed.generationId, text: rearmed.text, operationId: rearmed.command.operationId })
+    .toEqual({ state: "assigned", generationId: fixture.sourceGenerationId, text: held.text, operationId: held.command.operationId });
+  expect(failedDeliveries(fixture)).toEqual([]);
+});
+
+test("a held record from before fencedBy existed is re-armed by the cancel of the conversation's switch", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  const heldId = fixture.deliveries.held!.id;
+  /* Simulate the legacy row: no owner recorded. */
+  (registry as unknown as { mutate<T>(fn: (file: { heldDeliveries: Record<string, HeldDelivery> }) => T): T })
+    .mutate((file) => { delete file.heldDeliveries[heldId]!.fencedBy; });
+  expect(delivery(fixture, heldId).fencedBy ?? null).toBeNull();
+  planned(registry).cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  expect(delivery(fixture, heldId).state).toBe("assigned");
+});
+
+test("the coordinator does not advance a cancelled switch", async () => {
+  const fixture = await pendingSwitch();
+  const { registry, id } = fixture;
+  planned(registry).cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  const advanced = await advanceConversationMigration(id, registry, successorProvider(path.join(sandbox, "never.jsonl")), { deferBoardRepair: true }).catch((error: unknown) => error);
+  const after = registry.conversation(id)!;
+  expect(after.migration?.phase).toBe("rolled-back");
+  expect(after.generations.at(-1)?.accountId).toBe("account-a");
+  expect(fs.existsSync(path.join(sandbox, "never.jsonl"))).toBe(false);
+  void advanced;
+});
+
+test("withdrawals are remembered per conversation, bounded, and survive a registry reload", async () => {
+  const fixture = await pendingSwitch({ claim: false });
+  const { registry, id } = fixture;
+  for (let index = 0; index < 25; index += 1) planned(registry).withdrawConversationReconfigure(id, `withdrawn-${index}`);
+  const conversation = new AgentRegistry(fixture.registryFile).conversation(id)!;
+  expect(conversation.reconfigureWithdrawals?.length).toBe(20);
+  expect(conversation.reconfigureWithdrawals?.at(-1)?.operationId).toBe("withdrawn-24");
+  const reloaded = planned(new AgentRegistry(fixture.registryFile));
+  expect(reloaded.reconfigureCancelled(id, "withdrawn-24")).toBe(true);
+  expect(reloaded.reconfigureCancelled(id, "withdrawn-0")).toBe(false);
 });

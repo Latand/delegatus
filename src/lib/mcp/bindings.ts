@@ -3502,6 +3502,7 @@ async function conversationMigration(args: McpToolArgs, dependencies: ViewerMcpD
     action: required(args, "action"),
     expectedRevision: typeof args.expectedRevision === "number" ? args.expectedRevision : undefined,
     path: text(args.transcriptPath) || text(args.path),
+    ...(typeof args.operationId === "string" ? { operationId: args.operationId } : {}),
   });
   if ("error" in result.body && typeof result.body.error === "string") throw new Error(result.body.error);
   const conversation = result.body.conversation

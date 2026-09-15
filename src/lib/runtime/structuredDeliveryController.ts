@@ -2,6 +2,7 @@ import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import crypto from "node:crypto";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -646,6 +647,7 @@ export async function bindStructuredDeliveryQueue(
   const queue = new StructuredDeliveryQueue(
     {
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
+      reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {

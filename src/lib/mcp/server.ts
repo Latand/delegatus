@@ -2726,7 +2726,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_task: "Read one durable board task.",
   deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments.",
   resources: "Read system and Viewer-owned agent resource usage.",
-  conversation_migration: "Reseat, retry, or roll back a conversation account migration.",
+  conversation_migration: "Reseat, retry, roll back or cancel a conversation account migration, or withdraw an account switch the queue has not claimed yet.",
   agent_activity: "Read agent liveness: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
@@ -3175,8 +3175,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   conversation_migration: z.object({
     clientRequestId: clientRequestIdSchema,
     conversationId: z.string().min(1),
-    action: z.enum(["reseat", "retry", "rollback"]),
-    expectedRevision: z.number().int().min(0).optional(),
+    action: z.enum(["reseat", "retry", "rollback", "cancel", "withdraw"]).describe("cancel: a claimed switch still waiting for its turn, by expectedRevision; the migration is rolled back and the reconfigure that owned it never applies. withdraw: a queued switch the queue has not claimed, by operationId; a claimed one answers SWITCH_CLAIMED with the revision to cancel it by."),
+    expectedRevision: z.number().int().min(0).optional().describe("The migration's revision: required by retry, rollback and cancel."),
+    operationId: z.string().min(1).optional().describe("withdraw: the queued reconfigure operation."),
     transcriptPath: z.string().optional(),
   }).passthrough(),
   agent_activity: z.object({
