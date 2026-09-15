@@ -17,9 +17,9 @@ import { applyStructuredReconfigure } from "./structuredReconfigure";
 
 /*
  * Cancelling an account switch without losing anything (#1695 K6b, #1705).
- * PREPARED BEFORE THE IMPLEMENTATION: these cases state the contract of
- * `evidence/issue-1695/k6b-plan.md` and are red on main 098932f8. They use the
- * account-switch fixture of `structuredAccountSwitch.test.ts`: a structured
+ * These cases state the contract of `evidence/issue-1695/k6b-plan.md`; they
+ * were written before the implementation and failed on main 098932f8. They use
+ * the account-switch fixture of `structuredAccountSwitch.test.ts`: a structured
  * Claude conversation on account A running a turn, with three deliveries
  * around a switch to account B that waits for that turn. The first was
  * assigned to the source before the switch, the second began an attempt
@@ -180,13 +180,6 @@ async function pendingSwitch(options: { claim?: boolean } = {}): Promise<Pending
 const delivery = (fixture: PendingSwitch, id: string) => structuredClone(fixture.registry.snapshot().heldDeliveries[id]!);
 const failedDeliveries = (fixture: PendingSwitch) => Object.values(fixture.registry.snapshot().heldDeliveries).filter((entry) => entry.state === "failed");
 
-/* The planned registry surface (k6b-plan.md §2, §3). Absent on main: each case below fails there. */
-type Planned = AgentRegistry & {
-  cancelConversationSwitch(id: RegistryConversation["id"], expectedRevision: number): RegistryConversation;
-  withdrawConversationReconfigure(id: RegistryConversation["id"], operationId: string): { kind: "withdrawn" | "replayed" | "claimed" | "settled" };
-  reconfigureCancelled(id: RegistryConversation["id"], operationId: string): boolean;
-};
-const planned = (registry: AgentRegistry) => registry as Planned;
 
 test("cancelling a claimed switch that waits for the turn rolls it back, settles its owner, and re-arms only the delivery it held", async () => {
   const fixture = await pendingSwitch();
@@ -196,7 +189,7 @@ test("cancelling a claimed switch that waits for the turn rolls it back, settles
   const held = delivery(fixture, fixture.deliveries.held!.id);
   const migration = registry.conversation(id)!.migration!;
 
-  const cancelled = planned(registry).cancelConversationSwitch(id, migration.revision);
+  const cancelled = registry.cancelConversationSwitch(id, migration.revision);
 
   expect(cancelled.migration?.phase).toBe("rolled-back");
   expect(cancelled.reconfigure?.operationId).toBe(fixture.effect.operationId);
@@ -225,11 +218,11 @@ test("a claimed cancel is refused with nothing changed when its revision is stal
   const { registry, id } = fixture;
   const migration = registry.conversation(id)!.migration!;
   const heldId = fixture.deliveries.held!.id;
-  expect(() => planned(registry).cancelConversationSwitch(id, migration.revision + 1)).toThrow(/stale/);
+  expect(() => registry.cancelConversationSwitch(id, migration.revision + 1)).toThrow(/stale/);
   expect(registry.conversation(id)!.migration?.phase).toBe("waiting-turn");
 
   registry.transitionConversationMigration(id, migration.revision, ["waiting-turn"], { phase: "preparing" });
-  expect(() => planned(registry).cancelConversationSwitch(id, migration.revision)).toThrow(/started/);
+  expect(() => registry.cancelConversationSwitch(id, migration.revision)).toThrow(/started/);
   const current = registry.conversation(id)!;
   expect(current.migration?.phase).toBe("preparing");
   expect(current.reconfigure?.status).toBe("applying");
@@ -240,8 +233,8 @@ test("a switch withdrawn before the queue claims it is never claimed: no profile
   const fixture = await pendingSwitch({ claim: false });
   const { registry, id } = fixture;
 
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("withdrawn");
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("replayed");
+  expect(registry.withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("withdrawn");
+  expect(registry.withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("replayed");
 
   await expect(fixture.apply()).rejects.toThrow(/cancel/);
   const after = registry.conversation(id)!;
@@ -254,7 +247,7 @@ test("a switch withdrawn before the queue claims it is never claimed: no profile
 test("a withdrawal that arrives after the claim writes nothing and leaves the switch to a claimed cancel", async () => {
   const fixture = await pendingSwitch();
   const { registry, id } = fixture;
-  expect(planned(registry).withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("claimed");
+  expect(registry.withdrawConversationReconfigure(id, fixture.effect.operationId).kind).toBe("claimed");
   const after = registry.conversation(id)!;
   expect(after.migration?.phase).toBe("waiting-turn");
   expect(after.reconfigure?.status).toBe("applying");
@@ -338,12 +331,12 @@ test("the migration route withdraws a queued switch only after reading it from t
   expect(await route(null)).toMatchObject({ status: 404 });
   expect(await route(receipt("queued", { kind: "send" }))).toMatchObject({ status: 404 });
   expect(await route(receipt("failed"))).toMatchObject({ status: 409, body: { code: "SWITCH_SETTLED" } });
-  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
+  expect(registry.reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
 
   expect(await route(receipt("queued"))).toMatchObject({ status: 200, body: { withdraw: "withdrawn" } });
   expect(await route(receipt("queued"))).toMatchObject({ status: 200, body: { withdraw: "replayed" } });
   expect(kicks).toHaveLength(2);
-  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(true);
+  expect(registry.reconfigureCancelled(id, fixture.effect.operationId)).toBe(true);
   await expect(fixture.apply()).rejects.toThrow(/cancel/);
 });
 
@@ -357,7 +350,7 @@ test("a withdrawal of a switch the queue already claimed is refused with the mig
   } as never);
   expect(answer).toMatchObject({ status: 409, body: { code: "SWITCH_CLAIMED", expectedRevision: registry.conversation(id)!.migration!.revision } });
   expect(registry.conversation(id)!.migration?.phase).toBe("waiting-turn");
-  expect(planned(registry).reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
+  expect(registry.reconfigureCancelled(id, fixture.effect.operationId)).toBe(false);
 });
 
 test("a rollback through the route of a reconfigure-owned switch still waiting for its turn is the cancel: the queue's retry stays rolled back", async () => {
@@ -402,14 +395,14 @@ test("a held record from before fencedBy existed is re-armed by the cancel of th
   (registry as unknown as { mutate<T>(fn: (file: { heldDeliveries: Record<string, HeldDelivery> }) => T): T })
     .mutate((file) => { delete file.heldDeliveries[heldId]!.fencedBy; });
   expect(delivery(fixture, heldId).fencedBy ?? null).toBeNull();
-  planned(registry).cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  registry.cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
   expect(delivery(fixture, heldId).state).toBe("assigned");
 });
 
 test("the coordinator does not advance a cancelled switch", async () => {
   const fixture = await pendingSwitch();
   const { registry, id } = fixture;
-  planned(registry).cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
+  registry.cancelConversationSwitch(id, registry.conversation(id)!.migration!.revision);
   const advanced = await advanceConversationMigration(id, registry, successorProvider(path.join(sandbox, "never.jsonl")), { deferBoardRepair: true }).catch((error: unknown) => error);
   const after = registry.conversation(id)!;
   expect(after.migration?.phase).toBe("rolled-back");
@@ -421,11 +414,11 @@ test("the coordinator does not advance a cancelled switch", async () => {
 test("withdrawals are remembered per conversation, bounded, and survive a registry reload", async () => {
   const fixture = await pendingSwitch({ claim: false });
   const { registry, id } = fixture;
-  for (let index = 0; index < 25; index += 1) planned(registry).withdrawConversationReconfigure(id, `withdrawn-${index}`);
+  for (let index = 0; index < 25; index += 1) registry.withdrawConversationReconfigure(id, `withdrawn-${index}`);
   const conversation = new AgentRegistry(fixture.registryFile).conversation(id)!;
   expect(conversation.reconfigureWithdrawals?.length).toBe(20);
   expect(conversation.reconfigureWithdrawals?.at(-1)?.operationId).toBe("withdrawn-24");
-  const reloaded = planned(new AgentRegistry(fixture.registryFile));
+  const reloaded = new AgentRegistry(fixture.registryFile);
   expect(reloaded.reconfigureCancelled(id, "withdrawn-24")).toBe(true);
   expect(reloaded.reconfigureCancelled(id, "withdrawn-0")).toBe(false);
 });
