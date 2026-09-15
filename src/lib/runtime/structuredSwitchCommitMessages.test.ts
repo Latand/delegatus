@@ -402,8 +402,8 @@ function journalFor(fixture: Switch): { journal: RuntimeJournal; file: string; o
     },
   });
   const order = () => new Database(file, { readonly: true })
-    .query<{ operation_id: string }, []>("SELECT operation_id FROM operations WHERE conversation_id = ?1 ORDER BY event_seq")
-    .all(fixture.id as never).map((row) => row.operation_id);
+    .query<{ operation_id: string }, [string]>("SELECT operation_id FROM operations WHERE conversation_id = ?1 ORDER BY event_seq")
+    .all(fixture.id).map((row) => row.operation_id);
   return { journal, file, order };
 }
 
@@ -441,7 +441,7 @@ function journalClient(fixture: Switch, journal: RuntimeJournal): RuntimeHostCli
   return {
     snapshot: async () => snapshot(),
     command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
-    operationStatus: async (operationId: string) => journal.operationStatus(operationId),
+    operationStatus: async (operationId: string) => journal.operationResult(operationId),
   } as unknown as RuntimeHostClient;
 }
 
