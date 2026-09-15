@@ -1,3 +1,4 @@
+import { filesReadSummary } from "@/lib/filesReadSummary";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -865,6 +866,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const crownedProjects = [...new Set(
     curation.crowned.map((project) => remapProject(resolveCatalogAlias(project, projectAliases.aliases))),
   )];
+  const summary = new URL(request.url).searchParams.get("view") === "summary"
+    ? filesReadSummary(projected.flows, pipelines) : null;
   const body = JSON.stringify({
     files: projected.files,
     ...(responsePinOverlayPaths.size ? { pinOverlayPaths: [...responsePinOverlayPaths] } : {}),
@@ -873,8 +876,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     projectDisplayNames,
     ...(crownedProjects.length ? { crownedProjects } : {}),
     ...(Object.keys(projectCwds).length ? { projectCwds } : {}),
-    flows: projected.flows,
-    pipelines,
+    flows: summary?.flows ?? projected.flows,
+    pipelines: summary?.pipelines ?? pipelines,
+    ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     tasks: tasks.tasks,
     systemHealth: { tmux: routeDependencies.tmuxEndpointHealth(), registry: registryHealth },

@@ -1590,6 +1590,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     structuredSession?.session.voiceDeliveries ?? [],
     structuredSession?.session.voiceTranscript ?? EMPTY_VOICE_TRANSCRIPT,
     structuredSession?.session.host ?? "unknown",
+    structuredSession?.session.voiceDeliverySnapshotRevision,
+    structuredSession?.session.acknowledgedVoiceDeliveryIds,
   );
   /* Codex's own queue (#1629). Available only where the host has actually
      advertised native queue support — the capability is observed from the

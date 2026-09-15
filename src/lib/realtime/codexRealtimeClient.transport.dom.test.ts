@@ -628,3 +628,25 @@ test("a runtime that reports the host gone contradicts the call at once", async 
   expect(client.getSnapshot().agentUnavailable).toBeNull();
   await client.stop();
 });
+
+
+test("deferred snapshot bodies pause queued speech until authoritative hydration", async () => {
+  const delivered: unknown[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (body.action === "deliverWorkerResponse") {
+      delivered.push(body.delivery);
+      return jsonResponse(200, { ok: true, acknowledged: true, deliveryId: (body.delivery as { deliveryId: string }).deliveryId });
+    }
+    return jsonResponse(200, { ok: true, sdp: "v=0\r\nanswer" });
+  }) as unknown as typeof fetch;
+  const client = codexRealtimeClient("conversation_deferred_body");
+  const chunk = streamingVoiceDelivery({ sourceTurnId: "turn-deferred", chunkIndex: 0, startOffset: 0, endOffset: 18, text: "Canonical response" });
+  client.reconcileWorkerDeliveries([chunk], { authoritative: true });
+  client.reconcileWorkerDeliveries([], { ready: false });
+  await client.start(); StubPeerConnection.latest?.channel.onopen?.(); await flushAsync();
+  expect(delivered).toEqual([]);
+  client.reconcileWorkerDeliveries([chunk], { authoritative: true, ready: true });
+  await flushAsync(); expect(delivered).toEqual([chunk]);
+  await client.stop();
+});

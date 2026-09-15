@@ -1,7 +1,7 @@
 import type { FileEntry } from "../types";
 import { resolveTarget } from "../tmux";
 import { ctxFor } from "./context";
-import { lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
+import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles } from "./discover";
 import { entryEffort, entryEffortResult, entryFast } from "./effort";
 import { linkEntries } from "./links";
@@ -100,6 +100,7 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     entry.plan = planFor(entry); entry.goal = goalFor(entry); entry.ctx = ctxFor(entry);
     entry.lastTurn = lastTurnFor(entry);
     entry.lastAssistantMessageAt = lastAssistantMessageAtFor(entry);
+    entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);
     entry.pendingWakeup = pendingWakeupFor(entry);
   }, signal);
   throwIfCancelled(signal);

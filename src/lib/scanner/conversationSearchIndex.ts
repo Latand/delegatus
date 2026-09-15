@@ -9,6 +9,8 @@ type YieldControl = () => Promise<void>;
 
 interface SearchTextCacheEntry extends TranscriptSearchText {
   size: number;
+  mtime: number;
+  engine: ConversationCatalogEntry["engine"];
   bytes: number;
 }
 
@@ -59,9 +61,10 @@ async function buildIndex(
   maxCacheBytes: number,
   maxCacheEntries: number,
   signal?: AbortSignal,
+  prune = true,
 ): Promise<ConversationCatalogEntry[]> {
   const cache = store.__llvConversationSearchText ??= new Map();
-  pruneConversationSearchCache(new Set(catalog.map((entry) => entry.path)));
+  if (prune) pruneConversationSearchCache(new Set(catalog.map((entry) => entry.path)));
   let cacheBytes = store.__llvConversationSearchTextBytes
     ?? [...cache].reduce((total, [pathname, entry]) => total + (entry.bytes ?? searchTextBytes(entry, pathname)), 0);
   const enforceBudget = () => {
@@ -79,14 +82,14 @@ async function buildIndex(
     signal?.throwIfAborted();
     const entry = catalog[index];
     let text = cache.get(entry.path);
-    if (!text || text.size !== entry.size) {
+    if (!text || text.size !== entry.size || text.mtime !== entry.mtime || text.engine !== entry.engine) {
       if (text) {
         cache.delete(entry.path);
         cacheBytes -= text.bytes ?? searchTextBytes(text, entry.path);
         store.__llvConversationSearchTextBytes = Math.max(0, cacheBytes);
       }
       const hydrated = readText(entry.path, entry.size, entry.engine);
-      text = { ...hydrated, size: entry.size, bytes: searchTextBytes(hydrated, entry.path) };
+      text = { ...hydrated, size: entry.size, mtime: entry.mtime, engine: entry.engine, bytes: searchTextBytes(hydrated, entry.path) };
       /* A full-catalog sweep must preserve entries retained from its previous
          run. Admit a miss only into free capacity, preventing early misses
          from evicting entries the same sweep has yet to reuse. */
@@ -139,6 +142,8 @@ export function conversationSearchCacheStats(): { entries: number; trackedBytes:
 export async function indexConversationCatalog(
   catalog: readonly ConversationCatalogEntry[],
   options: {
+    /** False when indexing a scoped subset; caller prunes with the full catalog. */
+    prune?: boolean;
     readText?: SearchTextReader;
     yieldControl?: YieldControl;
     batchSize?: number;
@@ -161,7 +166,7 @@ export async function indexConversationCatalog(
     || options.maxCacheBytes !== undefined || options.maxCacheEntries !== undefined);
   const reuseProjection = options.reuseProjection ?? !hasOverrides;
   if (!reuseProjection) {
-    return buildIndex(catalog, readText, yieldControl, batchSize, maxCacheBytes, maxCacheEntries, options.signal);
+    return buildIndex(catalog, readText, yieldControl, batchSize, maxCacheBytes, maxCacheEntries, options.signal, options.prune);
   }
 
   options.signal?.throwIfAborted();
@@ -174,7 +179,7 @@ export async function indexConversationCatalog(
     delete store.__llvConversationSearchProjection;
     if (store.__llvConversationSearchProjectionTimer) clearTimeout(store.__llvConversationSearchProjectionTimer);
     const controller = new AbortController();
-    const promise = buildIndex(catalog, readText, yieldControl, batchSize, maxCacheBytes, maxCacheEntries, controller.signal);
+    const promise = buildIndex(catalog, readText, yieldControl, batchSize, maxCacheBytes, maxCacheEntries, controller.signal, options.prune);
     building = { catalog, controller, promise };
     store.__llvConversationSearchBuild = building;
     void promise.then((items) => {

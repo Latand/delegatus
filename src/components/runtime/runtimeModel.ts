@@ -284,6 +284,7 @@ export interface RuntimeSession {
       as a streaming bubble until the transcript materializes the item. */
   liveTurn?: RuntimeLiveTurn | null;
   voiceDeliveries?: RuntimeVoiceDelivery[];
+  voiceDeliverySnapshotRevision?: number;
   acknowledgedVoiceDeliveryIds?: string[];
   /** The canonical realtime transcript, newest last and bounded (#1629). */
   voiceTranscript?: RuntimeVoiceTranscriptSegment[];

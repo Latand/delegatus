@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 
+import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import type { SchemeLayout } from "@/components/scheme/layout";
+import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
@@ -75,7 +76,7 @@ function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files]);
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, query: options.query, statusOverrides: options.overrides, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, statusOverrides: options.overrides, now: NOW });
 }
 
 test("every stored task is a card in exactly one column or counted off the board, at a thousand tasks", () => {
@@ -158,26 +159,16 @@ test("the projection alone stays inside its budget at a thousand tasks", () => {
   expect(performance.now() - started).toBeLessThan(160);
 });
 
-test("cards order by needs-you, then activity, then the most recent update", () => {
-  const working = file(1, { authoritativeTurn: { state: "busy", source: "lifecycle", terminalAt: null }, activity: "live" } as Partial<FileEntry>);
-  const waiting = file(2, { waitingInput: { since: NOW - 60 } } as Partial<FileEntry>);
-  const quiet = file(3);
-  const tasks = [
-    task("old", "assigned", [], { updatedAt: "2026-09-14T09:00:00.000Z" }),
-    task("recent", "assigned", [], { updatedAt: "2026-09-14T11:00:00.000Z" }),
-    task("busy", "assigned", [working.path]),
-    task("owed", "assigned", [waiting.path]),
-    task("still", "assigned", [quiet.path]),
-  ];
-  const result = model(tasks, [working, waiting, quiet]);
-  const order = result.columns.assigned.cards.map((card) => card.task!.id);
-  expect(order[0]).toBe("owed");
-  expect(order[1]).toBe("busy");
-  expect(order.indexOf("recent")).toBeLessThan(order.indexOf("old"));
-  const busy = result.columns.assigned.cards.find((card) => card.task!.id === "busy")!;
-  expect(busy.working).toBe(1);
-  const idle = result.columns.assigned.cards.filter((card) => card.idle).map((card) => card.task!.id);
-  expect(idle.sort()).toEqual(["old", "recent"]);
+test("columns sort by agent work, ignore metadata, and put unknown work last with stable ties", () => {
+  const files = [file(1, { lastAgentWorkAt: 1000, activity: "live" }), file(2, { lastAgentWorkAt: 2000 }), file(3, { lastAgentWorkAt: 3000 }), file(4)];
+  const rows = [task("old", "assigned", [files[0]!.path]), task("recent", "assigned", [files[1]!.path]),
+    task("group", "assigned", [files[0]!.path, files[2]!.path]), task("never-b", "assigned", [files[3]!.path]), task("never-a", "assigned")];
+  const order = (rows: BoardTask[]) => model(rows, files).columns.assigned.cards.map(card => card.task!.id);
+  expect(order(rows)).toEqual(["group", "recent", "old", "never-a", "never-b"]);
+  expect(order(rows.map(row => ({ ...row, text: "Renamed", updatedAt: "2099-01-01T00:00:00Z" })))).toEqual(order(rows));
+  files[0] = { ...files[0]!, lastAgentWorkAt: 4000 };
+  expect(order(rows).slice(0, 2)).toEqual(["group", "old"]);
+  expect(model([task("other", "blocked", [files[2]!.path])], files).columns.blocked.cards[0]?.task?.id).toBe("other");
 });
 
 test("search narrows what is shown and never what is counted", () => {
@@ -316,4 +307,70 @@ test("an agent draft is the card's own: a band-local draft on its task, any othe
   expect(alone.origin).toBe("draft");
   expect(alone.otherSurfaces).toBe(0);
   expect(alone.idle).toBe(false);
+});
+
+
+function reviewerActivityFixture() {
+  const implementer = file(101, { lastAgentWorkAt: 1000 });
+  const reviewer = file(102, { lastAgentWorkAt: 3000, parent: implementer.path });
+  const other = file(103, { lastAgentWorkAt: 2000 });
+  const role = { engine: "codex" as const, model: null, effort: null };
+  const flow: Flow = {
+    id: "folded-review-flow", template: "implement-review-loop", project: "fixture", cwd: "/repo",
+    implementerPath: implementer.path, implementerConversationId: implementer.conversationId,
+    roles: { implementer: role, reviewer: role }, baseRef: "fixture-base", baseMode: "head", mode: "auto",
+    reviewerMode: "headless", roundLimit: 2, state: "reviewing", stateDetail: null,
+    createdAt: "2026-09-15T00:00:00Z", closedAt: null,
+    rounds: [{ n: 1, reviewerPath: reviewer.path, reviewerConversationId: reviewer.conversationId,
+      findingsPath: null, triggeredBy: "marker", readyNote: null, verdict: null, findingsCount: null,
+      startedAt: "2026-09-15T00:01:00Z", reviewedAt: null, relayedAt: null, error: null }],
+  };
+  const project = (files: FileEntry[], tasks: BoardTask[] = []) => {
+    const layout = buildSchemeLayout([], [implementer, other], files, [flow]);
+    const projection = projectTaskWorkflows(tasks, [], [flow], files);
+    const bands = buildTaskBands(layout, { tasks, projection, untitled: "Untitled" });
+    const result = buildKanbanModel({ bands, tasks, pipelines: [], flows: [flow], files, projection, now: NOW });
+    return { layout, bands, result, card: result.unlinked.find(card => card.id === `flow:${flow.id}`)! };
+  };
+  return { implementer, reviewer, other, flow, project };
+}
+
+test("taskless flow ordering includes reviewers folded into the real review deck", () => {
+  const { implementer, reviewer, other, project } = reviewerActivityFixture();
+  const { layout, result, card } = project([implementer, reviewer, other]);
+  expect(layout.decks[0]!.rounds.some(round => round.file?.path === reviewer.path)).toBe(true);
+  expect(card.members.map(member => member.file.path)).toEqual([implementer.path]);
+  expect(card.lastAgentWorkAtMs).toBe(3000);
+  expect(result.unlinked[0]).toBe(card);
+  const older = project([implementer, { ...reviewer, lastAgentWorkAt: null, mtime: NOW + 1000, title: "Renamed" }, other]);
+  expect(older.card.lastAgentWorkAtMs).toBe(1000);
+  expect(older.result.unlinked[0]).not.toBe(older.card);
+});
+
+test("folded reviewer ordering preserves historical bindings and current-generation resolution", () => {
+  const { implementer, reviewer, other, flow, project } = reviewerActivityFixture();
+  const membership = (slot: string) => ({ kind: "flow" as const, containerId: flow.id, role: "reviewer" as const,
+    round: 1, slot, stageId: null, stageOrder: null, parentConversationId: implementer.conversationId! });
+  const history = file(104, { lastAgentWorkAt: 4000, parent: implementer.path,
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: implementer.conversationId!, reviewsConversationId: implementer.conversationId!, memberships: [membership("reviewer:1:prior")] } });
+  const current = file(105, { conversationId: reviewer.conversationId, lastAgentWorkAt: 5000, parent: implementer.path,
+    predecessorPath: reviewer.path,
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: implementer.conversationId!, reviewsConversationId: implementer.conversationId!, memberships: [membership("reviewer:1:current")] } });
+  const files = [implementer, { ...reviewer, migratedTo: current.path }, other, history, current,
+    file(106, { lastAgentWorkAt: 9000 })];
+  expect(project(files).card.lastAgentWorkAtMs).toBe(5000);
+  expect(project(files.map(row => row.path === current.path ? { ...row, lastAgentWorkAt: 2500 } : row)).card.lastAgentWorkAtMs).toBe(4000);
+});
+
+
+test("linking a flow to a task preserves its folded reviewer activity and column", () => {
+  const { implementer, reviewer, other, project } = reviewerActivityFixture();
+  const linked = task("linked-flow", "blocked", [implementer.path]);
+  const { bands, result } = project([implementer, reviewer, other], [linked]);
+  const band = bands.find(band => band.task?.id === linked.id)!;
+  expect(band.flow).toBeNull();
+  expect(band.members.some(member => member.kind === "deck")).toBe(true);
+  const card = result.columns.blocked.cards.find(card => card.task?.id === linked.id)!;
+  expect(card.lastAgentWorkAtMs).toBe(3000);
+  expect(card.status).toBe("blocked");
 });

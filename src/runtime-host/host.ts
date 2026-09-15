@@ -86,7 +86,9 @@ export class RuntimeHost {
       if (request.method === "runtime-host-health") {
         if (!this.runtimeHostHealth) throw new Error("runtime-host startup evidence is unavailable");
         result = this.runtimeHostHealth();
-      } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson());
+      } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
+        ? request.params.voiceBodiesFor.filter((id): id is string => typeof id === "string").slice(0, 1)
+        : undefined));
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),

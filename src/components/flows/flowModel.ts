@@ -3,7 +3,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { getLocale, type Locale, type MessageKey, type TFunction, translate } from "@/lib/i18n";
 import type { Flow, FlowAction, FlowRoleKey, FlowState, ReviewVerdict, RoleConfig, Round } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
-import { currentConversationFile, currentMemberPath, withoutArchivedPredecessors } from "@/lib/accounts/identity";
+import { conversationFileIndex, currentMemberPath, withoutArchivedPredecessors } from "@/lib/accounts/identity";
 
 import { isConversation } from "@/components/projectModel";
 import { formatRateLimitTime } from "@/components/rateLimit";
@@ -70,14 +70,15 @@ export function useEffectiveFlows(flows: Flow[]): Flow[] {
  * common case) return the same references.
  */
 export function resolveFlowMemberPaths(flows: Flow[], files: readonly FileEntry[]): Flow[] {
+  const index = conversationFileIndex(files);
   let changedAny = false;
   const out = flows.map((flow) => {
-    const implementerPath = currentMemberPath(flow.implementerPath, flow.implementerConversationId, files) ?? flow.implementerPath;
+    const implementerPath = currentMemberPath(flow.implementerPath, flow.implementerConversationId, files, index) ?? flow.implementerPath;
     let roundsChanged = false;
     const rounds = flow.rounds.map((round) => {
       /* Only rewrite a recorded path — a round whose reviewer hasn't attached
          yet keeps its null (the "once known" contract). */
-      const reviewerPath = round.reviewerPath ? currentMemberPath(round.reviewerPath, round.reviewerConversationId, files) : round.reviewerPath;
+      const reviewerPath = round.reviewerPath ? currentMemberPath(round.reviewerPath, round.reviewerConversationId, files, index) : round.reviewerPath;
       if (reviewerPath === round.reviewerPath) return round;
       roundsChanged = true;
       return { ...round, reviewerPath };
@@ -120,46 +121,57 @@ export function claimedReviewerPaths(flows: Flow[], files: readonly FileEntry[] 
   return set;
 }
 
+/** Membership buckets preserve file order and every same-round retry. Keys
+ * are nested instead of concatenated so arbitrary durable ids cannot collide. */
+const reviewerStore = globalThis as typeof globalThis & { __llvReviewerIndexes?: WeakMap<readonly FileEntry[], Map<string, Map<number, FileEntry[]>>> };
+const reviewerIndexes = reviewerStore.__llvReviewerIndexes ??= new WeakMap();
+function reviewerMembers(flow: Flow, round: Round, files: readonly FileEntry[]): readonly FileEntry[] {
+  let index = reviewerIndexes.get(files);
+  if (!index) {
+    index = new Map();
+    for (const file of conversationFileIndex(files).visible) {
+      const seen = new Set<string>();
+      for (const membership of file.durableLineage?.memberships ?? []) {
+        if (membership.kind !== "flow" || membership.role !== "reviewer" || membership.round == null) continue;
+        const key = JSON.stringify([membership.containerId, membership.round]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let rounds = index.get(membership.containerId);
+        if (!rounds) index.set(membership.containerId, rounds = new Map());
+        const members = rounds.get(membership.round);
+        if (members) members.push(file); else rounds.set(membership.round, [file]);
+      }
+    }
+    reviewerIndexes.set(files, index);
+  }
+  return index.get(flow.id)?.get(round.n) ?? EMPTY_REVIEWERS;
+}
+const EMPTY_REVIEWERS: readonly FileEntry[] = [];
+
 /** Resolve the current transcript generation for a durable review round. */
 export function reviewerFileForRound(flow: Flow, round: Round, files: readonly FileEntry[]): FileEntry | null {
+  const index = conversationFileIndex(files);
+  const members = reviewerMembers(flow, round, files);
   if (round.reviewerBindingId) {
     const currentSlot = `reviewer:${round.n}:${round.reviewerBindingId}`;
-    const byBinding = withoutArchivedPredecessors([...files]).find((file) => file.durableLineage?.memberships.some((membership) =>
-      membership.kind === "flow"
-      && membership.containerId === flow.id
-      && membership.role === "reviewer"
-      && membership.round === round.n
-      && membership.slot === currentSlot
-    ));
-    if (byBinding) {
-      return byBinding.conversationId ? (currentConversationFile(files, byBinding.conversationId) ?? byBinding) : byBinding;
-    }
+    const byBinding = members.find((file) => file.durableLineage?.memberships.some((membership) =>
+      membership.kind === "flow" && membership.containerId === flow.id
+      && membership.role === "reviewer" && membership.round === round.n && membership.slot === currentSlot));
+    if (byBinding) return byBinding.conversationId ? (index.currentByConversation.get(byBinding.conversationId) ?? byBinding) : byBinding;
   }
   if (round.reviewerConversationId) {
-    const byConversation = currentConversationFile(files, round.reviewerConversationId);
+    const byConversation = index.currentByConversation.get(round.reviewerConversationId);
     if (byConversation) return byConversation;
   }
-  const byMembership = withoutArchivedPredecessors([...files]).find((file) => file.durableLineage?.memberships.some((membership) =>
-    membership.kind === "flow"
-    && membership.containerId === flow.id
-    && membership.role === "reviewer"
-    && membership.round === round.n
-  ));
-  if (byMembership) return byMembership;
-  const byPath = round.reviewerPath ? (files.find((file) => file.path === round.reviewerPath) ?? null) : null;
-  return byPath?.conversationId ? (currentConversationFile(files, byPath.conversationId) ?? byPath) : byPath;
+  if (members.length) return members[0]!;
+  const byPath = round.reviewerPath ? (index.byPath.get(round.reviewerPath) ?? null) : null;
+  return byPath?.conversationId ? (index.currentByConversation.get(byPath.conversationId) ?? byPath) : byPath;
 }
 
 /** Resolve every durable reviewer binding for one logical round, current last. */
 export function reviewerFilesForRound(flow: Flow, round: Round, files: readonly FileEntry[]): FileEntry[] {
-  const visibleFiles = withoutArchivedPredecessors([...files]);
   const current = reviewerFileForRound(flow, round, files);
-  const history = visibleFiles.filter((file) => file.durableLineage?.memberships.some((membership) =>
-    membership.kind === "flow"
-    && membership.containerId === flow.id
-    && membership.role === "reviewer"
-    && membership.round === round.n
-  )).filter((file) => file !== current);
+  const history = reviewerMembers(flow, round, files).filter((file) => file !== current);
   return current ? [...history, current] : history;
 }
 
@@ -184,7 +196,7 @@ export function reviewerBindingTargetsForRound(
   const seen = new Set(targets.map((target) => target.path));
   if (!round.reviewerPath || seen.has(round.reviewerPath)) return targets;
 
-  const pathFile = files.find((file) => file.path === round.reviewerPath) ?? null;
+  const pathFile = conversationFileIndex(files).byPath.get(round.reviewerPath) ?? null;
   const current = reviewerFileForRound(flow, round, files);
   const currentReplacedPath = Boolean(
     current

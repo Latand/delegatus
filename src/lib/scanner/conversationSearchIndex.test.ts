@@ -188,3 +188,17 @@ test("a full-catalog projection beyond its hard entry ceiling is never retained"
 
   expect(reads).toBeGreaterThan(firstReads);
 });
+
+
+test("same-size rewrites and engine changes invalidate retained search text", async () => {
+  const row = entry(99001);
+  let reads = 0;
+  const options = { readText: () => ({ title: `Revision ${++reads}`, firstPrompt: "" }), yieldControl: async () => {} };
+  await indexConversationCatalog([row], options);
+  await indexConversationCatalog([{ ...row }], options);
+  expect(reads).toBe(1);
+  const rewritten = { ...row, mtime: row.mtime + 1 };
+  expect((await indexConversationCatalog([rewritten], options))[0]!.title).toBe("Revision 2");
+  await indexConversationCatalog([{ ...rewritten, engine: "claude" }], options);
+  expect(reads).toBe(3);
+});

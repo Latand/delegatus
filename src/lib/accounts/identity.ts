@@ -1,5 +1,36 @@
 import type { FileEntry } from "@/lib/types";
 
+export interface ConversationFileIndex {
+  byPath: ReadonlyMap<string, FileEntry>;
+  currentByConversation: ReadonlyMap<string, FileEntry>;
+  visible: readonly FileEntry[];
+}
+
+/** One index per immutable file projection. A new poll/revision supplies a new
+ * array; weak keys let old revisions leave memory with their last consumer.
+ * Input order is significant: preserve the scalar resolver's first-match and
+ * archived-only fallback rules, including materialized-over-placeholder. */
+const identityStore = globalThis as typeof globalThis & { __llvFileIndexes?: WeakMap<readonly FileEntry[], ConversationFileIndex> };
+const fileIndexes = identityStore.__llvFileIndexes ??= new WeakMap();
+export function conversationFileIndex(files: readonly FileEntry[]): ConversationFileIndex {
+  const cached = fileIndexes.get(files);
+  if (cached) return cached;
+  const byPath = new Map<string, FileEntry>();
+  const currentByConversation = new Map<string, FileEntry>();
+  const visible: FileEntry[] = [];
+  const rank = (file: FileEntry) => isLaunchPlaceholder(file) ? 0 : isArchivedPredecessor(file) ? 1 : 2;
+  for (const file of files) {
+    if (!byPath.has(file.path)) byPath.set(file.path, file);
+    if (!isArchivedPredecessor(file)) visible.push(file);
+    if (!file.conversationId) continue;
+    const previous = currentByConversation.get(file.conversationId);
+    if (!previous || rank(file) > rank(previous)) currentByConversation.set(file.conversationId, file);
+  }
+  const index = { byPath, currentByConversation, visible };
+  fileIndexes.set(files, index);
+  return index;
+}
+
 /**
  * Stable conversation identity for account migration (issue #40, Sol contract).
  *
@@ -195,15 +226,16 @@ export function currentMemberPath(
   path: string | null,
   conversationId: string | null | undefined,
   files: readonly FileEntry[],
+  index?: ConversationFileIndex,
 ): string | null {
   if (conversationId) {
-    const current = currentConversationFile(files, conversationId);
+    const current = index ? index.currentByConversation.get(conversationId) : currentConversationFile(files, conversationId);
     if (current) return current.path;
   }
   if (!path) return path;
-  const recorded = files.find((file) => file.path === path);
+  const recorded = index ? index.byPath.get(path) : files.find((file) => file.path === path);
   if (recorded && isArchivedPredecessor(recorded) && recorded.conversationId) {
-    return currentConversationFile(files, recorded.conversationId)?.path ?? path;
+    return (index ? index.currentByConversation.get(recorded.conversationId) : currentConversationFile(files, recorded.conversationId))?.path ?? path;
   }
   return path;
 }

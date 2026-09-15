@@ -1731,9 +1731,10 @@ function ProjectDashboardView({
   const layoutGroups = hasNodes ? schemeGroups : archiveGroups;
   const layoutManual = hasNodes ? schemeManual : EMPTY_MANUAL;
   const layoutDrafts = hasNodes ? visibleDrafts : EMPTY_DRAFTS;
+  const layoutTasks = useMemo(() => (hasNodes ? boardTasks : EMPTY_TASKS).filter(isPlacedTask), [hasNodes, boardTasks]);
   const pipelineLayout = useMemo(
-    () => buildSchemeLayout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, [], new Set(), isolatedCompactHistoryPaths, [], new Set(), { now: nowSeconds }),
-    [layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, isolatedCompactHistoryPaths, nowSeconds],
+    () => buildSchemeLayout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, new Set(), { now: nowSeconds }),
+    [layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, nowSeconds],
   );
   /* Worker rows the scheme still draws in a retained form — an active flow's
      reviewer round deck keeps its finished rounds as deck tabs. Those are
@@ -2437,6 +2438,7 @@ function ProjectDashboardView({
               catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
             ) : kanbanLeaf ? (
               <KanbanBoard
+                layout={pipelineLayout}
                 project={project}
                 groups={layoutGroups}
                 manual={layoutManual}
