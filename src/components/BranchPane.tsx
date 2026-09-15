@@ -174,9 +174,14 @@ interface Props {
       passes an override on a renamable conversation owes the operator the same
       escape hatch. */
   titleOverride?: string;
+  /** A surface that frames this conversation itself (#1695, the kanban
+      reader): `header` stands where the desktop header would, and `className`
+      replaces the pane's card frame. Everything below the header — banners,
+      feed, control strip and composer — stays the pane's own. */
+  chrome?: { header: React.ReactNode; className: string; attributes?: Record<string, string> };
 }
 
-export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount }: Props) {
+export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome }: Props) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
@@ -269,13 +274,18 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
            presses that start here (wheel pan still covers scrolling). */
         data-pan-ignore
         data-link-path={file.path}
-        className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border ${paneToneSurface(state)} shadow-1 ${tone.section}`}
+        className={chrome
+          ? `relative flex min-h-0 min-w-0 flex-1 flex-col ${chrome.className}`
+          : `relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border ${paneToneSurface(state)} shadow-1 ${tone.section}`}
+        {...chrome?.attributes}
       >
-        <span
-          aria-hidden
-          className={`w-full shrink-0 ${isRoot ? "h-1" : "h-0.5"}`}
-          style={state === "done" ? { backgroundColor: "var(--color-strong)" } : engineEdge(file)}
-        />
+        {chrome ? null : (
+          <span
+            aria-hidden
+            className={`w-full shrink-0 ${isRoot ? "h-1" : "h-0.5"}`}
+            style={state === "done" ? { backgroundColor: "var(--color-strong)" } : engineEdge(file)}
+          />
+        )}
         {/* On the phone this header does not exist (mobile v2 lane 3,
             docs/design/mobile-v2/README.md §3.4): its identity moved into the
             shell bar's title cell — title on one line, state phrase, model and
@@ -287,7 +297,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
 
             Desktop keeps both rows: identity + actions on top (the close X
             pinned to the corner at every width), the metadata chips below. */}
-        {isMobile ? null : (
+        {isMobile ? null : chrome ? chrome.header : (
           <header
             className={`reasoning-host flex shrink-0 flex-col gap-y-1 border-b border-border px-2.5 py-1.5 ${tone.header} ${
               dragHandle ? "cursor-grab active:cursor-grabbing" : ""

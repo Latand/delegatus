@@ -211,6 +211,9 @@ export function Viewer() {
      render, so the dock the operator closed in one project stays closed there
      and nowhere else, with no frame of the previous project's answer. */
   const [orchestratorOpenProject, setOrchestratorOpenProject] = useState(OVERVIEW);
+  /* The kanban face seats the orchestrator above its own columns (#1695 K3);
+     the dock stays closed under it so one conversation has one composer. */
+  const [kanbanFace, setKanbanFace] = useState(false);
   if (orchestratorOpenProject !== project) {
     setOrchestratorOpenProject(project);
     setOrchestratorOpen(dockOpenFor(project));
@@ -1024,7 +1027,7 @@ export function Viewer() {
           the rest of the row instead of being covered. Desktop only — the phone
           reaches the same orchestrator through slice C (#979) — and never on
           the Overview, which is not a project and so has no seat. */}
-      {!isMobile && orchestratorOpen && project !== OVERVIEW ? (
+      {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW ? (
         <OrchestratorDock
           project={project}
           projectName={projectDisplayName(project, projectDisplayNames[project])}
@@ -1100,6 +1103,7 @@ export function Viewer() {
             mobileShell={mobileShell}
             orchestratorPanelOpen={orchestratorOpen}
             onToggleOrchestratorPanel={isMobile ? undefined : toggleOrchestrator}
+            onKanbanFace={setKanbanFace}
             onUserNavigate={cancelPendingIntent}
             onOpenCatalogFile={openCatalogFile}
             onCloseFile={releaseCatalogFile}

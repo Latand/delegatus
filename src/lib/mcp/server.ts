@@ -26,6 +26,7 @@ import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS } from "@/lib/pipelines/
 import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { TASK_COLORS } from "@/lib/tasks/types";
 import {
   MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
 } from "@/lib/suggestions/types";
@@ -2983,6 +2984,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     dueTz: z.string().nullable().optional(),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
+    color: z.enum(["none", ...TASK_COLORS]).optional()
+      .describe("Colour label shown on the task's kanban card (#1695). none clears it."),
+    hide: z.boolean().optional()
+      .describe("Hide (true) or show (false) the task's whole group on the kanban board (#1695). Requires expectedProject and expectedRevision. Nothing is stopped, sent or changed besides the hide: conversations keep running and pipelines keep their state. The group comes back by itself when something newer needs the operator (a decision request, a newly linked conversation, a pipeline newly waiting on a decision). The task holding the project's orchestrator seat conversation cannot be hidden (TASK_HIDE_PROTECTED)."),
   }).passthrough(),
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,

@@ -100,15 +100,16 @@ function mutation(value: unknown, index: number): BoardMutationV1 {
     return { kind: "mark-seen", id: validPath(raw.id, `mutations[${index}].id`), at: raw.at as number };
   }
   if (raw.kind === "set-presentation") {
-    exact(raw, ["kind", "viewMode", "taskPanelOpen", "idleCollapseMinutes"], `mutations[${index}]`);
-    if (raw.viewMode === undefined && raw.taskPanelOpen === undefined && raw.idleCollapseMinutes === undefined) throw new ViewValidationError("INVALID_REQUEST", `empty mutations[${index}]`);
+    exact(raw, ["kind", "viewMode", "desktopBoard", "taskPanelOpen", "idleCollapseMinutes"], `mutations[${index}]`);
+    if (raw.viewMode === undefined && raw.desktopBoard === undefined && raw.taskPanelOpen === undefined && raw.idleCollapseMinutes === undefined) throw new ViewValidationError("INVALID_REQUEST", `empty mutations[${index}]`);
     if (raw.viewMode !== undefined && raw.viewMode !== null && raw.viewMode !== "scheme" && raw.viewMode !== "list") throw new ViewValidationError("INVALID_REQUEST", `invalid mutations[${index}].viewMode`);
+    if (raw.desktopBoard !== undefined && raw.desktopBoard !== null && raw.desktopBoard !== "kanban" && raw.desktopBoard !== "scheme") throw new ViewValidationError("INVALID_REQUEST", `invalid mutations[${index}].desktopBoard`);
     if (raw.taskPanelOpen !== undefined && typeof raw.taskPanelOpen !== "boolean") throw new ViewValidationError("INVALID_REQUEST", `invalid mutations[${index}].taskPanelOpen`);
     if (raw.idleCollapseMinutes !== undefined && raw.idleCollapseMinutes !== null
       && (!Number.isInteger(raw.idleCollapseMinutes) || (raw.idleCollapseMinutes as number) <= 0 || (raw.idleCollapseMinutes as number) > MAX_BOARD_IDLE_COLLAPSE_MINUTES)) {
       throw new ViewValidationError("INVALID_REQUEST", `invalid mutations[${index}].idleCollapseMinutes`);
     }
-    return { kind: "set-presentation", ...(raw.viewMode === undefined ? {} : { viewMode: raw.viewMode }), ...(raw.taskPanelOpen === undefined ? {} : { taskPanelOpen: raw.taskPanelOpen }), ...(raw.idleCollapseMinutes === undefined ? {} : { idleCollapseMinutes: raw.idleCollapseMinutes as number | null }) };
+    return { kind: "set-presentation", ...(raw.viewMode === undefined ? {} : { viewMode: raw.viewMode }), ...(raw.desktopBoard === undefined ? {} : { desktopBoard: raw.desktopBoard as "kanban" | "scheme" | null }), ...(raw.taskPanelOpen === undefined ? {} : { taskPanelOpen: raw.taskPanelOpen }), ...(raw.idleCollapseMinutes === undefined ? {} : { idleCollapseMinutes: raw.idleCollapseMinutes as number | null }) };
   }
   throw new ViewValidationError("INVALID_REQUEST", `invalid mutations[${index}].kind`);
 }

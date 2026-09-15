@@ -100,7 +100,7 @@ export function isEmptyPrefs(prefs: BoardPrefs): boolean {
   return prefs.manual.length === 0 && prefs.hidden.length === 0 && prefs.expanded.length === 0 && prefs.favorites.length === 0
     && (prefs.foldedEngineChildIds?.length ?? 0) === 0 && (prefs.expandedEngineTrayParentIds?.length ?? 0) === 0
     && (prefs.idleCollapseMinutes === undefined ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES : prefs.idleCollapseMinutes) === DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES
-    && prefs.viewMode === null && !prefs.taskPanelOpen;
+    && prefs.viewMode === null && (prefs.desktopBoard ?? null) === null && !prefs.taskPanelOpen;
 }
 
 /** Worth seeding the server with: anything a user actually arranged. Empty
@@ -1023,6 +1023,8 @@ export interface BoardState extends BoardSnapshot {
   close(path: string): void;
   restore(path: string, placement: "auto" | "manual" | "expanded"): void;
   setViewMode(viewMode: BoardViewMode): void;
+  /** The desktop face: kanban (#1695) or an explicit scheme, with the view it implies. */
+  setDesktopBoard(desktopBoard: "kanban" | "scheme" | null, viewMode?: BoardViewMode): void;
   setTaskPanelOpen(open: boolean): void;
   /* The canonical selection's writers (#771) — the same three every view uses.
      Live even while the durable board is unavailable: the selection is session
@@ -1109,6 +1111,9 @@ export function useBoardState(project: string | null): BoardState {
     },
     setViewMode(viewMode) {
       storeRef.current?.mutate([{ kind: "set-presentation", viewMode }]);
+    },
+    setDesktopBoard(desktopBoard, viewMode) {
+      storeRef.current?.mutate([{ kind: "set-presentation", desktopBoard, ...(viewMode === undefined ? {} : { viewMode }) }]);
     },
     setTaskPanelOpen(open) {
       storeRef.current?.mutate([{ kind: "set-presentation", taskPanelOpen: open }]);
