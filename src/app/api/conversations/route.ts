@@ -1,9 +1,9 @@
-import { catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
-import { indexConversationCatalog } from "@/lib/scanner/conversationSearchIndex";
+import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
+import { indexConversationCatalog, pruneConversationSearchCache } from "@/lib/scanner/conversationSearchIndex";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
 import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
-import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding } from "@/lib/session/titleProjection";
+import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding, sessionProjectProjection } from "@/lib/session/titleProjection";
 import { cleanTitle } from "@/lib/title";
 
 export const runtime = "nodejs";
@@ -36,10 +36,19 @@ export async function GET(request: Request): Promise<Response> {
   };
   try {
     let page;
-    if (query) {
-      const indexed = await indexConversationCatalog(source, { signal: request.signal });
+    if (options.cursor) {
+      // The cursor owns its frozen ordering; do not rehydrate the corpus for
+      // every page (including search pages). The final page overlay stays live.
+      page = await loadConversationCatalogPage([], options, undefined, query ? undefined : hydrateSearchText);
+      overlaySessionTitles(page.items);
+    } else if (query) {
+      const scoped = scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project);
+      // Prune against the complete catalog, never a project subset. Otherwise
+      // alternating projects evicts each other's retained transcript heads.
+      pruneConversationSearchCache(new Set(source.map((entry) => entry.path)));
+      const indexed = await indexConversationCatalog(scoped, { signal: request.signal, prune: false });
       const displayed = indexed.map(catalogEntryToFileEntry);
-      await overlaySessionTitlesYielding(displayed);
+      await overlaySessionTitlesYielding(displayed, 48, undefined, false);
       const displayedByPath = new Map(displayed.map((entry) => [entry.path, entry]));
       const projected = indexed.map((entry) => {
         const display = displayedByPath.get(entry.path);

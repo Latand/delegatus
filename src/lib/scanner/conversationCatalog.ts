@@ -225,3 +225,26 @@ export async function loadConversationCatalogPage(
     total: page.total,
   };
 }
+
+
+type ScopedCatalogCache = WeakMap<readonly ConversationCatalogEntry[], WeakMap<ReadonlyMap<string, string>, Map<string, ConversationCatalogEntry[]>>>;
+const scopeStore = globalThis as typeof globalThis & { __llvScopedCatalogs?: ScopedCatalogCache };
+const scopedCatalogs = scopeStore.__llvScopedCatalogs ??= new WeakMap();
+/** Stable project slices let the bounded search projection survive keystrokes.
+ * Both discovery and registry ownership revisions invalidate the slice. */
+export function scopeConversationCatalog(source: readonly ConversationCatalogEntry[], projects: ReadonlyMap<string, string>, project?: string): ConversationCatalogEntry[] {
+  let byOwnership = scopedCatalogs.get(source);
+  if (!byOwnership) scopedCatalogs.set(source, byOwnership = new WeakMap());
+  let scopes = byOwnership.get(projects);
+  if (!scopes) byOwnership.set(projects, scopes = new Map());
+  const key = project ?? "";
+  const existing = scopes.get(key);
+  if (existing) return existing;
+  const scoped = source.flatMap(entry => {
+    const owner = projects.get(entry.path) ?? entry.project;
+    return !project || owner === project ? [owner === entry.project ? entry : { ...entry, project: owner }] : [];
+  });
+  scopes.set(key, scoped);
+  if (scopes.size > 8) scopes.delete(scopes.keys().next().value!);
+  return scoped;
+}

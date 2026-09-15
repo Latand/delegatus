@@ -111,8 +111,9 @@ function projectionBaseKey(
 
 function projectionScopeKey(
   pinnedPath: string | undefined,
+  summary = false,
 ): string {
-  return JSON.stringify([pinnedPath ?? null]);
+  return JSON.stringify(summary ? [pinnedPath ?? null, "summary"] : [pinnedPath ?? null]);
 }
 
 function projectionKey(baseKey: string): string {
@@ -362,8 +363,9 @@ export async function GET(request: Request): Promise<Response> {
 
   const baseKey = projectionBaseKey(scan, pinnedPath);
   const key = projectionKey(baseKey);
-  const scopeKey = projectionScopeKey(pinnedPath);
-  warmPersistedProjection(scopeKey, pinnedPath);
+  const summary = url.searchParams.get("view") === "summary";
+  const scopeKey = projectionScopeKey(pinnedPath, summary);
+  if (!summary) warmPersistedProjection(scopeKey, pinnedPath);
   const projected = await projectionFor(scopeKey, key, request, scan);
   const notModified = request.headers.get("if-none-match") === projected.representation.etag;
   const projectionTiming = [

@@ -70,7 +70,7 @@ const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
 const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
-  const params: string[] = [];
+  const params: string[] = ["view=summary"];
   /* A pending legacy `#f=` target: the scanner keeps this exact transcript in
      the capped feed so the deep link can resolve its conversation id even
      when the path is a demoted archived predecessor. */

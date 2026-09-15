@@ -303,8 +303,9 @@ export async function overlaySessionTitlesYielding(
   entries: FileEntry[],
   batchSize = 48,
   yieldControl: () => Promise<void> = () => new Promise((resolve) => setImmediate(resolve)),
+  includeProjectMetadata = true,
 ): Promise<void> {
-  const project = sessionTitleProjector();
+  const project = sessionTitleProjector(true, undefined, includeProjectMetadata);
   for (let index = 0; index < entries.length; index += 1) {
     project(entries[index]);
     if ((index + 1) % batchSize === 0) await yieldControl();

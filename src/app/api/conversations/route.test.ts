@@ -361,3 +361,30 @@ test("project list rows carry the lineage the files response projects: a superse
   expect(byPath.get(moved)?.migratedTo).toBe(target);
   expect(byPath.get(target)?.migratedTo).toBeUndefined();
 });
+
+
+test("project search never opens unrelated transcript bodies", async () => {
+  const selected = path.join(sandbox, "selected.jsonl");
+  fs.writeFileSync(selected, JSON.stringify({ type: "user", message: { content: "Scoped keyword" } }) + "\n");
+  const stat = fs.statSync(selected);
+  const entry = { path: selected, root: "claude-projects" as const, name: "selected", project: "selected-project", title: "Selected", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: stat.mtimeMs / 1000, size: stat.size };
+  // Reading this directory as a transcript throws; metadata-only projection is safe.
+  replaceConversationCatalog([entry, { ...entry, path: sandbox, project: "other-project" }]);
+  const result = await GET(new Request("http://localhost/api/conversations?project=selected-project&q=keyword"));
+  expect((await result.json()).items.map((item: { path: string }) => item.path)).toEqual([selected]);
+});
+
+
+test("ordinary cursor pages still hydrate their own transcript titles", async () => {
+  const entries = [1, 2].map(n => {
+    const pathname = path.join(sandbox, `cursor-${n}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: `Actual title ${n}` } }) + "\n");
+    const stat = fs.statSync(pathname);
+    return { path: pathname, root: "claude-projects" as const, name: `cursor-${n}`, project: "cursor-project", title: "Unhydrated", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 3 - n, size: stat.size };
+  });
+  replaceConversationCatalog(entries);
+  const first = await (await GET(new Request("http://localhost/api/conversations?project=cursor-project&limit=1"))).json();
+  const second = await (await GET(new Request(`http://localhost/api/conversations?project=cursor-project&limit=1&cursor=${first.nextCursor}`))).json();
+  expect(first.items[0].title).toBe("Actual title 1");
+  expect(second.items[0].title).toBe("Actual title 2");
+});

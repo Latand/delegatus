@@ -3410,3 +3410,16 @@ test("issue 1168: a seat rekeyed since it filed keeps one identity — the ask r
   const answered = await (await GET(new Request("http://127.0.0.1/api/files"))).json() as { files: FileEntry[] };
   expect(answered.files.find((entry) => entry.path === seatPath)?.bridgeAsk).toBeUndefined();
 });
+
+
+test("full and summary files representations never share ETags or cached bodies", async () => {
+  scannedFiles = [];
+  const full = await GET(new Request("http://localhost/api/files"));
+  const fullTag = full.headers.get("etag")!;
+  const summary = await GET(new Request("http://localhost/api/files?view=summary", { headers: { "if-none-match": fullTag } }));
+  expect(summary.status).toBe(200);
+  expect(summary.headers.get("etag")).not.toBe(fullTag);
+  expect((await summary.json()).readProjection).toBe("board-summary");
+  const fullAgain = await GET(new Request("http://localhost/api/files"));
+  expect((await fullAgain.json()).readProjection).toBeUndefined();
+});
