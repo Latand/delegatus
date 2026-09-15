@@ -348,7 +348,7 @@ test("the server's refusal keeps its words beside a Retry; a choice with no answ
   expect(chipText(stageChip(host))).toBe("Account C");
 });
 
-test("a conversation switches with the header's reconfigure; an account outside the project's is offered and recorded, and the switch waits for the turn with its target known to this page only", async () => {
+test("a conversation switches with the header's reconfigure; an account outside the project's is offered and recorded, and with no runtime plane the switch waits for the turn with its target known to this page only", async () => {
   const { host, update } = mount(searchPipeline({}, { accountId: "account-c" }));
   await tick();
   await openVerify(host);
@@ -455,6 +455,25 @@ test("a switch with no answer is not confirmed and never resent; a refused one s
   expect(chipText(conversationChip(second.host))).toBe("Account A");
   await openPicker(second.host, conversationChip(second.host));
   expect(rows(second.host).find((entry) => entry.id === "account-c")?.disabled).toBe(false);
+});
+
+test("a 503 that can follow dispatch is not confirmed: the accounts stay locked and exactly one request is sent", async () => {
+  hostAnswer = { status: 503, error: "runtime host socket closed" };
+  const { host } = mount(searchPipeline());
+  await tick();
+  await openVerify(host);
+  await openPicker(host, conversationChip(host));
+  click(row(host, "account-c"));
+  await tick(20);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account C not confirmed");
+  expect(receiptTexts(host)).toEqual(["Switching Verifier to Account C got no answer. It may be queued; this page won't send it again."]);
+  await openPicker(host, conversationChip(host));
+  expect(kv(host).at(-1)).toEqual(["Pending", "Account C · the request got no answer"]);
+  expect(notes(host)[0]).toBe("It may or may not have reached the server, and this page can't tell. Accounts stay unavailable here so nothing is sent twice; reloading the page ends this page's lock.");
+  expect(rows(host).every((entry) => entry.disabled)).toBe(true);
+  click(row(host, "account-g"));
+  await tick(40);
+  expect(hostRequests).toHaveLength(1);
 });
 
 test("the Stages sheet carries the same chips: a waiting stage's pane names its first turn's account, a started stage's reader its conversation's", async () => {

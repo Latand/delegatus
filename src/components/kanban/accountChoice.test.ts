@@ -3,7 +3,10 @@ import { expect, test } from "bun:test";
 import type { PatchPipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import type { ConversationMigration } from "@/lib/types";
 
+import { RUNTIME_HOST_UNAVAILABLE_CODE as SERVER_RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
+
 import {
+  RUNTIME_HOST_UNAVAILABLE_CODE,
   accountStanding,
   ConversationSwitches,
   parseProjectPolicy,
@@ -161,10 +164,17 @@ test("a switch request's answer: accepted with its operation and any outside-poo
   });
   expect(sent).toEqual([["/api/conversation-host", { action: "reconfigure", ...body }]]);
   expect(accepted).toEqual({ kind: "accepted", operationId: "op-1", status: "queued", outsidePool: true, recorded: true });
+  /* Known refusals are the ones the route gives before dispatch: a 4xx, or the 503 that says no runtime host client exists. */
   expect(await postConversationSwitch(body, answer(400, { error: "account is not available for claude" }))).toEqual({ kind: "refused", error: "account is not available for claude" });
+  expect(await postConversationSwitch(body, answer(409, { error: "structured host does not support the reconfigure control" }))).toEqual({ kind: "refused", error: "structured host does not support the reconfigure control" });
+  expect(await postConversationSwitch(body, answer(503, { error: "structured runtime host is unavailable", code: "runtime-host-unavailable" }))).toEqual({ kind: "refused", error: "structured runtime host is unavailable" });
+  /* A 503 or any other server error that can follow dispatch is unknown, error text or not. */
+  expect(await postConversationSwitch(body, answer(503, { error: "socket closed" }))).toEqual({ kind: "unknown" });
+  expect(await postConversationSwitch(body, answer(500, { error: "internal" }))).toEqual({ kind: "unknown" });
   expect(await postConversationSwitch(body, async () => { throw new TypeError("Failed to fetch"); })).toEqual({ kind: "unknown" });
   expect(await postConversationSwitch(body, answer(502, undefined))).toEqual({ kind: "unknown" });
   expect(await postConversationSwitch(body, answer(200, { structured: true }))).toEqual({ kind: "unknown" });
+  expect(RUNTIME_HOST_UNAVAILABLE_CODE).toBe(SERVER_RUNTIME_HOST_UNAVAILABLE_CODE);
 });
 
 const request = (over: Partial<SwitchRequest> = {}): SwitchRequest => ({ target: "account-g", phase: "accepted", operationId: "op-1", answeredStatus: "queued", ...over });
@@ -197,12 +207,14 @@ test("the migration record speaks for every page: waiting for the turn, switchin
 });
 
 test("a structured switch queued behind a turn is reported for every page by the runtime session's pending reconfigure, ahead of this page's own request", () => {
-  const queued = (over: Partial<{ operationId: string; accountId: string | null; status: string | null }> = {}) => ({ operationId: "op-1", accountId: "account-g", status: "queued", ...over });
+  const queued = (over: Partial<{ operationId: string; accountId: string | null; status: string | null }> = {}) => ({ operationId: "op-1", accountId: "account-g", model: "opus", effort: "high", status: "queued", ...over });
   expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued() })).toEqual({ view: { kind: "waiting", target: "account-g", source: "runtime" }, settle: null });
   expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ status: "applying" }) }).view).toEqual({ kind: "switching", target: "account-g", source: "runtime" });
-  /* A reconfigure that keeps the account, or names the one it runs on, is no switch. */
-  expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ accountId: null }) }).view).toEqual({ kind: "none" });
-  expect(switchView({ current: "account-g", migration: null, request: null, receipt: null, pending: queued() }).view).toEqual({ kind: "none" });
+  /* A reconfigure that keeps the account, or names the one it runs on, is a pending settings change: an account choice would replace it. */
+  expect(switchView({ current: "default", migration: null, request: null, receipt: null, pending: queued({ accountId: null }) })).toEqual({ view: { kind: "settings", target: null, model: "opus", effort: "high", source: "runtime" }, settle: null });
+  expect(switchView({ current: "account-g", migration: null, request: null, receipt: null, pending: queued() }).view).toEqual({ kind: "settings", target: null, model: "opus", effort: "high", source: "runtime" });
+  /* Its clearing is no success: without this page's request, and with the account unchanged, nothing settles. */
+  expect(switchView({ current: "default", migration: null, request: null, receipt: { status: "applied" }, pending: null })).toEqual({ view: { kind: "none" }, settle: null });
   /* This page's own request is no longer the only witness, with or without a receipt of its own on this page. */
   expect(switchView({ current: "default", migration: null, request: request({ answeredStatus: null }), receipt: null, pending: queued() }).view).toEqual({ kind: "waiting", target: "account-g", source: "runtime" });
   expect(switchView({ current: "default", migration: null, request: request(), receipt: { status: "queued" }, pending: queued() }).view).toEqual({ kind: "waiting", target: "account-g", source: "runtime" });

@@ -273,16 +273,16 @@ const closePicker = async () => {
 };
 
 /** The runtime store as a fresh page reads it: this conversation's session, with the queued reconfigure it projects. */
-function installRuntime(pending: { operationId: string; accountId: string } | null, over: { accountId?: string; receipts?: Array<{ operationId: string; status: string; reason?: string }> } = {}) {
+function installRuntime(pending: { operationId: string; accountId: string | null } | null, over: { accountId?: string; turn?: "running" | "idle"; receipts?: Array<{ operationId: string; status: string; reason?: string }> } = {}) {
   const snapshot = {
     schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
-      conversationId: verify.conversationId, sessionKey: { engine: "claude", sessionId: "verify-session" }, hostKind: "claude-broker", host: "hosted", turn: "running",
+      conversationId: verify.conversationId, sessionKey: { engine: "claude", sessionId: "verify-session" }, hostKind: "claude-broker", host: "hosted", turn: over.turn ?? "running",
       provenance: "structured", revision: 1, attentionIds: [],
       recentReceipts: (over.receipts ?? []).map((receipt, index) => ({ idempotencyKey: receipt.operationId, conversationId: verify.conversationId, kind: "reconfigure", at: iso(60), revision: index + 1, ...receipt })),
       accountId: over.accountId ?? "default", parentConversationId: null, flowId: null, workflowId: null, cwd: "/fixture", artifactPath: verify.path,
-      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1",
-      pendingReconfigure: pending ? { operationId: pending.operationId, model: "opus", effort: "high", fast: null, accountId: pending.accountId } : null,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: (over.turn ?? "running") === "running" ? "turn-1" : null,
+      pendingReconfigure: pending ? { operationId: pending.operationId, model: "opus", effort: "high", fast: null, ...(pending.accountId ? { accountId: pending.accountId } : {}) } : null,
     }],
     attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
   } as unknown as RuntimeSnapshot;
@@ -337,6 +337,46 @@ test("a superseded switch does not clear the newer target, and the migration rec
   installRuntime(null, { accountId: "account-c", receipts: [{ operationId: "op-2", status: "applied" }] });
   await tick();
   expect(chipText(conversationChip(host))).toBe("Account C");
+  await openPicker(host);
+  expect(rows(host).find((entry) => entry.id === "account-g")?.disabled).toBe(false);
+  expect(hostRequests).toEqual([]);
+});
+
+test("a pending change of model or effort alone is shown as it is and also locks the accounts, since a choice would replace it", async () => {
+  installRuntime({ operationId: "op-settings", accountId: null });
+  const { host } = mount(searchPipeline());
+  await tick();
+  await openVerify(host);
+  expect(chipText(conversationChip(host))).toBe("Account A settings pending");
+  await openPicker(host);
+  expect(kv(host).at(-1)).toEqual(["Pending", "opus · high · no account change"]);
+  expect(notes(host)).toContain("A change of model or effort is pending. Choosing an account now would replace it, so accounts stay unavailable while the runtime session reports it pending.");
+  expect(notes(host)).not.toContain("Cancelling or changing a pending switch isn't available yet: the ways that exist today can cancel messages held for it.");
+  expect(rows(host).every((entry) => entry.disabled)).toBe(true);
+  expect(rows(host).find((entry) => entry.id === "default")?.checked).toBe(false);
+  click(row(host, "account-c"));
+  await tick(40);
+  expect(hostRequests).toEqual([]);
+});
+
+test("a queued switch on an idle conversation says queued, never that it waits for a turn; its clearing is no success", async () => {
+  installRuntime({ operationId: "op-idle", accountId: "account-g" }, { turn: "idle" });
+  const { host } = mount(searchPipeline(), [build, { ...verify, activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: null } } as unknown as FileEntry]);
+  await tick();
+  await openVerify(host);
+  expect(chipText(conversationChip(host))).toBe("Account A → Account G queued");
+  await openPicker(host);
+  expect(kv(host).at(-1)).toEqual(["Pending", "Account G · queued"]);
+  expect(notes(host)).toContain("No turn is running: the switch starts now, and the next message goes to the chosen account.");
+  expect(notes(host).some((note) => /current turn/.test(note))).toBe(false);
+  await closePicker();
+
+  /* The projection clears while the conversation still runs on account A: nothing says it switched. */
+  installRuntime(null, { turn: "idle" });
+  await tick();
+  expect(chipText(conversationChip(host))).toBe("Account A");
+  const receipts = [...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent ?? "");
+  expect(receipts.some((text) => text.includes("now runs on"))).toBe(false);
   await openPicker(host);
   expect(rows(host).find((entry) => entry.id === "account-g")?.disabled).toBe(false);
   expect(hostRequests).toEqual([]);

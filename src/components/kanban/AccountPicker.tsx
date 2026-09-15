@@ -225,16 +225,25 @@ export function useConversationSwitch(file: FileEntry, session: RuntimeSession |
     ? session?.recentReceipts.find((candidate) => candidate.operationId === operationId && candidate.kind === "reconfigure") ?? null
     : null);
   const queued = session?.pendingReconfigure ?? null;
-  const pending = queued ? { operationId: queued.operationId, accountId: queued.accountId ?? null, status: receiptOf(queued.operationId)?.status ?? null } : null;
+  const pending = queued
+    ? { operationId: queued.operationId, accountId: queued.accountId ?? null, model: queued.model, effort: queued.effort, status: receiptOf(queued.operationId)?.status ?? null }
+    : null;
   return { key, current, request, ...switchView({ current, migration: file.migration, request, receipt: receiptOf(request?.operationId), pending }) };
 }
 
 const pendingTarget = (view: SwitchView): string | null => (view.kind === "none" ? null : view.target);
 
-function whenWord(t: TFunction, view: SwitchView): string {
+/** Whether the conversation runs a turn now: the runtime session's word when there is one. */
+export function conversationWorking(file: FileEntry, session: RuntimeSession | null): boolean {
+  return session ? session.turn === "running" : mobileRowState(file).key === "working";
+}
+
+function whenWord(t: TFunction, view: SwitchView, working: boolean): string {
   switch (view.kind) {
     case "sending": return t("kanban.account.whenSending");
-    case "waiting": return t("kanban.account.whenTurn");
+    /* Behind a running turn it waits for the turn; with none running it is only queued. */
+    case "waiting": return t(working ? "kanban.account.whenTurn" : "kanban.account.whenQueued");
+    case "settings": return t("kanban.account.whenSettings");
     case "switching": return t("kanban.account.whenSwitching");
     case "failed": return t("kanban.account.whenFailed");
     case "unknown": return t("kanban.account.whenUnknown");
@@ -266,8 +275,7 @@ function Chip({ current, to, when, pending, trigger, aria, onOpen }: {
       <span className="cur">{current}</span>
       {pending ? (
         <>
-          <span className="arrow" aria-hidden="true">→</span>
-          {to ? <span className="to">{to}</span> : null}
+          {to ? <><span className="arrow" aria-hidden="true">→</span><span className="to">{to}</span></> : null}
           {when ? <span className="when">{when}</span> : null}
         </>
       ) : null}
@@ -319,8 +327,8 @@ export function ConversationAccountChip({ file, session, readerKey, name }: { fi
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per settlement
   }, [settled, key, settleSwitch]);
   const target = pendingTarget(view);
-  const to = view.kind === "none" ? null : target ? labelOf(target) : t("kanban.account.anotherAccount");
-  const when = whenWord(t, view);
+  const to = view.kind === "none" || view.kind === "settings" ? null : target ? labelOf(target) : t("kanban.account.anotherAccount");
+  const when = whenWord(t, view, conversationWorking(file, session));
   const label = labelOf(current);
   return (
     <Chip
@@ -329,7 +337,7 @@ export function ConversationAccountChip({ file, session, readerKey, name }: { fi
       when={when || null}
       pending={view.kind !== "none"}
       trigger={readerKey}
-      aria={view.kind === "none" ? t("kanban.account.chipAria", { account: label }) : t("kanban.account.chipPendingAria", { account: label, state: t("kanban.account.stateTo", { target: to ?? "", when }) })}
+      aria={view.kind === "none" ? t("kanban.account.chipAria", { account: label }) : t("kanban.account.chipPendingAria", { account: label, state: to ? t("kanban.account.stateTo", { target: to, when }) : when })}
       onOpen={choice ? (anchor) => choice.open({ kind: "conversation", readerKey }, anchor) : null}
     />
   );
@@ -525,7 +533,7 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
     loadPolicy(project, true);
   }, [refresh, loadPolicy, project]);
   const policy = choice.policy(project);
-  const working = session ? session.turn === "running" : mobileRowState(file).key === "working";
+  const working = conversationWorking(file, session);
   const pending = view.kind !== "none";
   const target = pendingTarget(view);
   const targetName = target ? labelOf(target) : t("kanban.account.anotherAccount");
@@ -549,9 +557,10 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
       used,
       use,
       checked: pending ? isPending : isCurrent,
-      /* A pending switch can be neither changed nor cancelled without cancelling messages held for it. */
+      /* A pending switch can be neither changed nor cancelled without cancelling messages held for it,
+         and an account choice would replace a pending settings change. */
       disabled: pending || unavailable,
-      title: pending ? t("kanban.account.pendingTitle") : unavailable ? t("kanban.account.signedOutTitle") : standing === "outside" ? t("kanban.account.outsideTitle") : undefined,
+      title: pending ? t(view.kind === "settings" ? "kanban.account.pendingSettingsTitle" : "kanban.account.pendingTitle") : unavailable ? t("kanban.account.signedOutTitle") : standing === "outside" ? t("kanban.account.outsideTitle") : undefined,
       onPick: () => {
         onClose(true);
         if (isCurrent) return;
@@ -563,7 +572,8 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
   const pendingText = (() => {
     switch (view.kind) {
       case "sending": return t("kanban.account.pendingSending", { target: targetName });
-      case "waiting": return t("kanban.account.pendingWaiting", { target: targetName });
+      case "waiting": return t(working ? "kanban.account.pendingWaiting" : "kanban.account.pendingQueued", { target: targetName });
+      case "settings": return t("kanban.account.pendingSettings", { model: view.model, effort: view.effort });
       case "switching": return t("kanban.account.pendingSwitching", { target: targetName });
       case "failed": return view.reason ? t("kanban.account.pendingFailedReason", { target: targetName, reason: view.reason }) : t("kanban.account.pendingFailed", { target: targetName });
       case "unknown": return t("kanban.account.pendingUnknown", { target: targetName });
@@ -575,7 +585,8 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
     view.kind === "waiting" && view.source === "record" ? t("kanban.account.heldNote") : null,
     view.kind === "failed" ? t("kanban.account.failedNote") : null,
     view.kind === "unknown" ? t("kanban.account.unknownNote") : null,
-    view.kind !== "none" && view.kind !== "failed" ? t("kanban.account.noCancel") : null,
+    view.kind === "settings" ? t("kanban.account.settingsNote") : null,
+    view.kind !== "none" && view.kind !== "failed" && view.kind !== "settings" ? t("kanban.account.noCancel") : null,
   ].filter((note): note is string => Boolean(note));
 
   return (

@@ -104,7 +104,6 @@ export const stageAccountKey = (pipelineId: string, stageId: string) => `${pipel
 class Store<T> {
   protected readonly entries = new Map<string, T>();
   private readonly listeners = new Set<() => void>();
-  private revision = 0;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -112,8 +111,6 @@ class Store<T> {
       this.listeners.delete(listener);
     };
   };
-
-  version = (): number => this.revision;
 
   get(key: string): T | null {
     return this.entries.get(key) ?? null;
@@ -123,7 +120,6 @@ class Store<T> {
     if (value) this.entries.set(key, value);
     else if (!this.entries.has(key)) return;
     else this.entries.delete(key);
-    this.revision += 1;
     for (const listener of this.listeners) listener();
   }
 }
@@ -223,7 +219,7 @@ function decide(pipeline: Pipeline | null, stageId: string, account: string | nu
 
 /* ── A conversation's account switch ───────────────────────────────────── */
 
-/** A switch this page asked for. Held by this page only: nothing projects a queued switch's target. */
+/** A switch this page asked for, kept until the conversation, its migration record or its receipt settles it. */
 export interface SwitchRequest {
   target: string;
   /* `sending`: no answer yet. `accepted`: the route took it. `unknown`: the request got no answer. */
@@ -269,7 +265,20 @@ export interface SwitchBody {
   fast?: boolean;
 }
 
-/** `POST /api/conversation-host {action: "reconfigure"}`, the request the conversation header's account chip sends. */
+/**
+ * `structuredControls.ts` answers this code only before it dispatches anything
+ * (no runtime host client). Every other 503 there can follow a command that may
+ * have reached the journal. Kept here as a literal: the client bundle must not
+ * import the server module.
+ */
+export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
+
+/**
+ * `POST /api/conversation-host {action: "reconfigure"}`, the request the
+ * conversation header's account chip sends. Only a refusal the route gives
+ * before dispatch is known: a 4xx with its error, or the 503 above. Any other
+ * answer without an accepted body, and no answer at all, is unknown.
+ */
 export async function postConversationSwitch(body: SwitchBody, fetcher: (input: string, init: RequestInit) => Promise<Response> = (input, init) => globalThis.fetch(input, init)): Promise<SwitchAnswer> {
   let response: Response;
   try {
@@ -297,17 +306,23 @@ export async function postConversationSwitch(body: SwitchBody, fetcher: (input: 
       recorded: typeof json.accountOverride?.recorded === "boolean" ? json.accountOverride.recorded : null,
     };
   }
-  /* An answer that explains nothing may or may not have queued the switch. */
-  if (typeof json?.error !== "string") return { kind: "unknown" };
-  return { kind: "refused", error: json.error };
+  if (typeof json?.error === "string"
+    && ((response.status >= 400 && response.status < 500)
+      || (response.status === 503 && (json as { code?: unknown }).code === RUNTIME_HOST_UNAVAILABLE_CODE))) {
+    return { kind: "refused", error: json.error };
+  }
+  /* A server error after dispatch, or an answer that explains nothing: the switch may be queued. */
+  return { kind: "unknown" };
 }
 
 export type SwitchSource = "record" | "runtime" | "page";
 
-/** A structured switch the runtime session reports as queued or applying, with its operation's receipt status. */
+/** A reconfigure the runtime session reports as queued or applying, with its operation's receipt status. */
 export interface RuntimePendingSwitch {
   operationId: string;
   accountId: string | null;
+  model: string;
+  effort: string;
   status: string | null;
 }
 
@@ -320,7 +335,9 @@ export type SwitchView =
   | { kind: "switching"; target: string | null; source: SwitchSource }
   | { kind: "failed"; target: string | null; reason: string | null }
   /* This page's request got no answer, or its receipt ended uncertain. */
-  | { kind: "unknown"; target: string };
+  | { kind: "unknown"; target: string }
+  /* A reconfigure that changes no account is pending: an account choice now would replace it. */
+  | { kind: "settings"; target: null; model: string; effort: string; source: "runtime" };
 
 export type SwitchSettlement =
   | { kind: "switched"; target: string }
@@ -356,11 +373,14 @@ export function switchView(input: {
       settle: request ? { kind: "failed", target: request.target, reason: live?.failure ?? null } : null,
     };
   }
-  /* A reconfigure that names another account, as the runtime session projects it for every page. */
-  const pending = input.pending?.accountId && input.pending.accountId !== current ? input.pending : null;
-  const runtime: SwitchView | null = pending
-    ? { kind: pending.status === "applying" ? "switching" : "waiting", target: pending.accountId, source: "runtime" }
-    : null;
+  /* A pending reconfigure, as the runtime session projects it for every page: a switch when it names
+     another account, a settings change otherwise. Either way a new account choice would replace it. */
+  const pending = input.pending ?? null;
+  const runtime: SwitchView | null = !pending
+    ? null
+    : pending.accountId && pending.accountId !== current
+      ? { kind: pending.status === "applying" ? "switching" : "waiting", target: pending.accountId, source: "runtime" }
+      : { kind: "settings", target: null, model: pending.model, effort: pending.effort, source: "runtime" };
   if (!request) return { view: runtime ?? none, settle: null };
   if (request.phase === "unknown") return { view: runtime ?? { kind: "unknown", target: request.target }, settle: null };
   const status = input.receipt?.status ?? request.answeredStatus;

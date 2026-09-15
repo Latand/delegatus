@@ -25,7 +25,8 @@ import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
  *   - a running stage conversation's chip and picker: its current account and
  *     stage setting, an account outside the project's accounts offered and
  *     recorded, the switch sent as the conversation header's `reconfigure`,
- *     then "after this turn" with the target known to this page only, every
+ *     then "after this turn" with the target known to this page only (the
+ *     fixture runs without a runtime plane, so no session reports it), every
  *     row unavailable, nothing resent while it waits, and "now runs on" only
  *     once the conversation runs on the target;
  *   - a switch the migration record reports, shown to a fresh page; a switch
