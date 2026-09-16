@@ -84,6 +84,32 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(byConversation.ok && byConversation.tasks[0]!.assignments[0]!.path).toBe("/fixture/new.jsonl");
 });
 
+/* #1720 — what a spawn's explicit `taskId` actually admits. An explicit target
+   carries its own project, so `launchMembershipInput` hands the commit an EMPTY
+   project (the operator chose the task, and the launch directory may derive
+   another), and with no project to compare against, a single id from another
+   project is admitted. The cross-project refusal exists for a set that spans
+   two projects, and for `create_pipeline`, which validates against the
+   pipeline's project at the store seam. The mandate and the `spawn_agent`
+   schema describe it exactly this way; this pins the behaviour they describe. */
+test("a spawn-shaped explicit target from another project is admitted, and a mixed set is refused", () => {
+  const tasks = [task("here", "fixture"), task("there", "elsewhere")];
+  const foreignAlone = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-1" }, identity: { clientAttemptId: "spawn-1" }, explicitTaskIds: ["there"] }, deps);
+  expect(foreignAlone.ok).toBe(true);
+  expect(foreignAlone.ok && foreignAlone.taskIds).toEqual(["there"]);
+  expect(foreignAlone.ok && foreignAlone.created).toEqual([]);
+
+  const mixed = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-2" }, identity: { clientAttemptId: "spawn-2" }, explicitTaskIds: ["here", "there"] }, deps);
+  expect(mixed.ok).toBe(false);
+  expect(!mixed.ok && mixed.status).toBe(409);
+
+  /* An id naming no task refuses on either shape — the half of the published
+     contract that IS true for a spawn. */
+  const unknown = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-3" }, identity: { clientAttemptId: "spawn-3" }, explicitTaskIds: ["no-such-task"] }, deps);
+  expect(unknown.ok).toBe(false);
+  expect(!unknown.ok && unknown.status).toBe(404);
+});
+
 test("explicit targets are validated together: a missing or foreign task refuses the whole request and writes nothing", () => {
   const tasks = [task("a", "fixture"), task("b", "fixture"), task("c", "elsewhere")];
   const missing = ensureTaskMembership(tasks, { project: "fixture", origin: { kind: "launch", key: "k" }, identity: { clientAttemptId: "k" }, explicitTaskIds: ["a", "gone"] }, deps);

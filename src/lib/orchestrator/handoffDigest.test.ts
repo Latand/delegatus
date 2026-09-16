@@ -450,10 +450,20 @@ test("the delivered default mandate fits the delivery bound with room for a rota
 });
 
 /* A seat on a bespoke mandate receives all three directives appended, which is
-   the largest text delivery ever composes for a given mandate. */
-test("a bespoke mandate plus every appended directive still fits the delivery bound", () => {
-  const bespoke = "A seat's own mandate, written before #1720.".repeat(40);
-  const preflight = mandatePreflight(bespoke, "existing", { mode: "standard" });
-  expect(preflight.ok).toBe(true);
-  if (preflight.ok) expect(preflight.bytes).toBeGreaterThan(Buffer.byteLength(bespoke));
+   the largest text delivery ever composes for a given mandate. The fixture is
+   derived from the directives themselves rather than hand-tuned, so growing any
+   of them moves this test instead of leaving it green: a bespoke mandate sized
+   to sit just inside the bound today is refused once the appended text grows. */
+test("a bespoke mandate sized to the bound is admitted, and one byte past it is refused", () => {
+  const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
+  const room = MAX_STRUCTURED_TEXT_BYTES - appended;
+  expect(room).toBeGreaterThan(0);
+
+  const atBound = mandatePreflight("c".repeat(room), "existing", { mode: "standard" });
+  expect(atBound.ok).toBe(true);
+  expect(atBound.bytes).toBe(MAX_STRUCTURED_TEXT_BYTES);
+
+  const past = mandatePreflight("c".repeat(room + 1), "existing", { mode: "standard" });
+  expect(past.ok).toBe(false);
+  expect(past.ok === false && past.excess).toBe(1);
 });

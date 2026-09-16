@@ -387,11 +387,18 @@ test("the mandate makes discovery precede any launch, over every status", () => 
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("FIND IT BEFORE YOU LAUNCH ANYTHING");
   /* The failure this fixes: a seat that listed only inbox and assigned missed
      the blocked card that already owned the outcome and opened a second one. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("list_tasks for this project with NO status filter");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("blocked and recently finished work is in the answer beside inbox and assigned");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("list_tasks for this project with NO status filter and limit: 200");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("blocked and finished work can reach you beside inbox and assigned");
+  /* The answer is one capped page in creation order (`bindings.ts` slices
+     `loadTasks()` with no cursor and no sort), and the project task cap is
+     higher than the read cap — so a full page has dropped the newest work,
+     which is exactly what the seat is looking for. The mandate must not
+     promise a completeness the tool cannot give. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a page at the cap was truncated and the NEWEST work is what it dropped");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("treat it as a lead, never as the whole board");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task any id the operator or a report hands you even when the page did not carry it");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("search_transcripts");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create a task only when nothing on the board owns this outcome");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create a task only when nothing you can reach owns this outcome");
 });
 
 test("the mandate requires a real title and description at creation, never left to the launched agent", () => {
@@ -416,6 +423,15 @@ test("the mandate carries the task into the launch call itself, by field name", 
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Adding it after the pipeline exists comes too late for the stages that already started");
   /* A reviewer already inherits the reviewed work's task at the reservation. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.");
+  /* The cross-project refusal belongs to create_pipeline, which validates the
+     ids against the pipeline's project at the store seam. A spawn's explicit
+     target carries its own project and a single foreign id is admitted
+     (pinned in membership.test.ts), so the mandate must not promise a refusal
+     there — a manager acting on that promise binds an agent to another
+     project's card and is told nothing. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
+    .not.toContain("or a task in another project, refuses the launch before any agent starts");
   /* No invented id shape: the mandate must never teach a format the board does
      not mint. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');

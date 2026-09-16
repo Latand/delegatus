@@ -907,7 +907,13 @@ test("the launch tools publish the task binding fields agents must pass", async 
     const spawn = listed.tools.find((candidate) => candidate.name === "spawn_agent");
     const taskId = spawn?.inputSchema.properties?.taskId as { type?: string; description?: string } | undefined;
     expect(taskId?.type).toBe("string");
-    expect(taskId?.description).toContain("refuses the launch before any agent starts");
+    expect(taskId?.description).toContain("an id naming no task refuses the launch before any agent starts");
+    /* The published contract must not promise the cross-project refusal that
+       only create_pipeline performs: a spawn's explicit target carries its own
+       project, so a single foreign id is admitted (membership.test.ts). */
+    expect(taskId?.description).toContain("taken as given and binds the agent to that project's card");
+    expect(taskId?.description).not.toContain("or a task in another project, refuses the launch");
+    expect(taskIds?.description).toContain("existing task in the pipeline's project");
     expect(taskId?.description).toContain("placeholder task of its own");
     /* A reviewer inherits the reviewed work's task at the reservation, so it
        must not be told to pass one. */

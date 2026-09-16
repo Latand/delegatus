@@ -119,7 +119,7 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
 export const ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}
 A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation the operator asked for on its own.
 
-FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with NO status filter, so blocked and recently finished work is in the answer beside inbox and assigned. Read the candidates with get_task, and run search_transcripts when the operator's words name work you cannot place on the board. Reuse what you find, and create a task only when nothing on the board owns this outcome.
+FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with NO status filter and limit: 200, so blocked and finished work can reach you beside inbox and assigned. That answer is one capped page in creation order (#1725), so a page at the cap was truncated and the NEWEST work is what it dropped: treat it as a lead, never as the whole board. Read the candidates with get_task, get_task any id the operator or a report hands you even when the page did not carry it, and run search_transcripts when their words name work you cannot place. Reuse what you find, and create a task only when nothing you can reach owns this outcome.
 
 NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Leaving the naming to the agent you are about to launch fails in practice: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
 
@@ -127,7 +127,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task whe
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every stage launch of that pipeline — run, review-loop, retry, fail branch — then joins that task, because the binding is read off the pipeline at each launch. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title.
 - A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.
-- Use the exact id the board gave you. An id naming no task, or a task in another project, refuses the launch before any agent starts.
+- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take another stage, create the successor pipeline with the SAME taskIds, so one card carries both pipelines.
 

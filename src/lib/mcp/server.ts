@@ -2932,7 +2932,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().describe("First instruction sent to the agent."),
     title: z.string().min(1).describe("Semantic conversation title required for every new spawn."),
     taskId: z.string().optional()
-      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task, or a task in another project, refuses the launch before any agent starts. Omitting it admits the agent onto a placeholder task of its own, which is how one outcome ends up with several cards; a reviewer or child spawn inherits the task of the work it reviews and needs nothing here."),
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it admits the agent onto a placeholder task of its own, which is how one outcome ends up with several cards; a reviewer or child spawn inherits the task of the work it reviews and needs nothing here."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),
