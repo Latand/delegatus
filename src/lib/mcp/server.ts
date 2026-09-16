@@ -2932,8 +2932,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().describe("First instruction sent to the agent."),
     title: z.string().min(1).describe("Semantic conversation title required for every new spawn."),
     /* Blank is refused HERE because nothing downstream refuses it: the spawn
-       route treats a blank taskId as absent and admits the agent onto a
-       placeholder card, which is the duplicate #1720 exists to stop. The
+       route reads a blank taskId as absent, and an absent task is not an
+       unbound agent — every agent-made spawn carries its caller as lineage
+       parent, so the launch silently joins the CALLER's task and the outcome's
+       card records nothing. There is no duplicate card to notice, which is
+       what makes the boundary the only place that can answer. The
        create_pipeline half of this contract is refused by the engine, with its
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()

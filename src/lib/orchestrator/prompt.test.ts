@@ -412,8 +412,9 @@ test("the mandate requires a real title and description at creation, never left 
 });
 
 /* The two fields are the whole enforcement: membership is committed from what
-   the launch CALL carried, so a pipeline or spawn that names no task is given a
-   placeholder card. The mandate prints the field names the schemas declare, and
+   the launch CALL carried, and what a call carrying no task gets differs per
+   tool — a pipeline mints the container placeholder, a spawn joins the caller's
+   own task. The mandate prints the field names the schemas declare, and
    no invented task id format — board ids are opaque. */
 test("the mandate carries the task into the launch call itself, by field name", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("CARRY THE TASK INTO THE LAUNCH ITSELF");
