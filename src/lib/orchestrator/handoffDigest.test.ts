@@ -449,14 +449,30 @@ test("the delivered default mandate fits the delivery bound with room for a rota
   expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
-/* A seat on a bespoke mandate receives all three directives appended, which is
-   the largest text delivery ever composes for a given mandate. The fixture is
-   derived from the directives themselves rather than hand-tuned, so growing any
-   of them moves this test instead of leaving it green: a bespoke mandate sized
-   to sit just inside the bound today is refused once the appended text grows. */
-test("a bespoke mandate sized to the bound is admitted, and one byte past it is refused", () => {
+/* What delivery appends is a fixed cost every bespoke mandate pays, so it is
+   the number worth pinning: a mandate is only deliverable in the room left
+   after it. This ceiling is the budget the delivered directives are allowed to
+   occupy — a quarter of the envelope — and a directive that grows past it
+   fails HERE, naming the budget, rather than as a 413 on a live seat's
+   adoption or rotation. Raising it is a deliberate edit with the remaining
+   headroom in view. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 8_000;
+
+test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
-  const room = MAX_STRUCTURED_TEXT_BYTES - appended;
+  expect(appended).toBeLessThanOrEqual(DELIVERED_DIRECTIVE_BUDGET_BYTES);
+  /* And the budget itself leaves a bespoke mandate the room the rotation
+     ladder needs: core, plus a history section, plus a fresh handoff. */
+  expect(MAX_STRUCTURED_TEXT_BYTES - DELIVERED_DIRECTIVE_BUDGET_BYTES).toBeGreaterThan(HISTORY_BUDGET_BYTES * 2);
+});
+
+/* The boundary of mandatePreflight itself, measured on the delivered text: a
+   bespoke mandate sized to land exactly on the envelope is admitted, and one
+   byte more is refused by exactly one byte. This pins the arithmetic — that
+   delivery's cost is added to the mandate before the bound is applied, and
+   that `excess` reports the real overshoot a caller is asked to shorten by. */
+test("a bespoke mandate landing exactly on the envelope is admitted, and one byte past it is refused", () => {
+  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery(""));
   expect(room).toBeGreaterThan(0);
 
   const atBound = mandatePreflight("c".repeat(room), "existing", { mode: "standard" });

@@ -1517,7 +1517,7 @@ test("AC4: rotation drops the history, then trims the notes, and refuses only wh
        headroom tracks what delivery appends around a mandate — the initial
        status contract, the clock handover (#1245) and, since #1720, the
        task-ownership section — so a core that once trimmed to a fit now has
-       ~6.6 KB less to play with. */
+       about 6.9 KB less to play with (measured: 7047 bytes appended). */
     mandate: stackedMandate("c".repeat(22_800), 2),
     handoffNotes: "n".repeat(2_000),
   }, deps);

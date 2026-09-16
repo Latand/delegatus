@@ -925,8 +925,12 @@ test("the launch tools publish the task binding fields agents must pass", async 
 
 /* Backwards compatibility: both fields reached the server through `.passthrough()`
    before they were declared, so declaring them must not refuse a call that used
-   to be admitted — including the empty and whitespace ids the engine itself
-   validates and answers for. */
+   to be admitted. `create_pipeline` keeps its empty and whitespace entries,
+   which the engine validates and answers for with a named violation. A blank
+   `spawn_agent.taskId` is the one addition: nothing downstream refuses it — the
+   spawn route reads a blank id as no task and admits the agent onto a
+   placeholder card — so the boundary is the only place that can answer, and
+   both launch tools now answer the same malformed id the same way. */
 test("declaring the task binding fields refuses nothing the launch surfaces already accepted", () => {
   const pipelineArgs = { clientRequestId: "binding-parity", task: "t", repoDir: "/repo", stages: [{ id: "build", kind: "run", "prompt": "Implement." }] };
   for (const taskIds of [undefined, [], ["board-task-fixture"], ["board-task-fixture", "second-task-fixture"], [""], ["  "]]) {
@@ -937,7 +941,7 @@ test("declaring the task binding fields refuses nothing the launch surfaces alre
   }
 
   const spawnArgs = { clientRequestId: "binding-parity-spawn", cwd: "/repo", "prompt": "Implement.", title: "Fixture launch" };
-  for (const taskId of [undefined, "board-task-fixture", ""]) {
+  for (const taskId of [undefined, "board-task-fixture"]) {
     const args = taskId === undefined ? spawnArgs : { ...spawnArgs, taskId };
     const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse(args);
     expect(parsed.success).toBe(true);
@@ -948,4 +952,13 @@ test("declaring the task binding fields refuses nothing the launch surfaces alre
      naming the field, instead of reaching the engine as an unread key. */
   expect(TOOL_INPUT_SCHEMAS.create_pipeline.safeParse({ ...pipelineArgs, taskIds: "board-task-fixture" }).success).toBe(false);
   expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: 7 }).success).toBe(false);
+
+  /* A blank spawn taskId is refused at the boundary, naming the field, because
+     the launch would read it as no task and mint a placeholder card in
+     silence. `create_pipeline` answers the same mistake from the engine. */
+  for (const blank of ["", "   "]) {
+    const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: blank });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((issue) => issue.path[0] === "taskId")).toBe(true);
+  }
 });

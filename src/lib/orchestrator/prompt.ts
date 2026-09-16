@@ -106,15 +106,27 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  * delivered, and the version bump is what marks it stale in the seat card,
  * `get_orchestrator` and `rotate_orchestrator` until then.
  *
- * Every API statement below is a server-side guarantee, checked in
- * `launchMembership.test.ts`, `membership.ts` and `engine.ts`: explicit
- * `taskIds` on a pipeline are read fresh at every stage launch
- * (`launchMembership.ts`), an unknown or cross-project id refuses the launch
- * before actuation (`membership.ts`), `pipeline_action: "link-task"` writes
- * `pipeline.taskIds` while `link_task_to_pipeline` writes one assignment row
- * and leaves that list alone (`engine.ts`, `bindings.ts`), and a pipeline with
- * an empty list re-adopts the card its own admission minted
- * (`adoptPipelineFallbackTask`).
+ * Every API statement below is a server-side guarantee, and each is checked
+ * where it is performed:
+ *
+ * - explicit `taskIds` on a pipeline are read fresh at every stage launch
+ *   (`launchMembership.ts`, `launchMembership.test.ts`);
+ * - an id naming no task refuses the launch before actuation, on either tool
+ *   (`membership.ts`, `membership.test.ts`);
+ * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
+ *   `pipeline_action: "link-task"`, which validate against the pipeline's own
+ *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
+ *   from `engine.ts`). A spawn's explicit target carries its own project —
+ *   `launchMembership.ts` commits it with an EMPTY project — so the guard in
+ *   `membership.ts` compares against nothing and a SINGLE foreign id is
+ *   admitted. The directive and the `spawn_agent` schema say this per tool;
+ *   do not restate it as one rule for both (`membership.test.ts` pins the
+ *   admission, `launchMembership.test.ts` pins the empty project);
+ * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
+ *   `link_task_to_pipeline` writes one assignment row and leaves that list
+ *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
+ * - a pipeline with an empty list re-adopts the card its own admission minted
+ *   (`adoptPipelineFallbackTask` in `engine.ts`).
  */
 export const ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}
 A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation the operator asked for on its own.
@@ -208,6 +220,17 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 - Replacing manual spawns is a non-goal: the user's own agents keep working; you coordinate, you do not take over.
 - Re-derive board state per turn from bounded snapshots rather than accumulating it in context.`;
 
+/** What delivery appends, in order, and the text each is recognized by: a
+    section with its own heading is recognized by that heading, so a caller who
+    reworded the body under it keeps their wording; the initial-status contract
+    has no heading of its own and is recognized by its whole text. Adding a
+    directive is one entry here. */
+const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
+  { marker: ORCHESTRATOR_TASK_OWNERSHIP_HEADING, directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
+  { marker: ORCHESTRATOR_VIEWER_CLOCK_HEADING, directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
+  { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
+];
+
 /** Every seat receives the initial-status contract, the clock handover AND the
     task-ownership section (#1720), whatever mandate it holds. Each is appended
     at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
@@ -218,13 +241,8 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
     cannot say which paragraphs a mandate actually contains. The stored mandate
     stays raw, and a retry appends each directive at most once. */
 export function orchestratorMandateForDelivery(mandate: string): string {
-  const withOwnership = mandate.includes(ORCHESTRATOR_TASK_OWNERSHIP_HEADING)
-    ? mandate
-    : `${mandate}\n\n${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}`;
-  const withClock = withOwnership.includes(ORCHESTRATOR_VIEWER_CLOCK_HEADING)
-    ? withOwnership
-    : `${withOwnership}\n\n${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}`;
-  return withClock.includes(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)
-    ? withClock
-    : `${withClock}\n\n${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}`;
+  return DELIVERED_DIRECTIVES.reduce(
+    (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
+    mandate,
+  );
 }
