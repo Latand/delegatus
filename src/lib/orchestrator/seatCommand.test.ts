@@ -1285,8 +1285,6 @@ function stackedMandate(core: string, count: number): string {
   return [core, ...Array.from({ length: count }, (_, index) => handoffSection(index + 1))].join("\n\n");
 }
 
-/** What spawn mode actually asserts against the envelope: the orchestrator
-    role scaffold, a blank line, and the mandate. */
 /** The core size that leaves exactly `reserveBytes` for the handoff once the
     scaffold and everything delivery appends are accounted for. */
 function trimBandCoreBytes(reserveBytes: number): number {
@@ -1295,6 +1293,8 @@ function trimBandCoreBytes(reserveBytes: number): number {
   return MAX_STRUCTURED_TEXT_BYTES - scaffold - Buffer.byteLength(orchestratorMandateForDelivery(""), "utf8") - reserveBytes;
 }
 
+/** What spawn mode actually asserts against the envelope: the orchestrator
+    role scaffold, a blank line, and the mandate. */
 function launchBytes(prompt: string): number {
   const role = resolveSpawnRole({ role: "orchestrator", roleParams: { mode: "standard" } });
   const scaffold = role.ok && role.value ? role.value.scaffold : "";

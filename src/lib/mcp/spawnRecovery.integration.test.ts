@@ -305,12 +305,13 @@ test("production recovery probes the exported validate route over HTTP with the 
    whether the route infers the caller as lineage parent. It does for an
    agent-capability POST to /api/spawn; it does NOT for this tool, whose control
    dispatch arrives same-origin with the operator spawn capability. This drives
-   the production control path over real HTTP and reads the request exactly as
-   the route receives it: no agent caller, the body passed through as the
-   selector, and with no src/parent/parentConversationId no parent at all — so
-   a task-less spawn_agent that names no parent is admitted onto a placeholder
-   card of its own. */
-test("an MCP spawn reaches the route as no agent caller, so without a body selector it has no lineage parent", async () => {
+   the tool's spawn VALIDATE probe (`recover` POSTs to /api/spawn/validate) over
+   real HTTP. The probe shares the dispatch's headers (`spawnControlHeaders()`
+   plus the same-origin control post) and body (`spawnDispatchBody()`), so it
+   stands in for the /api/spawn call without being that call. The request
+   classifies as no agent caller, and applying the route's selector rule to the
+   received body with no src/parent/parentConversationId resolves no parent. */
+test("the spawn_agent validate probe arrives as no agent caller, so without a body selector it resolves no lineage parent", async () => {
   const cwd = path.join(sandbox, "parentless-probe-dir");
   fs.mkdirSync(cwd, { recursive: true });
   const registry = new AgentRegistry(path.join(sandbox, `registry-${crypto.randomUUID()}.json`), undefined, undefined, { sqliteMode: "off" });

@@ -229,7 +229,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> batched deploy -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
-- Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
+- Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
 - Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests). Never merge red.
 - Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
 
