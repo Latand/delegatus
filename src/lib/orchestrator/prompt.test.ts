@@ -467,7 +467,15 @@ test("the mandate separates the binding repair from the assignment-only tool, an
 test("the mandate requires a membership readback and states that a linked task may still be invisible", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("READ BACK WHAT YOU DID");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_pipeline and confirm its taskIds contain the task");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task and confirm the launch is recorded on it");
+  /* The task-side proof is `pipelineIds`, which `projectTaskPipelineIds`
+     computes from `pipeline.taskIds` on every get_task read, so it is true as
+     soon as the link lands. Assignments are NOT: link-task writes none, and
+     `planAdmissions` skips a pipeline that already carries taskIds, so a
+     manager told to look for an assignment reads a successful repair as a
+     failed one and reaches for the tools this section just warned it off. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task and confirm the task's pipelineIds contain the pipeline");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a link writes none, and the stages already running stay on the card they were admitted to");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("get_task and confirm the launch is recorded on it");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A task can hold a launch and still draw no band on the board");
 });
 

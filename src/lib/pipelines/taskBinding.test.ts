@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { buildPipeline } from "./store";
-import { ensurePipelineForTask } from "./taskBinding";
+import { ensurePipelineForTask, projectTaskPipelineIds } from "./taskBinding";
 
 const role = {
   roleId: "builder" as const,
@@ -105,4 +105,34 @@ test("auto-create bounds a valid long board-task title to the pipeline limit", (
 
   expect(decision?.task).toHaveLength(4_000);
   expect(decision?.spec).toHaveLength(4_500);
+});
+
+/* #1720 — what a manager can actually read back after repairing a binding.
+   `pipeline_action "link-task"` writes `pipeline.taskIds` and nothing else: no
+   assignment is recorded, and the stages already running stay on the card they
+   were admitted to. The task's own read model answers from the pipeline side,
+   so the link is visible as `pipelineIds` the moment it lands — which is what
+   the mandate tells the seat to confirm, and it must stay true. */
+test("a linked pipeline shows on the task as pipelineIds while its assignments stay untouched", () => {
+  const board = task();
+  const unlinked = buildPipeline({
+    id: "repaired1",
+    task: "repaired",
+    taskIds: [],
+    project: "viewer",
+    repoDir: "/repo",
+    stages: [{ id: "run", kind: "run", prompt: "run", next: null, effectiveRole: role }],
+    srcPath: null,
+    srcConversationId: null,
+    now: "now",
+  });
+
+  expect(projectTaskPipelineIds([board], [unlinked])[0]!.pipelineIds).toEqual([]);
+
+  /* The one write `link-task` performs. */
+  unlinked.taskIds.push(board.id);
+
+  const [readBack] = projectTaskPipelineIds([board], [unlinked]);
+  expect(readBack!.pipelineIds).toEqual([unlinked.id]);
+  expect(readBack!.assignments).toEqual([]);
 });

@@ -138,7 +138,13 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
  * - a pipeline with an empty list re-adopts the card its own admission minted
- *   (`adoptPipelineFallbackTask` in `engine.ts`).
+ *   (`adoptPipelineFallbackTask` in `engine.ts`);
+ * - a link is visible on the task as `pipelineIds` immediately
+ *   (`projectTaskPipelineIds` in `taskBinding.ts`, which both `get_task` and
+ *   `list_tasks` read through). It writes no assignment, and `planAdmissions`
+ *   skips a pipeline that already carries `taskIds` (`membership.ts`), so the
+ *   stages already running stay on the card they were admitted to and the
+ *   task's first assignment arrives with the next launch.
  */
 export const ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}
 A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation the operator asked for on its own.
@@ -157,7 +163,7 @@ EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipelin
 
 REPAIR WITH THE TOOL THAT BINDS. pipeline_action "link-task" writes the task onto the pipeline, so stages starting after it join it. link_task_to_pipeline records one assignment on the task and leaves the pipeline's own task list alone, so a pipeline repaired only that way keeps minting its own card. Never use "unlink-task" to tidy a duplicate: a pipeline left with no task re-adopts the card it minted on the next controller tick.
 
-READ BACK WHAT YOU DID. After a create or a link, call get_pipeline and confirm its taskIds contain the task, then call get_task and confirm the launch is recorded on it. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
+READ BACK WHAT YOU DID. After a create or a link, call get_pipeline and confirm its taskIds contain the task, then call get_task and confirm the task's pipelineIds contain the pipeline — that is the binding, read from the task's side, and it is true the moment the link lands. Assignments answer a different question: a link writes none, and the stages already running stay on the card they were admitted to, so a repaired pipeline's task shows its first assignment when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
 
 ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pipeline after a failure, a fix lane after a review — retire the superseded container only once the outcome is carried by the surviving one and nothing in the old one is still running or unknown. Closing a container is unavailable as a way to hide work that is still owed: say out loud what you are dropping, and mark a task blocked with the reason when it cannot proceed. Never close containers in bulk to tidy the board.
 
