@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 
 import type { BoardTask } from "@/lib/tasks/types";
 
+import { launchMembershipInput } from "@/lib/tasks/launchMembership";
+
+import { adoptPipelineFallbackTask } from "./engine";
 import { buildPipeline } from "./store";
 import { ensurePipelineForTask, projectTaskPipelineIds } from "./taskBinding";
 
@@ -135,4 +138,49 @@ test("a linked pipeline shows on the task as pipelineIds while its assignments s
   const [readBack] = projectTaskPipelineIds([board], [unlinked]);
   expect(readBack!.pipelineIds).toEqual([unlinked.id]);
   expect(readBack!.assignments).toEqual([]);
+});
+
+/* #1720 — the repair a manager actually faces. A pipeline created without
+   taskIds adopts the placeholder its first stage minted AT THAT STAGE'S
+   RESERVATION, so by the time anyone repairs it the list is [placeholder]:
+   link-task appends, and later stages join BOTH cards. Re-adoption runs only on
+   an EMPTY list, so unlinking the placeholder after the link leaves the outcome
+   alone for good — the step that removes the duplicate — while unlinking the
+   LAST task brings the placeholder back. The mandate's repair order and its
+   "never unlink the last task" rule rest on exactly this. */
+test("adopt, link the outcome, unlink the placeholder: no re-adoption, and the next stage names only the outcome", () => {
+  const placeholder: BoardTask = { ...task(), id: "fallback-card", origin: { kind: "pipeline", key: "repair01", refinement: "pending" } };
+  const outcome: BoardTask = { ...task(), id: "outcome-card" };
+  const pipeline = buildPipeline({
+    id: "repair01",
+    task: "repair",
+    taskIds: [],
+    project: "viewer",
+    repoDir: "/repo",
+    stages: [{ id: "run", kind: "run", prompt: "run", next: null, effectiveRole: role }],
+    srcPath: null,
+    srcConversationId: null,
+    now: "now",
+  });
+  const stageLaunch = { engine: "codex", cwd: "/repo", origin: { kind: "container" as const, container: "pipeline" as const, containerId: pipeline.id } };
+  const nextStage = () => launchMembershipInput(stageLaunch, { launchId: "launch-next", conversationId: "conversation_next" }, () => pipeline.taskIds, () => "viewer");
+
+  /* First stage reservation: adoption. */
+  expect(adoptPipelineFallbackTask(pipeline, [placeholder, outcome])).toBe(true);
+  expect(pipeline.taskIds).toEqual(["fallback-card"]);
+
+  /* link-task appends: a stage launched now joins both cards. */
+  pipeline.taskIds.push(outcome.id);
+  expect(nextStage().explicitTaskIds).toEqual(["fallback-card", "outcome-card"]);
+
+  /* unlink-task the placeholder: the list is not empty, so nothing re-adopts. */
+  pipeline.taskIds = pipeline.taskIds.filter((id) => id !== placeholder.id);
+  expect(adoptPipelineFallbackTask(pipeline, [placeholder, outcome])).toBe(false);
+  expect(pipeline.taskIds).toEqual(["outcome-card"]);
+  expect(nextStage().explicitTaskIds).toEqual(["outcome-card"]);
+
+  /* Unlinking the LAST task is the step the mandate forbids: the placeholder returns. */
+  pipeline.taskIds = [];
+  expect(adoptPipelineFallbackTask(pipeline, [placeholder, outcome])).toBe(true);
+  expect(pipeline.taskIds).toEqual(["fallback-card"]);
 });

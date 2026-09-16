@@ -5,12 +5,14 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
+import { isAgentInitiatedSpawn, spawnLineageSelectorForCaller } from "@/app/api/spawn/admission";
 import { POST as spawnAdmissionPost } from "@/app/api/spawn/validate/route";
 import { executeSpawnAdmissionValidation } from "@/lib/agent/spawnAdmissionValidation";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { readSpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { executeSpawnRequest, type SpawnCommandDependencies } from "@/lib/agent/spawnCommand";
+import { resolveSpawnLineage } from "@/lib/agent/spawnParent";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 import {
@@ -291,6 +293,62 @@ test("production recovery probes the exported validate route over HTTP with the 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ pathname: "/api/spawn/validate", capability: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
     expect(readSpawnAdmissionFence(binding.downstreamKey)).toMatchObject({ status: 400 });
+  } finally {
+    viewer.stop(true);
+    if (previousControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousControlUrl;
+  }
+});
+
+/* #1720 — who the parent of an MCP spawn is. The mandate and the spawn_agent
+   schema tell a manager what a spawn with no taskId joins, and that depends on
+   whether the route infers the caller as lineage parent. It does for an
+   agent-capability POST to /api/spawn; it does NOT for this tool, whose control
+   dispatch arrives same-origin with the operator spawn capability. This drives
+   the production control path over real HTTP and reads the request exactly as
+   the route receives it: no agent caller, the body passed through as the
+   selector, and with no src/parent/parentConversationId no parent at all — so
+   a task-less spawn_agent that names no parent is admitted onto a placeholder
+   card of its own. */
+test("an MCP spawn reaches the route as no agent caller, so without a body selector it has no lineage parent", async () => {
+  const cwd = path.join(sandbox, "parentless-probe-dir");
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(sandbox, `registry-${crypto.randomUUID()}.json`), undefined, undefined, { sqliteMode: "off" });
+  const received: { agentInitiated: boolean; body: Record<string, unknown> }[] = [];
+  const viewer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const routed = new NextRequest(request);
+      received.push({ agentInitiated: isAgentInitiatedSpawn(routed), body: await routed.clone().json() as Record<string, unknown> });
+      return spawnAdmissionPost.withDependencies(routed, { registry: () => registry });
+    },
+  });
+  const previousControlUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = viewer.url.origin;
+  try {
+    const args = spawnArgs("spawn_parentless_http_1", cwd);
+    const tools = viewerMcpRecoverableTools({
+      ...productionDomainDependencies,
+      registrySnapshot: () => registry.readOnlySnapshot(),
+      attentionAuthority: () => ({ kind: "root", conversationId: null, role: null }),
+      recoveryPredecessors: () => [],
+    });
+    const bindingInput = await tools.spawn_agent!.bind(args);
+    await tools.spawn_agent!.recover({
+      ...bindingInput,
+      version: 1,
+      toolName: "spawn_agent",
+      clientRequestId: String(args.clientRequestId),
+      owner: { pid: process.pid, startIdentity: null },
+      claimedAt: new Date().toISOString(),
+    }, { legacy: false, args });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]!.agentInitiated).toBe(false);
+    const selector = spawnLineageSelectorForCaller(null, received[0]!.body);
+    expect(selector).toBe(received[0]!.body);
+    expect(resolveSpawnLineage(selector, registry).parent).toBeNull();
   } finally {
     viewer.stop(true);
     if (previousControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;

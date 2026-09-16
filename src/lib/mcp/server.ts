@@ -2679,7 +2679,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Viewer-managed agent conversation and return its durable conversation and launch ids.",
-    "Pass `taskId` to admit the agent onto an existing board task (#1720); a launch that names none joins the task of the conversation that called, so the work is recorded on the caller's card rather than the outcome's.",
+    "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
@@ -2932,15 +2932,17 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().describe("First instruction sent to the agent."),
     title: z.string().min(1).describe("Semantic conversation title required for every new spawn."),
     /* Blank is refused HERE because nothing downstream refuses it: the spawn
-       route reads a blank taskId as absent, and an absent task is not an
-       unbound agent — every agent-made spawn carries its caller as lineage
-       parent, so the launch silently joins the CALLER's task and the outcome's
-       card records nothing. There is no duplicate card to notice, which is
-       what makes the boundary the only place that can answer. The
+       route reads a blank taskId as absent and admits the launch anyway — onto
+       the tasks of whatever parent or reviewed conversation the call names, or
+       onto a fresh placeholder card when it names none. Either way the
+       outcome's card records nothing and the caller is told nothing, so the
+       boundary is the only place that can answer. This dispatch reaches
+       /api/spawn same-origin with the operator capability, so the route never
+       infers the caller as parent; only body selectors set one. The
        create_pipeline half of this contract is refused by the engine, with its
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
-      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it does NOT leave the agent unbound: every agent-made spawn resolves its caller's conversation as its lineage parent, so the launch joins the task that conversation already holds — a manager's task-less spawn lands on the manager's own seat card while the outcome's card records nothing, and only a launch with no lineage parent holding a task is given a placeholder. A reviewer or child spawn works on the same inheritance and needs nothing here."),
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),

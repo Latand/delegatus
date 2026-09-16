@@ -30,8 +30,9 @@
  * across diagnosis, build, review, repair and release, the seat finds that task
  * before it launches anything, and it carries the id into the launch call
  * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
- * launch that names no task is recorded somewhere else: a pipeline on a
- * placeholder card of its own, a spawn on the caller's card. */
+ * launch that names no task is recorded somewhere else: on the card of a
+ * conversation it names as parent or reviews, or on a placeholder card of its
+ * own. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -119,12 +120,19 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   `membership.test.ts`). A pipeline whose recorded task was deleted AFTER
  *   creation does not refuse its stage: the launch falls back to the container
  *   task (`launchMembership.ts`);
- * - a launch carrying NO task is recorded per tool: a pipeline stage mints the
- *   container placeholder, while a spawn inherits — every MCP spawn resolves
- *   its caller's conversation as lineage parent (`spawnCommand.ts`), the parent
- *   goes into `inherit` (`launchMembership.ts`), and the admission joins the
- *   task that parent already holds (`membership.ts`, `membership.test.ts`).
- *   The placeholder is minted only when nothing inherited holds a task;
+ * - a launch carrying NO task: a pipeline stage mints the container
+ *   placeholder; a spawn joins every task held by its lineage parent and by the
+ *   conversation it reviews (`inherit` in `launchMembership.ts`, joined in
+ *   `membership.ts`), and mints a placeholder only when neither holds one. Who
+ *   the parent is depends on the path. MCP `spawn_agent` dispatches same-origin
+ *   with the operator spawn capability, so `/api/spawn` sees no agent caller
+ *   and the parent comes only from `src`, `parent` or `parentConversationId`
+ *   in the body — a reviewer with none of those parents on the reviewed
+ *   conversation (`spawnParent.ts`). An agent-capability POST to `/api/spawn`
+ *   always makes the caller the parent (`admission.ts`). So a task-less spawn
+ *   that names no parent is a duplicate card, and a reviewer that names one
+ *   joins the caller's card beside the reviewed work's
+ *   (`membership.test.ts`, `spawnRecovery.integration.test.ts`);
  * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
  *   `pipeline_action: "link-task"`, which validate against the pipeline's own
  *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
@@ -137,8 +145,14 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
- * - a pipeline with an empty list re-adopts the card its own admission minted
- *   (`adoptPipelineFallbackTask` in `engine.ts`);
+ * - a pipeline created without `taskIds` adopts the placeholder its first
+ *   stage minted AT THAT STAGE'S RESERVATION, so a repair starts from
+ *   `[placeholder]`: `link-task` makes it `[placeholder, outcome]` and later
+ *   stages join both. Re-adoption runs only on an EMPTY list
+ *   (`adoptPipelineFallbackTask` and `reconcilePipelineFallbackTasks` in
+ *   `engine.ts`), so unlinking the placeholder after the link leaves
+ *   `[outcome]` for good, while unlinking a pipeline's last task brings the
+ *   placeholder back (`taskBinding.test.ts`);
  * - a link is visible on the task as `pipelineIds` immediately
  *   (`projectTaskPipelineIds` in `taskBinding.ts`, which both `get_task` and
  *   `list_tasks` read through). It writes no assignment, and `planAdmissions`
@@ -147,23 +161,23 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   task's first assignment arrives with the next launch.
  */
 export const ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}
-A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation the operator asked for on its own.
+A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation asked for on its own.
 
 FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with NO status filter and limit: 200, so blocked and finished work can reach you beside inbox and assigned. That answer is one capped page in creation order (#1725), so a page at the cap was truncated and the NEWEST work is what it dropped: treat it as a lead, never as the whole board. Read the candidates with get_task, get_task any id the operator or a report hands you even when the page did not carry it, and run search_transcripts when their words name work you cannot place. Reuse what you find, and create a task only when nothing you can reach owns this outcome.
 
-NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Leaving the naming to the agent you are about to launch fails in practice: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
+NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Never leave the naming to the agent you launch: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
 
-CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task when the launch is reserved, from what the CALL carried, and what it does when the call carried none differs per tool: a pipeline created without taskIds is given a placeholder card of its own, and that card is the duplicate the operator sees; a spawn_agent call without taskId joins the task of the conversation that MADE the call — yours — so the worker lands on your seat's card and the outcome's card records nothing. Neither is what you want. So:
-- create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every stage launch of that pipeline — run, review-loop, retry, fail branch — then joins that task, because the binding is read off the pipeline at each launch. Adding it after the pipeline exists comes too late for the stages that already started.
-- spawn_agent — pass taskId: "<board task id>" beside the prompt and the title.
-- A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.
+CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one: spawn_agent sets a parent only when the call names one, while POST /api/spawn always makes you the parent, putting the worker on your seat's card. None of these is the outcome's card. So:
+- create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every stage launch of that pipeline — run, review-loop, retry, fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
+- spawn_agent or POST /api/spawn — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
+- A review flow or a pipeline's review-loop stage inherits the task of the work it reviews. Pass nothing, create nothing.
 - Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
 
-EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take another stage, create the successor pipeline with the SAME taskIds, so one card carries both pipelines.
+EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
 
-REPAIR WITH THE TOOL THAT BINDS. pipeline_action "link-task" writes the task onto the pipeline, so stages starting after it join it. link_task_to_pipeline records one assignment on the task and leaves the pipeline's own task list alone, so a pipeline repaired only that way keeps minting its own card. Never use "unlink-task" to tidy a duplicate: a pipeline left with no task re-adopts the card it minted on the next controller tick.
+REPAIR WITH THE TOOL THAT BINDS. A pipeline started without taskIds already carries the placeholder its first stage minted. Repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts its placeholder on the next controller tick.
 
-READ BACK WHAT YOU DID. After a create or a link, call get_pipeline and confirm its taskIds contain the task, then call get_task and confirm the task's pipelineIds contain the pipeline — that is the binding, read from the task's side, and it is true the moment the link lands. Assignments answer a different question: a link writes none, and the stages already running stay on the card they were admitted to, so a repaired pipeline's task shows its first assignment when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
+READ BACK WHAT YOU DID. After a create or a link, call get_pipeline and confirm its taskIds contain the task, then call get_task and confirm the task's pipelineIds contain the pipeline, which holds the moment the link lands. Assignments answer a different question: a link writes none, and the stages already running stay on the card they were admitted to, so a repaired pipeline's task shows its first assignment when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
 
 ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pipeline after a failure, a fix lane after a review — retire the superseded container only once the outcome is carried by the surviving one and nothing in the old one is still running or unknown. Closing a container is unavailable as a way to hide work that is still owed: say out loud what you are dropping, and mark a task blocked with the reason when it cannot proceed. Never close containers in bulk to tidy the board.
 

@@ -84,14 +84,13 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(byConversation.ok && byConversation.tasks[0]!.assignments[0]!.path).toBe("/fixture/new.jsonl");
 });
 
-/* #1720 — what a spawn that carries NO task admits onto. Every agent-made
-   spawn resolves its caller's conversation as its lineage parent
-   (`spawnCommand.ts`), and `launchMembershipInput` puts that parent into
-   `inherit`, so the launch joins the task the caller already holds and mints
-   nothing. A manager's task-less implementer spawn therefore lands on the
-   MANAGER'S seat card, with no duplicate card anywhere to notice. The
-   placeholder is minted only when nothing inherited holds a task. The mandate
-   and the `spawn_agent` schema say this; here is the behaviour they describe. */
+/* #1720 — what a spawn that carries NO task admits onto. When the launch HAS a
+   lineage parent, `launchMembershipInput` puts it into `inherit` and the launch
+   joins the task that parent holds, minting nothing. Whether there is a parent
+   depends on the path: an agent-capability POST to /api/spawn always makes the
+   caller the parent, while MCP spawn_agent sets one only from a body selector
+   (pinned end to end in spawnRecovery.integration.test.ts). With no parent, or
+   a parent holding no task, the launch gets a placeholder card of its own. */
 test("a launch carrying only a lineage parent joins the parent's task and creates nothing", () => {
   const seat = task("seat", "fixture", {
     assignments: [{ conversationId: "conversation_manager", path: null, panePid: null, state: "linked", error: null, at: now }],
@@ -108,6 +107,29 @@ test("a launch carrying only a lineage parent joins the parent's task and create
   const orphan = ensureTaskMembership([], { project: "fixture", origin: { kind: "launch", key: "spawn-orphan" }, title: "Implement the export retry", identity: { clientAttemptId: "spawn-orphan", conversationId: "conversation_orphan" }, inherit: [inheritParent] }, deps);
   expect(orphan.ok && orphan.created.length).toBe(1);
   expect(orphan.ok && orphan.tasks[0]!.origin?.refinement).toBe("pending");
+});
+
+/* #1720 — a reviewer spawn that names a parent. The lineage resolver makes the
+   named caller the parent and records the reviewed conversation beside it, so
+   the launch inherits from BOTH and joins every task either holds: the
+   manager's seat card and the outcome's card. Only an explicit taskId, which
+   wins over inheritance, keeps the reviewer on the outcome alone — which is
+   why the mandate tells a seat to pass taskId on reviewer spawns too. */
+test("a reviewer carrying both a parent and a reviewed conversation joins both of their tasks, and an explicit id wins", () => {
+  const seat = task("seat-card", "fixture", {
+    assignments: [{ conversationId: "conversation_manager", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const outcome = task("outcome-card", "fixture", {
+    assignments: [{ conversationId: "conversation_implementer", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const inherit = [{ conversationId: "conversation_implementer", path: null }, { conversationId: "conversation_manager", path: null }];
+
+  const both = ensureTaskMembership([seat, outcome], { project: "fixture", origin: { kind: "launch", key: "review-1" }, identity: { clientAttemptId: "review-1", conversationId: "conversation_reviewer" }, inherit }, deps);
+  expect(both.ok && both.taskIds.slice().sort()).toEqual(["outcome-card", "seat-card"]);
+  expect(both.ok && both.created).toEqual([]);
+
+  const pinned = ensureTaskMembership([seat, outcome], { project: "", origin: { kind: "launch", key: "review-2" }, identity: { clientAttemptId: "review-2", conversationId: "conversation_reviewer_2" }, explicitTaskIds: ["outcome-card"], inherit }, deps);
+  expect(pinned.ok && pinned.taskIds).toEqual(["outcome-card"]);
 });
 
 /* #1720 — what a spawn's explicit `taskId` actually admits. An explicit target

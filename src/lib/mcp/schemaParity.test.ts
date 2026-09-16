@@ -914,17 +914,18 @@ test("the launch tools publish the task binding fields agents must pass", async 
     expect(taskId?.description).toContain("taken as given and binds the agent to that project's card");
     expect(taskId?.description).not.toContain("or a task in another project, refuses the launch");
     expect(taskIds?.description).toContain("existing task in the pipeline's project");
-    /* The omission case is the caller's own card, never a placeholder: an
-       agent-made spawn always carries its caller as lineage parent and joins
-       the task that parent holds. Publishing "a placeholder of its own" sent a
-       manager looking for a duplicate card that never appears. */
-    expect(taskId?.description).toContain("joins the task that conversation already holds");
-    expect(taskId?.description).toContain("lands on the manager's own seat card");
-    expect(taskId?.description).not.toContain("admits the agent onto a placeholder task of its own");
-    expect(spawn?.description).not.toContain("admitted onto a placeholder task of its own");
-    /* A reviewer rides the same inheritance at the reservation, so it must not
-       be told to pass one. */
-    expect(taskId?.description).toContain("A reviewer or child spawn works on the same inheritance and needs nothing here");
+    /* The omission case depends on the parent the CALL names: this tool never
+       infers the caller as parent (spawnRecovery.integration.test.ts), so a
+       call naming no parent gets a placeholder card — a duplicate — and one
+       naming a parent joins that parent's card. */
+    expect(taskId?.description).toContain("this tool never infers one from the caller");
+    expect(taskId?.description).toContain("it is given a placeholder task of its own, which is a duplicate card");
+    expect(taskId?.description).not.toContain("lands on the manager's own seat card");
+    expect(spawn?.description).toContain("it is given a placeholder task of its own — a duplicate card");
+    /* A reviewer that names a parent joins that parent's card beside the
+       reviewed work's (membership.test.ts), so it is told to pass taskId too. */
+    expect(taskId?.description).toContain("so pass taskId on reviewer spawns too — an explicit id wins over inheritance");
+    expect(taskId?.description).not.toContain("needs nothing here");
     expect(spawn?.inputSchema.required).not.toContain("taskId");
     expect(spawn?.description).toContain("Pass `taskId` to admit the agent onto an existing board task");
     /* create_pipeline keeps the placeholder wording, which is true of it. */

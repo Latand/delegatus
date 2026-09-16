@@ -418,22 +418,28 @@ test("the mandate requires a real title and description at creation, never left 
    no invented task id format — board ids are opaque. */
 test("the mandate carries the task into the launch call itself, by field name", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("CARRY THE TASK INTO THE LAUNCH ITSELF");
-  /* What an omitted binding does differs per tool, and the spawn case is the
-     one a manager gets wrong silently: every agent-made spawn resolves its
-     caller's conversation as lineage parent, so a task-less implementer spawn
-     joins the MANAGER'S seat card and the outcome's card records nothing. No
-     duplicate card appears, so a manager told to look for one concludes the
-     launch was bound. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a pipeline created without taskIds is given a placeholder card of its own");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a spawn_agent call without taskId joins the task of the conversation that MADE the call — yours — so the worker lands on your seat's card and the outcome's card records nothing");
+  /* What an omitted binding does depends on the parent the call has. MCP
+     spawn_agent dispatches same-origin with the operator capability, so the
+     route infers no parent and a task-less call that names none is a duplicate
+     placeholder card (spawnRecovery.integration.test.ts). An agent-capability
+     POST to /api/spawn always makes the caller the parent, so the worker lands
+     on the seat's card. The mandate must state both, and must not tell a seat
+     that every spawn lands on its own card. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A pipeline created without taskIds is given a placeholder card of its own");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("spawn_agent sets a parent only when the call names one, while POST /api/spawn always makes you the parent");
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .not.toContain("a launch that names no task is given a placeholder card of its own");
+    .not.toContain("a spawn_agent call without taskId joins the task of the conversation that MADE the call");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('taskIds: ["<board task id>"] in the SAME call as stages and autoStart');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('spawn_agent — pass taskId: "<board task id>"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('spawn_agent or POST /api/spawn — pass taskId: "<board task id>"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("run, review-loop, retry, fail branch");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Adding it after the pipeline exists comes too late for the stages that already started");
-  /* A reviewer already inherits the reviewed work's task at the reservation. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.");
+  /* A reviewer spawn that names a parent joins the parent's card beside the
+     reviewed work's (membership.test.ts), so reviewer spawns pass taskId too;
+     review flows and review-loop stages really do need nothing. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("on EVERY spawn, reviewers included: an explicit id wins over inheritance");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A review flow or a pipeline's review-loop stage inherits the task of the work it reviews. Pass nothing, create nothing.");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("A review flow or a reviewer spawn inherits");
   /* The cross-project refusal belongs to create_pipeline, which validates the
      ids against the pipeline's project at the store seam. A spawn's explicit
      target carries its own project and a single foreign id is admitted
@@ -451,18 +457,22 @@ test("the mandate carries the task into the launch call itself, by field name", 
 test("the mandate extends existing work and reuses the same task for a successor pipeline", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("EXTEND THE WORK THAT EXISTS");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A started pipeline's graph is fixed");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create the successor pipeline with the SAME taskIds");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create the successor pipeline with the SAME taskIds, so one card carries both");
 });
 
-/* The two tools differ in what they write, and the difference decides whether
-   later stages join the task: `link-task` writes pipeline.taskIds,
-   link_task_to_pipeline writes one assignment row on the task. `unlink-task`
-   then lets the pipeline re-adopt the card its own admission minted. */
-test("the mandate separates the binding repair from the assignment-only tool, and forbids unlink as cleanup", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('pipeline_action "link-task" writes the task onto the pipeline, so stages starting after it join it');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("link_task_to_pipeline records one assignment on the task and leaves the pipeline's own task list alone");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Never use "unlink-task" to tidy a duplicate');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("re-adopts the card it minted on the next controller tick");
+/* A pipeline created without taskIds adopts its placeholder at the first
+   stage's reservation, so a repair starts from [placeholder]. link-task
+   appends (later stages join both cards); unlinking the placeholder afterwards
+   leaves [outcome] and nothing re-adopts, because re-adoption needs an EMPTY
+   list. So the repair is link, read back, unlink the placeholder — and the
+   only forbidden unlink is the last one (taskBinding.test.ts pins all three). */
+test("the mandate orders the binding repair, separates the assignment-only tool, and forbids unlinking the last task", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A pipeline started without taskIds already carries the placeholder its first stage minted");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Repair in order: pipeline_action "link-task" with the outcome\'s task, read it back, then "unlink-task" the placeholder id that was there before');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("stages already admitted stay on the placeholder card");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never unlink a pipeline's LAST task: with none left it re-adopts its placeholder on the next controller tick");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('Never use "unlink-task" to tidy a duplicate');
 });
 
 test("the mandate requires a membership readback and states that a linked task may still be invisible", () => {
