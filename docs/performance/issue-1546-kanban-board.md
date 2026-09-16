@@ -66,13 +66,14 @@ every run, not a best one.
 
 **Scroll — 80 wheel events down the Assigned column, data frozen**
 
-A 2.7 s control window with no input is subtracted where a row says "gesture",
-because polling keeps working while the operator scrolls; that control measured
-19–24 ms of JavaScript and 8 commits on both sides.
+Polling keeps working while the operator scrolls, so a row marked "gesture"
+subtracts **that same run's** 2.7 s no-input control window — one rule, applied
+per run, for every such row. Those controls measured 19–24 ms of JavaScript and
+8 commits on both sides.
 
 | | before | after |
 | --- | --- | --- |
-| JavaScript (gesture) | 129–165 ms | **17–24 ms** |
+| JavaScript (gesture) | 128–164 ms | **15–23 ms** |
 | `getBoundingClientRect` self time | 71–90 ms | **12–19 ms** |
 | React commits (gesture) | 25–27 | **4–5** |
 | 95th-percentile frame | 16.7–16.8 ms | 16.7–16.8 ms |
@@ -80,6 +81,20 @@ because polling keeps working while the operator scrolls; that control measured
 
 The scroll profile also shows `renderCard` and `shallowEqual` leaving the sample
 entirely: the gesture no longer renders cards.
+
+## Against the targets the diagnosis set
+
+The investigation this lane was handed set acceptance numbers. Each one, and
+what this instrument can and cannot say about it:
+
+| target | verdict |
+| --- | --- |
+| F1 — no grouping task over 50 ms | **met.** No task reached 50 ms in any of the six runs, and the grouping scan is 3–5 ms. The caveat is the harness, not the number: it answers its own fetches, so it carries none of the real route's payload or JSON parse cost. |
+| F1 — at most 5 frames over 25 ms in a 35 s idle sample | **met.** 2–3 of ~2,098, down from 5–9. |
+| F1 — no frame over 50 ms | **at the rounding boundary.** `frameMaxMs` is rounded to a whole millisecond by the driver, so two of three after runs read exactly 50 and a 50.4 ms frame would be indistinguishable from a 50.0 ms one. The same frame is there before the change (33–50 ms on both sides), so it is not something this diff introduced — but this instrument cannot certify the target either way. |
+| F2 — at most 200 ms of script time in an 80-wheel run | **not met as stated, and not measurable as stated.** Gesture-attributable *total sampled* time is 276–287 ms after (365–434 ms before). Almost all of it is V8 `(program)`; the JavaScript this change can be held to is 15–23 ms, down from 128–164 ms. Whether 200 ms was meant to cover `(program)` is not recoverable from the target, so the honest reading is that the number went down by a third and still sits above the line. |
+| F2 — at most 2 board re-renders while scrolling | **not measurable with this instrument.** The counter is React's `onCommitFiberRoot`, which is document-wide: it cannot attribute a commit to the board rather than to a reader, a receipt or a poll. Gesture-attributable commits are 4–5 after, down from 25–27, and no card renders during the gesture (`renderCard` and `shallowEqual` leave the sample entirely). Proving the stricter claim needs a per-component render counter this driver does not have. |
+| F2 — still reports the right visible cards once scrolling stops | **met.** 0 of 285 tiles mismatched in all six runs, and independently in the #1695 browser suite. |
 
 ## Residuals, stated as measured
 
@@ -100,10 +115,11 @@ entirely: the gesture no longer renders cards.
 - **One of the three "after" scroll runs had a single 83 ms frame**; the other
   five runs across both sides had none over 17 ms. It was not reproduced and is
   recorded rather than explained.
-- **The gesture's total sampled non-idle time is ~485 ms, of which ~445 ms is
-  V8's own `(program)` bookkeeping** — parse, compile and input plumbing that
-  moves independently of this change (the before runs spent the same there).
-  Only the JavaScript row above is attributable to the board.
+- **Most of the gesture's sampled time is V8's own `(program)` bookkeeping**,
+  not the board. Total sampled non-idle time over the gesture is 471–490 ms
+  after and 584–637 ms before; of that, 432–450 ms after and 426–453 ms before
+  is `(program)` — parse, compile and input plumbing that moves independently of
+  this change. Only the JavaScript row above is attributable to the board.
 - **Nothing here was measured on a physical touchpad, a high-density display, or
   above 60 Hz.**
 

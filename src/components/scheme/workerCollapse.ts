@@ -121,22 +121,10 @@ interface FlowMembership {
   round: Round | null;
 }
 
-/**
- * Flow role of a transcript, derived from the FLOWS list by matching paths —
- * never from a `file.flow` annotation. `/api/files` serializes raw scanner
- * entries and does NOT run `annotateFlowEntries` (only the flow-engine tick
- * does), so `file.flow` is absent on the board's files and cannot be trusted;
- * matching `flow.implementerPath` / `round.reviewerPath` is the same resolution
- * the rest of the board already uses (flowByImplementer, claimedReviewerPaths).
- * A reviewer match wins over an implementer match.
- *
- * Both sides of that match are canonical (#943 follow-up): a durable record
- * holds the spelling that was current when the round ran, and the projection
- * publishes the root discovery walked, so `resolve` rewrites the recorded path
- * onto the corpus before the comparison. Without it every round of a flow that
- * predates its account's cut-over misses and renders as a free node.
- */
+/** The three lookups {@link flowMembership} answers from, built once per
+    (flows projection, claim resolver) pair by {@link flowMembershipIndex}. */
 interface FlowMembershipIndex {
+  /** Flow id → flow, in flows order (first wins) — the durable-membership lookup. */
   byId: ReadonlyMap<string, Flow>;
   /** Resolved reviewer path → its round, in flows-then-rounds order (first wins). */
   reviewerByPath: ReadonlyMap<string, { flow: Flow; round: Round }>;
@@ -186,6 +174,21 @@ function flowMembershipIndex(flows: readonly Flow[], resolve: TranscriptClaimRes
   return index;
 }
 
+/**
+ * Flow role of a transcript, derived from the FLOWS list by matching paths —
+ * never from a `file.flow` annotation. `/api/files` serializes raw scanner
+ * entries and does NOT run `annotateFlowEntries` (only the flow-engine tick
+ * does), so `file.flow` is absent on the board's files and cannot be trusted;
+ * matching `flow.implementerPath` / `round.reviewerPath` is the same resolution
+ * the rest of the board already uses (flowByImplementer, claimedReviewerPaths).
+ * A reviewer match wins over an implementer match.
+ *
+ * Both sides of that match are canonical (#943 follow-up): a durable record
+ * holds the spelling that was current when the round ran, and the projection
+ * publishes the root discovery walked, so `resolve` rewrites the recorded path
+ * onto the corpus before the comparison. Without it every round of a flow that
+ * predates its account's cut-over misses and renders as a free node.
+ */
 function flowMembership(
   file: FileEntry,
   flows: readonly Flow[],
