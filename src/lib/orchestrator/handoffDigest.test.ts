@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
   composeSuccessorMandate,
@@ -19,8 +20,10 @@ import {
   productionDigestRuntime,
   splitMandate,
   summarizeHandoffsHeadless,
+  mandatePreflight,
   type HandoffDigestRuntime,
 } from "./handoffDigest";
+import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "./prompt";
 
 /* Issue #1067. Every test here runs against an isolated LLV_STATE_DIR and an
    injected runtime: nothing spawns a process, opens a socket, reads an account
@@ -424,4 +427,33 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
 
   expect(runs).toBe(0);
   expect(outcome).toBeInstanceOf(Error);
+});
+
+/* #1720 grew the default mandate by a section, and the same text is what a
+   rotation carries into the successor's core. One bound decides delivery, and
+   it is measured on the DELIVERED text plus the launch scaffold — so the
+   growth is checked here rather than discovered as a silently trimmed digest
+   or a refused designation. */
+test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
+  const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
+  expect(preflight.ok).toBe(true);
+  /* A rotation composes core + history + handoff against the same envelope;
+     the history alone is budgeted at HISTORY_BUDGET_BYTES, so the core has to
+     leave at least that much behind. */
+  if (preflight.ok) {
+    const remaining = MAX_STRUCTURED_TEXT_BYTES - preflight.bytes - preflight.overhead;
+    expect(remaining).toBeGreaterThan(HISTORY_BUDGET_BYTES);
+  }
+  /* Delivery appends nothing to the current default, so the mandate a fresh
+     seat is spawned with is the text measured above. */
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+});
+
+/* A seat on a bespoke mandate receives all three directives appended, which is
+   the largest text delivery ever composes for a given mandate. */
+test("a bespoke mandate plus every appended directive still fits the delivery bound", () => {
+  const bespoke = "A seat's own mandate, written before #1720.".repeat(40);
+  const preflight = mandatePreflight(bespoke, "existing", { mode: "standard" });
+  expect(preflight.ok).toBe(true);
+  if (preflight.ok) expect(preflight.bytes).toBeGreaterThan(Buffer.byteLength(bespoke));
 });

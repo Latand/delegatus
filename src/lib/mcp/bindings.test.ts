@@ -811,6 +811,59 @@ test("link_task_to_pipeline binds the latest operational attempt after historica
   })]);
 });
 
+/* #1720 — the two repair tools are named alike and write different things. This
+   one records ONE assignment row on the task; the pipeline's own task list is
+   what later stage launches read, and it is left alone here, so a pipeline
+   repaired only this way keeps admitting its stages onto a card of its own.
+   The mandate warns about exactly this, and the warning stays true only while
+   the behaviour is pinned. */
+test("link_task_to_pipeline records an assignment and leaves the pipeline's own task list untouched", async () => {
+  const pipeline = {
+    id: "pipeline-mcp-binding-scope",
+    taskIds: [],
+    srcPath: "/pipeline/creator.jsonl",
+    srcConversationId: "conversation_creator",
+    runs: [{ stageId: "build", attempts: [{
+      n: 1,
+      state: "running",
+      historical: false,
+      agentPath: "/pipeline/build.jsonl",
+      conversationId: "conversation_build",
+    }] }],
+  } as unknown as Pipeline;
+  let tasks: BoardTask[] = [{
+    id: "task-mcp-binding-scope",
+    project: "live-log-viewer-next",
+    status: "inbox",
+    text: "Keep one outcome on one card",
+    placement: "unplaced",
+    assignments: [],
+    createdAt: "2026-09-16T10:30:00.000Z",
+    updatedAt: "2026-09-16T10:30:00.000Z",
+  }];
+  const bindings = viewerMcpBindings({
+    getPipelines: () => ({ pipelines: [pipeline] }),
+    mutateTasks: (mutator) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    isoNow: () => "2026-09-16T10:31:00.000Z",
+  });
+
+  await bindings.link_task_to_pipeline({
+    taskId: tasks[0]!.id,
+    pipelineId: pipeline.id,
+    clientRequestId: "mcp-link-binding-scope",
+  });
+
+  expect(tasks[0]!.assignments).toEqual([expect.objectContaining({
+    conversationId: "conversation_build",
+    state: "handoff",
+  })]);
+  expect(pipeline.taskIds).toEqual([]);
+});
+
 test("link_task_to_pipeline follows the cursor retry after a fail-edge loop-back", async () => {
   const retryPath = "/pipeline/build-retry.jsonl";
   const retryConversationId = "conversation_build_retry";

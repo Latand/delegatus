@@ -11,9 +11,12 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SPAWN_CONFIG,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
+  ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
   orchestratorMandateForDelivery,
+  orchestratorMandateStale,
 } from "./prompt";
 
 test("the manager draft defaults to Claude Opus 5 on low effort through the role preset", () => {
@@ -88,8 +91,13 @@ test("bridge reports survive as the second channel, for the operator away from t
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 13", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(13);
+test("the default mandate is at version 14, and a v13 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(14);
+  /* #1720 — a seat already running keeps the mandate it was delivered, so the
+     version bump is the only thing that surfaces the missing section until its
+     next spawn, adoption or rotation. */
+  expect(orchestratorMandateStale(13)).toBe(true);
+  expect(orchestratorMandateStale(14)).toBe(false);
 });
 
 /* #1428 v13 — agents kept re-solving what an earlier conversation had already
@@ -357,4 +365,152 @@ test("the prompt forbids any user-facing confirmation step outright", () => {
 
 test("the prompt tells the manager to re-derive board state rather than accumulate it", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Re-derive board state per turn");
+});
+
+/* #1720 v14 — the board task is the unit of work. A manager that opened a
+   pipeline without `taskIds` produced a second card for work that already had
+   one, and the operator saw two live claims on one outcome. The mandate now
+   names the one canonical task, when to find it, and the fields that carry it
+   into the launch. */
+test("the mandate makes one product outcome own one task across its whole life", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_TASK_OWNERSHIP_HEADING);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A board task is one PRODUCT OUTCOME");
+  /* Every phase of one outcome, named, so a fix round or a release is not read
+     as separate work deserving its own card. */
+  for (const phase of ["the diagnosis", "the implementer", "every reviewer", "every retry", "the fix round", "the release"]) {
+    expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(phase);
+  }
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Open a second task only for genuinely separate work");
+});
+
+test("the mandate makes discovery precede any launch, over every status", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("FIND IT BEFORE YOU LAUNCH ANYTHING");
+  /* The failure this fixes: a seat that listed only inbox and assigned missed
+     the blocked card that already owned the outcome and opened a second one. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("list_tasks for this project with NO status filter");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("blocked and recently finished work is in the answer beside inbox and assigned");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("search_transcripts");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create a task only when nothing on the board owns this outcome");
+});
+
+test("the mandate requires a real title and description at creation, never left to the launched agent", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("FIRST LINE is a human title of 3 to 10 words");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("what the work has to achieve");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A role name, a stage id, a prompt excerpt and \"Untitled task\" are all unusable as titles");
+  /* First-action refinement stays a fallback: the roles that cannot name a task
+     are exactly the read-only ones, and a launch that dies first names nothing. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("read-only reviewers, verifiers and architects are told not to mutate state");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a launch that dies before its first turn names nothing");
+});
+
+/* The two fields are the whole enforcement: membership is committed from what
+   the launch CALL carried, so a pipeline or spawn that names no task is given a
+   placeholder card. The mandate prints the field names the schemas declare, and
+   no invented task id format — board ids are opaque. */
+test("the mandate carries the task into the launch call itself, by field name", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("CARRY THE TASK INTO THE LAUNCH ITSELF");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('taskIds: ["<board task id>"] in the SAME call as stages and autoStart');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('spawn_agent — pass taskId: "<board task id>"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("run, review-loop, retry, fail branch");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Adding it after the pipeline exists comes too late for the stages that already started");
+  /* A reviewer already inherits the reviewed work's task at the reservation. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.");
+  /* No invented id shape: the mandate must never teach a format the board does
+     not mint. */
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');
+});
+
+test("the mandate extends existing work and reuses the same task for a successor pipeline", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("EXTEND THE WORK THAT EXISTS");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A started pipeline's graph is fixed");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("create the successor pipeline with the SAME taskIds");
+});
+
+/* The two tools differ in what they write, and the difference decides whether
+   later stages join the task: `link-task` writes pipeline.taskIds,
+   link_task_to_pipeline writes one assignment row on the task. `unlink-task`
+   then lets the pipeline re-adopt the card its own admission minted. */
+test("the mandate separates the binding repair from the assignment-only tool, and forbids unlink as cleanup", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('pipeline_action "link-task" writes the task onto the pipeline, so stages starting after it join it');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("link_task_to_pipeline records one assignment on the task and leaves the pipeline's own task list alone");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Never use "unlink-task" to tidy a duplicate');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("re-adopts the card it minted on the next controller tick");
+});
+
+test("the mandate requires a membership readback and states that a linked task may still be invisible", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("READ BACK WHAT YOU DID");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_pipeline and confirm its taskIds contain the task");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_task and confirm the launch is recorded on it");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A task can hold a launch and still draw no band on the board");
+});
+
+/* Retiring a superseded container is gated on the transfer having happened:
+   the opposite error — closing live containers to tidy the board — destroys
+   work the operator is still owed. */
+test("the mandate retires a superseded container only after the outcome moved, and never in bulk", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("only once the outcome is carried by the surviving one and nothing in the old one is still running or unknown");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("say out loud what you are dropping");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("mark a task blocked with the reason when it cannot proceed");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never close containers in bulk to tidy the board");
+});
+
+test("the mandate keeps an unknown outcome under its original receipt key", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("RECEIPTS ARE THE RECORD");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A retry of the SAME logical operation reuses its id and replays the original receipt");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("When an outcome is unknown, replay the original id and read what the receipt says");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Re-issuing it under a fresh id is how one outcome ends up with two pipelines and two cards");
+});
+
+/* The conveyor section is what a seat reads when it spawns an implementer, so
+   the binding field has to appear there too. */
+test("the conveyor rules name the task binding on the spawn call and the one card", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("taskId = the outcome's board task");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Keep the outcome's ONE task card updated");
+});
+
+/* Delivery, on exactly the terms the clock handover established: the seats that
+   launch work without a task are the ones carrying a bespoke or older mandate,
+   and a rotation hands the successor the INCUMBENT's mandate. */
+test("the task-ownership section reaches a bespoke or older mandate, exactly once", () => {
+  const bespoke = "A seat's own mandate, written before #1720.";
+  const delivered = orchestratorMandateForDelivery(bespoke);
+
+  expect(delivered).toStartWith(bespoke);
+  expect(delivered).toContain(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE);
+  expect(delivered.split(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)).toHaveLength(2);
+  /* The other two directives still arrive, each once. */
+  expect(delivered.split(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE)).toHaveLength(2);
+  expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
+  /* Idempotent: a redelivery after a host death appends nothing. */
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  /* And a caller who reworded the section under its own heading keeps THEIR
+     wording — appending the canonical copy would deliver two ownership rules. */
+  const reworded = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}\nOne card per outcome. Ask me before you open another.`;
+  expect(orchestratorMandateForDelivery(reworded)).not.toContain(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
+});
+
+/* The current default carries all three inline, so a fresh seat reads each in
+   place and delivery has nothing to append. */
+test("the delivered default carries each directive exactly once and is unchanged by delivery", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  for (const directive of [
+    ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
+    ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
+    ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
+  ]) {
+    expect(ORCHESTRATOR_SYSTEM_PROMPT.split(directive)).toHaveLength(2);
+  }
+});
+
+/* Ownership decides whether work starts on the right card, so the seat reads it
+   before the section that starts pipelines by default. */
+test("the ownership section precedes the start-by-default pipeline contract", () => {
+  const ownership = ORCHESTRATOR_SYSTEM_PROMPT.indexOf(ORCHESTRATOR_TASK_OWNERSHIP_HEADING);
+  const start = ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Start-by-default pipeline contract");
+  expect(ownership).toBeGreaterThan(-1);
+  expect(start).toBeGreaterThan(ownership);
 });

@@ -2679,6 +2679,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Viewer-managed agent conversation and return its durable conversation and launch ids.",
+    "Pass `taskId` to admit the agent onto an existing board task (#1720); a launch that names none is admitted onto a placeholder task of its own.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
@@ -2697,6 +2698,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: "Update a durable board task.",
   create_pipeline: [
     "Create a Viewer pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
+    "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail`. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review-loop stage reviews the session of the run stage that reaches it, so it must be pass-reachable from a run stage through `next` edges — array order alone reaches nothing. review-loop stages are always read-only, may not define `onFail`, and take their engine/model/effort from their role (the registry reviewer preset runs on Codex) unless the stage overrides them.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
@@ -2929,6 +2931,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     cwd: z.string().min(1).describe("Existing working directory for the new agent."),
     "prompt": z.string().describe("First instruction sent to the agent."),
     title: z.string().min(1).describe("Semantic conversation title required for every new spawn."),
+    taskId: z.string().optional()
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task, or a task in another project, refuses the launch before any agent starts. Omitting it admits the agent onto a placeholder task of its own, which is how one outcome ends up with several cards; a reviewer or child spawn inherits the task of the work it reviews and needs nothing here."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),
@@ -2992,6 +2996,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
     task: z.string().min(1).describe("Board title for the pipeline."),
+    taskIds: z.array(z.string()).optional()
+      .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
