@@ -6989,6 +6989,49 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
 });
 
+test("a failover attempt edited to another engine checks account availability on that engine (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-engine-override", resetsAt) });
+  const available = (engine: "claude" | "codex"): ReturnType<typeof accountManager.resolveProjectSpawn> => ({
+    kind: "available",
+    account: {
+      engine,
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  usageLimitPorts(h, available("codex"));
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "pending" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.definition).toBeUndefined();
+
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "applied", appliesFromAttempt: 2 });
+
+  const checkedEngines: string[] = [];
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex") => {
+      checkedEngines.push(engine);
+      return engine === "claude" ? available("claude") : { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+
+  const failedOver = loadPipelines()[0]!;
+  expect(checkedEngines).toEqual(["claude"]);
+  expect(failedOver.state).toBe("running");
+  expect(failedOver.runs[0]!.attempts[1]!.effectiveRole.engine).toBe("claude");
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+});
+
 test("a failover whose remaining capacity disappears parks with the limit detail (#1371)", async () => {
   const h = harness();
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);

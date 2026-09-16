@@ -220,6 +220,90 @@ test("a stage with attempts keeps its place in the array", async () => {
   expect(current().stages.map((item) => item.id)).toEqual(["one", "two"]);
 });
 
+test("add-stage may not insert before a started stage, and inserting after the running stage still routes through the new stage", async () => {
+  const h = harness();
+  const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);
+  const before = structuredClone(current());
+
+  /* At the front the new stage would be a head nothing routes to, and one would move. */
+  const front = await patchPipeline(id, { action: "add-stage", index: 0, stage: stage("zero", null) as never }, h.ports, AGENT);
+  expect(front.status).toBe(409);
+  expect(front.graphEdit).toBeUndefined();
+  expect(current().stages).toEqual(before.stages);
+  expect(current().runs).toEqual(before.runs);
+  expect(current().graphEdits).toEqual(before.graphEdits);
+
+  const after = await patchPipeline(id, { action: "add-stage", index: 1, stage: stage("between", null) as never }, h.ports, AGENT);
+  expect(after.error).toBeUndefined();
+  expect(current().stages.map((item) => [item.id, item.next])).toEqual([["one", "between"], ["between", "two"], ["two", null]]);
+
+  await tickPipelines([h.finish(1, "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish(2, "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish(3, "pass")], h.ports);
+  expect(h.spawnedStages()).toEqual(["one", "between", "two"]);
+  expect(current().state).toBe("completed");
+});
+
+test("a completed pipeline refuses graph edits, because no attempt would ever run them", async () => {
+  const h = harness();
+  const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);
+  await tickPipelines([h.finish(1, "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish(2, "pass")], h.ports);
+  expect(current().state).toBe("completed");
+
+  const completed = structuredClone(current());
+  for (const request of [
+    { action: "add-stage", stage: stage("three", null) },
+    { action: "override-stage", stageId: "two", effort: "high" },
+    { action: "set-edge", stageId: "two", edge: "fail", to: "one" },
+    { action: "reorder-stage", stageIds: ["one", "two"] },
+  ] as const) {
+    const refused = await patchPipeline(id, request as never, h.ports, AGENT);
+    expect(refused.status).toBe(409);
+    expect(refused.graphEdit).toBeUndefined();
+  }
+  expect(current()).toEqual(completed);
+});
+
+test("a launch re-issued after the controller was unavailable keeps the definition bound before the edit", async () => {
+  const h = harness();
+  const baseSpawn = h.ports.spawnAgent;
+  let calls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    calls += 1;
+    if (calls === 1) {
+      h.spawns.push(structuredClone(input));
+      throw new Error("structured delivery controller is unavailable");
+    }
+    return baseSpawn(input, onReserved);
+  };
+  const id = await started(h.ports, [stage("build", "verify"), stage("verify", null)]);
+
+  const bounced = attemptsOf("build");
+  expect(bounced).toHaveLength(1);
+  expect(bounced[0]!.state).toBe("pending");
+  expect(bounced[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  const boundDefinition = structuredClone(bounced[0]!.definition);
+  const boundRole = structuredClone(bounced[0]!.effectiveRole);
+  expect(boundRole.effort).toBe("medium");
+
+  const edited = await patchPipeline(id, { action: "override-stage", stageId: "build", "prompt": "Do build differently", effort: "high" }, h.ports, AGENT);
+  expect(edited.graphEdit).toMatchObject({ effect: "pending-next-attempt", appliesFromAttempt: 2 });
+
+  for (let tick = 0; tick < 5 && calls < 2; tick += 1) await tickPipelines([], h.ports);
+  expect(calls).toBe(2);
+  expect(attemptsOf("build")).toHaveLength(1);
+  expect(attemptsOf("build")[0]!.state).toBe("running");
+  expect(attemptsOf("build")[0]!.definition).toEqual(boundDefinition);
+  expect(attemptsOf("build")[0]!.effectiveRole).toEqual(boundRole);
+  expect(h.spawns[1]!.role.effort).toBe("medium");
+  expect(h.persistedAtSpawn.at(-1)!.definition).toEqual(boundDefinition);
+  expect(current().stages[0]!.effectiveRole.effort).toBe("high");
+});
+
 test("two editors holding the same read: the second write is refused with STAGE_CHANGED and nothing is changed", async () => {
   const h = harness();
   const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);

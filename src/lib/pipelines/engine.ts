@@ -2274,13 +2274,17 @@ async function tickRunStage(
     if (usageLimitedAccounts.length > 0) {
       const unavailableIds = usageLimitedAccounts.map((limited) => limited.accountId);
       const latestLimited = usageLimitedAccounts.at(-1)!;
-      const accountLabel = ports.accountLabel?.(attempt.effectiveRole.engine, latestLimited.accountId) ?? latestLimited.accountId;
+      /* A failover attempt is still unbound here, so it launches on whatever
+         engine the stage names by the time it binds below; an edit accepted
+         since it was created is checked against that engine. */
+      const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
+      const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
       let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
       try {
-        resolution = ports.resolveProjectSpawn?.(attempt.effectiveRole.engine, {
+        resolution = ports.resolveProjectSpawn?.(engine, {
           project: pipeline.project,
           unavailableIds,
-        }) ?? accountManager.resolveProjectSpawn(attempt.effectiveRole.engine, {
+        }) ?? accountManager.resolveProjectSpawn(engine, {
           project: pipeline.project,
           unavailableIds,
         });
@@ -4134,11 +4138,27 @@ function replaceDraftStages(
 
 const GRAPH_EDIT_ACTIONS: ReadonlySet<string> = new Set<PipelineGraphEditAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
-/** Graph edits are accepted in every state but `closed` (graph slice 1): a
-    running, paused, parked or completed pipeline keeps a plan its next routing
-    decision reads. A closed pipeline routes nothing again. */
+/** Graph edits are accepted while a pipeline can still route (graph slice 1):
+    a draft, or a running, paused or parked pipeline keeps a plan its next
+    routing decision reads. A completed or closed pipeline routes nothing
+    again, so an edit there would record an effect no attempt ever runs. */
 function closedGraphRefusal(pipeline: Pipeline): PipelinePatchResult | null {
-  return pipeline.state === "closed" ? { error: "pipeline is closed; its graph can no longer be edited", status: 409 } : null;
+  return TERMINAL_STATES.has(pipeline.state)
+    ? { error: `pipeline is ${pipeline.state}; no further attempt runs, so its graph can no longer be edited`, status: 409 }
+    : null;
+}
+
+/** On a started pipeline array order is presentation, and a stage that has
+    run, or that the cursor rests on, keeps its place so the plan's history
+    reads in the order it happened. */
+function startedStagePositionRefusal(pipeline: Pipeline, ordered: readonly PipelineStageInput[]): PipelinePatchResult | null {
+  if (pipeline.state === "draft") return null;
+  const pinned = pipeline.stages.find((existing, position) =>
+    (ownAttempts(pipeline, existing.id).length > 0 || pipeline.cursor?.stageId === existing.id)
+    && ordered[position]?.id !== existing.id);
+  return pinned
+    ? { error: `stage ${pinned.id} has already started and keeps its place; only stages that have not started move`, status: 409 }
+    : null;
 }
 
 const STAGE_CHANGED_ERROR = "the stage changed since it was read; read it again before overriding it";
@@ -4934,6 +4954,10 @@ export async function patchPipeline(
       const seamNext = predecessor ? predecessor.next ?? null : inputs[index]?.id ?? null;
       const inserted: PipelineStageInput = { ...req.stage, next: seamNext };
       inputs.splice(index, 0, inserted);
+      /* An insert before a started stage shifts it, and one at the front
+         makes a head nothing routes to once the pipeline has left it. */
+      const displaced = startedStagePositionRefusal(pipeline, inputs);
+      if (displaced) return displaced;
       if (predecessor) predecessor.next = inserted.id;
       const replaced = pipeline.state === "draft"
         ? replaceDraftStages(pipeline, inputs, ports.roleLookup)
@@ -5003,15 +5027,8 @@ export async function patchPipeline(
         const [moved] = ordered.splice(from, 1);
         ordered.splice(toIndex!, 0, moved!);
       }
-      if (pipeline.state !== "draft") {
-        /* Array order is presentation; pass edges decide what runs. A stage that
-           has run, or that the cursor rests on, keeps its place so the plan's
-           history reads in the order it happened. */
-        const pinned = pipeline.stages.find((existing, position) =>
-          (ownAttempts(pipeline, existing.id).length > 0 || pipeline.cursor?.stageId === existing.id)
-          && ordered[position]?.id !== existing.id);
-        if (pinned) return { error: `stage ${pinned.id} has already started and keeps its place; only stages that have not started move`, status: 409 };
-      }
+      const displaced = startedStagePositionRefusal(pipeline, ordered);
+      if (displaced) return displaced;
       const replaced = pipeline.state === "draft"
         ? replaceDraftStages(pipeline, ordered, ports.roleLookup)
         : replaceStartedStages(pipeline, ordered, ports.roleLookup);
