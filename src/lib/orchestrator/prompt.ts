@@ -30,7 +30,8 @@
  * across diagnosis, build, review, repair and release, the seat finds that task
  * before it launches anything, and it carries the id into the launch call
  * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
- * launch that names no task is given a placeholder card of its own. */
+ * launch that names no task is recorded somewhere else: a pipeline on a
+ * placeholder card of its own, a spawn on the caller's card. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -111,8 +112,19 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *
  * - explicit `taskIds` on a pipeline are read fresh at every stage launch
  *   (`launchMembership.ts`, `launchMembership.test.ts`);
- * - an id naming no task refuses the launch before actuation, on either tool
- *   (`membership.ts`, `membership.test.ts`);
+ * - an id naming no task refuses the launch before actuation on either tool,
+ *   in a different place each time: `create_pipeline` refuses at the create
+ *   call (`pipelineTaskLinkError` in `store.ts`, called from `engine.ts`),
+ *   while a spawn's explicit id refuses at the admission (`membership.ts`,
+ *   `membership.test.ts`). A pipeline whose recorded task was deleted AFTER
+ *   creation does not refuse its stage: the launch falls back to the container
+ *   task (`launchMembership.ts`);
+ * - a launch carrying NO task is recorded per tool: a pipeline stage mints the
+ *   container placeholder, while a spawn inherits — every MCP spawn resolves
+ *   its caller's conversation as lineage parent (`spawnCommand.ts`), the parent
+ *   goes into `inherit` (`launchMembership.ts`), and the admission joins the
+ *   task that parent already holds (`membership.ts`, `membership.test.ts`).
+ *   The placeholder is minted only when nothing inherited holds a task;
  * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
  *   `pipeline_action: "link-task"`, which validate against the pipeline's own
  *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
@@ -135,7 +147,7 @@ FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with NO sta
 
 NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Leaving the naming to the agent you are about to launch fails in practice: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
 
-CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task when the launch is reserved, from what the CALL carried, and a launch that names no task is given a placeholder card of its own — that card is the duplicate the operator sees. So:
+CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task when the launch is reserved, from what the CALL carried, and what it does when the call carried none differs per tool: a pipeline created without taskIds is given a placeholder card of its own, and that card is the duplicate the operator sees; a spawn_agent call without taskId joins the task of the conversation that MADE the call — yours — so the worker lands on your seat's card and the outcome's card records nothing. Neither is what you want. So:
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every stage launch of that pipeline — run, review-loop, retry, fail branch — then joins that task, because the binding is read off the pipeline at each launch. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title.
 - A review flow or a reviewer spawn inherits the task of the work it reviews. Pass nothing, create nothing.

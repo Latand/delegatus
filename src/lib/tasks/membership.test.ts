@@ -84,6 +84,32 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(byConversation.ok && byConversation.tasks[0]!.assignments[0]!.path).toBe("/fixture/new.jsonl");
 });
 
+/* #1720 — what a spawn that carries NO task admits onto. Every agent-made
+   spawn resolves its caller's conversation as its lineage parent
+   (`spawnCommand.ts`), and `launchMembershipInput` puts that parent into
+   `inherit`, so the launch joins the task the caller already holds and mints
+   nothing. A manager's task-less implementer spawn therefore lands on the
+   MANAGER'S seat card, with no duplicate card anywhere to notice. The
+   placeholder is minted only when nothing inherited holds a task. The mandate
+   and the `spawn_agent` schema say this; here is the behaviour they describe. */
+test("a launch carrying only a lineage parent joins the parent's task and creates nothing", () => {
+  const seat = task("seat", "fixture", {
+    assignments: [{ conversationId: "conversation_manager", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const inheritParent = { conversationId: "conversation_manager", path: null };
+
+  const joined = ensureTaskMembership([seat], { project: "fixture", origin: { kind: "launch", key: "spawn-child" }, title: "Implement the export retry", identity: { clientAttemptId: "spawn-child", conversationId: "conversation_child" }, inherit: [inheritParent] }, deps);
+  expect(joined.ok).toBe(true);
+  expect(joined.ok && joined.taskIds).toEqual(["seat"]);
+  expect(joined.ok && joined.created).toEqual([]);
+
+  /* Only when nothing inherited holds a task does a placeholder appear — and
+     it binds the parent beside the launch, so the pair stays on one card. */
+  const orphan = ensureTaskMembership([], { project: "fixture", origin: { kind: "launch", key: "spawn-orphan" }, title: "Implement the export retry", identity: { clientAttemptId: "spawn-orphan", conversationId: "conversation_orphan" }, inherit: [inheritParent] }, deps);
+  expect(orphan.ok && orphan.created.length).toBe(1);
+  expect(orphan.ok && orphan.tasks[0]!.origin?.refinement).toBe("pending");
+});
+
 /* #1720 — what a spawn's explicit `taskId` actually admits. An explicit target
    carries its own project, so `launchMembershipInput` hands the commit an EMPTY
    project (the operator chose the task, and the launch directory may derive

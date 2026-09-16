@@ -417,6 +417,16 @@ test("the mandate requires a real title and description at creation, never left 
    no invented task id format — board ids are opaque. */
 test("the mandate carries the task into the launch call itself, by field name", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("CARRY THE TASK INTO THE LAUNCH ITSELF");
+  /* What an omitted binding does differs per tool, and the spawn case is the
+     one a manager gets wrong silently: every agent-made spawn resolves its
+     caller's conversation as lineage parent, so a task-less implementer spawn
+     joins the MANAGER'S seat card and the outcome's card records nothing. No
+     duplicate card appears, so a manager told to look for one concludes the
+     launch was bound. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a pipeline created without taskIds is given a placeholder card of its own");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a spawn_agent call without taskId joins the task of the conversation that MADE the call — yours — so the worker lands on your seat's card and the outcome's card records nothing");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
+    .not.toContain("a launch that names no task is given a placeholder card of its own");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('taskIds: ["<board task id>"] in the SAME call as stages and autoStart');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('spawn_agent — pass taskId: "<board task id>"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("run, review-loop, retry, fail branch");

@@ -2679,7 +2679,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Viewer-managed agent conversation and return its durable conversation and launch ids.",
-    "Pass `taskId` to admit the agent onto an existing board task (#1720); a launch that names none is admitted onto a placeholder task of its own.",
+    "Pass `taskId` to admit the agent onto an existing board task (#1720); a launch that names none joins the task of the conversation that called, so the work is recorded on the caller's card rather than the outcome's.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
@@ -2937,7 +2937,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        create_pipeline half of this contract is refused by the engine, with its
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
-      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it admits the agent onto a placeholder task of its own, which is how one outcome ends up with several cards; a reviewer or child spawn inherits the task of the work it reviews and needs nothing here."),
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it does NOT leave the agent unbound: every agent-made spawn resolves its caller's conversation as its lineage parent, so the launch joins the task that conversation already holds — a manager's task-less spawn lands on the manager's own seat card while the outcome's card records nothing, and only a launch with no lineage parent holding a task is given a placeholder. A reviewer or child spawn works on the same inheritance and needs nothing here."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),
