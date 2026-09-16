@@ -6989,17 +6989,17 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
 });
 
-test("a failover attempt edited to another engine checks account availability on that engine (graph slice 1)", async () => {
+test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
   const h = harness();
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-engine-override", resetsAt) });
-  const available = (engine: "claude" | "codex"): ReturnType<typeof accountManager.resolveProjectSpawn> => ({
+  usageLimitPorts(h, {
     kind: "available",
     account: {
-      engine,
+      engine: "codex",
       accountId: SPARE_ACCOUNT,
       kind: "managed",
       home: process.env.LLV_STATE_DIR!,
@@ -7007,29 +7007,63 @@ test("a failover attempt edited to another engine checks account availability on
       env: { NODE_ENV: "test" },
     },
   });
-  usageLimitPorts(h, available("codex"));
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "pending" });
-  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.definition).toBeUndefined();
+  const retrying = loadPipelines()[0]!.runs[0]!.attempts[1]!;
+  expect(retrying).toMatchObject({ state: "pending", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retrying.definition).toBeUndefined();
 
   const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
   expect(edited.graphEdit).toMatchObject({ effect: "applied", appliesFromAttempt: 2 });
 
-  const checkedEngines: string[] = [];
+  /* The Claude account shares the limited Codex account's id and never hit a limit. */
+  const checks: Array<{ engine: string; unavailableIds: string[] }> = [];
   Object.assign(h.ports, {
-    resolveProjectSpawn: (engine: "claude" | "codex") => {
-      checkedEngines.push(engine);
-      return engine === "claude" ? available("claude") : { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] };
+    resolveProjectSpawn: (engine: "claude" | "codex", request: { unavailableIds?: string[] }) => {
+      checks.push({ engine, unavailableIds: [...(request.unavailableIds ?? [])] });
+      return { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] };
     },
   });
   await tickPipelines([], h.ports);
 
-  const failedOver = loadPipelines()[0]!;
-  expect(checkedEngines).toEqual(["claude"]);
-  expect(failedOver.state).toBe("running");
-  expect(failedOver.runs[0]!.attempts[1]!.effectiveRole.engine).toBe("claude");
+  const launched = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(launched.state).toBe("running");
+  expect(launched.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: LIMITED_ACCOUNT });
+  expect(launched.runs[0]!.attempts[1]!.effectiveRole.engine).toBe("claude");
   expect(h.spawnInputs).toHaveLength(2);
   expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
+});
+
+test("a usage limit hit after the stage moved to another engine retries there without checking the old engine (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "pending-next-attempt", appliesFromAttempt: 2 });
+
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("limit-after-engine-override", resetsAt) });
+  const checks: string[] = [];
+  usageLimitPorts(h, { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex") => {
+      checks.push(engine);
+      return { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  const retried = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(retried.state).toBe("running");
+  expect(retried.runs[0]!.attempts[0]).toMatchObject({ state: "failed", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retried.runs[0]!.attempts[1]).toMatchObject({ state: "running" });
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
 });
 
 test("a failover whose remaining capacity disappears parks with the limit detail (#1371)", async () => {
@@ -7102,8 +7136,8 @@ test("successive usage limits park on the earliest reset across failed-over acco
     stateDetail: `rate limited until ${new Date(firstReset * 1_000).toISOString()}, account ${SPARE_ACCOUNT_LABEL}`,
   });
   expect(parked.runs[0]!.attempts[1]?.usageLimitedAccounts).toEqual([
-    { accountId: LIMITED_ACCOUNT, resetsAt: firstReset },
-    { accountId: SPARE_ACCOUNT, resetsAt: secondReset },
+    { accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt: firstReset },
+    { accountId: SPARE_ACCOUNT, engine: "codex", resetsAt: secondReset },
   ]);
 });
 

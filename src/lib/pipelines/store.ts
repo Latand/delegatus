@@ -154,9 +154,10 @@ function isAttempt(value: unknown, index: number): boolean {
         && !Array.isArray(limited)
         && typeof limited.accountId === "string"
         && limited.accountId.length > 0
+        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
       ))
-      && new Set(attempt.usageLimitedAccounts.map((limited) => limited.accountId)).size === attempt.usageLimitedAccounts.length
+      && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&

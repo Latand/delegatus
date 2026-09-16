@@ -227,8 +227,10 @@ export type PipelineStageAttempt = {
   paneId: string | null;
   /** Account that owns this launch. Optional for records written before #1371. */
   accountId?: string | null;
-  /** Usage-limited accounts excluded from this activation, with their resets. */
-  usageLimitedAccounts?: Array<{ accountId: string; resetsAt: number | null }>;
+  /** Usage-limited accounts excluded from this activation, with their resets.
+      `engine` names the engine the limit was hit on; account ids are unique
+      only within an engine. Entries written before it was recorded omit it. */
+  usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;

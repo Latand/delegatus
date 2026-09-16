@@ -1326,6 +1326,14 @@ function rateLimitParkDetail(resetsAt: number | null, accountLabel: string): str
   return `rate limited until ${reset}, account ${accountLabel}`;
 }
 
+/** The usage limits that exclude accounts of `engine`. Both engines name their
+    main account `default`, so a limit hit on one engine never excludes an
+    account of the other; an entry from before engines were recorded belongs to
+    the engine its attempt was created under. */
+function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNullable<PipelineStageAttempt["usageLimitedAccounts"]> {
+  return (attempt.usageLimitedAccounts ?? []).filter((limited) => (limited.engine ?? attempt.effectiveRole.engine) === engine);
+}
+
 /** Terminal usage-limit recovery reuses the ordinary attempt and account
     selection seams. The failed attempt stays as evidence; an automatic retry
     carries a durable exclusion into the next spawn, while a pin or exhausted
@@ -1358,11 +1366,26 @@ function recoverUsageLimitedAttempt(
     return;
   }
 
-  const usageLimitedAccounts = [
-    ...(attempt.usageLimitedAccounts ?? []).filter((limited) => limited.accountId !== accountId),
-    { accountId, resetsAt: knownReset(usageLimit.resetsAt) },
+  const limitedEngine = attempt.effectiveRole.engine;
+  attempt.usageLimitedAccounts = [
+    ...(attempt.usageLimitedAccounts ?? []).filter((limited) => !(limited.accountId === accountId && (limited.engine ?? limitedEngine) === limitedEngine)),
+    { accountId, engine: limitedEngine, resetsAt: knownReset(usageLimit.resetsAt) },
   ];
-  attempt.usageLimitedAccounts = usageLimitedAccounts;
+  const retryWithLimits = () => {
+    pipeline.state = "running";
+    pipeline.pausedState = null;
+    pipeline.stateDetail = terminalDetail;
+    setCursorState(pipeline, stage.id, "pending");
+    const retry = newAttempt(pipeline, stage);
+    if (retry) retry.usageLimitedAccounts = attempt.usageLimitedAccounts!.map((limited) => ({ ...limited }));
+  };
+  /* An edit accepted since this attempt bound moved the stage to another
+     engine: the retry launches there, where this limit excludes nothing. */
+  if (stage.effectiveRole.engine !== limitedEngine) {
+    retryWithLimits();
+    return;
+  }
+  const usageLimitedAccounts = usageLimitsOn(attempt, limitedEngine);
   const unavailableAccountIds = usageLimitedAccounts.map((limited) => limited.accountId);
   let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
   try {
@@ -1380,12 +1403,7 @@ function recoverUsageLimitedAttempt(
   }
 
   if (resolution.kind === "available" && resolution.account.accountId !== accountId) {
-    pipeline.state = "running";
-    pipeline.pausedState = null;
-    pipeline.stateDetail = terminalDetail;
-    setCursorState(pipeline, stage.id, "pending");
-    const retry = newAttempt(pipeline, stage);
-    if (retry) retry.usageLimitedAccounts = usageLimitedAccounts;
+    retryWithLimits();
     return;
   }
 
@@ -2270,14 +2288,15 @@ async function tickRunStage(
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
-    const usageLimitedAccounts = attempt.usageLimitedAccounts ?? [];
+    /* A failover attempt is still unbound here, so it launches on whatever
+       engine the stage names by the time it binds below; an edit accepted
+       since it was created is checked against that engine, and only limits
+       hit on that engine exclude its accounts. */
+    const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
+    const usageLimitedAccounts = usageLimitsOn(attempt, engine);
     if (usageLimitedAccounts.length > 0) {
       const unavailableIds = usageLimitedAccounts.map((limited) => limited.accountId);
       const latestLimited = usageLimitedAccounts.at(-1)!;
-      /* A failover attempt is still unbound here, so it launches on whatever
-         engine the stage names by the time it binds below; an edit accepted
-         since it was created is checked against that engine. */
-      const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
       const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
       let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
       try {
@@ -2352,7 +2371,7 @@ async function tickRunStage(
         cwd: pipeline.worktreeDir,
         project: pipeline.project,
         requestedAccountId: bound.account ?? null,
-        unavailableAccountIds: (attempt.usageLimitedAccounts ?? []).map((limited) => limited.accountId),
+        unavailableAccountIds: usageLimitsOn(attempt, attempt.effectiveRole.engine).map((limited) => limited.accountId),
         title: pipelineStageTitle(pipeline.task, stage.id),
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
