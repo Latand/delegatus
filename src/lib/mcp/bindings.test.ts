@@ -1959,6 +1959,33 @@ test("a refused pipeline close exposes its host report through MCP, not only pro
   expect(pauseActor).toEqual({ kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" });
 });
 
+test("a graph edit through MCP carries the calling conversation and answers with its journal entry (graph slice 1)", async () => {
+  const actors: Array<[string | undefined, unknown]> = [];
+  const graphEdit = { seq: 1, at: "2026-09-16T00:00:00.000Z", actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" }, action: "add-stage", stageId: "three", pipelineState: "running", effect: "applied", appliesFromAttempt: 1, summary: "added stage three at position 3, after two" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, request: { action?: string }, _ports: unknown, actor: unknown) => {
+      actors.push([request.action, actor]);
+      return request.action === "add-stage" ? { pipeline: { id: "pipeline_1", state: "running" }, graphEdit } : { pipeline: { id: "pipeline_1", state: "running" } };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, {
+    claim: async () => ({ kind: "fresh" as const }),
+    complete: async () => {},
+  } as never);
+
+  const added = await service.callTool("pipeline_action", { clientRequestId: "graph-add", pipelineId: "pipeline_1", action: "add-stage", stage: { id: "three", kind: "run", prompt: "Three", next: null } });
+  expect(added).toMatchObject({ ok: true, pipelineId: "pipeline_1", graphEdit });
+  for (const action of ["reorder-stage", "set-edge", "override-stage", "remove-stage"]) {
+    await service.callTool("pipeline_action", { clientRequestId: `graph-${action}`, pipelineId: "pipeline_1", action, stageId: "three" });
+  }
+  await service.callTool("pipeline_action", { clientRequestId: "graph-dismiss", pipelineId: "pipeline_1", action: "dismiss" });
+  const agent = { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" };
+  expect(actors).toEqual([
+    ["add-stage", agent], ["reorder-stage", agent], ["set-edge", agent], ["override-stage", agent], ["remove-stage", agent], ["dismiss", undefined],
+  ]);
+});
+
 test("agent_activity reports the liveness snapshot and journals the stalls it finds (#645)", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-activity-"));
   sandboxes.push(sandbox);

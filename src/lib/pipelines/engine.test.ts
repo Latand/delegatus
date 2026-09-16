@@ -7315,7 +7315,7 @@ test("reviewNote parks a too-long directive for raw and role-backed review stage
   expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
 });
 
-test("override-stage re-configures an unstarted stage and rejects a started one (issue #118)", async () => {
+test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
   const { ports } = harness();
   const created = await create(ports);
   /* The trailing "build" stage has not run yet, so its config is still editable. */
@@ -7334,7 +7334,8 @@ test("override-stage re-configures an unstarted stage and rejects a started one 
   expect(cleared.error).toBeUndefined();
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "build")!.effectiveRole.model).toBeNull();
 
-  /* Once the stage has an attempt it is frozen: the override 409s. */
+  /* A running attempt recorded without a bound definition would read the live
+     stage on a re-issued launch, so its stage refuses the override until it settles. */
   const started = loadPipelines()[0]!;
   const buildStage = started.stages.find((stage) => stage.id === "build")!;
   started.runs.find((run) => run.stageId === "build")!.attempts.push({
@@ -7593,10 +7594,11 @@ test("draft-only mutations cannot rewrite or delete an active pipeline", async (
   const { ports } = harness();
   const active = await create(ports);
   const before = structuredClone(loadPipelines()[0]!);
+  /* add-stage, reorder-stage, set-edge and override-stage edit a started graph
+     (graph slice 1, graphEdits.test.ts); the cursor stage keeps its place. */
   const attempts = [
     { action: "start" },
     { action: "update-draft", task: "rewritten" },
-    { action: "add-stage", stage: { id: "extra", kind: "run", prompt: "extra", next: null } },
     { action: "remove-stage", stageId: "plan" },
     { action: "reorder-stage", stageId: "plan", toIndex: 1 },
     { action: "delete" },
@@ -9725,7 +9727,7 @@ test("override-stage with expectedStageDigest writes only against the digest the
   expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine at last.");
 });
 
-test("a started stage keeps its already-started answer even against a stale digest, and an override without a digest is unchanged", async () => {
+test("a started stage answers a stale digest with STAGE_CHANGED, and an attempt launched before definitions were bound holds its stage until it settles", async () => {
   const { ports } = harness();
   const created = await create(ports);
   const stale = stageDigest(buildStageOf());
@@ -9737,7 +9739,12 @@ test("a started stage keeps its already-started answer even against a stale dige
     startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
   });
   savePipelines([started]);
-  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports)).toEqual({ error: "stage has already started", status: 409 });
+  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports))
+    .toMatchObject({ status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+  const legacy = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()) }, ports);
+  expect(legacy.status).toBe(409);
+  expect(legacy.error).toContain("before attempts recorded their own definition");
+  expect(buildStageOf().prompt).toBe("Build v2");
 });
 
 test("guard values that are present but malformed, or stated on an action they do not guard, are refused before anything changes", async () => {

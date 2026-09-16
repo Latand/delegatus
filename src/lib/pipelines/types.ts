@@ -1,4 +1,5 @@
 import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
 export type PipelineAccess = "read-only" | "read-write";
 export type PipelineSandbox = "full" | "restricted";
@@ -171,12 +172,54 @@ export type PipelineBoundedWait = {
   retryMaxMs?: number;
 };
 
+/** The stage definition an attempt runs, bound in the record transaction that
+    moves it out of `pending`, before its first spawn call (graph slice 1,
+    ADR-0002 of automation-v2). Together with the attempt's `effectiveRole`,
+    re-cloned at the same instant, it is everything the attempt reads about its
+    stage: an edit accepted after it is bound applies from the next attempt. */
+export type PipelineAttemptDefinition = {
+  boundAt: string;
+  /** `stageDigest` of the stage as it was bound. */
+  stageDigest: string;
+  "prompt": string;
+  account: string | null;
+  role: PipelineRoleRef | null;
+  sandbox: PipelineSandbox | null;
+  outputs: string[] | null;
+};
+
+export type PipelineGraphEditAction = "add-stage" | "remove-stage" | "reorder-stage" | "set-edge" | "override-stage";
+
+/** One accepted graph edit, as the pipeline's own journal keeps it. */
+export type PipelineGraphEdit = {
+  /** Increments per pipeline, and keeps incrementing past trimmed entries. */
+  seq: number;
+  at: string;
+  /** The operator, or the agent conversation that made the edit. */
+  actor: PauseResumeActor;
+  action: PipelineGraphEditAction;
+  stageId: string | null;
+  /** The pipeline state the edit was accepted in. */
+  pipelineState: PipelineState;
+  /** `applied`: nothing had bound the stage yet, so its next attempt runs the
+      edit. `pending-next-attempt`: an attempt of the stage is already bound
+      and keeps its definition; the edit applies from `appliesFromAttempt`. */
+  effect: "applied" | "pending-next-attempt";
+  /** The first attempt of `stageId` that runs under this edit; null for an
+      edge or an order change, which apply at the next routing decision. */
+  appliesFromAttempt: number | null;
+  summary: string;
+};
+
 export type PipelineStageAttempt = {
   n: number;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
   state: PipelineAttemptState;
   effectiveRole: EffectivePipelineRole;
+  /** Absent until the attempt leaves `pending`, and on attempts recorded
+      before definitions were bound, which read the live stage. */
+  definition?: PipelineAttemptDefinition | null;
   launchId: string | null;
   conversationId: string | null;
   sessionId: string | null;
@@ -377,6 +420,8 @@ export type Pipeline = {
   restored?: boolean;
   /** Durable user pin for the desktop board's world-space pipeline group. */
   pos?: { x: number; y: number };
+  /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
+  graphEdits?: PipelineGraphEdit[];
 };
 
 export type CreatePipelineRequest = {
@@ -441,9 +486,12 @@ export type PatchPipelineRequest = {
   stageId?: string;
   /** retry-stage identity fence for a retry initiated from a launch receipt. */
   launchId?: string;
-  /** for override-stage (#1695 C7): the `stageDigest` of the stage configuration
-      this edit was made against, as `GET /api/pipelines/:id` answers it. A stage
-      that no longer has it answers 409 `STAGE_CHANGED` and is left unchanged. */
+  /** The read a graph edit was made against (#1695 C7, graph slice 1). On
+      override-stage and set-edge it is the `stageDigest` of `stageId`, which
+      covers the stage's edges; on add-stage, remove-stage and reorder-stage it
+      is the `graphDigest` of the whole ordered plan. `GET /api/pipelines/:id`
+      and `get_pipeline` answer both. A plan that no longer has it answers 409
+      `STAGE_CHANGED` and is left unchanged. */
   expectedStageDigest?: string;
   /** for retry-stage and skip-stage: the stage the caller saw the pipeline
       waiting on. A pipeline no longer waiting on it answers 409 `STAGE_CHANGED`
