@@ -374,3 +374,84 @@ test("linking a flow to a task preserves its folded reviewer activity and column
   expect(card.lastAgentWorkAtMs).toBe(3000);
   expect(card.status).toBe("blocked");
 });
+
+function linkedPipeline(id: string, attempts: Array<Record<string, unknown>>, extra: Partial<Pipeline> = {}): Pipeline {
+  const base = pipeline();
+  const attempt = (row: Record<string, unknown>, n: number) => ({ n, state: "passed", activatedBy: null, agentPath: null, conversationId: null, launchId: null, sessionId: null, paneId: null, flowId: null, effectiveRole: {}, output: null, verdict: null, error: null, startedAt: null, completedAt: null, ...row });
+  return {
+    ...base,
+    id,
+    taskIds: ["sorted"],
+    runs: attempts.length ? [{ stageId: "build", attempts: attempts.map((row, index) => attempt(row, index + 1)) }] : [],
+    ...extra,
+  } as unknown as Pipeline;
+}
+
+function pipelineOrder(pipelines: Pipeline[], files: FileEntry[], flows: Flow[] = []) {
+  const tasks = [task("sorted", "assigned")];
+  const projection = projectTaskWorkflows(tasks, pipelines, flows, files);
+  const bands = buildTaskBands(layout([]), { tasks, projection, untitled: "Untitled task" });
+  const result = buildKanbanModel({ bands, tasks, pipelines, projection, files, flows, now: NOW });
+  return result.columns.assigned.cards.find((card) => card.task?.id === "sorted")!.pipelines;
+}
+
+test("a task's pipelines run newest agent work first, whatever their insertion order, state or timestamps", () => {
+  const worked = file(201, { lastAgentWorkAt: 3000 });
+  const older = file(202, { lastAgentWorkAt: 1000 });
+  const silent = file(203);
+  const pipelines = [
+    /* Never started, created last: no work evidence, so it sorts at the bottom. */
+    linkedPipeline("p-never", [], { state: "draft", createdAt: "2026-09-16T00:00:00.000Z" } as Partial<Pipeline>),
+    linkedPipeline("p-older", [{ conversationId: older.conversationId }], { state: "running" } as Partial<Pipeline>),
+    /* Attempt timestamps are newest here, and they are not agent work. */
+    linkedPipeline("p-unknown", [{ conversationId: silent.conversationId, agentPath: silent.path, state: "running", startedAt: "2026-09-16T00:00:00.000Z", completedAt: "2026-09-16T01:00:00.000Z" }]),
+    linkedPipeline("p-worked", [{ conversationId: worked.conversationId }], { state: "completed" } as Partial<Pipeline>),
+    /* An attempt naming a conversation this board never read stays unknown. */
+    linkedPipeline("p-missing", [{ conversationId: "conversation_fixture_missing", agentPath: "/fixture/missing.jsonl" }]),
+  ];
+  const files = [worked, older, silent];
+  const summaries = pipelineOrder(pipelines, files);
+  expect(summaries.map((summary) => summary.pipeline.id)).toEqual(["p-worked", "p-older", "p-missing", "p-never", "p-unknown"]);
+  expect(pipelineOrder([...pipelines].reverse(), files).map((summary) => summary.pipeline.id)).toEqual(["p-worked", "p-older", "p-missing", "p-never", "p-unknown"]);
+  /* Sorting pipelines leaves each pipeline's own stage order as the graph draws it. */
+  for (const summary of summaries) {
+    expect(summary.chips.map((chip) => chip.stage.id)).toEqual(summarizePipeline(summary.pipeline).chips.map((chip) => chip.stage.id));
+  }
+
+  /* New work on the older pipeline moves it to the top. */
+  const moved = pipelineOrder(pipelines, [worked, { ...older, lastAgentWorkAt: 4000 }, silent]);
+  expect(moved.map((summary) => summary.pipeline.id).slice(0, 2)).toEqual(["p-older", "p-worked"]);
+});
+
+test("pipelines with equal work keep a stable id order", () => {
+  const a = file(211, { lastAgentWorkAt: 2000 });
+  const b = file(212, { lastAgentWorkAt: 2000 });
+  const pipelines = [linkedPipeline("p-b", [{ conversationId: b.conversationId }]), linkedPipeline("p-a", [{ conversationId: a.conversationId }])];
+  expect(pipelineOrder(pipelines, [a, b]).map((summary) => summary.pipeline.id)).toEqual(["p-a", "p-b"]);
+  expect(pipelineOrder([...pipelines].reverse(), [b, a]).map((summary) => summary.pipeline.id)).toEqual(["p-a", "p-b"]);
+});
+
+test("pipeline work counts historical attempts and every generation of a migrated conversation", () => {
+  const recent = file(221, { lastAgentWorkAt: 3000 });
+  const retired = file(222, { lastAgentWorkAt: 1000, migratedTo: "/fixture/conversation-223.jsonl" });
+  const successor = file(223, { conversationId: retired.conversationId, lastAgentWorkAt: 5000, predecessorPath: retired.path });
+  const pathOnly = file(224, { lastAgentWorkAt: 4000 });
+  const pipelines = [
+    linkedPipeline("p-recent", [{ conversationId: recent.conversationId }]),
+    /* A lineage-adopted attempt still names the old generation's path. */
+    linkedPipeline("p-migrated", [{ historical: true, conversationId: null, agentPath: retired.path }, { historical: true, conversationId: retired.conversationId, agentPath: retired.path }]),
+    linkedPipeline("p-path", [{ conversationId: null, agentPath: pathOnly.path }]),
+  ];
+  expect(pipelineOrder(pipelines, [recent, retired, successor, pathOnly]).map((summary) => summary.pipeline.id)).toEqual(["p-migrated", "p-path", "p-recent"]);
+});
+
+test("a review-loop pipeline whose only recent work is its reviewer's sorts by that reviewer", () => {
+  const { implementer, reviewer, other, flow } = reviewerActivityFixture();
+  const files = [{ ...implementer, lastAgentWorkAt: 500 }, reviewer, other];
+  const pipelines = [
+    linkedPipeline("p-other", [{ conversationId: other.conversationId }]),
+    linkedPipeline("p-review", [{ conversationId: null, agentPath: null, flowId: flow.id }]),
+  ];
+  expect(pipelineOrder(pipelines, files, [flow]).map((summary) => summary.pipeline.id)).toEqual(["p-review", "p-other"]);
+  expect(pipelineOrder(pipelines, [files[0]!, { ...reviewer, lastAgentWorkAt: null }, other], [flow]).map((summary) => summary.pipeline.id)).toEqual(["p-other", "p-review"]);
+});
