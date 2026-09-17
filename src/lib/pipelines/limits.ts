@@ -17,3 +17,5 @@ export const MAX_PIPELINE_STAGES = 8;
 export const MIN_STARTED_PIPELINE_STAGES = 1;
 export const MAX_FAIL_EDGE_ROUNDS = 9;
 export const DEFAULT_FAIL_EDGE_ROUNDS = 5;
+/** Accepted graph edits a pipeline record keeps; the oldest are dropped first. */
+export const MAX_PIPELINE_GRAPH_EDITS = 50;

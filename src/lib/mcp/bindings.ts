@@ -82,6 +82,7 @@ import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelecti
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, projectPipelineListRows } from "@/lib/pipelines/listProjection";
+import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
@@ -168,6 +169,7 @@ import {
 import { mcpCallerIdentity, mcpToolPolicy, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
+const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
 interface LinkTaskToPipelineDependencies {
   getPipelines(): ReturnType<typeof getPipelines>;
@@ -1346,7 +1348,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
   const request = withoutKeys(args, ["pipelineId", "clientRequestId"]);
-  const result = action === "pause" || action === "resume"
+  /* Pause, resume and graph edits carry the calling agent as their actor. */
+  const result = action === "pause" || action === "resume" || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -1358,7 +1361,12 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
   /* A close reports the stage hosts it terminated and the uncommitted work it
      left behind (#670), so an agent driving the board sees it too. */
-  return { pipelineId, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}) };
+  return {
+    pipelineId,
+    pipeline: result.pipeline,
+    ...(result.close ? { close: result.close } : {}),
+    ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+  };
 }
 
 async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPipelineDependencies): Promise<McpToolPayload> {
@@ -2801,7 +2809,8 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
   if (!pipeline) throw new Error("pipeline not found");
-  return redactPayload({ pipelineId, pipeline });
+  /* The digests a guarded graph edit names as expectedStageDigest. */
+  return { ...redactPayload({ pipelineId, pipeline }), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
 }
 
 const SENSITIVE_PAYLOAD_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|passwd|secret)/i;
