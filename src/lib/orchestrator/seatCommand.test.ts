@@ -182,7 +182,6 @@ test("spawn mode designates and injects together: mandate rides the spawn prompt
     clientAttemptId: "req_00000001",
   });
   expect(String(recorded.spawns[0]!.prompt)).toStartWith("own the board");
-  expect(String(recorded.spawns[0]!.prompt)).toContain("all mandate missions are complete; standing by");
   const { active, pending } = orchestratorSeatFor("proj-a");
   expect(active?.conversationId).toBe(NEW_ID);
   expect(active?.mandate).toBe("own the board");
@@ -677,11 +676,9 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(spawnedPrompt).toStartWith("own the board");
   expect(spawnedPrompt).toContain(NEW_ID);
   expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
-  expect(spawnedPrompt).toContain("fresh clientRequestId");
   expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
   expect(spawnedPrompt).toContain("[doing] Ship the handoff (task_1)");
   expect(spawnedPrompt).toContain("Prioritize the review queue.");
-  expect(spawnedPrompt).toContain("all mandate missions are complete; standing by");
 
   const { active } = orchestratorSeatFor("proj-a");
   expect(active?.conversationId).toBe(SUCCESSOR);

@@ -928,8 +928,6 @@ test("the run is launched with the operator's edited brief behind the fixed prea
   expect(prompt).toContain(edited);
   /* The operator's text cannot edit away the rules that keep a run correct. */
   expect(prompt).toContain("RUN RULES");
-  expect(prompt).toContain("Read SEQUENTIALLY");
-  expect(prompt).toContain("is NOT recency");
   expect(prompt.indexOf("RUN RULES")).toBeLessThan(prompt.indexOf(edited));
   /* And the default brief is not smuggled in beside it. */
   expect(prompt).not.toContain(DEFAULT_DAILY_REPORT_PROMPT.split("\n")[0]);

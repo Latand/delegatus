@@ -44,7 +44,7 @@ export interface SeatTickReading {
   line: string;
   /** The sentence at the top of the Actual section. */
   sentence: string;
-  /** The four read-only rows, in the order an operator reads them. */
+  /** The read-only rows, in the order an operator reads them. */
   rows: SeatTickRow[];
   /** What holds the next wake back, in one clause, or null. */
   blocker: string | null;
@@ -207,6 +207,36 @@ function toneOf(kind: SeatTickStateKind, stopped: boolean | null): SeatTickTone 
   return kind === "paused" && stopped === true ? "warn" : TONE[kind];
 }
 
+/**
+ * When the next wake is due, in one clause (#1771).
+ *
+ * Read beside the last DELIVERED wake above it, and that pairing is the whole
+ * point: a tick can look enabled, checking and recently delivering while every
+ * wake it prepares is refused, and the two rows together are what makes that
+ * visible without asking the seat. The seat's own mute day was read off the
+ * board as «healthy» for hours.
+ *
+ * Derived from the same interval the check applies and the same stamp only a
+ * LANDED wake moves, so it says nothing the row cannot prove: with no row it
+ * is unknown, with the tick off there is nothing to be due, with the next wake
+ * fenced it is held, and with the interval already spent it is the next check —
+ * never an invented instant.
+ */
+function nextWakeValue(answer: SeatTickSettingsAnswer, blocker: string | null, now: number, t: TFunction): string {
+  const state = answer.state;
+  if (!state) return t("seatTick.unknown");
+  if (!answer.effective.enabled) return t("seatTick.nextWake.off");
+  if (blocker) return t("seatTick.nextWake.blocked");
+  const last = state.lastWakeAt ? Date.parse(state.lastWakeAt) : Number.NaN;
+  if (!Number.isFinite(last)) return t("seatTick.nextWake.due");
+  const due = last + answer.effective.wakeIntervalMinutes * 60_000;
+  if (due <= now) return t("seatTick.nextWake.due");
+  const minutes = Math.max(1, Math.round((due - now) / 60_000));
+  return minutes >= 90
+    ? t("seatTick.nextWake.inHour", { n: Math.round(minutes / 60) })
+    : t("seatTick.nextWake.inMin", { n: minutes });
+}
+
 function rowsOf(answer: SeatTickSettingsAnswer, blocker: string | null, now: number, t: TFunction): SeatTickRow[] {
   const unknown = t("seatTick.unknown");
   const state = answer.state;
@@ -222,6 +252,7 @@ function rowsOf(answer: SeatTickSettingsAnswer, blocker: string | null, now: num
         ? (state ? t("seatTick.never") : unknown)
         : reasons ? t("seatTick.row.wakeWithReasons", { age: wakeAge, reasons }) : wakeAge,
     },
+    { label: t("seatTick.row.nextWake"), value: nextWakeValue(answer, blocker, now, t) },
     {
       label: t("seatTick.row.lastDelivery"),
       value: answer.lastDelivery && deliveryAge

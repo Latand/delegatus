@@ -13,6 +13,7 @@ import {
   assertRuntimeEvent,
   normalizeRuntimeEventInput,
   parseRuntimeScope,
+  runtimeIdempotencyKeyAdmissible,
   runtimePresentationReceipt,
   runtimeScopeKey,
   type RuntimeAttention,
@@ -1729,7 +1730,7 @@ export class RuntimeJournal {
 
   private assertOperation(command: RuntimeOperationCommand): void {
     if (!command.conversationId || command.conversationId.includes(":") || /\s/.test(command.conversationId)) throw new Error("conversationId is invalid");
-    if (!command.idempotencyKey || command.idempotencyKey.length > 200) throw new Error("idempotencyKey is invalid");
+    if (!runtimeIdempotencyKeyAdmissible(command.idempotencyKey)) throw new Error("idempotencyKey is invalid");
     if (command.operationId !== undefined && (!command.operationId.trim() || command.operationId.includes(":") || /\s/.test(command.operationId))) throw new Error("operationId is invalid");
     if (Buffer.byteLength(JSON.stringify(command)) > 256 * 1024) throw new Error("runtime operation exceeds 256 KiB");
     if (command.kind === "send" || command.kind === "steer") {
