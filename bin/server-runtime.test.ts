@@ -40,6 +40,29 @@ function removeSandbox(directory: string): void {
   }
 }
 
+/**
+ * A spawned CLI is a real process, so what it costs is the runner's to decide
+ * and never this file's to assert. Every case that starts one runs under this
+ * budget: it exists so a wedged launcher fails readably instead of hanging the
+ * job, and it is wide enough that a contended runner cannot answer for the
+ * behaviour under test. The default ten seconds was not — the launcher's own
+ * Node startup plus a failed Bun resolution was close enough to it that the
+ * case failed at 10 015 ms on a shared runner (#1603, #1434, #1638, #1320).
+ */
+const SPAWN_BUDGET_MS = 120_000;
+
+/**
+ * What the child actually did, asserted rather than assumed. `Bun.spawn`'s
+ * `exited` resolves for a process that was signalled too, and a launcher the
+ * runner tore down is a different outcome from one that named a missing
+ * prerequisite and exited 1 — so the exit is read as an event: a status, and
+ * no signal behind it.
+ */
+async function exitedWith(child: Bun.Subprocess, code: number): Promise<void> {
+  const exitCode = await child.exited;
+  expect({ exitCode, signalCode: child.signalCode }).toEqual({ exitCode: code, signalCode: null });
+}
+
 async function availablePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => {
@@ -167,7 +190,17 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     LLV_STATE_DIR: stateDirectory,
     TMPDIR: path.join(sandbox, "tmp"),
     LLV_LANG: "en",
-    LLV_RUNTIME_HOST_FENCE_WAIT_MS: "0",
+    /* The CLI reports a socket owned by somebody else only while the host it
+       spawned is still alive: its readiness loop checks the child's exit
+       before it probes the socket. This case holds the fence as well as the
+       socket, so a child told not to wait for the fence dies within
+       milliseconds of starting, and which of the two true refusals the CLI
+       printed came down to whether the runner got to the first probe first —
+       the Linux half of #1320. Told to wait, the child stays up, the probe
+       finds the socket this test is listening on, and the CLI reaches the
+       branch under test every time. The wait is never spent: the CLI fails on
+       its first probe and the child is stopped below. */
+    LLV_RUNTIME_HOST_FENCE_WAIT_MS: "60000",
   };
   const incumbent = cliRuntimeHostConfig(packageRoot, { env: environment, home: environment.HOME });
   const socketPath = incumbent.socketPath;
@@ -191,8 +224,7 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     String(await availablePort()),
   ], { cwd: packageRoot, env: environment, stdout: "pipe", stderr: "pipe" });
   try {
-    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(exitCode).toBe(1);
+    const [, stderr] = await Promise.all([exitedWith(child, 1), new Response(child.stderr).text()]);
     expect(stderr).toContain("Couldn't start the structured runtime host");
     expect(stderr).toContain(`runtime host socket is owned by pid ${process.pid}`);
     expect(stderr).toContain("stop the other agent-log-viewer instance");
@@ -202,7 +234,7 @@ test("the CLI rejects a ready runtime socket owned by another process", async ()
     fence.release();
     removeSandbox(sandbox);
   }
-}, 10_000);
+}, SPAWN_BUDGET_MS);
 
 for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun prerequisite before starting the Viewer (missing exit event: ${missingExitEvent})`, async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-missing-bun-"));
@@ -248,8 +280,7 @@ for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun 
     String(await availablePort()),
   ], { cwd: path.resolve(import.meta.dir, ".."), env: environment, stdout: "pipe", stderr: "pipe" });
   try {
-    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(exitCode).toBe(1);
+    const [, stderr] = await Promise.all([exitedWith(child, 1), new Response(child.stderr).text()]);
     expect(stderr).toContain("Couldn't start the structured runtime host");
     expect(stderr).toContain("Bun executable");
     expect(stderr).toContain("is unavailable");
@@ -257,7 +288,7 @@ for (const missingExitEvent of [false, true]) test(`the CLI names a missing Bun 
     if (child.exitCode === null && !child.killed) child.kill();
     removeSandbox(sandbox);
   }
-}, 10_000);
+}, SPAWN_BUDGET_MS);
 
 test("structured hosts select Bun for a CLI process launched by Node", () => {
   expect(viewerServerBunRuntime({
@@ -291,9 +322,10 @@ test("the packaged helper makes the same structured-runtime choice under Node", 
     stderr: "pipe",
   });
 
-  expect(probe.exitCode).toBe(0);
+  // `success` is false for a probe that was signalled rather than exiting 0.
+  expect({ exitCode: probe.exitCode, success: probe.success }).toEqual({ exitCode: 0, success: true });
   expect(probe.stdout.toString()).toBe("/verified/bun");
-});
+}, SPAWN_BUDGET_MS);
 
 /* Structured hosting is on by default, and it genuinely needs Bun (`bun:sqlite`
    journal, kernel start tokens on macOS). A launcher that still keyed on a
@@ -378,10 +410,10 @@ test("Viewer child processes receive no ambient WakaTime key material", () => {
     "process.stdout.write(JSON.stringify({ keep: process.env.KEEP_ME, key: process.env.WAKATIME_API_KEY ?? null }))",
   ], { env, stdout: "pipe", stderr: "pipe" });
 
-  expect(probe.exitCode).toBe(0);
+  expect({ exitCode: probe.exitCode, success: probe.success }).toEqual({ exitCode: 0, success: true });
   expect(JSON.parse(probe.stdout.toString())).toEqual({ keep: "kept", key: null });
   expect(JSON.stringify(env)).not.toContain(placeholder);
-});
+}, SPAWN_BUDGET_MS);
 
 test("published launcher child options capture no ambient WakaTime key material", () => {
   const placeholder = ["launcher", "fixture", "value"].join("-");

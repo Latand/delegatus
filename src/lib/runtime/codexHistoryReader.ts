@@ -5,6 +5,24 @@ export type CodexHistoryRpc = (
   method: string, params: Record<string, unknown>, timeoutMs: number,
 ) => Promise<unknown>;
 
+/** The one clock the deadline is measured and enforced on. A caller that
+ * supplies it owns both halves, so `now()` and the timer that fires at the
+ * deadline can never disagree. Nothing here is renewed per page. */
+export interface CodexHistoryClock {
+  now(): number;
+  /** Runs `fire` once, `ms` from now on this clock; the result cancels it. */
+  after(ms: number, fire: () => void): () => void;
+}
+
+/** The default: the process clock and its timer, exactly as before. */
+const systemClock: CodexHistoryClock = {
+  now: () => Date.now(),
+  after: (ms, fire) => {
+    const timer = setTimeout(fire, ms);
+    return () => clearTimeout(timer);
+  },
+};
+
 type ObjectValue = Record<string, unknown>;
 export interface CodexHistoryIdentity { threadId: string; path: string }
 export interface CodexHistoryItem extends ObjectValue { id: string; type: string }
@@ -16,6 +34,9 @@ export interface CodexHistoryTurn extends ObjectValue {
 export interface CodexHistoryOptions {
   /** Absolute deadline supplied by the existing caller; never renewed per page. */
   deadlineAt: number;
+  /** Reads the deadline on a clock other than the process clock. Omitted in
+   * production, where `deadlineAt` is a `Date.now()` instant as before. */
+  clock?: CodexHistoryClock;
   maxBytes?: number;
   /** Counts every RPC response, including metadata. */
   maxPages?: number;
@@ -181,19 +202,20 @@ async function readHistory(
     // Freeze caller input before the first asynchronous boundary.
     const target = { ...identity };
     const deadlineAt = options.deadlineAt;
+    const clock = options.clock ?? systemClock;
     let bytes = 0;
     let requests = 0;
     const pages: CodexHistoryPage[] = [];
     const call = async (method: string, params: ObjectValue): Promise<ObjectValue> => {
-      const remainingMs = deadlineAt - Date.now();
+      const remainingMs = deadlineAt - clock.now();
       requireValue(remainingMs > 0, "deadline");
       requireValue(requests++ < maxPages, "pages");
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let cancelTimer: (() => void) | undefined;
       let response: unknown;
       try {
         response = await Promise.race([
           rpc(method, params, remainingMs),
-          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReadFailure("deadline")), remainingMs); }),
+          new Promise<never>((_, reject) => { cancelTimer = clock.after(remainingMs, () => reject(new ReadFailure("deadline"))); }),
         ]);
       } catch (error) {
         if (error instanceof ReadFailure) throw error;
@@ -206,10 +228,10 @@ async function readHistory(
           throw new ReadFailure("not-materialized");
         }
         throw new ReadFailure(unsupported(error) ? "unsupported" : "transport");
-      } finally { clearTimeout(timer); }
-      requireValue(Date.now() < deadlineAt, "deadline");
+      } finally { cancelTimer?.(); }
+      requireValue(clock.now() < deadlineAt, "deadline");
       bytes += jsonBytes(response, maxBytes - bytes);
-      requireValue(Date.now() < deadlineAt, "deadline");
+      requireValue(clock.now() < deadlineAt, "deadline");
       const result = object(response);
       requireValue(result && !Object.hasOwn(result, "error"));
       // Detach retained evidence from a mutable RPC fixture/transport buffer.
@@ -286,14 +308,14 @@ async function readHistory(
           && typeof canonical.clientId === "string" && matchingClientIds.has(canonical.clientId))) {
           const observed: ObservedHistory = {state: "observed", identity: target, turns, pages, bytes};
           if (!accept || accept(observed)) {
-            requireValue(Date.now() < deadlineAt, "deadline");
+            requireValue(clock.now() < deadlineAt, "deadline");
             return observed;
           }
         }
       }
       cursor = page.nextCursor;
     } while (cursor !== null);
-    requireValue(Date.now() < deadlineAt, "deadline");
+    requireValue(clock.now() < deadlineAt, "deadline");
     return { state: "complete", identity: target, turns, pages, bytes };
   } catch (error) {
     if (error instanceof ReadFailure) return error.reason === "unsupported"

@@ -199,7 +199,10 @@ test("an ordinary queued send mapped to native keeps its operation through compa
   churn(journal);
   expect(journal.operationResult("op-mapped")).toBeNull();
   journal.close();
-});
+  /* Two journal restarts and four compaction passes on real disk. The case
+     asserts no duration: this budget exists so a contended runner cannot
+     answer for the behaviour, and a real wedge still fails it. */
+}, 120_000);
 
 test("every unsettled state holds exactly the ids it still answers through, across restart", async () => {
   const filename = journalFile();
@@ -522,14 +525,24 @@ test("holds stay bounded by the unsettled-entry admission cap, and a pre-hold jo
   expect(() => journal.executeOperation(nativeCommand("op-scale-over-cap", { text: "scale" }))).toThrow("admission bound exceeded");
   journal.close();
   journal = open(filename, 64);
-  const started = performance.now();
   churn(journal, 256);
-  const churnMs = performance.now() - started;
   expect(holds(filename)).toHaveLength(unsettledCount);
   const count = (sql: string) => { const db = new Database(filename, { readonly: true }); const value = db.query<{ n: number }, []>(sql).get()!.n; db.close(); return value; };
   expect(count("SELECT COUNT(*) AS n FROM operations")).toBe(unsettledCount);
-  // 256 compacting appends over 2000 held rows: the hold check is an indexed lookup, not an entry scan.
-  expect(churnMs).toBeLessThan(10_000);
+  /* 256 compacting appends over 2000 held rows. What made that bounded is the
+     projection itself: compaction probes the holds table by operation id, and
+     that column is its key, so the check costs a lookup rather than a walk of
+     the 2000 entries behind it. That is a fact about the schema on disk, so it
+     is read from the schema rather than measured against a wall clock — how
+     long a shared runner took to make these appends was never the subject. */
+  const holdProbePlan = (() => {
+    const db = new Database(filename, { readonly: true });
+    const rows = db.query<{ detail: string }, [string]>("EXPLAIN QUERY PLAN SELECT entry_id FROM native_queue_operation_holds WHERE operation_id = ?").all("op-scale-00000");
+    db.close();
+    return rows.map(row => row.detail).join(" | ");
+  })();
+  expect(holdProbePlan).toContain("SEARCH native_queue_operation_holds");
+  expect(holdProbePlan).not.toContain("SCAN");
   journal.close();
 
   // A journal compacted before holds existed: drop them, reopen, and they are rebuilt from the entries.
