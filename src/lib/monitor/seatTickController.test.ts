@@ -76,14 +76,20 @@ interface Harness {
   cards: { project: string; card: SeatTickCard }[];
   written: SeatTickProjectState[];
   withdrawn: { wake: SeatTickOutstandingWake; reason: string }[];
-  seat: { conversationId: string; seatEpoch: number; path: string | null } | null;
+  seat: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null } | null;
   /** Every liveness read the check made, in order (#1465). */
   liveness: { project?: string; conversationId?: string }[];
   /** Registry snapshot reads the check made (#1465). */
   snapshots: number;
 }
 
-type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: string | null; branch?: string; closedAt?: string | null; project?: string };
+type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: string | null; branch?: string; closedAt?: string | null; project?: string;
+  /** The conversation that created the lane (#1749), as the store records it.
+      Null is a lane nobody's seat launched. */
+  src?: string | null;
+  /** The newest attempt's state, when the case is a stage that stopped rather
+      than a lane that completed. */
+  attemptState?: string };
 
 function pipelineRecord(entry: PipelineFixture) {
   return {
@@ -98,20 +104,20 @@ function pipelineRecord(entry: PipelineFixture) {
     baseRef: "main",
     lastPassedCommit: "",
     stages: [],
-    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: "passed", startedAt: entry.movedAt, completedAt: entry.movedAt }] }] : [],
+    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt }] }] : [],
     cursor: null,
     state: entry.state,
     pausedState: null,
     stateDetail: null,
     srcPath: null,
-    srcConversationId: null,
+    srcConversationId: entry.src ?? null,
     createdAt: entry.createdAt,
     closedAt: entry.closedAt ?? null,
   };
 }
 
 function harness(options: {
-  seat?: { conversationId: string; seatEpoch: number; path: string | null } | null;
+  seat?: { conversationId: string; seatEpoch: number; path: string | null; designatedAt?: string | null } | null;
   turn?: "busy" | "idle";
   seatActivity?: Partial<AgentLivenessRecord> | null;
   pipelines?: PipelineFixture[];
@@ -1704,7 +1710,8 @@ test("the wake the scheduler fires carries the project's own monitor prompt, che
   /* Beside what the tick derived, not instead of it, and the contract still
      has the last word. */
   expect(first.sent[0]!.text).toContain("Items:");
-  expect(first.sent[0]!.text).toContain("Act on the listed items only");
+  expect(first.sent[0]!.text).toContain("Contract:");
+  expect(first.sent[0]!.text).not.toContain("Act on the listed items only");
 
   /* The next check reads the same row rather than any memory of the last wake,
      so an hour later the instruction is still on the wake. A prompt the seat
@@ -4644,4 +4651,118 @@ test("a wake the delivery layer would not take names the refusal on the check's 
   expect(unreturned).toMatchObject({ verdict: "wake", delivery: { outcome: "unreturned" } });
   expect(unreturned!.detail).toContain("the transport call for the wake did not return");
   expect(other.row().outstandingWake).not.toBeNull();
+});
+
+/* ------------------------------------------------------------------------- *
+ * What a wake is FOR, when the seat has its own board (#1749).
+ *
+ * The shape the issue was filed on: a seat at epoch 173 woken six times, each
+ * wake listing five children of seats retired a fortnight earlier and holding
+ * thirty-odd more back, while the lane that seat had launched sat completed
+ * with its pull request unmerged and two others stood parked. Every case below
+ * drives the production controller over its own registry, row and state
+ * directory.
+ * ------------------------------------------------------------------------- */
+
+/** The lane fixture for a seat's own settled work: the store's `src` names the
+    seat's conversation, which is the whole of what makes it the seat's. */
+function ownLane(fixture: ChildFixture, over: Partial<PipelineFixture> = {}): PipelineFixture {
+  return {
+    id: "pipeline_own_lane",
+    state: "completed",
+    createdAt: ago(fixture, 120),
+    movedAt: ago(fixture, 2),
+    project: fixture.project,
+    src: fixture.seat.conversationId,
+    ...over,
+  };
+}
+
+test("a completed lane the seat launched leads the wake, and stale children are counted rather than listed (#1749)", async () => {
+  const fixture = childFixture("own-lane-over-stale-children");
+  /* Forty children that finished a fortnight before this seat was designated,
+     which is what filled every wake in the evidence. */
+  const historical = Array.from({ length: 40 }, (_, n) => fixture.spawn({
+    title: `historical worker ${n}`,
+    turn: "terminal",
+    terminalAt: ago(fixture, 20 * 24 * 60),
+  }));
+  fixture.seed();
+  const rig = childRig(fixture, {
+    seat: { ...fixture.seat, designatedAt: ago(fixture, 120) },
+    pipelines: [ownLane(fixture)],
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"] });
+  expect(rig.sent).toHaveLength(1);
+  const text = rig.sent[0]!.text;
+
+  /* First: the line straight under the agenda's heading, which is where the
+     five-item bound cuts from. */
+  const agenda = text.split("\nItems:\n")[1]!.split("\n").filter((line) => line.startsWith("- "));
+  expect(agenda[0]).toContain("pipeline_own_lane");
+  expect(record).toMatchObject({ items: 1 });
+
+  /* And not one of the forty is named: they are a number on one line. */
+  for (const child of historical) expect(text).not.toContain(child.id);
+  const summarised = text.match(/\((\d+) spawned child\(ren\) not listed/);
+  expect(summarised).not.toBeNull();
+  expect(Number(summarised![1])).toBeGreaterThan(0);
+  expect(fixture.acknowledged()).toEqual([]);
+}, 60_000);
+
+test("an outcome harvested under an earlier seat epoch is not listed again after a rotation (#1749)", async () => {
+  const fixture = childFixture("harvested-before-rotation");
+  const child = fixture.spawn({ title: "worker", turn: "terminal", terminalAt: ago(fixture, 240) });
+  fixture.seed();
+  /* Epoch 7 takes the outcome: a wake that lands is what acknowledges it. */
+  const first = childRig(fixture, { seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"] });
+  expect(fixture.acknowledged()).toEqual([child.id]);
+
+  /* The re-mint: a second turn read out of the same ledger is a NEW outcome
+     identity for a conversation whose result was consumed under epoch 7, and
+     its terminal instant is still the one the registry recorded then. Before
+     this, the rotation's first wake carried it back to the successor. */
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-two", seq: 3 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-two", status: "completed", seq: 4 });
+
+  const rotated = childRig(fixture, {
+    now: fixture.now + 61 * MINUTE,
+    seat: { ...fixture.seat, seatEpoch: 8, designatedAt: ago(fixture, 120) },
+  });
+  const record = await runSeatTickCheck(fixture.project, rotated.deps);
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(rotated.sent).toEqual([]);
+});
+
+test("the wake a settled own lane raises composes a key the runtime journal admits (#1749)", async () => {
+  const fixture = childFixture("own-lane-key-bound");
+  const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 10) });
+  /* Everything that has ever lengthened this key at once: the marker an
+     age-bound retirement leaves, a monitor prompt's digest, and now a second
+     reason kind beside the child's. */
+  fixture.seed({ releasedWake: { clientMessageId: `seat-tick:${fixture.project}:7:retired`, releasedAt: ago(fixture, 5) } });
+  const rig = childRig(fixture, {
+    seat: { ...fixture.seat, designatedAt: ago(fixture, 600) },
+    settings: { ...defaultSeatTickSettings(fixture.project), monitorPrompt: MUTE_PROMPT },
+    pipelines: [ownLane(fixture, { state: "needs_decision", attemptState: "needs_decision" })],
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"] });
+  const key = rig.sent[0]!.clientMessageId!;
+  expect(key.length).toBeLessThanOrEqual(RUNTIME_IDEMPOTENCY_KEY_LIMIT);
+
+  /* The verdict that counts is the production validator's, and the same
+     journal refuses one character past the bound. */
+  const journal = new RuntimeJournal(path.join(fixture.dir, "own-lane-key-admission.sqlite"), { structuredHosts: true });
+  try {
+    expect(journal.executeOperation(admissionCommand(child.id, key, rig.sent[0]!.text)).receipt).toMatchObject({ idempotencyKey: key });
+    expect(() => journal.executeOperation(admissionCommand(child.id, "k".repeat(RUNTIME_IDEMPOTENCY_KEY_LIMIT + 1), "over the bound")))
+      .toThrow("idempotencyKey is invalid");
+  } finally {
+    journal.close();
+  }
 });

@@ -3372,6 +3372,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.unstartedTask": "незапущене завдання",
   "seatTick.reason.interval": "інтервал",
   "seatTick.reason.childTerminal": "воркер завершився",
+  "seatTick.reason.ownLaneSettled": "твоя гілка завершилась",
   "seatTick.outcome.landed": "доставлено",
   "seatTick.outcome.deferred": "відкладено, спроба в очікуванні",
   "seatTick.outcome.queued": "у черзі",

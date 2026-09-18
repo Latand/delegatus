@@ -38,7 +38,7 @@ const CONVERSATION = ["conversation", "0f4c21b7729fbc9e"].join("_");
 const MINUTE = 60_000;
 
 function seat(over: Partial<SeatTickSeatInput> = {}): SeatTickSeatInput {
-  return { conversationId: CONVERSATION, seatEpoch: 7, path: null, turn: "idle", activity: null, ...over };
+  return { conversationId: CONVERSATION, seatEpoch: 7, path: null, designatedAt: null, turn: "idle", activity: null, ...over };
 }
 
 function lane(over: Partial<SeatTickPipelineInput> = {}): SeatTickPipelineInput {
@@ -98,6 +98,7 @@ function input(over: Partial<SeatTickCheckInput> = {}): SeatTickCheckInput {
     events: [],
     pullRequests: [],
     pullRequestsUnavailable: null,
+    ownLanes: [],
     signals: [],
     children: [],
     childrenUnavailable: null,

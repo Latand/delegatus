@@ -193,7 +193,10 @@ export type SeatTickWakeReasonKind =
   | "interval"
   /** A standalone child the seat spawned reached a terminal outcome nobody has
       harvested (#1465): its result is the seat's next obligation, once. */
-  | "child-terminal";
+  | "child-terminal"
+  /** A lane the seat itself launched whose stage completed, failed or parked
+      on a decision (#1749), and which nobody has closed out. */
+  | "own-lane-settled";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -202,6 +205,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "unstarted-task",
   "interval",
   "child-terminal",
+  "own-lane-settled",
 ];
 
 export interface SeatTickWakeReason {
@@ -232,6 +236,11 @@ export type SeatTickVerdict =
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
     deferred: number;
+    /** Terminal children this wake deliberately did NOT list (#1749): their
+        outcomes predate the seat's own designation, or an earlier epoch
+        already harvested them. Counted rather than named — the wake says how
+        many it skipped and nothing else about them. */
+    staleChildren: number;
     /** Evidence this check could not read (#1298). The reasons above stand
         without it; this is what the wake says it could not see. */
     gaps: SeatTickEvidenceGap[];
@@ -339,6 +348,12 @@ export interface SeatTickSeatInput {
   conversationId: string;
   seatEpoch: number;
   path: string | null;
+  /** When THIS epoch was designated (#1749). The clock a child's terminal
+      instant is measured against: an outcome recorded more than a day before
+      the seat existed belongs to a predecessor's board, not to this one's.
+      Null when the seat row carries no readable instant, which dates nothing
+      and therefore stales nothing. */
+  designatedAt: string | null;
   turn: "busy" | "idle" | "terminal" | "unknown";
   activity: SeatTickActivity | null;
 }
@@ -360,6 +375,33 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+}
+
+/**
+ * A lane the seat itself launched, whose stage has settled and whose outcome
+ * nobody has taken (#1749).
+ *
+ * It is a separate list from {@link SeatTickCheckInput.pipelines} because that
+ * one holds OPEN lanes, and the lane this exists for is the one that closed the
+ * gap: a pipeline the seat created ran its only stage, passed, went
+ * `completed`, and left the board — so the tick, which reads open lanes, saw
+ * nothing at all. Meanwhile the seat had a finished lane with an approved pull
+ * request sitting unmerged and no wake that named it.
+ *
+ * `src` is what makes it the seat's: a lane some other hand launched settles
+ * onto that hand's board, and a wake carrying it would be the tick telling a
+ * seat about work it never had.
+ */
+export interface SeatTickOwnLaneInput {
+  id: string;
+  title: string;
+  /** What settled: the lane completed, a stage failed (a failed spawn among
+      them), or it parked waiting for a decision. */
+  settled: "completed" | "failed" | "needs_decision";
+  /** Newest movement instant, or null. The backlog bound is measured from it,
+      so a lane the seat settled and left alone for days stops being a reason
+      it can never discharge — the same rule an unstarted card lives under. */
+  updatedAt: string | null;
 }
 
 export interface SeatTickTaskInput {
@@ -512,6 +554,12 @@ export interface SeatTickChildInput {
   /** When the terminal outcome was recorded, for ordering the harvest oldest
       first. Null while the child is not terminal. */
   terminalAt: string | null;
+  /** The seat epoch whose landed wake last harvested an outcome of this child
+      (#1749). An earlier epoch's harvest is what makes an outcome that predates
+      this seat history rather than work, however the identity was re-minted:
+      the conversation's result was consumed under a seat since retired. Absent
+      until some wake has landed naming it. */
+  harvestedEpoch?: number | null;
   /** The liveness plane's verdict for a running child's open turn, asked only
       when the registry says the turn is open. Null is no verdict, never a
       stall. */
@@ -782,6 +830,10 @@ export interface SeatTickCheckInput {
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
   signals: readonly SeatTickSignalInput[];
+  /** Lanes the seat itself launched whose stage has settled (#1749). Empty for
+      a seat that launched nothing and for lanes some other hand created: the
+      obligation is the seat's own, and it is the one the tick was blind to. */
+  ownLanes: readonly SeatTickOwnLaneInput[];
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below
