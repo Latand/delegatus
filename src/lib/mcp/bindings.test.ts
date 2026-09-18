@@ -1986,6 +1986,52 @@ test("a graph edit through MCP carries the calling conversation and answers with
   ]);
 });
 
+test("a stage completion call is attributed by the server, and a caller cannot name itself (graph slice 2)", async () => {
+  const calls: Array<[unknown, unknown]> = [];
+  const report = {
+    seq: 1,
+    at: "2026-09-18T00:00:00.000Z",
+    actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+    verdict: { status: "fail", findings: ["P0 — the fence is missing"], rankedFindings: [{ severity: "P0", text: "the fence is missing" }] },
+    summary: "One finding left.",
+    provenance: { head: "0".repeat(40), branch: "pipeline/x", uncommitted: [], pullRequest: null, outputs: [] },
+    calls: 1,
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    reportStageCompletion: async (request: { stageId?: unknown }, actor: unknown) => {
+      calls.push([request, actor]);
+      return request.stageId === "not-mine"
+        ? { error: "this conversation does not hold stage not-mine", status: 403, code: "STAGE_REPORT_NOT_HELD", slots: [{ pipelineId: "pipeline_1", stageId: "build", attempt: 1, state: "running" }] }
+        : { pipelineId: "pipeline_1", stageId: "build", attempt: 1, report, replaced: false };
+    },
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_stage_1", role: "builder" }),
+  } as never);
+  const service = createMcpToolService(bindings, {
+    claim: async () => ({ kind: "fresh" as const }),
+    complete: async () => {},
+  } as never);
+
+  const accepted = await service.callTool("stage_report", {
+    clientRequestId: "report-1",
+    verdict: "fail",
+    findings: [{ severity: "P0", text: "the fence is missing" }],
+    summary: "One finding left.",
+    /* A caller claim about who it is reaches the controller as an argument and
+       never as the actor: the actor below is the server's own attribution. */
+    conversationId: "conversation_somebody_else",
+  });
+  expect(accepted).toMatchObject({ ok: true, pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report });
+  expect(calls[0]![1]).toEqual({ kind: "agent", role: "builder", conversationId: "conversation_stage_1" });
+
+  const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });
+  expect(refused).toMatchObject({
+    ok: false,
+    code: "tool_failed",
+    error: "this conversation does not hold stage not-mine",
+    details: { code: "STAGE_REPORT_NOT_HELD", status: 403, slots: [{ stageId: "build", attempt: 1, state: "running" }] },
+  });
+});
+
 test("agent_activity reports the liveness snapshot and journals the stalls it finds (#645)", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-activity-"));
   sandboxes.push(sandbox);

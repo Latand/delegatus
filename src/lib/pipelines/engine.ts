@@ -51,6 +51,7 @@ import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
   MAX_PIPELINE_GRAPH_EDITS,
+  MAX_PIPELINE_STAGE_REPORTS,
   MAX_PIPELINE_STAGES,
   MAX_SPEC_LENGTH,
   MAX_STAGE_OUTPUTS,
@@ -63,6 +64,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
+import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -85,11 +87,13 @@ import type {
   PipelineStage,
   PipelineStageInput,
   PipelineStageAttempt,
+  PipelineStageReport,
+  PipelineStageReportEntry,
   PipelineTerminalReap,
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
 } from "./types";
-import { parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict } from "./verdict";
+import { MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
   launchId: string;
@@ -2170,6 +2174,32 @@ function commitPassedStage(
   }
 }
 
+/**
+ * The completion an attempt reported for itself, when it reported one (graph
+ * slice 2). The call outranks the fenced JSON verdict in the transcript: it is
+ * an explicit statement the server attributed to the calling conversation,
+ * while the fenced block is the second input, for an attempt whose engine
+ * cannot make the call or whose scaffold still ends in one. The prose keeps
+ * its place as the relay payload when the call carried no summary, so nothing
+ * the next stage reads is lost.
+ *
+ * This is consulted only where settlement is already decided — at a terminal
+ * turn — which is what makes the call an intent rather than the close: an
+ * attempt that reports and then keeps working settles when its turn ends.
+ */
+function reportedStageVerdict(
+  attempt: PipelineStageAttempt,
+  fenced: ParsedStageVerdict | { failureReason: string; output: string } | null,
+  text: string,
+): ParsedStageVerdict | null {
+  const report = attempt.report;
+  if (!report) return null;
+  return {
+    verdict: report.verdict,
+    output: (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
+  };
+}
+
 /** One-shot settlement of a completed stage turn. Semantic contradictions park
     with their parser reason. Valid verdicts are recorded before settlement. */
 function settleStageVerdict(
@@ -2627,7 +2657,8 @@ async function tickRunStage(
   }
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
-    const parsed = parsePipelineStageVerdict(durable.message!.text);
+    const fenced = parsePipelineStageVerdict(durable.message!.text);
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text) ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -2731,7 +2762,8 @@ async function tickRunStage(
     }
     return;
   }
-  const parsed = parsePipelineStageVerdict(message.text);
+  const fenced = parsePipelineStageVerdict(message.text);
+  const parsed = reportedStageVerdict(attempt, fenced, message.text) ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
@@ -5608,6 +5640,137 @@ export async function patchPipeline(
     }
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
+  });
+}
+
+/** A stage attempt whose turn is under way, so its conversation can still say
+    how the stage ended. Everything else has settled, and a settled attempt is
+    a record, not a claim anyone may still edit. */
+const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running", "reviewing", "committing"]);
+
+export type StageCompletionRequest = StageCompletionInput & { stageId?: unknown };
+
+export type StageCompletionSlot = { pipelineId: string; stageId: string; attempt: number; state: PipelineStageAttempt["state"] };
+
+export type StageCompletionResult = {
+  pipelineId?: string;
+  stageId?: string;
+  attempt?: number;
+  report?: PipelineStageReport;
+  /** True when this call replaced an earlier report of the same attempt. */
+  replaced?: boolean;
+  error?: string;
+  status?: number;
+  code?: string;
+  /** What the calling conversation actually holds, on a refusal that turns on
+      which stage it is: the caller names one of these and calls again. */
+  slots?: StageCompletionSlot[];
+};
+
+/**
+ * A stage attempt reports its own completion (graph slice 2, #1730).
+ *
+ * The caller is resolved server-side: the calling conversation is matched to
+ * the attempt it is running, so a conversation cannot report for a stage it
+ * does not hold and `stageId` is needed only to disambiguate a conversation
+ * that holds more than one. The call is an intent — it records the verdict on
+ * the attempt and returns; the attempt settles when its turn completes, on the
+ * existing lifecycle-aware path. A second call before settlement replaces the
+ * first, and a call after it is refused, because by then the verdict is the
+ * record the graph already routed on.
+ *
+ * Provenance is never taken from the caller. The head, the branch's pull
+ * request and the declared outputs are read by the server at the moment of the
+ * call, so what the attempt shows is what the server observed.
+ */
+export async function reportStageCompletion(
+  request: StageCompletionRequest,
+  actor: PauseResumeActor,
+  ports: PipelinePorts = defaultPipelinePorts(),
+): Promise<StageCompletionResult> {
+  const conversationId = actor.kind === "agent" ? actor.conversationId?.trim() || null : null;
+  if (!conversationId) {
+    return {
+      error: "a stage completion is reported by the stage's own conversation, and this call carries no conversation identity",
+      status: 403,
+      code: "STAGE_REPORT_NOT_AN_ATTEMPT",
+    };
+  }
+  const requestedStageId = typeof request.stageId === "string" && request.stageId.trim() ? request.stageId.trim() : null;
+  return withPipelineMutation((pipelines, persist) => {
+    const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
+      .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
+      .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
+    const slots = (entries: typeof held): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
+      ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
+    if (held.length === 0) {
+      return {
+        error: "this conversation is not running a pipeline stage, so it has no stage completion to report",
+        status: 403,
+        code: "STAGE_REPORT_NOT_AN_ATTEMPT",
+      };
+    }
+    const named = requestedStageId ? held.filter(({ stageId }) => stageId === requestedStageId) : held;
+    if (named.length === 0) {
+      return {
+        error: `this conversation does not hold stage ${requestedStageId}`,
+        status: 403,
+        code: "STAGE_REPORT_NOT_HELD",
+        slots: slots(held),
+      };
+    }
+    const live = named.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
+    if (live.length === 0) {
+      const settled = named.at(-1)!;
+      return {
+        error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
+        status: 409,
+        code: "STAGE_REPORT_SETTLED",
+        slots: slots(named),
+      };
+    }
+    if (live.length > 1) {
+      return {
+        error: "this conversation holds more than one live stage; name the one being reported in stageId",
+        status: 409,
+        code: "STAGE_REPORT_AMBIGUOUS",
+        slots: slots(live),
+      };
+    }
+    const normalized = normalizeStageCompletion(request);
+    if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
+
+    const { pipeline, stageId, attempt } = live[0]!;
+    const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
+    const declaredOutputs = stage ? attemptStage(stage, attempt).outputs ?? [] : [];
+    const prior = attempt.report ?? null;
+    const entries = pipeline.stageReports ?? [];
+    const seq = (entries.at(-1)?.seq ?? 0) + 1;
+    const report: PipelineStageReport = {
+      seq,
+      at: ports.now(),
+      actor,
+      verdict: normalized.verdict,
+      summary: normalized.summary,
+      provenance: collectStageProvenance(pipeline, declaredOutputs, ports.exec),
+      calls: (prior?.calls ?? 0) + 1,
+    };
+    attempt.report = report;
+    const entry: PipelineStageReportEntry = {
+      seq,
+      at: report.at,
+      actor,
+      stageId,
+      attempt: attempt.n,
+      status: report.verdict.status,
+      findings: report.verdict.findings?.length ?? 0,
+      replaces: prior?.seq ?? null,
+      summary: report.summary,
+    };
+    /* Replaced, never pushed into: loaded records share leaves with the cache. */
+    pipeline.stageReports = [...entries, entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
+    persist();
+    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null };
   });
 }
 

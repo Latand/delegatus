@@ -19,3 +19,12 @@ export const MAX_FAIL_EDGE_ROUNDS = 9;
 export const DEFAULT_FAIL_EDGE_ROUNDS = 5;
 /** Accepted graph edits a pipeline record keeps; the oldest are dropped first. */
 export const MAX_PIPELINE_GRAPH_EDITS = 50;
+
+/** Accepted stage completion calls a pipeline record keeps (graph slice 2);
+    the oldest are dropped first, as graph edits are. A call carries at most
+    {@link MAX_STAGE_REPORT_FINDINGS} findings of {@link MAX_STAGE_FINDING_CHARS}
+    each, and a summary of {@link MAX_STAGE_REPORT_SUMMARY_CHARS}. */
+export const MAX_PIPELINE_STAGE_REPORTS = 50;
+export const MAX_STAGE_REPORT_FINDINGS = 50;
+export const MAX_STAGE_FINDING_CHARS = 2_000;
+export const MAX_STAGE_REPORT_SUMMARY_CHARS = 2_000;

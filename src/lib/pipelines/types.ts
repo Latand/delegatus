@@ -106,9 +106,23 @@ export type PipelineStage = PipelineStageInput & {
 
 export type StageVerdictStatus = "pass" | "fail" | "needs_decision";
 
+export const STAGE_FINDING_SEVERITIES = ["P0", "P1", "P2", "P3"] as const;
+export type StageFindingSeverity = typeof STAGE_FINDING_SEVERITIES[number];
+
+/** One finding with the rank its author gave it (graph slice 2). `severity:
+    null` is a finding that arrived with no rank — every finding a fenced JSON
+    verdict carried before ranking existed, which stays accepted. */
+export type StageFinding = { severity: StageFindingSeverity | null; text: string };
+
 export type StageVerdict = {
   status: StageVerdictStatus;
+  /** Findings in severity order, most severe first, each rendered as
+      `<severity> — <text>` when it carries one. This is what every reader of
+      a verdict shows, and what the fail edge relays. */
   findings?: string[];
+  /** The same findings as records, present when at least one carries a rank.
+      Derived from `findings`, so a record round-trips through the store. */
+  rankedFindings?: StageFinding[];
   confidence?: number;
 };
 
@@ -211,6 +225,59 @@ export type PipelineGraphEdit = {
   summary: string;
 };
 
+/** What the server itself observed about a stage attempt's work at the moment
+    the attempt reported completion (graph slice 2). Never taken from the
+    caller: the call carries a verdict, findings and a summary, and nothing
+    else. A field the server could not read is `null`, which is a statement
+    about the read, not about the work. */
+export type PipelineStageProvenance = {
+  /** The worktree's checked-out commit, dirty tree included. */
+  head: string | null;
+  branch: string;
+  /** Uncommitted paths the server saw, bounded; empty means a clean tree.
+      `null` when the worktree could not be read at all. */
+  uncommitted: string[] | null;
+  /** The pull request the forge reports for `branch`, or null when there is
+      none and when the forge could not be reached. */
+  pullRequest: { url: string; number: number; state: string } | null;
+  /** The stage's declared outputs, and whether the server found each in the
+      worktree. Empty when the stage declares none. */
+  outputs: Array<{ path: string; present: boolean }>;
+};
+
+/** A stage attempt's own completion report (graph slice 2): the intent the
+    attempt stated through the MCP tool, not the close. The attempt settles
+    when its turn completes, on this verdict; a second call before settlement
+    replaces this record, and one after it is refused. */
+export type PipelineStageReport = {
+  /** Shared with the pipeline's attributed journal entry for this call. */
+  seq: number;
+  at: string;
+  /** The calling conversation, resolved by the server from the call itself. */
+  actor: PauseResumeActor;
+  verdict: StageVerdict;
+  summary: string | null;
+  provenance: PipelineStageProvenance;
+  /** Accepted calls this attempt has made, replacements included. */
+  calls: number;
+};
+
+/** One accepted completion call, as the pipeline's own journal keeps it —
+    the same attribution a graph edit carries in slice 1. */
+export type PipelineStageReportEntry = {
+  seq: number;
+  at: string;
+  actor: PauseResumeActor;
+  stageId: string;
+  attempt: number;
+  status: StageVerdictStatus;
+  /** How many findings the call carried, by severity, most severe first. */
+  findings: number;
+  /** The `seq` of the report this call replaced before settlement, or null. */
+  replaces: number | null;
+  summary: string | null;
+};
+
 export type PipelineStageAttempt = {
   n: number;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -296,6 +363,10 @@ export type PipelineStageAttempt = {
   activatedBy: PipelineEdgeActivation | null;
   output: string | null;
   verdict: StageVerdict | null;
+  /** The completion the attempt reported for itself (graph slice 2), standing
+      until its turn completes and settlement reads it. Absent on an attempt
+      that never called, which settles from its fenced JSON verdict. */
+  report?: PipelineStageReport | null;
   error: string | null;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
@@ -424,6 +495,9 @@ export type Pipeline = {
   pos?: { x: number; y: number };
   /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
   graphEdits?: PipelineGraphEdit[];
+  /** Accepted stage completion calls, oldest first, at most
+      MAX_PIPELINE_STAGE_REPORTS (graph slice 2). */
+  stageReports?: PipelineStageReportEntry[];
 };
 
 export type CreatePipelineRequest = {

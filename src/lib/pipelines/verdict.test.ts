@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { parseStageVerdict, stageVerdictFrom, stageVerdictRejectionReason } from "./verdict";
+import type { StageVerdict } from "./types";
+import { normalizeStageCompletion, parseStageVerdict, stageVerdictFrom, stageVerdictRejectionReason } from "./verdict";
 
 test("stage verdict guard accepts the bounded contract", () => {
   expect(stageVerdictFrom({ status: "pass", findings: ["verified"], confidence: 0.9 })).toEqual({
@@ -233,4 +234,110 @@ test("prose marker validation covers content beyond the stored output cap", () =
     failureReason: 'contradictory stage verdict: prose marker "REQUEST_CHANGES" disagrees with JSON status "pass"',
     output: boundedOutput,
   });
+});
+
+/* Graph slice 2 (#1730): the completion call and the fenced JSON verdict are
+   two inputs of one form, and they end in this normaliser. */
+
+test("a completion call and a fenced JSON verdict normalise to one shape", () => {
+  const called = normalizeStageCompletion({
+    verdict: "fail",
+    findings: [{ severity: "P1", text: "the retry loop never ends" }],
+    summary: "Left the loop open.",
+  });
+  const fenced = parseStageVerdict([
+    "Left the loop open.",
+    "",
+    "```json",
+    '{"status":"fail","findings":["P1 — the retry loop never ends"]}',
+    "```",
+  ].join("\n"));
+
+  expect(called).toEqual({
+    verdict: {
+      status: "fail",
+      findings: ["P1 — the retry loop never ends"],
+      rankedFindings: [{ severity: "P1", text: "the retry loop never ends" }],
+    },
+    summary: "Left the loop open.",
+  });
+  expect(fenced).toEqual({
+    verdict: (called as { verdict: StageVerdict }).verdict,
+    output: "Left the loop open.",
+  });
+});
+
+test("findings are recorded most severe first, whichever input carried them", () => {
+  const called = normalizeStageCompletion({
+    verdict: "fail",
+    findings: [
+      { severity: "P2", text: "third" },
+      { severity: "P0", text: "first" },
+      { severity: "P1", text: "second" },
+      { severity: "P0", text: "first again" },
+    ],
+  });
+  expect(called).toEqual({
+    verdict: {
+      status: "fail",
+      findings: ["P0 — first", "P0 — first again", "P1 — second", "P2 — third"],
+      rankedFindings: [
+        { severity: "P0", text: "first" },
+        { severity: "P0", text: "first again" },
+        { severity: "P1", text: "second" },
+        { severity: "P2", text: "third" },
+      ],
+    },
+    summary: null,
+  });
+  /* The same order out of a fenced block, and unranked findings come last. */
+  expect(stageVerdictFrom({ status: "fail", findings: ["P2 - third", "no rank at all", "P0 first"] })).toEqual({
+    status: "fail",
+    findings: ["P0 — first", "P2 — third", "no rank at all"],
+    rankedFindings: [
+      { severity: "P0", text: "first" },
+      { severity: "P2", text: "third" },
+      { severity: null, text: "no rank at all" },
+    ],
+  });
+});
+
+test("findings that carry no rank stay the array a fenced verdict always was", () => {
+  expect(stageVerdictFrom({ status: "fail", findings: ["second regression", "first regression"] })).toEqual({
+    status: "fail",
+    findings: ["second regression", "first regression"],
+  });
+});
+
+test("a completion call is refused for the shapes a fenced verdict is refused for", () => {
+  expect(normalizeStageCompletion({ verdict: "approve" })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+  expect(normalizeStageCompletion({ verdict: "pass", findings: [{ severity: "P2", text: "still open" }] })).toEqual({
+    error: 'contradictory stage verdict: status "pass" cannot include findings',
+    code: "STAGE_REPORT_CONTRADICTORY",
+  });
+  expect(normalizeStageCompletion({ verdict: "fail", findings: ["plain text"] })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+  expect(normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P9", text: "x" }] })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+  expect(normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "   " }] })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+  expect(normalizeStageCompletion({ verdict: "fail", findings: Array.from({ length: 51 }, () => ({ severity: "P3", text: "x" })) }))
+    .toMatchObject({ code: "STAGE_REPORT_INVALID" });
+});
+
+test("a completion call clamps its summary and accepts a verdict with no findings", () => {
+  const long = normalizeStageCompletion({ verdict: "needs_decision", summary: "x".repeat(4_000) });
+  expect(long).toEqual({ verdict: { status: "needs_decision" }, summary: "x".repeat(2_000) });
+  expect(normalizeStageCompletion({ verdict: "pass", summary: "  " })).toEqual({ verdict: { status: "pass" }, summary: null });
+});
+
+test("a rankedFindings field in an agent's own fenced block is ignored, and a record round-trips", () => {
+  const forged = stageVerdictFrom({
+    status: "fail",
+    findings: ["P1 — the retry loop never ends"],
+    rankedFindings: [{ severity: "P0", text: "promoted by the agent" }],
+  });
+  expect(forged).toEqual({
+    status: "fail",
+    findings: ["P1 — the retry loop never ends"],
+    rankedFindings: [{ severity: "P1", text: "the retry loop never ends" }],
+  });
+  expect(stageVerdictFrom(forged)).toEqual(forged!);
 });
