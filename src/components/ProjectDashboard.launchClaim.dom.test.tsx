@@ -11,9 +11,10 @@
  * with only a "Launch history · 1" failure row left.
  *
  * This mounts the REAL ProjectDashboard with that exact shape and proves the
- * conversation keeps its board card while the shelf still reports the failed
- * delivery. A pathless `spawn:<launchId>` receipt keeps today's behavior: it is
- * shelved and claimed, because it has no transcript to hide.
+ * conversation keeps its board card whatever the launch record says. A pathless
+ * `spawn:<launchId>` receipt keeps today's behavior: it is claimed off the
+ * board, because it has no transcript to hide. The launch-history drawer that
+ * used to list these records was removed from the board in #1765.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -206,9 +207,11 @@ test("a failed-delivery launch record on a scanned transcript path never hides t
   /* The conversation is real board content: it must keep its tile on the Board (the kanban, #1695). */
   expect(await waitFor(() => host.querySelector(`[data-member="${path}"]`) !== null)).toBe(true);
 
-  /* The failed delivery stays visible: the shelf still lists the record. */
   await settle();
-  expect(host.querySelector('[data-testid="launch-history"]')).not.toBeNull();
+  /* The launch-history drawer is gone (#1765); what this guards is the
+     conversation, which keeps its tile whatever the record says. */
+  expect(host.querySelector('[data-testid="launch-history"]')).toBeNull();
+  expect(host.querySelector(`[data-member="${path}"]`)).not.toBeNull();
 });
 
 test("a pathless terminal receipt is still shelved and never becomes a board card", async () => {
@@ -222,5 +225,7 @@ test("a pathless terminal receipt is still shelved and never becomes a board car
 
   expect(host.querySelector('[data-kanban-board] [data-member="spawn:launch-claim-2"]')).toBeNull();
   expect(host.querySelector('[data-kanban-board] [data-link-path="spawn:launch-claim-2"]')).toBeNull();
-  expect(host.querySelector('[data-testid="launch-history"]')).not.toBeNull();
+  /* The launch-history drawer is gone (#1765); the receipt is still claimed
+     off the board rather than drawn as a card. */
+  expect(host.querySelector('[data-testid="launch-history"]')).toBeNull();
 });

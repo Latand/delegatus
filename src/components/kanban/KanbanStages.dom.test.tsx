@@ -313,13 +313,13 @@ test("retry and skip name the stage the pipeline waits on and send the action al
   const { host, route } = mount(parked);
   await tick();
   click(card(host).querySelector("[data-pipeline-menu]"));
-  expect(menuItem(host, "Retry Verifier")?.getAttribute("aria-disabled")).toBeNull();
-  click(menuItem(host, "Skip Verifier"));
+  expect(menuItem(host, "Retry Verify")?.getAttribute("aria-disabled")).toBeNull();
+  click(menuItem(host, "Skip Verify"));
   await tick();
   /* The stage and attempt the operator saw ride along; the engine checks them before it acts. */
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
   expect(route.reads).toEqual([]);
-  expect(receiptTexts(host)).toEqual(["Skipped Verifier in «Restore search results after the index rebuild»"]);
+  expect(receiptTexts(host)).toEqual(["Skipped Verify in «Restore search results after the index rebuild»"]);
 });
 
 test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pane per stage in graph order", async () => {
@@ -330,28 +330,28 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
   const view = sheet(host)!;
   expect(view.getAttribute("role")).toBe("dialog");
   expect(view.querySelector("header h2")?.textContent).toBe("Restore search results after the index rebuild");
-  expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verifier running · attempt 2");
+  expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verify running · attempt 2");
   const chips = [...view.querySelectorAll<HTMLElement>("[data-nav-stage]")];
-  expect(chips.map((chip) => chip.textContent)).toEqual(["1Builder", "2Reviewer", "3Verifier", "4Cleaner"]);
+  expect(chips.map((chip) => chip.textContent)).toEqual(["1Implement", "2Review", "3Verify", "4Merge"]);
   expect(chips.map((chip) => chip.getAttribute("aria-current"))).toEqual(["false", "false", "true", "false"]);
-  expect(view.querySelector(".gs-nav .ploop")?.textContent).toBe("↺ Verifier fails → Builder · 1/2");
+  expect(view.querySelector(".gs-nav .ploop")?.textContent).toBe("↺ Verify fails → Implement · 1/2");
   expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
   expect([...view.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   same(document.activeElement, pane(host, "verify"));
 
   const implement = pane(host, "implement")!;
-  expect(implement.querySelector(".pname")?.textContent).toBe("1. Builder");
-  expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verifier · fail");
+  expect(implement.querySelector(".pname")?.textContent).toBe("1. Implement");
+  expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verify · fail");
   expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["#1 · passed", "false"], ["#2 · passed", "true"]]);
   expect([...pane(host, "review")!.querySelectorAll(".rounds .rchip")].map((chip) => chip.textContent)).toEqual(["Round 1 · changes requested", "Round 2 · approved"]);
-  expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Reviewer · pass · on fail → Builder · 1/2");
+  expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Review · pass · on fail → Implement · 1/2");
   /* Each started pane holds its shown attempt's conversation as a reader. */
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));
   expect(pane(host, "verify")!.querySelector("[data-kanban-reader]")?.getAttribute("data-in-sheet")).toBe("1");
   /* The waiting stage holds its first message, marked as waiting for delivery. */
   const merge = pane(host, "merge")!;
-  expect(merge.querySelector(".pane-sub")?.textContent).toBe("runs when Verifier passes");
-  expect(merge.querySelector(".msg.event")?.textContent).toBe("Starts when Verifier passes · last stage");
+  expect(merge.querySelector(".pane-sub")?.textContent).toBe("runs when Verify passes");
+  expect(merge.querySelector(".msg.event")?.textContent).toBe("Starts when Verify passes · last stage");
   expect(merge.querySelector("[data-draft-message] .btext")?.textContent).toBe("Merge once the alias swap is verified.");
   expect(merge.querySelector(".bstatus")?.textContent).toBe("Waiting for stage start · not delivered");
   expect(merge.querySelector<HTMLTextAreaElement>(".composer2 textarea")?.disabled).toBe(true);
@@ -400,7 +400,7 @@ test("Collapse finished folds passed stages and lets their readers go; a navigat
   await tick();
   expect([...sheet(host)!.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.collapsed)).toEqual(["1", "1", "0", "0"]);
   expect(readerIn(pane(host, "implement"))).toBeNull();
-  expect(pane(host, "implement")!.querySelector(".vlabel")?.textContent).toBe("1 Builder · passed");
+  expect(pane(host, "implement")!.querySelector(".vlabel")?.textContent).toBe("1 Implement · passed");
   click(sheet(host)!.querySelector('[data-nav-stage="review"]'));
   await tick();
   expect(pane(host, "review")!.dataset.collapsed).toBe("0");
@@ -452,7 +452,7 @@ test("a waiting node opens its first message on the card; Save re-reads the stag
   await tick();
   const panel = card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
   same(document.activeElement, panel);
-  expect(panel.querySelector(".ch-title")?.textContent).toBe("Cleaner · Restore search results after the index rebuild");
+  expect(panel.querySelector(".ch-title")?.textContent).toBe("Merge · Restore search results after the index rebuild");
   expect(panel.querySelector(".ch-stage")?.textContent).toBe("stage 4/4");
   expect(card(host).querySelector('.psummary [data-stage="merge"]')?.classList.contains("selected")).toBe(true);
   click(panel.querySelector("[data-draft-edit]"));
@@ -503,7 +503,7 @@ test("a stage that starts between the check and the write answers 409: the text 
   click(panel()!.querySelector("[data-draft-save]"));
   await tick();
   expect(route.patches).toHaveLength(1);
-  expect(panel()!.querySelector("[data-draft-undelivered] .msg-text")?.textContent).toBe("Cleaner started with its previous first message. Your edit was not delivered.");
+  expect(panel()!.querySelector("[data-draft-undelivered] .msg-text")?.textContent).toBe("Merge started with its previous first message. Your edit was not delivered.");
   expect(panel()!.querySelector("[data-draft-undelivered] .kept")?.textContent).toBe("Too late.");
   expect(receiptTexts(host)).toEqual([]);
   /* The catalog catches up: the stage has its conversation, and the draft still holds the panel. */
@@ -559,20 +559,20 @@ test("a refused skip's Retry sends the same guarded expectations; with the curso
   await tick();
   route.state.answers.push({ ok: false, status: 409, error: "the stage worktree has uncommitted changes" });
   click(card(host).querySelector("[data-pipeline-menu]"));
-  click(menuItem(host, "Skip Verifier"));
+  click(menuItem(host, "Skip Verify"));
   await tick();
   expect(route.reads).toEqual([]);
   const guarded: PatchPipelineRequest = { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 };
   expect(route.patches.map((patch) => patch.body)).toEqual([guarded]);
   const refused = host.querySelector("[data-kanban-receipt].error");
-  expect(refused?.querySelector(".msg")?.textContent).toBe("Skip Verifier was refused: the stage worktree has uncommitted changes");
+  expect(refused?.querySelector(".msg")?.textContent).toBe("Skip Verify was refused: the stage worktree has uncommitted changes");
   route.state.record = parkedOn("implement");
   click(refused?.querySelector(".act"));
   await tick();
   expect(route.patches.map((patch) => patch.body)).toEqual([guarded, guarded]);
   /* Refused by the guard: read once, to say what waits now; nothing is resent. */
   expect(route.reads).toEqual(["p-search"]);
-  expect(receiptTexts(host)).toEqual(["Skip Verifier was not sent: the pipeline now waits on Builder."]);
+  expect(receiptTexts(host)).toEqual(["Skip Verify was not sent: the pipeline now waits on Implement."]);
 });
 
 test("a retry chosen on a stale menu is refused by the engine when another stage, or a newer attempt of the same stage, waits now; a current one retries", async () => {
@@ -580,25 +580,25 @@ test("a retry chosen on a stale menu is refused by the engine when another stage
   await tick();
   route.state.record = parkedOn("implement");
   click(card(host).querySelector("[data-pipeline-menu]"));
-  click(menuItem(host, "Retry Verifier"));
+  click(menuItem(host, "Retry Verify"));
   await tick();
   expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 }]);
-  expect(receiptTexts(host)).toEqual(["Retry Verifier was not sent: the pipeline now waits on Builder."]);
+  expect(receiptTexts(host)).toEqual(["Retry Verify was not sent: the pipeline now waits on Implement."]);
 
   const newer = parkedOn("verify");
   newer.runs.find((run) => run.stageId === "verify")!.attempts.push(attempt(3, "failed", verify2, 60) as never);
   route.state.record = newer;
   click(card(host).querySelector("[data-pipeline-menu]"));
-  click(menuItem(host, "Retry Verifier"));
+  click(menuItem(host, "Retry Verify"));
   await tick();
-  expect(receiptTexts(host).at(-1)).toBe("Retry Verifier was not sent: a newer attempt of Verifier waits now.");
+  expect(receiptTexts(host).at(-1)).toBe("Retry Verify was not sent: a newer attempt of Verify waits now.");
 
   route.state.record = null;
   click(card(host).querySelector("[data-pipeline-menu]"));
-  click(menuItem(host, "Retry Verifier"));
+  click(menuItem(host, "Retry Verify"));
   await tick();
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 });
-  expect(receiptTexts(host).at(-1)).toBe("Retrying Verifier in «Restore search results after the index rebuild»");
+  expect(receiptTexts(host).at(-1)).toBe("Retrying Verify in «Restore search results after the index rebuild»");
 });
 
 test("a stage another client changes between the save's read and its write is refused by the engine and keeps that client's words, which the notice shows", async () => {
@@ -731,7 +731,7 @@ test("a pipeline closed before its stage launched says the edit was never sent, 
   const closed = { ...searchPipeline({ state: "closed" } as Partial<Pipeline>, { stageId: "merge", attempts: [attempt(1, "pending", null, 30, { startedAt: null })] }) } as Pipeline;
   update(closed);
   await tick();
-  expect(panel()!.querySelector("[data-draft-ended] .msg-text")?.textContent).toBe("The pipeline ended before Cleaner started. Nothing was sent.");
+  expect(panel()!.querySelector("[data-draft-ended] .msg-text")?.textContent).toBe("The pipeline ended before Merge started. Nothing was sent.");
   expect(panel()!.querySelector("[data-draft-ended] .kept")?.textContent).toBe("Wait for the alias swap.");
   expect(panel()!.querySelector("[data-draft-undelivered]")).toBeNull();
   expect(panel()!.textContent).not.toContain("started with");
@@ -805,15 +805,15 @@ test("a stage waiting before any attempt of its own is expected as attempt 0, an
   const started = parkedOn("merge");
   started.runs.push({ stageId: "merge", attempts: [attempt(1, "needs_decision", merge1, 30)] } as never);
   route.state.record = started;
-  click(menuItem(host, "Skip Cleaner"));
+  click(menuItem(host, "Skip Merge"));
   await tick();
   expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "skip-stage", expectedStageId: "merge", expectedAttempt: 0 }]);
-  expect(receiptTexts(host)).toEqual(["Skip Cleaner was not sent: a newer attempt of Cleaner waits now."]);
+  expect(receiptTexts(host)).toEqual(["Skip Merge was not sent: a newer attempt of Merge waits now."]);
 
   route.state.record = null;
   click(card(host).querySelector("[data-pipeline-menu]"));
-  click(menuItem(host, "Retry Cleaner"));
+  click(menuItem(host, "Retry Merge"));
   await tick();
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "merge", expectedAttempt: 0 });
-  expect(receiptTexts(host).at(-1)).toBe("Retrying Cleaner in «Restore search results after the index rebuild»");
+  expect(receiptTexts(host).at(-1)).toBe("Retrying Merge in «Restore search results after the index rebuild»");
 });

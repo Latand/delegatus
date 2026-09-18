@@ -244,6 +244,7 @@
 }
 .kb .stage-section .sec-head { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-secondary); min-height: 28px; }
 .kb .stage-section .sec-head .kind { flex-shrink: 0; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--surface-card); border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
+.kb .stage-section .sec-head .ptitle { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--color-primary); }
 .kb .stage-section .sec-head .progress { color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .stage-section .sec-head .grow { flex: 1; }
 .kb .stage-section .graph-edit { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -254,8 +255,11 @@
 .kb .stage-section .stage-findings li[data-severity="P0"] .sev, .kb .stage-section .stage-findings li[data-severity="P1"] .sev { color: var(--color-danger, var(--color-text)); }
 .kb .stage-section .stage-findings .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card.shelf .stage-section .sec-head { flex-wrap: wrap; row-gap: 2px; }
-.kb .card.shelf .stage-section .sec-head .kind { display: none; }
+.kb .card.shelf .stage-section .sec-head .ptitle { flex-basis: 100%; }
 .kb .card.shelf .stage-section .sec-head .progress { order: 10; flex-basis: 100%; }
+.kb .done-pipelines { margin-top: 4px; }
+.kb .done-pipelines .completed-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
+.kb .done-pipelines .completed-toggle svg { width: 12px; height: 12px; }
 .kb .pstate-chip { flex-shrink: 0; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; background: var(--surface-card); color: var(--color-muted); border: 1px solid var(--border-default); }
 .kb .pstate-chip[data-pstate="running"] { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 40%, var(--border-default)); }
 .kb .pstate-chip[data-pstate="needs_decision"] { color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 45%, var(--border-default)); background: var(--color-warning-soft); }

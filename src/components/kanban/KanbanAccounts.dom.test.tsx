@@ -277,7 +277,7 @@ test("a waiting stage names its first turn's account; the picker weighs each acc
   await openWaitingStage(host);
   expect(chipText(stageChip(host))).toBe("Project's choice");
   await openPicker(host, stageChip(host));
-  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Cleaner · Claude");
+  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Merge · Claude");
   expect(kv(host)).toEqual([["First turn on", "Project's choice"]]);
   expect(rows(host).map(({ id, name, tag, checked, disabled }) => [id, name, tag, checked, disabled])).toEqual([
     ["", "Project's choice", "chosen", true, false],
@@ -299,7 +299,7 @@ test("a waiting stage names its first turn's account; the picker weighs each acc
   same(document.activeElement, stageChip(host));
   expect(route.reads).toEqual(["p-search"]);
   expect(route.patches).toEqual([{ action: "override-stage", stageId: "merge", account: "account-c", expectedStageDigest: stageDigest(searchPipeline().stages[2]!) }]);
-  expect(receiptTexts(host)).toEqual(["Cleaner runs on Account C from its first turn"]);
+  expect(receiptTexts(host)).toEqual(["Merge runs on Account C from its first turn"]);
   update({ pipeline: searchPipeline({ account: "account-c" }) });
   expect(chipText(stageChip(host))).toBe("Account C");
 });
@@ -317,7 +317,7 @@ test("the project's choice clears a stage's pin, and the stage's menu opens the 
   click(row(host, ""));
   await tick();
   expect(route.patches).toEqual([{ action: "override-stage", stageId: "merge", account: null, expectedStageDigest: stageDigest(searchPipeline({ account: "account-c" }).stages[2]!) }]);
-  expect(receiptTexts(host)).toEqual(["Cleaner uses the project's choice of account"]);
+  expect(receiptTexts(host)).toEqual(["Merge uses the project's choice of account"]);
 });
 
 test("a stage another client changed after the read keeps that client's account; the receipt says what it runs on now and nothing is resent", async () => {
@@ -330,7 +330,7 @@ test("a stage another client changed after the read keeps that client's account;
   await tick();
   expect(route.patches).toHaveLength(1);
   expect(route.reads).toEqual(["p-search", "p-search"]);
-  expect(receiptTexts(host)).toEqual(["Cleaner was changed elsewhere and runs on Account E now. Nothing was overwritten."]);
+  expect(receiptTexts(host)).toEqual(["Merge was changed elsewhere and runs on Account E now. Nothing was overwritten."]);
 });
 
 test("the server's refusal keeps its words beside a Retry; a choice with no answer is not confirmed until a read shows the stage holds it", async () => {
@@ -342,7 +342,7 @@ test("the server's refusal keeps its words beside a Retry; a choice with no answ
   click(row(host, "account-c"));
   await tick();
   const refused = host.querySelector("[data-kanban-receipt].error");
-  expect(refused?.querySelector(".msg")?.textContent).toBe("Cleaner's account wasn't changed: claude account account-c is not allowed on project fixture");
+  expect(refused?.querySelector(".msg")?.textContent).toBe("Merge's account wasn't changed: claude account account-c is not allowed on project fixture");
   expect(refused?.querySelector(".act")?.textContent).toBe("Retry");
 
   route.state.answers.push({ ok: false, status: 0, error: "Failed to fetch", unknown: true });
@@ -350,21 +350,21 @@ test("the server's refusal keeps its words beside a Retry; a choice with no answ
   click(row(host, "account-c"));
   await tick();
   expect(chipText(stageChip(host))).toBe("Project's choice → Account C not confirmed");
-  expect(receiptTexts(host).at(-1)).toBe("Changing Cleaner's account got no answer. It may have been saved.");
+  expect(receiptTexts(host).at(-1)).toBe("Changing Merge's account got no answer. It may have been saved.");
   await openPicker(host, stageChip(host));
   expect(kv(host)).toEqual([["First turn on", "Project's choice"], ["Pending", "Account C · not confirmed"]]);
   /* Check again only reads: the stage does not hold it yet, so it stays unconfirmed. */
   click(picker(host)!.querySelector("[data-account-check]"));
   await tick();
   expect(route.patches).toHaveLength(2);
-  expect(receiptTexts(host).at(-1)).toBe("Still not confirmed: Cleaner doesn't run on Account C yet");
+  expect(receiptTexts(host).at(-1)).toBe("Still not confirmed: Merge doesn't run on Account C yet");
   route.state.record = searchPipeline({ account: "account-c" });
   update({ pipeline: searchPipeline({ account: "account-c" }) });
   await openPicker(host, stageChip(host));
   click(picker(host)!.querySelector("[data-account-check]"));
   await tick();
   expect(route.patches).toHaveLength(2);
-  expect(receiptTexts(host).at(-1)).toBe("Cleaner runs on Account C from its first turn");
+  expect(receiptTexts(host).at(-1)).toBe("Merge runs on Account C from its first turn");
   expect(chipText(stageChip(host))).toBe("Account C");
 });
 
@@ -374,7 +374,7 @@ test("a conversation switches with the header's reconfigure; an account outside 
   await openVerify(host);
   expect(chipText(conversationChip(host))).toBe("Account A");
   await openPicker(host, conversationChip(host));
-  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Verifier · Claude");
+  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Verify · Claude");
   expect(kv(host)).toEqual([["Current turn on", "Account A · Max · 72% of 5h"], ["Stage setting", "Project's choice"], ["Launched on", "Account C"]]);
   expect(rows(host).map(({ id, tag, checked, disabled }) => [id, tag, checked, disabled])).toEqual([
     ["default", "current", true, false],
@@ -391,7 +391,7 @@ test("a conversation switches with the header's reconfigure; an account outside 
   await tick(20);
   expect(hostRequests).toEqual([{ action: "reconfigure", path: verify.path, conversationId: verify.conversationId, accountId: "account-g", model: "opus", effort: "high" }]);
   expect(receiptTexts(host)).toEqual([
-    "Switch to Account G requested for Verifier. It waits for the current turn to end.",
+    "Switch to Account G requested for Verify. It waits for the current turn to end.",
     "Account G is outside this project's accounts; the switch is recorded as your choice",
   ]);
   expect(chipText(conversationChip(host))).toBe("Account A → Account G after this turn");
@@ -456,7 +456,7 @@ test("a switch with no answer is not confirmed and never resent; a refused one s
   click(row(host, "account-c"));
   await tick(20);
   expect(chipText(conversationChip(host))).toBe("Account A → Account C not confirmed");
-  expect(receiptTexts(host)).toEqual(["Switching Verifier to Account C got no answer. It may be queued; this page won't send it again."]);
+  expect(receiptTexts(host)).toEqual(["Switching Verify to Account C got no answer. It may be queued; this page won't send it again."]);
   await openPicker(host, conversationChip(host));
   expect(kv(host).at(-1)).toEqual(["Pending", "Account C · the request got no answer"]);
   expect(rows(host).every((entry) => entry.disabled)).toBe(true);
@@ -488,7 +488,7 @@ test("a 503 that can follow dispatch is not confirmed: the accounts stay locked 
   click(row(host, "account-c"));
   await tick(20);
   expect(chipText(conversationChip(host))).toBe("Account A → Account C not confirmed");
-  expect(receiptTexts(host)).toEqual(["Switching Verifier to Account C got no answer. It may be queued; this page won't send it again."]);
+  expect(receiptTexts(host)).toEqual(["Switching Verify to Account C got no answer. It may be queued; this page won't send it again."]);
   await openPicker(host, conversationChip(host));
   expect(kv(host).at(-1)).toEqual(["Pending", "Account C · the request got no answer"]);
   expect(notes(host)[0]).toBe("It may or may not have reached the server, and this page can't tell. Accounts stay unavailable here so nothing is sent twice; reloading the page ends this page's lock.");
@@ -509,7 +509,7 @@ test("Cancel on a switch waiting for its turn sends cancel with the record's rev
   await tick(20);
   expect(migrationRequests).toEqual([{ conversationId: verify.conversationId!, body: { action: "cancel", expectedRevision: 2 } }]);
   expect(hostRequests).toEqual([]);
-  expect(receiptTexts(host)).toEqual(["Cancelled the switch to Account C for Verifier"]);
+  expect(receiptTexts(host)).toEqual(["Cancelled the switch to Account C for Verify"]);
 });
 
 test("a switch past waiting for its turn offers no Cancel and no Change", async () => {
@@ -542,10 +542,10 @@ test("Change withdraws the queued switch first and asks for the new account only
   expect(writes).toEqual(["reconfigure:account-c", "migration:withdraw", "reconfigure:account-g"]);
   expect(migrationRequests).toEqual([{ conversationId: verify.conversationId!, body: { action: "withdraw", operationId: "op-1" } }]);
   expect(receiptTexts(host).slice(-2)).toEqual([
-    "Switch to Account G requested for Verifier. It waits for the current turn to end.",
+    "Switch to Account G requested for Verify. It waits for the current turn to end.",
     "Account G is outside this project's accounts; the switch is recorded as your choice",
   ]);
-  expect(receiptTexts(host)).toContain("Cancelled the switch to Account C for Verifier");
+  expect(receiptTexts(host)).toContain("Cancelled the switch to Account C for Verify");
   /* The cancelled switch's own request ended with the cancel, not as a failure. */
   expect(receiptTexts(host).some((text) => text.includes("failed"))).toBe(false);
   expect(chipText(conversationChip(host))).toBe("Account A → Account G after this turn");
@@ -621,7 +621,7 @@ test("an unanswered cancel locks only the switch it named: once that switch is g
   await tick(40);
   expect(migrationRequests).toHaveLength(2);
   expect(migrationRequests.at(-1)?.body).toEqual({ action: "cancel", expectedRevision: 2 });
-  expect(receiptTexts(host).at(-1)).toBe("Cancelled the switch to Account G for Verifier");
+  expect(receiptTexts(host).at(-1)).toBe("Cancelled the switch to Account G for Verify");
 });
 
 test("the same cancel answered as a replay reads as cancelled, and a switch that already ended reads as no longer pending, never as started", async () => {
@@ -632,7 +632,7 @@ test("the same cancel answered as a replay reads as cancelled, and a switch that
   await openPicker(first.host, conversationChip(first.host));
   click(picker(first.host)!.querySelector("[data-account-cancel]"));
   await tick(40);
-  expect(receiptTexts(first.host).at(-1)).toBe("Cancelled the switch to Account C for Verifier");
+  expect(receiptTexts(first.host).at(-1)).toBe("Cancelled the switch to Account C for Verify");
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
 
@@ -664,7 +664,7 @@ test("a cancel refused before anything was written (the journal unreadable) offe
   click(receipt?.querySelector(".act"));
   await tick(40);
   expect(migrationRequests).toHaveLength(2);
-  expect(receiptTexts(host).at(-1)).toBe("Cancelled the switch to Account C for Verifier");
+  expect(receiptTexts(host).at(-1)).toBe("Cancelled the switch to Account C for Verify");
 });
 
 test("the Stages sheet carries the same chips: a waiting stage's pane names its first turn's account, a started stage's reader its conversation's", async () => {
@@ -676,5 +676,5 @@ test("the Stages sheet carries the same chips: a waiting stage's pane names its 
   expect(chipText(pane("merge").querySelector('[data-account-trigger="stage:p-search:merge"]'))).toBe("Account C");
   expect(chipText(pane("verify").querySelector(`[data-account-trigger="${verify.conversationId}"]`))).toBe("Account A");
   await openPicker(host, pane("merge").querySelector('[data-account-trigger="stage:p-search:merge"]'));
-  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Cleaner · Claude");
+  expect(picker(host)?.querySelector(".head")?.textContent).toBe("Account · Merge · Claude");
 });

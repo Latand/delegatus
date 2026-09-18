@@ -154,34 +154,22 @@ const pressEscape = () => flushSync(() => {
   dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never);
 });
 
-test("mobile: a terminal shelf action closes the modal, unlocks the body, and restores focus — nested disclosures keep it open", async () => {
+test("mobile: the host sheet carries no retired drawer, and its own rows keep the modal open (#1765)", async () => {
   const host = mount();
   const opener = await openShelf(host);
   /* The modal locks body scroll and takes focus. */
   expect(dom.document.body.style.overflow).toBe("hidden");
-
-  /* Two nested INTERNAL disclosures inside the readiness strip must keep the
-     shelf open (they reveal content within the sheet, they do not navigate). */
-  const strip = q(host, '[data-testid="task-readiness"]');
-  expect(strip).not.toBeNull();
-  const stripToggle = strip!.querySelector('button[aria-label="Readiness sections for every project task"]') as unknown as HTMLElement;
-  flushSync(() => stripToggle.click());
-  expect(shelf(host)).not.toBeNull();
-  /* Expand every readiness section (the task lands in exactly one) — each is an
-     internal disclosure that must keep the modal open. */
-  for (const sectionToggle of [...strip!.querySelectorAll('[data-readiness-section] > button')] as unknown as HTMLElement[]) {
-    flushSync(() => sectionToggle.click());
+  /* The readiness, launch-history, idle and quiet drawers were removed from
+     the board and from this sheet; the sheet's own rows are what is left. */
+  for (const selector of ['[data-testid="task-readiness"]', '[data-testid="launch-history"]', '[data-testid="worker-stacks"]']) {
+    expect(q(host, selector), selector).toBeNull();
   }
-  expect(shelf(host)).not.toBeNull();
-  expect(dom.document.body.style.overflow).toBe("hidden");
-
-  /* The TERMINAL action (open the task on the board) closes the modal. */
-  const openBtn = [...strip!.querySelectorAll("button")].find((b) => (b.getAttribute("aria-label") || "").startsWith("Open task on the board:")) as unknown as HTMLElement;
-  expect(openBtn).toBeTruthy();
-  flushSync(() => openBtn.click());
+  /* Its own rows are still there: the runtime line and the background tasks. */
+  expect(shelf(host)!.textContent).toContain(translate("en", "mobile2.host.runtime"));
+  expect(shelf(host)!.textContent).toContain(translate("en", "mobile2.host.background"));
+  /* Escape is still the way out, and the body unlocks with it. */
+  pressEscape();
   expect(shelf(host)).toBeNull();
-  /* Body scroll unlocked. The menu row that opened the sheet left with its
-     menu, so focus has no opener to return to; the bar's ⋯ is still there. */
   expect(dom.document.body.style.overflow).toBe("");
   expect(opener.isConnected).toBe(true);
   await settle();
@@ -217,11 +205,14 @@ test("mobile: the project name is the bar's title cell and the host sheet stays 
   await settle();
 });
 
-test("desktop: the readiness strip renders inline with no shelf modal, no bar and no menu", async () => {
+test("desktop: the board renders with no shelf modal, no bar, no menu and no retired drawer (#1765)", async () => {
   mobile = false;
   const host = mount();
-  const ready = await waitFor(() => q(host, '[data-testid="task-readiness"]') !== null);
+  const ready = await waitFor(() => q(host, "[data-kanban-board]") !== null);
   expect(ready).toBe(true);
+  for (const selector of ['[data-testid="task-readiness"]', '[data-testid="launch-history"]', '[data-testid="worker-stacks"]']) {
+    expect(q(host, selector), selector).toBeNull();
+  }
   expect(menuTrigger(host)).toBeNull();
   expect(q(host, "[data-mobile2-bar]")).toBeNull();
   expect(shelf(host)).toBeNull();
@@ -238,7 +229,7 @@ test("the desktop has no + Pipeline of its own, and the phone's New pipeline sub
       return new Response(JSON.stringify(body));
     }) as typeof fetch;
     const desktop = mount();
-    expect(await waitFor(() => q(desktop, '[data-testid="task-readiness"]') !== null)).toBe(true);
+    expect(await waitFor(() => q(desktop, "[data-kanban-board]") !== null)).toBe(true);
     expect(desktop.querySelector(`[aria-label="${translate("en", "dash.newPipeline")}"]`)).toBeNull();
     expect(desktop.querySelector(`[aria-label="${translate("en", "pipelineBuilder.createDraftAria")}"]`)).toBeNull();
     for (const root of roots) flushSync(() => root.unmount());

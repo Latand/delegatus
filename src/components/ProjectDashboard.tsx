@@ -35,7 +35,6 @@ import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumben
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
 import { directReviewFlows, isDirectReviewFlow } from "./flows/directReviewGroups";
-import { deckDisclosureMarker, writeDeckDisclosureOverride } from "./flows/reviewDeckDisclosure";
 import { claimedReviewerDescendantPaths, foldClaimedReviewers, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
 import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
@@ -44,13 +43,10 @@ import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray
 import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
-import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, groupWorkerStacks, pipelineCursorStagePaths, pipelineOriginOf, pipelineStagePipelineIds, protectedReviewerNodes } from "./scheme/workerCollapse";
+import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, pipelineCursorStagePaths, protectedReviewerNodes } from "./scheme/workerCollapse";
 import { launchHistoryClaimPaths, launchHistoryFor, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
-import { LaunchHistory } from "./LaunchHistory";
 import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, partitionTaskStacks, persistExpandedTasks } from "./scheme/taskStacks";
-import { TaskReadinessStrip } from "./TaskReadinessStrip";
-import { WorkerStacks } from "./WorkerStacks";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { TaskPanel } from "./tasks/TaskPanel";
@@ -97,7 +93,6 @@ import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { SoundToggle } from "./SoundToggle";
-import { ResidualStrip } from "./TreeAside";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -824,34 +819,7 @@ function ProjectDashboardView({
     () => new Set(files.filter((file) => !collapsedPaths.has(file.path)).map((file) => file.path)),
     [files, collapsedPaths],
   );
-  /* Per-origin stack grouping inputs (issue #136): a worker folds under its
-     pipeline, else its spawner — the topmost resolvable ancestor of its
-     `parent` chain — so one origin is one chip regardless of how many workers or
-     rounds it bred. Pipeline ownership resolves through the ancestor chain so a
-     stage's spawned child stays in the pipeline stack, not a second origin one. */
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file] as const)), [files]);
-  const pipelineIdByPath = useMemo(() => pipelineStagePipelineIds(pipelines, flows, files), [pipelines, flows, files]);
-  const pipelineIdOf = useMemo(
-    () => (path: string): string | null => {
-      const file = filesByPath.get(path);
-      return file ? pipelineOriginOf(file, filesByPath, pipelineIdByPath) : null;
-    },
-    [filesByPath, pipelineIdByPath],
-  );
-  const spawnerRootOf = useMemo(
-    () => (file: FileEntry): string | null => {
-      let cursor = file;
-      const seen = new Set<string>([file.path]);
-      for (;;) {
-        const parent = cursor.parent ? filesByPath.get(cursor.parent) : undefined;
-        if (!parent || seen.has(parent.path)) break;
-        seen.add(parent.path);
-        cursor = parent;
-      }
-      return cursor.path;
-    },
-    [filesByPath],
-  );
   /* Terminal spawn receipts past the recent horizon (compact launch history):
      a pathless `spawn:` receipt has no transcript to mount as a pane, so it
      leaves the board layout and minimap entirely and renders in the
@@ -1612,18 +1580,6 @@ function ProjectDashboardView({
     openBoardRow(file);
   };
 
-  /* Expand a terminal direct review group back onto the board (#289 + #325):
-     record the durable disclosure override as EXPANDED (so the deck
-     materializes fully instead of its collapsed chip), then open the reviewed
-     anchor through the shared restore grammar — role-based placement, pins,
-     and reload survival come free. */
-  const expandReviewGroup = (flow: Flow) => {
-    writeDeckDisclosureOverride(window.localStorage, flow.id, "expanded", deckDisclosureMarker(flow));
-    const anchor = files.find((file) => file.path === flow.implementerPath);
-    if (anchor) openSwitchboardFile(anchor);
-    else board.restore(flow.implementerPath, "manual");
-  };
-
   /* Undo a close: reopen the card through the shared restore path so #199's
      durable membership rebinds it to its pipeline/review zone automatically. When
      the file entry is known we go through `openSwitchboardFile` (same role-based
@@ -1740,31 +1696,12 @@ function ProjectDashboardView({
     () => buildSchemeLayout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, new Set(), { now: nowSeconds }),
     [layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, nowSeconds],
   );
-  /* Worker rows the scheme still draws in a retained form — an active flow's
-     reviewer round deck keeps its finished rounds as deck tabs. Those are
-     re-admitted here so a folded reviewer is never listed twice (its deck AND a
-     worker stack). */
-  const deckReviewerPaths = useMemo(() => {
-    const paths = new Set<string>();
-    for (const deck of pipelineLayout.decks) for (const round of deck.rounds) if (round.file) paths.add(round.file.path);
-    return paths;
-  }, [pipelineLayout]);
   /* The board's placed conversation windows, in layout order — the fallback the
      non-scheme publisher below reports as visible when the history list has no
      rows of its own (#771 requirement a). Carried as a newline-joined signature
      rather than a fresh array so the effect's dependency compares BY VALUE:
      `pipelineLayout` is derived inline and has a new identity every render. */
   const boardWindowSignature = pipelineLayout.nodes.map((node) => node.file.path).join("\n");
-  /* Stacks render regardless of `hasNodes` (the WorkerStacks strip sits outside
-     the scheme/list switch), so a worker-only or fully-closed project still
-     shows its folded workers instead of an empty board. `hiddenSet` joins the
-     exclude set: a closed worker is a tombstone — it must not resurface as a
-     stack member (its manual/expanded pin was dropped on close, so it would
-     otherwise re-qualify as a plain collapse candidate). */
-  const workerStacks = useMemo(() => groupWorkerStacks(collapsibleWorkers, deckFlows, new Set([...deckReviewerPaths, ...hiddenSet, ...launchHistoryPaths, ...compactPipelinePaths]), {
-    pipelineIdOf,
-    originOf: spawnerRootOf,
-  }), [collapsibleWorkers, deckFlows, deckReviewerPaths, hiddenSet, launchHistoryPaths, compactPipelinePaths, pipelineIdOf, spawnerRootOf]);
   const listAvailable = catalogKnown || historyRows.length > 0;
   /* A landing from the resolver outranks the saved preference for as long as it
      stands (see `openedConversation`). It cannot conjure a surface that has
@@ -2068,41 +2005,6 @@ function ProjectDashboardView({
     }
     return entries;
   };
-  /* The folded worker / quiet / readiness strips. The desktop renders them
-     inline under the board; the phone reaches them inside the host sheet, and
-     every action there is terminal, so on the phone each callback closes the
-     sheet first (unmounting the modal restores focus and unlocks the body).
-     Lane 10 retires the strips; the host sheet's own rows outlive them. */
-  const hiddenStrips = () => {
-    const closeSheetThen = <A extends unknown[]>(fn: (...args: A) => void) =>
-      isMobile ? (...args: A) => { mobileNav.closeSheet(); fn(...args); } : fn;
-    return (
-      <>
-        <TaskReadinessStrip
-          tasks={projectTasks}
-          files={files}
-          pipelines={pipelines}
-          flows={deckFlows}
-          conversationAliases={conversationAliases}
-          repository={projectCatalogEntries.find((entry) => entry.project === project)?.repository ?? null}
-          onOpenTask={closeSheetThen(openTask)}
-          onOpenFile={closeSheetThen(openSwitchboardFile)}
-        />
-        <LaunchHistory items={launchHistory} onRetry={closeSheetThen(retryLaunch)} />
-        <WorkerStacks
-          stacks={workerStacks}
-          files={files}
-          flows={deckFlows}
-          pipelines={pipelines}
-          onSelect={closeSheetThen(openSwitchboardFile)}
-          onExpandGroup={closeSheetThen(expandReviewGroup)}
-        />
-        {!hasArchiveNodes && residual.length ? (
-          <ResidualStrip items={residual} activeRootPaths={quietActiveRoots} onSelect={closeSheetThen(openSwitchboardFile)} />
-        ) : null}
-      </>
-    );
-  };
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
@@ -2128,9 +2030,7 @@ function ProjectDashboardView({
           hiddenCount={hasArchiveNodes ? 0 : residual.length}
           onOpenCatalog={() => { mobileNav.closeSheet(); chooseEmptyView("list"); }}
           onClose={close}
-        >
-          {boardReady ? hiddenStrips() : null}
-        </MobileHostSheet>
+        />
       );
     }
     return mobileShell?.renderSheet(name, close) ?? null;
@@ -2498,21 +2398,6 @@ function ProjectDashboardView({
       {isMobile && mobileTaskSheet ? (
         <TaskSheet project={project} projectName={projectName} tasks={projectTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
       ) : null}
-
-      {/* Worker-class cards that have auto-collapsed fold into one stack per
-      origin — flow / pipeline / spawner (issue #112, #136) — instead of
-      vanishing to the switchboard. The quiet `residual` strip is derived from `sceneFiles`,
-          which already excludes every collapsed worker, so a card never appears
-          in both a stack and here.
-
-          On the phone the handoff control, the collapsed-worker strip, and the
-          quiet strip share one footer row (issue #177 item 5): the handoff docks
-          beside a single disclosure that folds both strips. Desktop renders the
-          two strips directly, side by side. */}
-      {/* The desktop renders the hidden strips inline under the board; the
-          phone reaches the same strips inside the host sheet (mobile v2 lane 2),
-          which is the one place host detail lives. */}
-      {!isMobile && boardReady ? hiddenStrips() : null}
 
       <TaskToastHost />
     </div>
