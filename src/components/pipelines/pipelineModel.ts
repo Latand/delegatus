@@ -27,6 +27,7 @@ import type {
   StageVerdictStatus,
 } from "@/lib/pipelines/types";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
+import { failEdgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
 
 import { PIPELINES_CHANGED_EVENT } from "./pipelineEvents";
 
@@ -1350,17 +1351,9 @@ export type PipelineBoardProjection = {
   onBoard: boolean;
 };
 
-/** Rounds a stage's fail edge has already traversed, derived from the durable
-    activation records on the target stage's attempts. */
-export function stageFailEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): number {
-  if (!stage.onFail) return 0;
-  const target = pipeline.runs.find((run) => run.stageId === stage.onFail!.to);
-  if (!target) return 0;
-  return target.attempts.filter((attempt) =>
-    !attempt.historical
-    && attempt.activatedBy?.edge === "fail"
-    && attempt.activatedBy.stageId === stage.id).length;
-}
+/** Rounds a stage's fail edge has already traversed. The engine's own budget
+    function, so no displayed n/max can disagree with the routing decision. */
+export { failEdgeRoundsUsed as stageFailEdgeRoundsUsed };
 
 /**
  * Is a stage's fail edge frozen evidence (#353)? A fail edge freezes the instant
@@ -1371,7 +1364,7 @@ export function stageFailEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage
  */
 export function stageFailEdgeFrozen(pipeline: Pipeline, stage: PipelineStage): boolean {
   if (pipeline.cursor?.activatedBy?.edge === "fail" && pipeline.cursor.activatedBy.stageId === stage.id) return true;
-  return stageFailEdgeRoundsUsed(pipeline, stage) > 0;
+  return failEdgeRoundsUsed(pipeline, stage) > 0;
 }
 
 /** Verdict-keyed edge list of the conversation graph, with the predicted next
@@ -1393,7 +1386,7 @@ export function pipelineBoardEdges(pipeline: Pipeline): PipelineBoardEdge[] {
         from: stage.id,
         to: stage.onFail.to,
         kind: "fail",
-        usedRounds: stageFailEdgeRoundsUsed(pipeline, stage),
+        usedRounds: failEdgeRoundsUsed(pipeline, stage),
         maxRounds: stage.onFail.maxRounds,
         isNext: false,
       });

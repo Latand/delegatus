@@ -7892,6 +7892,74 @@ test("an accepted fail verdict traverses the fail edge, loops once, then parks o
   expect(current.runs[1]!.attempts[1]!.state).toBe("failed");
 });
 
+test("a retry of the fail edge's target spends no round, and the budget still parks once the edge has really been traversed twice (#1754)", async () => {
+  const h = harness();
+  const CYCLE_STAGES_TWO_ROUNDS = [
+    CYCLE_STAGES[0],
+    { ...CYCLE_STAGES[1], onFail: { to: "build", maxRounds: 2 } },
+  ];
+  await create(h.ports, CYCLE_STAGES_TWO_ROUNDS as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built v1")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail", "cannot pass")], h.ports);
+  await tickPipelines([], h.ports);
+
+  let current = loadPipelines()[0]!;
+  const round = current.runs[0]!.attempts[1]!;
+  expect(round.activatedBy).toEqual({ stageId: "verify", attempt: 1, edge: "fail" });
+
+  /* The round's own attempt died on its spawn and `retry-stage` re-ran the
+     stage: a fresh attempt carrying the same activation. The traversal already
+     happened; this is the same round, not a second one (#1754). */
+  round.state = "failed";
+  round.completedAt = h.ports.now();
+  round.error = "pipeline structured runtime host is unavailable";
+  current.runs[0]!.attempts.push({
+    ...structuredClone(round),
+    n: 3,
+    state: "running",
+    completedAt: null,
+    error: null,
+    launchId: "launch-retry",
+    conversationId: "conversation_stage_retry",
+    sessionId: "session-retry",
+    agentPath: "/codex/stage-retry.jsonl",
+    paneId: null,
+  });
+  current.cursor = { stageId: "build", state: "running", input: round.input, activatedBy: round.activatedBy };
+  savePipelines([current]);
+
+  /* The retried attempt passes and verify fails a second time: that failure is
+     the edge's second traversal, so it loops rather than parking. */
+  await tickPipelines([h.finish("/codex/stage-retry.jsonl", "pass", "built v2")], h.ports);
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[1]!.attempts).toHaveLength(2);
+  const verifyRetryPath = current.runs[1]!.attempts[1]!.agentPath!;
+  await tickPipelines([h.finish(verifyRetryPath, "fail", "still broken")], h.ports);
+
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "verify", attempt: 2, edge: "fail" } });
+
+  /* Two traversals are spent; the third failure parks for the operator. */
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  const buildRoundTwo = current.runs[0]!.attempts.at(-1)!;
+  await tickPipelines([h.finish(buildRoundTwo.agentPath!, "pass", "built v3")], h.ports);
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  const verifyThird = current.runs[1]!.attempts.at(-1)!;
+  expect(current.runs[1]!.attempts).toHaveLength(3);
+  await tickPipelines([h.finish(verifyThird.agentPath!, "fail", "regression")], h.ports);
+
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
+});
+
 test("needs_decision always parks — a fail edge never auto-loops it (#353)", async () => {
   const h = harness();
   await create(h.ports, CYCLE_STAGES as never);

@@ -77,6 +77,8 @@ import {
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
+import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
@@ -694,22 +696,24 @@ function productionCallerProject(): string | null {
 }
 
 /**
- * #1321: the project of the repository this Viewer deploys.
+ * The canonical project of the Agent Log Viewer this process IS — the one
+ * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
  *
- * The cwd cannot answer this. An MCP client launches wherever the CALLER works,
+ * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
  * which is exactly the foreign repository the deploy refusal has to tell apart
- * from the Viewer's own, and a packaged release has no `.git` of its own to read
- * either. The one fact that travels with the code is the canonical remote it is
- * deployed from — `LLV_VIEWER_CANONICAL_REMOTE` when the host configures one,
- * else the repository metadata bundled in the Viewer's own manifest — resolved
- * through the SAME repository-key algorithm that names checkouts, so the seat of
- * a live Viewer clone and the release it deploys land on one project id.
+ * from the Viewer's own, and a packaged release has no `.git` of its own to
+ * read either. The one fact that travels with the code is the canonical remote
+ * it is deployed from — `LLV_VIEWER_CANONICAL_REMOTE` when the host configures
+ * one, else the repository metadata bundled in the Viewer's own manifest —
+ * resolved through the SAME repository-key algorithm that names live checkouts,
+ * so a clone of that remote and the release built from it land on one project
+ * id.
  *
- * Folded through the orchestrator's project namespace because seats are stored
+ * Folded through the operator's project aliases because seats are stored
  * alias-resolved: comparing a raw repository id against an aliased seat project
  * would refuse the Viewer's own deploy.
  */
-function productionViewerProject(): string | null {
+function viewerOwnProject(): string | null {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
   const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
@@ -1031,7 +1035,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
-  viewerProject: productionViewerProject,
+  viewerProject: viewerOwnProject,
 };
 
 function text(value: unknown): string {
@@ -2205,7 +2209,7 @@ async function deployExactSha(
      would otherwise learn only "revision not found" and go looking for a better
      SHA. Fails closed when the Viewer cannot name its own repository — a deploy
      whose target is unproven is the one this closes. */
-  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : productionViewerProject();
+  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
   if (seat.project !== viewerProject) {
     throw new McpToolRefusal(
       "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
@@ -2665,7 +2669,8 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
-  const effective = effectiveSeatTickSettings(settings, Date.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const now = Date.now();
+  const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
   return redactPayload({
     project,
     changed,
@@ -2695,7 +2700,38 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        see what it is restoring before it restores it. */
     defaults: defaultSeatTickSettings(project),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+    /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
+       twenty-minute interval and receiving nothing was reading a settings
+       answer that said everything was fine: the fence lived in the accounting
+       row and no surface carried it. This says which attempt holds the
+       project's wakes, since when and when it lapses on its own. */
+    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
   });
+}
+
+/**
+ * The fence, for the settings answer, from a read that changes nothing.
+ *
+ * Peeked rather than read the way a check reads it, so asking about a project
+ * nobody has ticked mints no accounting row, and wrapped because one
+ * unreadable store may not take a seat's tick controls away — an answer that
+ * cannot name the fence says so instead of throwing.
+ *
+ * The row is all this reads: it names the attempt the next check would meet,
+ * and whether that check may then move it depends on what the layer holding the
+ * payload answers, which only a check asks for. The sentence says as much.
+ */
+function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: number): McpToolPayload {
+  try {
+    const state = peekSeatTickState(project);
+    const active = orchestratorSeatFor(project).active;
+    const fence = seatTickReportedFence(state, active ? { conversationId: active.conversationId ?? null } : null, now, wakeIntervalMs);
+    return { fence, fenceDetail: seatTickFenceDetail(fence), fenceError: null };
+  } catch (error) {
+    /* The whole answer goes through `redactPayload`, so the store's own words
+       reach the caller with secrets already taken out of them. */
+    return { fence: null, fenceDetail: "the tick row could not be read, so whether a wake is fenced is unknown", fenceError: error instanceof Error ? error.message : "unknown error" };
+  }
 }
 
 

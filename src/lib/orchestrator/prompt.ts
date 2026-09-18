@@ -32,7 +32,12 @@
  * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
  * launch that names no task is recorded somewhere else: on the card of a
  * conversation it names as parent or reviews, or on a placeholder card of its
- * own. */
+ * own. v16 (#1760) deletes the Deploys section outright. It described
+ * deploying Agent Log Viewer itself, this mandate is the prompt for a manager
+ * of ANY project, and scoping the section to the Viewer's own seat (v15, #1745)
+ * answered a question mandate delivery has no business asking. The protocol it
+ * carried lives in the Viewer checkout's own `llv-conveyor` skill, which the
+ * fences below already name as that checkout's playbook. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -48,7 +53,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 14;
+export const ORCHESTRATOR_PROMPT_VERSION = 16;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -183,6 +188,25 @@ ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pip
 
 RECEIPTS ARE THE RECORD. Every one of these calls is keyed by clientRequestId. A retry of the SAME logical operation reuses its id and replays the original receipt; a new operation gets a new id. When an outcome is unknown, replay the original id and read what the receipt says. Re-issuing it under a fresh id is how one outcome ends up with two pipelines and two cards.`;
 
+/**
+ * The `## Deploys` section exactly as it shipped in the shared mandate body up
+ * to v15 (#1760).
+ *
+ * It described deploying Agent Log Viewer itself, and every project's stored
+ * mandate that was composed from the default body carries these bytes today.
+ * Delivery removes them by exact string match and by nothing else: no heading
+ * is parsed, so a seat's own section about its own project's release survives
+ * whatever it is called, and a mandate whose copy was reworded keeps its
+ * wording — the only text this knows how to take back is the text the Viewer
+ * put there.
+ */
+const SHIPPED_DEPLOYS_SECTION = `## Deploys
+YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.
+1. Prepare: merges landed on origin/main, gates green. Never deploy red.
+2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.
+3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
+4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`;
+
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are the viewer's built-in Manager (issues #182, #691) — the agent that owns the board and runs the whole conveyor through the viewer's own HTTP API and MCP tools. You never act outside them.
 
 ${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}
@@ -226,7 +250,7 @@ Much of what you will meet has been met before, and the Viewer indexes every use
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## Conveyor rules
-Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> batched deploy -> cleanup.
+Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, where it has one -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
@@ -238,13 +262,6 @@ A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe
 
 ## Start-by-default pipeline contract
 When the operator asks for work, assess complexity, compose stages/roles, POST /api/pipelines with autoStart: true (or start it immediately after creation), and put the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: POST /api/pipelines with autoStart: false, report the draft id/link, and wait for the operator to press Start on the board. The explicit draft request may be asked in your own conversation or relayed through the gateway; both channels carry the same authority.
-
-## Deploys
-YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.
-1. Prepare: merges landed on origin/main, gates green. Never deploy red.
-2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.
-3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
-4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.
 
 ## Fences
 - Operate exclusively through the viewer API and MCP tools (spawn, flows, pipelines, tasks, files, agent/snapshot, conversation-host). No direct process or runtime manipulation.
@@ -271,10 +288,21 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
     the current prompt version and a rotation passes the incumbent's version
     through unchanged — so a version number
     cannot say which paragraphs a mandate actually contains. The stored mandate
-    stays raw, and a retry appends each directive at most once. */
+    stays raw, and a retry appends each directive at most once.
+
+    Delivery also takes one thing OFF the mandate (#1760): the `## Deploys`
+    section as it shipped in the body up to v15, which told every project's
+    manager how to deploy Agent Log Viewer. A stored mandate composed from that
+    body is replayed verbatim on a pending retry and carried through a rotation,
+    so the version bump alone would leave those bytes in front of managers who
+    must never read them. The removal is an exact string match against what
+    shipped, and delivery asks nothing about whose project this is. */
 export function orchestratorMandateForDelivery(mandate: string): string {
+  const withoutShippedDeploys = mandate
+    .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
+    .split(SHIPPED_DEPLOYS_SECTION).join("");
   return DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
-    mandate,
+    withoutShippedDeploys,
   );
 }
