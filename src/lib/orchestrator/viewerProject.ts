@@ -1,5 +1,5 @@
 import { canonicalProject } from "@/lib/projects/aliases";
-import { projectIdentityFromRepositoryRoot, repositoryRootForPath } from "@/lib/projects/identity";
+import { viewerOwnProject } from "@/lib/projects/viewerIdentity";
 
 /* "Is this seat's project the Viewer's own?" — the one question that decides
  * whether a mandate may carry instructions about deploying Agent Log Viewer
@@ -13,36 +13,17 @@ import { projectIdentityFromRepositoryRoot, repositoryRootForPath } from "@/lib/
  * The comparison is between two project KEYS, and both are minted by the same
  * algorithm so there is no second naming scheme: a seat's key comes from the
  * repository identity of its cwd (`describe.ts` → `projectIdentityFrom*`), and
- * the Viewer's key comes from the repository identity of the checkout this
- * process runs out of. Both are then resolved through the operator's project
- * aliases, because a renamed project reaches the seat route under its alias
- * target and the raw identity would no longer match it.
- *
- * TEMPORARY HOME. The deploy refusal in #1321 answers the same question on the
- * server side and resolves it from the release's bundled repository metadata,
- * which keeps working in a packaged release that ships no `.git` of its own.
- * That resolver is the one this should become; it lives behind
- * `src/lib/mcp/**`, which this lane does not own, so the predicate sits here
- * until the two can be folded together. Until then a packaged release names its
- * checkout with `LLV_VIEWER_REPOSITORY_ROOT`; with neither a checkout nor that
- * override, nothing resolves and the section is withheld from every project —
- * the safe direction, and never the reverse.
+ * the Viewer's key comes from {@link viewerOwnProject}, the resolver the deploy
+ * refusal (#1321) answers the same question with. That sharing is the point:
+ * the section is delivered to exactly the seat `deploy_exact_sha` would act
+ * for, and the two can never disagree — including in a packaged release, which
+ * carries no `.git` and names itself from its bundled repository metadata.
+ * Both sides are then resolved through the operator's project aliases, because
+ * a renamed project reaches the seat route under its alias target and the raw
+ * identity would no longer match it.
  */
 
-/** The checkout the running Viewer's own code lives in, named explicitly for a
-    packaged release that carries no repository metadata of its own. */
-function viewerRepositoryRoot(): string | null {
-  const configured = process.env.LLV_VIEWER_REPOSITORY_ROOT?.trim();
-  return repositoryRootForPath(configured || process.cwd());
-}
-
-/** The canonical project key of the repository this Viewer is, or null when the
-    running release cannot name its own checkout. */
-export function viewerOwnProject(): string | null {
-  const root = viewerRepositoryRoot();
-  const identity = root ? projectIdentityFromRepositoryRoot(root) : null;
-  return identity ? canonicalProject(identity.project) : null;
-}
+export { viewerOwnProject };
 
 /** Whether a seat's project is the Viewer's own. An unresolved project on
     either side answers false: the caller's question is "may this seat be told

@@ -306,39 +306,101 @@ const DELIVERED_DIRECTIVES: readonly {
   { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
-/** A Markdown heading line, and so the end of the section before it. The shape
-    matches what `normalizeMarkers` in `handoffDigest.ts` neutralizes, so the
-    two modules agree on what counts as a heading. */
-const HEADING_LINE = /^#{1,6}[ \t]+/;
+/** A Markdown heading line and its level, or 0 when the line is not a heading.
+    The shape matches what `normalizeMarkers` in `handoffDigest.ts` neutralizes,
+    so the two modules agree on what counts as a heading. */
+function headingLevel(line: string): number {
+  return /^(#{1,6})[ \t]+/.exec(line)?.[1]!.length ?? 0;
+}
 
-/** Whether a heading names a section of this mandate. Anchored to a whole line,
-    unlike the substring test the every-project directives use: prose that
-    mentions `## Deploys` mid-sentence is not a section, and treating it as one
-    would withhold the real section from the seat entitled to it. */
-function carriesSection(mandate: string, heading: string): boolean {
-  return mandate.split("\n").some((line) => line.trimEnd() === heading);
+/** A fenced code block's delimiter: three or more backticks or tildes, indented
+    by at most three spaces. An opening backtick fence's info string may not
+    itself contain a backtick; a closing fence carries no info string at all. */
+function fenceDelimiter(line: string): { char: string; length: number; info: string } | null {
+  const match = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!match) return null;
+  return { char: match[1]![0]!, length: match[1]!.length, info: match[2]!.trim() };
 }
 
 /**
- * The mandate with the FIRST section this heading names removed — the heading
- * line and everything under it up to the next heading, and nothing beyond it.
+ * The heading level of every line, with fenced code blocks blanked out.
+ *
+ * A mandate is prose that quotes commands, and a fenced block is where a `#`
+ * comment or a `### ` in a sample lives. Such a line is not a section boundary:
+ * treating one as a heading would end the deploy section early and leave the
+ * rest of it — `deploy_exact_sha` and all — in a foreign project's delivery.
+ */
+function headingLevels(lines: readonly string[]): number[] {
+  let open: { char: string; length: number } | null = null;
+  return lines.map((line) => {
+    const delimiter = fenceDelimiter(line);
+    if (open) {
+      if (delimiter && delimiter.char === open.char && delimiter.length >= open.length && !delimiter.info) open = null;
+      return 0;
+    }
+    if (delimiter && !(delimiter.char === "`" && delimiter.info.includes("`"))) {
+      open = { char: delimiter.char, length: delimiter.length };
+      return 0;
+    }
+    return headingLevel(line);
+  });
+}
+
+/** The lines at which this heading opens a section of the mandate. Anchored to
+    a whole line and outside fenced blocks, unlike the substring test the
+    every-project directives use: prose that mentions `## Deploys` mid-sentence
+    is not a section, and treating it as one would withhold the real section
+    from the seat entitled to it. */
+function sectionStarts(lines: readonly string[], heading: string): number[] {
+  const levels = headingLevels(lines);
+  const starts: number[] = [];
+  lines.forEach((line, index) => {
+    if (levels[index]! > 0 && line.trimEnd() === heading) starts.push(index);
+  });
+  return starts;
+}
+
+/** Whether a heading names a section of this mandate. */
+function carriesSection(mandate: string, heading: string): boolean {
+  return sectionStarts(mandate.split("\n"), heading).length > 0;
+}
+
+/**
+ * The mandate with EVERY section this heading names removed — each heading line
+ * and everything under it up to the next heading of the same or shallower
+ * level, and nothing beyond that.
+ *
+ * Three things a reworded section does that a single pass to the next heading
+ * of any level got wrong, each of which left `deploy_exact_sha` text in a
+ * foreign project's delivered mandate: a `### ` sub-heading belongs to the
+ * section it sits under, a heading-looking line inside a fenced block is not a
+ * heading at all, and a mandate that carries the section twice must lose both
+ * copies. Removal repeats until the heading names nothing left in the text.
  *
  * The body is never compared: a caller who reworded it under the recognised
  * heading wrote their own version of the same section, and this is a delivery
- * that must not carry either version. One section per delivery, so a retry of
- * the same delivery strips nothing the first one left behind.
+ * that must not carry either version. Everything from the next heading of the
+ * marker's own level onwards survives byte for byte.
  */
 function withoutSection(mandate: string, heading: string): string {
-  const lines = mandate.split("\n");
-  const start = lines.findIndex((line) => line.trimEnd() === heading);
-  if (start < 0) return mandate;
-  let end = start + 1;
-  while (end < lines.length && !HEADING_LINE.test(lines[end]!)) end += 1;
-  const kept = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
-  /* Mid-mandate the removed range took the blank line that separated the
-     section from the next heading with it, so the seam already reads right;
-     at the end of the mandate it leaves the blank line that preceded it. */
-  return end < lines.length ? kept : kept.trimEnd();
+  const level = headingLevel(heading);
+  let lines = mandate.split("\n");
+  /* Mid-mandate the removed range takes the blank line that separated the
+     section from the next heading with it, so the seam already reads right; a
+     section that ran to the end of the mandate leaves the blank line that
+     preceded it. */
+  let reachedEnd = false;
+  for (;;) {
+    const levels = headingLevels(lines);
+    const start = sectionStarts(lines, heading)[0];
+    if (start === undefined) break;
+    let end = start + 1;
+    while (end < lines.length && !(levels[end]! > 0 && levels[end]! <= level)) end += 1;
+    reachedEnd ||= end === lines.length;
+    lines = [...lines.slice(0, start), ...lines.slice(end)];
+  }
+  const kept = lines.join("\n");
+  return reachedEnd ? kept.trimEnd() : kept;
 }
 
 /** Every seat receives the initial-status contract, the clock handover AND the
@@ -355,9 +417,10 @@ function withoutSection(mandate: string, heading: string): string {
     the Viewer's own seat receives the deploy section, every other project's
     delivery has it removed — including the thirteen stored mandates that carry
     it from the years it lived in the shared body. The caller answers that
-    question with `isViewerOwnProject` in `viewerProject.ts`; it is not answered
+    question with `isViewerOwnProject` in `viewerProject.ts`, which reads the
+    same Viewer-project resolver the deploy refusal does; it is not answered
     here because this module is also imported by the seat's client surfaces,
-    which cannot reach a repository on disk. Delivering to no named seat is not
+    which cannot reach the server's own state. Delivering to no named seat is not
     delivering to the Viewer's, which is the safe direction: the section is
     withheld rather than guessed into place. */
 export function orchestratorMandateForDelivery(

@@ -577,3 +577,114 @@ test("the ownership section precedes the start-by-default pipeline contract", ()
   expect(ownership).toBeGreaterThan(-1);
   expect(start).toBeGreaterThan(ownership);
 });
+
+/* #1745 round 2. The strip ran once and ended at a heading of ANY level, so a
+   reworded section was only partly removed and the rest — `deploy_exact_sha`
+   and all — was still handed to a foreign project's manager. Each case below
+   is one of the shapes that survived. A foreign delivery is
+   `orchestratorMandateForDelivery(..., { viewerSeat: false })`; nothing here
+   asserts on the prose of the section, only on where it starts and ends. */
+function deliveredElsewhere(mandate: string): string {
+  return orchestratorMandateForDelivery(mandate, { viewerSeat: false });
+}
+
+/** The tail every case below keeps: a top-level heading and what follows it,
+    which must survive byte for byte. */
+const SURVIVING_TAIL = [
+  "## Fences",
+  "- Operate exclusively through the viewer API and MCP tools.",
+  "- One lane per issue.",
+  "",
+  "### Escalation",
+  "Report, never ask.",
+].join("\n");
+
+test("#1745: a sub-heading inside the deploy section is removed with it", () => {
+  const stored = [
+    "You run the conveyor for this project.",
+    "",
+    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
+    "Deploy when main is green.",
+    "",
+    "### Rollback",
+    "Call deploy_exact_sha with the previous SHA.",
+    "",
+    SURVIVING_TAIL,
+  ].join("\n");
+
+  const delivered = deliveredElsewhere(stored);
+  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
+  expect(delivered).not.toContain("### Rollback");
+  expect(delivered).not.toContain("deploy_exact_sha");
+  /* What preceded the section, and everything from the next heading of the
+     marker's own level onwards, byte for byte — the every-project directives
+     delivery appends follow it. */
+  expect(delivered).toStartWith(`You run the conveyor for this project.\n\n${SURVIVING_TAIL}`);
+});
+
+test("#1745: a heading-looking line inside a fenced block does not end the deploy section", () => {
+  const stored = [
+    "Ship what the operator asks for.",
+    "",
+    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
+    "Resolve the SHA yourself:",
+    "",
+    "```bash",
+    "# comment that looks like a heading",
+    "git rev-parse origin/main",
+    "```",
+    "",
+    "Then call deploy_exact_sha with it.",
+    "",
+    SURVIVING_TAIL,
+  ].join("\n");
+
+  const delivered = deliveredElsewhere(stored);
+  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
+  expect(delivered).not.toContain("git rev-parse origin/main");
+  expect(delivered).not.toContain("deploy_exact_sha");
+  expect(delivered).not.toContain("```");
+  expect(delivered).toStartWith(`Ship what the operator asks for.\n\n${SURVIVING_TAIL}`);
+});
+
+test("#1745: two copies of the deploy section both go", () => {
+  const stored = [
+    "A seat's own mandate.",
+    "",
+    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
+    "The first copy, with deploy_exact_sha in it.",
+    "",
+    "## Conveyor rules",
+    "- one lane per issue",
+    "",
+    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
+    "The second copy, pasted in later, also naming deploy_exact_sha.",
+    "",
+    SURVIVING_TAIL,
+  ].join("\n");
+
+  const delivered = deliveredElsewhere(stored);
+  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
+  expect(delivered).not.toContain("deploy_exact_sha");
+  /* What sat between the two copies is untouched, and so is the tail. */
+  expect(delivered).toStartWith(
+    `A seat's own mandate.\n\n## Conveyor rules\n- one lane per issue\n\n${SURVIVING_TAIL}`,
+  );
+});
+
+test("#1745: everything after the following top-level heading survives byte for byte", () => {
+  const stored = [
+    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
+    "Deploy when main is green.",
+    "",
+    "### Rollback",
+    "```",
+    "## not a heading",
+    "```",
+    "Call deploy_exact_sha with the previous SHA.",
+    "",
+    SURVIVING_TAIL,
+  ].join("\n");
+
+  expect(deliveredElsewhere(stored).slice(0, SURVIVING_TAIL.length)).toBe(SURVIVING_TAIL);
+});
