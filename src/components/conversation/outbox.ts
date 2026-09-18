@@ -1160,6 +1160,30 @@ export function cancelOutbox(cardId: string, id: string): void {
 }
 
 /**
+ * Clear a parked bubble nothing can ever address (#1593).
+ *
+ * An entry parked `deliveryUncertain` normally carries an operation: the
+ * receipt stream settles it, and the recovery row offers the journal's own
+ * retry and discard against that id. An entry parked with NO operation and no
+ * receipt has neither — the send was refused before an id was minted, or the
+ * response died before one arrived — so nothing will ever settle it, no control
+ * is offered on it, and `visibleOutbox` shows it past every retirement rule for
+ * as long as the tab's storage lives.
+ *
+ * This is the one way out: the row goes, and the caller puts its text back in
+ * the composer. Refused for any entry an operation CAN address, because there
+ * the message may really be in the journal and dropping the bubble would tell
+ * the operator it is gone.
+ */
+export function clearParkedOutbox(cardId: string, id: string): OutboxEntry | null {
+  const queue = readOutbox(cardId);
+  const entry = queue.find((item) => item.id === id);
+  if (!entry || !entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt) return null;
+  write(cardId, queue.filter((item) => item.id !== id));
+  return entry;
+}
+
+/**
  * Retry a failed submission (round-1 P1#4). The entry returns to `queued` under
  * its ORIGINAL id — which is its idempotency key — so the serial dispatcher
  * re-sends it with the same key: an idempotent replay, never a second distinct
