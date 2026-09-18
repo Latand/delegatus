@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { Pipeline, PipelineGraphEdit, PipelineStage } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
@@ -35,12 +35,68 @@ export const ROLE_GLYPH: Record<string, React.ReactNode> = {
 
 const LIVE_CHIP_STATES = new Set<StageChipState>(["running", "reviewing", "committing"]);
 
+/** How many findings of the card's ranked list it shows before counting. */
+const SHOWN_STAGE_FINDINGS = 3;
+
+function actorName(t: TFunction, actor: PipelineGraphEdit["actor"]): string {
+  return actor.kind === "operator"
+    ? t("kanban.graph.editedByOperator")
+    : [actor.role ?? "agent", actor.conversationId].filter(Boolean).join(" ");
+}
+
+/** The latest completion a stage reported for itself, signed by the
+    conversation that reported it, with its findings in severity order
+    (graph slice 2). */
+function StageReportLine({ pipeline, entry, names }: {
+  pipeline: Pipeline;
+  entry: PipelineStageReportEntry;
+  names: Map<string, string>;
+}) {
+  const { t } = useLocale();
+  const attempt = pipeline.runs
+    .find((run) => run.stageId === entry.stageId)?.attempts
+    .find((candidate) => candidate.n === entry.attempt) ?? null;
+  const findings: StageFinding[] = attempt?.report?.verdict.rankedFindings
+    ?? attempt?.verdict?.rankedFindings
+    ?? (attempt?.report?.verdict.findings ?? attempt?.verdict?.findings ?? []).map((text) => ({ severity: null, text }));
+  const at = Date.parse(entry.at);
+  return (
+    <>
+      <p
+        className="stage-report"
+        data-stage-report={entry.seq}
+        data-stage-report-actor={entry.actor.kind}
+        data-stage-report-status={entry.status}
+        title={entry.summary ?? ""}
+      >
+        {t("kanban.stageReport.reported", {
+          who: actorName(t, entry.actor),
+          age: Number.isFinite(at) ? fmtAge(at / 1000) : "",
+          stage: names.get(entry.stageId) ?? entry.stageId,
+          verdict: t(`kanban.past.stageVerdict.${entry.status}`),
+        })}
+      </p>
+      {findings.length ? (
+        <ul className="stage-findings" data-stage-findings={findings.length}>
+          {findings.slice(0, SHOWN_STAGE_FINDINGS).map((finding, index) => (
+            <li key={index} data-severity={finding.severity ?? "none"}>
+              <span className="sev">{finding.severity ?? t("kanban.stageReport.unranked")}</span>
+              <span className="text">{finding.text}</span>
+            </li>
+          ))}
+          {findings.length > SHOWN_STAGE_FINDINGS ? (
+            <li className="more">{t("kanban.stageReport.moreFindings", { count: findings.length - SHOWN_STAGE_FINDINGS })}</li>
+          ) : null}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
 /** The latest graph edit, signed by whoever made it (graph slice 1). */
 function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const { t } = useLocale();
-  const who = edit.actor.kind === "operator"
-    ? t("kanban.graph.editedByOperator")
-    : [edit.actor.role ?? "agent", edit.actor.conversationId].filter(Boolean).join(" ");
+  const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
     edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
@@ -176,6 +232,7 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
           <PipelineChips summary={summary} nameOf={nameOf} selected={selected} onOpenStage={onOpenStage} />
         )}
       </div>
+      {pipeline.stageReports?.length ? <StageReportLine pipeline={pipeline} entry={pipeline.stageReports.at(-1)!} names={names} /> : null}
       {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
   );

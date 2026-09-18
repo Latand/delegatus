@@ -77,7 +77,7 @@ import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevo
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline } from "@/lib/pipelines/engine";
+import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
@@ -587,6 +587,7 @@ export interface ViewerMcpDomainDependencies {
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
   patchPipeline: typeof patchPipeline;
+  reportStageCompletion: typeof reportStageCompletion;
   loadTasks: typeof loadTasks;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
@@ -984,6 +985,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
   patchPipeline,
+  reportStageCompletion,
   loadTasks,
   collectSnapshot,
   readResources,
@@ -1376,6 +1378,38 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     pipeline: result.pipeline,
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+  };
+}
+
+/**
+ * A stage attempt reports its own completion (graph slice 2, #1730).
+ *
+ * The caller never names itself: the attempt is resolved server-side from this
+ * server's own attribution, the same derivation a graph edit's actor comes
+ * from, so a conversation cannot report for a stage it does not hold. A
+ * refusal carries the code and, where the answer turns on which stage, the
+ * live slots the caller does hold.
+ */
+async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const request = withoutKeys(args, ["clientRequestId"]) as StageCompletionRequest;
+  const result = await dependencies.reportStageCompletion(request, pauseResumeActorOf(dependencies));
+  if (!result.report) {
+    throw new McpToolRefusal(result.error ?? "could not report the stage completion", {
+      ...(result.code ? { code: result.code } : {}),
+      ...(result.status ? { status: result.status } : {}),
+      ...(result.slots ? { slots: result.slots } : {}),
+    });
+  }
+  /* The tick the settlement path needs is the ordinary one: the report is an
+     intent, and the attempt settles when its turn ends. Asking for a tick here
+     only shortens the wait between the turn ending and the stage moving. */
+  requestPipelineTick();
+  return {
+    pipelineId: result.pipelineId,
+    stageId: result.stageId,
+    attempt: result.attempt,
+    replaced: result.replaced ?? false,
+    report: result.report,
   };
 }
 
@@ -4398,6 +4432,7 @@ export function viewerMcpBindings(
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: createPipeline,
     pipeline_action: (args) => pipelineAction(args, domainDependencies),
+    stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => linkTaskToPipeline(args, linkTaskDependencies),
     list_conversations: (args, context) => listConversations(args, viewerControlForCall(controlDependencies, context)),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),

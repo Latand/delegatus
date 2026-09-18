@@ -1653,6 +1653,7 @@ describe("MCP tool service", () => {
         "update_task",
         "create_pipeline",
         "pipeline_action",
+        "stage_report",
         "link_task_to_pipeline",
         "list_conversations",
         "search_transcripts",
