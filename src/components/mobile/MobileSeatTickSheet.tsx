@@ -88,9 +88,13 @@ export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen
       onSelect={onOpen}
       ariaLabel={t("seatTick.chipAria", { line: reading.line })}
       attrs={{ "data-mobile2-open": "tick", "data-seat-tick-row": reading.state }}
+      /* The trailing text here is a whole clause, not a word, so IT is what
+         gives way: the label, the state dot and the chevron keep their size
+         and the summary truncates between them. */
+      trailingShrinks
       trailing={
         <>
-          <span className="min-w-0 truncate">{reading.summary}</span>
+          <span data-seat-tick-row-summary className="min-w-0 truncate">{reading.summary}</span>
           <SeatTickDot tone={reading.tone} />
           <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
         </>

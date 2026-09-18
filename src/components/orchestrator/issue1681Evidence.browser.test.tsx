@@ -29,8 +29,13 @@ import { translate } from "@/lib/i18n";
  *     floor: the row keeps both controls whole, the popover is portalled so the
  *     dock's `overflow: hidden` cannot clip it, and nothing overflows
  *     sideways;
- *   - 390 × 844: the tick row is at least 44 px, the sheet opens and scrolls,
- *     and Save stays above a keyboard-sized inset.
+ *   - the KANBAN SEAT's header at 1280, 1024 and 900 px in both locales: that
+ *     row does not wrap and nothing scrolls, so the controls group must not be
+ *     drawn outside it, and the model name it exists to show must survive;
+ *   - 390 × 844 in both locales, for a stale and a blocked reading: the tick
+ *     row is at least 44 px, its label renders whole while the summary beside
+ *     it truncates, the sheet opens and scrolls, and Save stays above a
+ *     keyboard-sized inset.
  *
  * Measurements go to `evidence/issue-1681/geometry.json`. No raster is
  * committed: the numbers are the evidence, and this driver is how they are
@@ -68,11 +73,23 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
   const rotate = (await rectOf(page, "[data-orchestrator-rotate]"))!;
   const dockBox = (await rectOf(page, "[data-fixture-dock]"))!;
   const rowRead = await page.evaluate(() => {
+    const contentWidth = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      return Math.round(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    };
     const dockEl = document.querySelector("[data-fixture-dock]") as HTMLElement;
     const row = document.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
+    const identity = document.querySelector("[data-orchestrator-identity]") as HTMLElement;
+    const face = document.querySelector("[data-seat-tick-face]") as HTMLElement | null;
     return {
       /* The dock CLIPS; its own content must fit the width it really has. */
       dockOverflow: dockEl.scrollWidth > dockEl.clientWidth,
+      hostWidth: Math.round(row.getBoundingClientRect().width),
+      hostContentWidth: contentWidth(row),
+      /* The dock's row wraps, so its own height says whether the controls
+         pushed it onto a second line — the optional note in the critique. */
+      identityLines: Math.round(identity.getBoundingClientRect().height),
+      faceShown: face !== null && face.getBoundingClientRect().width > 0,
       rowLines: Math.round(row.getBoundingClientRect().height),
       /* Pre-existing, and recorded rather than asserted: the rail's 248 px and
          the dock's 360 px floor already exceed a 640 px viewport, so the
@@ -80,7 +97,12 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
     };
   });
-  const face = await page.textContent("[data-seat-tick-chip]");
+  /* Rendered, not `textContent`: a collapsed face is `display: none` and keeps
+     its words in the DOM. */
+  const face = await page.evaluate(() => {
+    const element = document.querySelector("[data-seat-tick-face]") as HTMLElement | null;
+    return element && element.getBoundingClientRect().width > 0 ? element.textContent!.trim() : null;
+  });
   const title = await page.getAttribute("[data-seat-tick-chip]", "title");
   const dot = await page.getAttribute("[data-seat-tick-chip] [data-seat-tick-dot]", "data-seat-tick-dot");
   await shot(page, `${key}-closed`);
@@ -119,7 +141,7 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
     key,
     viewport: { width, height },
     dock,
-    chip: { ...chip, face: face?.trim() ?? "", title, dot },
+    chip: { ...chip, face, title, dot },
     rotate,
     row: rowRead,
     /* Both controls whole, on ONE line, with the tick immediately before
@@ -136,13 +158,110 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
   };
 }
 
-async function phone(browser: Browser, base: string) {
-  const viewport = { width: 390, height: 844 };
-  const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+/**
+ * The kanban seat's header, in its own host, in both locales.
+ *
+ * `.kb .seat-head` is one flex row that does not wrap above 767 px, so an
+ * overflow here does not reflow — it draws the controls group over the row's
+ * other children and squeezes the model name to nothing. The dock's numbers
+ * cannot stand in for it, which is how a 1024 px seat check written into the
+ * design note went unmeasured.
+ */
+async function seat(browser: Browser, base: string, width: number, locale: "en" | "uk") {
+  const key = `seat-${width}-${locale}`;
+  const context = await browser.newContext({ viewport: { width, height: 800 }, colorScheme: "dark" });
+  /* The Viewer reads its locale from `localStorage`; the Ukrainian faces are
+     the longest strings this row ever carries. */
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${base}/?surface=phone`);
+  await page.goto(`${base}/?surface=seat`);
+  await page.waitForSelector("[data-seat-tick-chip]");
+  await page.waitForTimeout(400);
+
+  const measured = await page.evaluate(() => {
+    const contentWidth = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      return Math.round(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    };
+    const head = document.querySelector(".seat-head") as HTMLElement;
+    const row = document.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
+    const controls = document.querySelector("[data-orchestrator-controls]") as HTMLElement;
+    const chip = document.querySelector("[data-seat-tick-chip]") as HTMLElement;
+    const rotate = document.querySelector("[data-orchestrator-rotate]") as HTMLElement;
+    const model = row.querySelector("[title]") as HTMLElement | null;
+    const predecessor = document.querySelector("[data-orchestrator-predecessor]") as HTMLElement | null;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), right: Math.round(rect.right), width: Math.round(rect.width) };
+    };
+    /* What the row is drawn over, if anything: every sibling of the incumbent
+       row inside the header, and the row's own right edge against them. */
+    const siblings = [...head.children]
+      .filter((child) => child !== row)
+      .map((child) => ({ mark: child.getAttribute("data-fixture-host-controls") !== null || child.getAttribute("data-fixture-collapse") !== null, ...box(child)! }))
+      .filter((child) => child.mark);
+    const identity = document.querySelector("[data-orchestrator-identity]") as HTMLElement;
+    const controlsRight = controls.getBoundingClientRect().right;
+    /* The precise symptom: `.seat-head` does not wrap and nothing scrolls, so
+       a shrink-0 group inside a shrunk row SPILLS past its parent's right edge
+       and is painted under whatever follows it in the DOM. `scrollWidth` reads
+       0 for it, because flex absorbed the pressure by crushing the row's
+       flexible children to nothing instead. */
+    const spill = Math.round(controlsRight - identity.getBoundingClientRect().right);
+    return {
+      /* The container query reads the HOST's width; the identity row inside it
+         is what gets crushed. Both are recorded so the thresholds are
+         calibrated against a measurement rather than a guess. */
+      hostWidth: Math.round(row.getBoundingClientRect().width),
+      hostContentWidth: contentWidth(row),
+      identityWidth: Math.round(identity.getBoundingClientRect().width),
+      /* How far the controls group is drawn outside the row that holds it. */
+      controlsSpill: Math.max(0, spill),
+      /* And past the link that is painted over it — only while the link is
+         actually drawn: a `display: none` element measures a zero rect at the
+         origin, and subtracting that reports the whole viewport as a spill. */
+      spillPastPredecessor: predecessor && predecessor.getBoundingClientRect().width > 0
+        ? Math.max(0, Math.round(controlsRight - predecessor.getBoundingClientRect().x))
+        : 0,
+      headOverflow: Math.round(head.scrollWidth - head.clientWidth),
+      rowOverflow: Math.round(row.scrollWidth - row.clientWidth),
+      /* RENDERED, not `textContent`: a collapsed face is `display: none` and
+         still carries its words in the DOM. */
+      chipFace: (() => {
+        const face = chip.querySelector("[data-seat-tick-face]") as HTMLElement | null;
+        return face && face.getBoundingClientRect().width > 0 ? face.textContent!.trim() : null;
+      })(),
+      /* The whole summary stays reachable whatever the face shows. */
+      chipTitle: chip.getAttribute("title"),
+      chipLabel: chip.getAttribute("aria-label"),
+      chipWidth: Math.round(chip.getBoundingClientRect().width),
+      controlsWidth: Math.round(controls.getBoundingClientRect().width),
+      modelWidth: model ? Math.round(model.getBoundingClientRect().width) : null,
+      rotateVisible: rotate.getBoundingClientRect().width > 0,
+      predecessorShown: predecessor !== null && predecessor.getBoundingClientRect().width > 0,
+      predecessorWidth: predecessor ? Math.round(predecessor.getBoundingClientRect().width) : 0,
+      /* Drawn OVER a sibling: the controls group's right edge past a later
+         sibling's left edge is the overlap the critique measured at 900 px. */
+      overlapsSiblings: siblings.some((sibling) => controlsRight > sibling.x + 1),
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  await shot(page, key);
+  await context.close();
+  return { key, viewport: { width, height: 800 }, locale, ...measured, errors };
+}
+
+async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en", tick: "stale" | "blocked" = "stale") {
+  const viewport = { width: 390, height: 844 };
+  const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=phone&tick=${tick}`);
   await page.waitForSelector("[data-seat-tick-row]");
   await page.waitForTimeout(400);
 
@@ -161,9 +280,22 @@ async function phone(browser: Browser, base: string) {
       belowIdentity: identity ? own.top >= identity.bottom - 1 : false,
       aboveMandate: mandate ? own.bottom <= mandate.top + 1 : false,
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      /* The row's three parts, against each other and against the phone's own
+         right edge: a trailing CLAUSE in a fixed-size slot crushes the label
+         to nothing and pushes the dot and the chevron off the screen.
+
+         Selected STRUCTURALLY — the label and the slots are the shared row
+         primitive's own spans, so the caller has nothing to hang an attribute
+         on: child 0 is the icon, 1 the label, 2 the trailing slot. */
+      labelWidth: Math.round((element.children[1] as HTMLElement).getBoundingClientRect().width),
+      labelText: (element.children[1] as HTMLElement).textContent ?? "",
+      summaryWidth: Math.round((element.querySelector("[data-seat-tick-row-summary]") as HTMLElement).getBoundingClientRect().width),
+      dotRight: Math.round((element.querySelector("[data-seat-tick-dot]") as HTMLElement).getBoundingClientRect().right),
+      chevronRight: Math.round(((element.children[2] as HTMLElement).querySelector("svg") as unknown as SVGElement).getBoundingClientRect().right),
+      rowRight: Math.round(own.right),
     };
   });
-  await shot(page, "phone-seat-sheet");
+  await shot(page, `phone-${locale}-${tick}-seat-sheet`);
 
   await page.locator("[data-seat-tick-row]").click();
   await page.waitForSelector('[data-mobile2-sheet="tick"]');
@@ -184,7 +316,7 @@ async function phone(browser: Browser, base: string) {
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
     };
   });
-  await shot(page, "phone-tick-sheet");
+  await shot(page, `phone-${locale}-${tick}-tick-sheet`);
 
   /* The keyboard: focus the interval field and apply the inset the phone's own
      signal produces, then measure what is still reachable above it. */
@@ -197,7 +329,7 @@ async function phone(browser: Browser, base: string) {
   }, keyboard);
   await page.waitForTimeout(300);
   const saveWithKeyboard = (await rectOf(page, "[data-seat-tick-save]"))!;
-  await shot(page, "phone-tick-sheet-keyboard");
+  await shot(page, `phone-${locale}-${tick}-keyboard`);
 
   const close = await page.evaluate(() => {
     (document.querySelector('[data-mobile2-sheet="tick"] [data-mobile2-close]') as HTMLButtonElement).click();
@@ -208,7 +340,9 @@ async function phone(browser: Browser, base: string) {
 
   await context.close();
   return {
-    key: "phone-390",
+    key: `phone-390-${locale}-${tick}`,
+    locale,
+    tick,
     viewport,
     row: { ...row, ...rowRead },
     rowMeetsTouchTarget: row.height >= 44,
@@ -254,9 +388,24 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
       issue: 1681,
       /* The narrowest desktop the Viewer lays out is 640 × 600 (`useIsMobile`);
          360 px is the dock's own floor (`OrchestratorDock.MIN_WIDTH`). */
+      /* 1440 is the first width where the dock's own clamp
+         (`max(360px, min(width, 100vw - 948px))`) actually grants the
+         operator's 440 px, so it is where the tick's word comes back. */
+      roomy: await desktop(browser, base, 1440, 900, 440),
       wide: await desktop(browser, base, 1280, 800, 440),
       narrow: await desktop(browser, base, 640, 600, 360),
+      /* The seat header, which the dock's numbers say nothing about. */
+      seatWide: await seat(browser, base, 1280, "en"),
+      seat1024: await seat(browser, base, 1024, "en"),
+      seat1024Uk: await seat(browser, base, 1024, "uk"),
+      seat900: await seat(browser, base, 900, "en"),
+      seat900Uk: await seat(browser, base, 900, "uk"),
       phone: await phone(browser, base),
+      /* The row's label is the thing that disappeared: the longest trailing
+         clause, and the longest label, in the locale that has both. */
+      phoneUk: await phone(browser, base, "uk"),
+      phoneBlocked: await phone(browser, base, "en", "blocked"),
+      phoneBlockedUk: await phone(browser, base, "uk", "blocked"),
     };
   } finally {
     await browser.close();
@@ -264,17 +413,25 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   }
   fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(evidence, null, 2)}\n`);
 
-  for (const key of ["wide", "narrow"] as const) {
+  for (const key of ["roomy", "wide", "narrow"] as const) {
     const read = evidence[key] as Awaited<ReturnType<typeof desktop>>;
     expect(read.errors, `${key} page errors`).toEqual([]);
     expect(read.chip.width, `${key} chip rendered`).toBeGreaterThan(0);
     expect(read.chipBeforeRotate, `${key} chip before Rotate`).toBe(true);
     expect(read.chipInsideDock, `${key} chip inside the dock`).toBe(true);
     expect(read.rotateInsideDock, `${key} Rotate inside the dock`).toBe(true);
-    /* The face is the schedule and the dot is the state, at every width. */
-    expect(read.chip.face, `${key} chip face`).toContain(translate("en", "seatTick.everyMin", { n: 30 }));
+    /* The dot is the state at EVERY width; the face is the schedule while the
+       host can afford the word, and the whole summary is on the title and the
+       accessible label either way. */
     expect(read.chip.dot, `${key} chip dot`).toBe("warn");
     expect(read.chip.title, `${key} closed summary`).toContain("stale");
+    if (read.row.hostContentWidth > 379) {
+      expect(read.chip.face, `${key} chip face`).toContain(translate("en", "seatTick.everyMin", { n: 30 }));
+    } else {
+      expect(read.chip.face, `${key} chip face collapsed`).toBeNull();
+      /* Collapsed rather than wrapped: the identity stays on one line. */
+      expect(read.row.identityLines, `${key} identity lines`).toBeLessThan(40);
+    }
     expect(read.popoverInViewport, `${key} popover inside the viewport`).toBe(true);
     expect(read.popover.portalled, `${key} popover portalled`).toBe(true);
     expect(read.popover.insideDock, `${key} popover outside the clipping dock`).toBe(false);
@@ -285,15 +442,65 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
     expect(read.closesOnEscape, `${key} Escape closes`).toBe(true);
     expect(read.closesOnOutsideClick, `${key} outside click closes`).toBe(true);
   }
+  /* The kanban seat's header, which the dock's numbers said nothing about. */
+  for (const key of ["seatWide", "seat1024", "seat1024Uk", "seat900", "seat900Uk"] as const) {
+    const seatRead = evidence[key] as Awaited<ReturnType<typeof seat>>;
+    expect(seatRead.errors, `${key} page errors`).toEqual([]);
+    /* The row does not wrap and nothing scrolls, so the controls group must
+       not be drawn one pixel outside the row that holds it, nor over the
+       siblings that follow it. */
+    expect(seatRead.controlsSpill, `${key} controls spill`).toBe(0);
+    expect(seatRead.spillPastPredecessor, `${key} spill past the predecessor link`).toBe(0);
+    expect(seatRead.overlapsSiblings, `${key} overlaps the header's other controls`).toBe(false);
+    expect(seatRead.headOverflow, `${key} header overflow`).toBe(0);
+    /* And the identity the row exists for stays readable: a model name crushed
+       to nothing is the row losing its own subject. */
+    expect(seatRead.modelWidth, `${key} model width`).toBeGreaterThan(40);
+    expect(seatRead.rotateVisible, `${key} Rotate visible`).toBe(true);
+    expect(seatRead.chipWidth, `${key} chip visible`).toBeGreaterThan(0);
+    /* Whatever the face shows, the word it gave up is still reachable — on the
+       chip's own title and its accessible label, in the row's own locale. */
+    const interval = translate(seatRead.locale, "seatTick.everyMin", { n: 30 });
+    expect(seatRead.chipTitle, `${key} chip title`).toContain(interval);
+    expect(seatRead.chipLabel, `${key} chip label`).toContain(interval);
+    /* The word is given up by the width, not by the locale. */
+    if (seatRead.hostContentWidth > 539) {
+      expect(seatRead.chipFace, `${key} chip face`).not.toBeNull();
+    } else {
+      expect(seatRead.chipFace, `${key} chip face collapsed`).toBeNull();
+    }
+  }
+
+  /* The phone's row, in both locales and for the longest trailing clause it
+     can carry. The row's LABEL is what disappeared: a clause in a fixed-size
+     trailing slot crushed it to nothing and pushed the state dot and the
+     chevron off the right edge. */
+  for (const key of ["phone", "phoneUk", "phoneBlocked", "phoneBlockedUk"] as const) {
+    const phoneRead = evidence[key] as Awaited<ReturnType<typeof phone>>;
+    const row = phoneRead.row;
+    expect(phoneRead.errors, `${key} page errors`).toEqual([]);
+    /* The label renders, whole, in its own locale — never truncated away by
+       the clause beside it. */
+    expect(row.labelText, `${key} row label`).toBe(translate(phoneRead.locale, "seatTick.rowLabel"));
+    expect(row.labelWidth, `${key} label width`).toBeGreaterThan(40);
+    /* The summary is the element that gives way, and it still shows
+       something. */
+    expect(row.summaryWidth, `${key} summary width`).toBeGreaterThan(80);
+    /* The dot and the chevron stay inside the row, which stays inside the
+       phone: those two marks are the row's state and its affordance. */
+    expect(row.dotRight, `${key} dot inside the row`).toBeLessThanOrEqual(row.rowRight);
+    expect(row.chevronRight, `${key} chevron inside the row`).toBeLessThanOrEqual(row.rowRight);
+    expect(row.rowRight, `${key} row inside the phone`).toBeLessThanOrEqual(phoneRead.viewport.width);
+    expect(row.pageOverflow, `${key} no sideways overflow`).toBe(false);
+    expect(phoneRead.rowMeetsTouchTarget, `${key} row is at least 44 px`).toBe(true);
+  }
+
   const read = evidence.phone as Awaited<ReturnType<typeof phone>>;
   expect(read.errors, "phone page errors").toEqual([]);
   expect(read.rowMeetsTouchTarget, "the row is at least 44 px").toBe(true);
   expect(read.row.belowIdentity, "the row is under the seat identity").toBe(true);
   expect(read.row.aboveMandate, "the row is above Edit the mandate").toBe(true);
   expect(read.row.dot, "the row's dot is the actual state").toBe("warn");
-  expect(read.row.text, "the row's trailing summary").toContain(translate("en", "seatTick.everyMin", { n: 30 }));
-  expect(read.row.text, "the row's label").toContain(translate("en", "seatTick.rowLabel"));
-  expect(read.row.pageOverflow, "no sideways overflow on the phone").toBe(false);
   expect(read.sheet.seatSheets, "the tick sheet replaces the seat sheet").toBe(0);
   expect(read.sheet.title, "the sheet names the seat and the project").toBe(translate("en", "seatTick.sheetTitle", { project: "Atlas" }));
   expect(read.sheet.bodyScrolls, "the sheet's body scrolls").toBe(true);

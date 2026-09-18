@@ -1,5 +1,58 @@
 {
   "issue": 1681,
+  "roomy": {
+    "key": "desktop-1440-dock-440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "dock": 440,
+    "chip": {
+      "x": 501.640625,
+      "y": 50,
+      "width": 102.71875,
+      "height": 24,
+      "face": "every 30 min",
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 612.359375,
+      "y": 50,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "hostWidth": 440,
+      "hostContentWidth": 416,
+      "identityLines": 24,
+      "faceShown": true,
+      "rowLines": 56,
+      "pageOverflow": false
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 284.359375,
+      "y": 82,
+      "width": 320,
+      "height": 621.5,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": false,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
   "wide": {
     "key": "desktop-1280-dock-440",
     "viewport": {
@@ -8,23 +61,27 @@
     },
     "dock": 440,
     "chip": {
-      "x": 421.640625,
-      "y": 74,
-      "width": 102.71875,
+      "x": 484.359375,
+      "y": 50,
+      "width": 40,
       "height": 24,
-      "face": "every 30 min",
+      "face": null,
       "title": "Tick: every 30 min · stale: last check 23m ago",
       "dot": "warn"
     },
     "rotate": {
       "x": 532.359375,
-      "y": 74,
+      "y": 50,
       "width": 63.640625,
       "height": 24
     },
     "row": {
       "dockOverflow": false,
-      "rowLines": 80,
+      "hostWidth": 360,
+      "hostContentWidth": 336,
+      "identityLines": 24,
+      "faceShown": false,
+      "rowLines": 56,
       "pageOverflow": false
     },
     "chipBeforeRotate": true,
@@ -33,7 +90,7 @@
     "rotateInsideDock": true,
     "popover": {
       "x": 204.359375,
-      "y": 106,
+      "y": 82,
       "width": 320,
       "height": 560,
       "portalled": true,
@@ -57,23 +114,27 @@
     },
     "dock": 360,
     "chip": {
-      "x": 421.640625,
-      "y": 74,
-      "width": 102.71875,
+      "x": 484.359375,
+      "y": 50,
+      "width": 40,
       "height": 24,
-      "face": "every 30 min",
+      "face": null,
       "title": "Tick: every 30 min · stale: last check 23m ago",
       "dot": "warn"
     },
     "rotate": {
       "x": 532.359375,
-      "y": 74,
+      "y": 50,
       "width": 63.640625,
       "height": 24
     },
     "row": {
       "dockOverflow": false,
-      "rowLines": 80,
+      "hostWidth": 360,
+      "hostContentWidth": 336,
+      "identityLines": 24,
+      "faceShown": false,
+      "rowLines": 56,
       "pageOverflow": true
     },
     "chipBeforeRotate": true,
@@ -82,7 +143,7 @@
     "rotateInsideDock": true,
     "popover": {
       "x": 204.359375,
-      "y": 106,
+      "y": 82,
       "width": 320,
       "height": 420,
       "portalled": true,
@@ -98,8 +159,145 @@
     "closesOnOutsideClick": true,
     "errors": []
   },
+  "seatWide": {
+    "key": "seat-1280-en",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 571,
+    "hostContentWidth": 571,
+    "identityWidth": 407,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": "every 30 min",
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 103,
+    "controlsWidth": 174,
+    "modelWidth": 79,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 156,
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1024": {
+    "key": "seat-1024-en",
+    "viewport": {
+      "width": 1024,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 523,
+    "hostContentWidth": 523,
+    "identityWidth": 359,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 40,
+    "controlsWidth": 112,
+    "modelWidth": 79,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 156,
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1024Uk": {
+    "key": "seat-1024-uk",
+    "viewport": {
+      "width": 1024,
+      "height": 800
+    },
+    "locale": "uk",
+    "hostWidth": 523,
+    "hostContentWidth": 523,
+    "identityWidth": 328,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipWidth": 40,
+    "controlsWidth": 125,
+    "modelWidth": 77,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 186,
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat900": {
+    "key": "seat-900-en",
+    "viewport": {
+      "width": 900,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 399,
+    "hostContentWidth": 399,
+    "identityWidth": 399,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 40,
+    "controlsWidth": 112,
+    "modelWidth": 79,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat900Uk": {
+    "key": "seat-900-uk",
+    "viewport": {
+      "width": 900,
+      "height": 800
+    },
+    "locale": "uk",
+    "hostWidth": 399,
+    "hostContentWidth": 399,
+    "identityWidth": 399,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipWidth": 40,
+    "controlsWidth": 125,
+    "modelWidth": 79,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
   "phone": {
-    "key": "phone-390",
+    "key": "phone-390-en-stale",
+    "locale": "en",
+    "tick": "stale",
     "viewport": {
       "width": 390,
       "height": 844
@@ -114,7 +312,13 @@
       "dot": "warn",
       "belowIdentity": true,
       "aboveMandate": true,
-      "pageOverflow": false
+      "pageOverflow": false,
+      "labelWidth": 50,
+      "labelText": "Seat tick",
+      "summaryWidth": 192,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
     },
     "rowMeetsTouchTarget": true,
     "sheet": {
@@ -133,6 +337,153 @@
       "x": 16,
       "y": 794,
       "width": 214.484375,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneUk": {
+    "key": "phone-390-uk-stale",
+    "locale": "uk",
+    "tick": "stale",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "stale",
+      "text": "Тікер оркестраторакожні 30 хв · застаріло: остання перевірка 23 хв тому",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 118,
+      "labelText": "Тікер оркестратора",
+      "summaryWidth": 134,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Тікер оркестратора · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 190.21875,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneBlocked": {
+    "key": "phone-390-en-blocked",
+    "locale": "en",
+    "tick": "blocked",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "blocked",
+      "text": "Seat tickevery 30 min · blocked: unresolved wake since 2h ago (dispatch refused)",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 50,
+      "labelText": "Seat tick",
+      "summaryWidth": 202,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Seat tick · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 214.484375,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneBlockedUk": {
+    "key": "phone-390-uk-blocked",
+    "locale": "uk",
+    "tick": "blocked",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "blocked",
+      "text": "Тікер оркестраторакожні 30 хв · стримується: нерозв'язане пробудження від 2 год тому (відправлення: відхилено)",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 118,
+      "labelText": "Тікер оркестратора",
+      "summaryWidth": 134,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Тікер оркестратора · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 190.21875,
       "height": 44
     },
     "saveAboveKeyboard": true,

@@ -185,6 +185,7 @@ export function MobileSheetRow({
   testId,
   attrs,
   ariaLabel,
+  trailingShrinks = false,
 }: {
   icon?: ReactNode;
   label: ReactNode;
@@ -201,6 +202,18 @@ export function MobileSheetRow({
   /** Harness hooks (`data-mobile2-*`) and any other data attribute. */
   attrs?: Record<`data-${string}`, string | undefined>;
   ariaLabel?: string;
+  /**
+   * Swap which of the two texts gives way when the row is too narrow.
+   *
+   * By default the LABEL truncates and the trailing slot keeps its size,
+   * because a trailing slot is normally a word or a count. A row whose
+   * trailing text is a whole clause has to invert that: with the slot fixed,
+   * the label is crushed to nothing and the slot's own trailing marks — a
+   * state dot, a chevron — are pushed off the right edge (#1681, measured at
+   * 390 px, where the Ukrainian «Тікер оркестратора» never rendered at all).
+   * Opt-in, so every existing row is byte-identical.
+   */
+  trailingShrinks?: boolean;
 }) {
   return (
     <button
@@ -218,9 +231,15 @@ export function MobileSheetRow({
       }`}
     >
       {icon ? <span className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center ${danger ? "text-danger" : "text-secondary"}`}>{icon}</span> : null}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className={trailingShrinks ? "shrink-0 truncate" : "min-w-0 flex-1 truncate"}>{label}</span>
       {trailing ? (
-        <span className={`ml-auto inline-flex shrink-0 items-center gap-1.5 text-label font-medium ${selected ? "text-accent" : "text-muted"}`}>{trailing}</span>
+        <span
+          className={`ml-auto inline-flex items-center gap-1.5 text-label font-medium ${
+            trailingShrinks ? "min-w-0 flex-1 justify-end" : "shrink-0"
+          } ${selected ? "text-accent" : "text-muted"}`}
+        >
+          {trailing}
+        </span>
       ) : null}
     </button>
   );

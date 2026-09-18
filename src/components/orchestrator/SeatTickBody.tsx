@@ -217,9 +217,14 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       className={`flex min-w-0 flex-col gap-3 ${phone ? "px-4 pb-3" : "p-3"}`}
     >
       <div className="flex min-w-0 flex-col gap-0.5">
-        <p className="min-w-0 truncate text-label font-semibold text-secondary" title={projectName}>
-          {t("seatTick.head", { project: projectName })}
-        </p>
+        {/* The phone's sheet header already says «Seat tick · <project>», so
+            repeating it here is the same line twice in 44 px of vertical room.
+            The desktop popover has no header of its own, so it keeps it. */}
+        {phone ? null : (
+          <p className="min-w-0 truncate text-label font-semibold text-secondary" title={projectName}>
+            {t("seatTick.head", { project: projectName })}
+          </p>
+        )}
         <p className="flex min-w-0 items-center gap-1.5 text-ui text-primary" data-seat-tick-summary>
           <SeatTickDot tone={reading.tone} />
           <span className="min-w-0 break-words">{reading.line}</span>

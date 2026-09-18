@@ -8,9 +8,12 @@ import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
+import { Bot, Lock } from "lucide-react";
+
 import { MobileOrchestratorSheet } from "../mobile/MobileOrchestratorSheet";
 import { IncumbentHeader } from "./IncumbentHeader";
 import type { OrchestratorPanelState } from "./seatState";
+import "../kanban/kanbanBoard.css";
 
 /*
  * The real seat tick controls, in the real surfaces, for the rendered checks
@@ -27,6 +30,8 @@ import type { OrchestratorPanelState } from "./seatState";
 
 const PROJECT = "atlas";
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+/** `?surface=` picks the host, `?dock=` its width, `?tick=` which reading. */
+const params = new URLSearchParams(window.location.search);
 
 /** Off the default and stale, so the chip carries its longest face («every 30
     min») beside a warning dot, and the popover shows every section at once. */
@@ -78,6 +83,16 @@ function answer(): SeatTickSettingsAnswer {
   };
 }
 
+/** Blocked by an unresolved wake — the longest trailing clause the phone's row
+    ever carries, and the case the critique measured clipped at 390 px. */
+function blockedAnswer(): SeatTickSettingsAnswer {
+  const base = answer();
+  return {
+    ...base,
+    state: { ...base.state!, outstandingWake: { preparedAt: ago(120), dispatch: "refused" } },
+  };
+}
+
 const accounts = {
   claude: { active: "primary", accounts: [{ id: "primary", label: "primary", authPresent: true, auth: { state: "ok", plan: "max" } }] },
   codex: { active: "codex-primary", accounts: [{ id: "codex-primary", label: "codex-primary", authPresent: true }] },
@@ -87,7 +102,10 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
-  if (url.startsWith("/api/monitor/seat-tick/settings")) return json({ ...answer(), changed: init?.method === "PUT" });
+  if (url.startsWith("/api/monitor/seat-tick/settings")) {
+    const body = params.get("tick") === "blocked" ? blockedAnswer() : answer();
+    return json({ ...body, changed: init?.method === "PUT" });
+  }
   if (url.startsWith("/api/accounts")) return json(accounts);
   if (url.startsWith("/api")) return json({});
   return realFetch(input, init);
@@ -166,6 +184,61 @@ function Desktop({ dock }: { dock: number }) {
   );
 }
 
+/**
+ * The KANBAN SEAT's header, the incumbent row's other host — and the one the
+ * dock's measurements say nothing about.
+ *
+ * It is a different layout problem, not a narrower version of the same one:
+ * `.kb .seat-head` is a single flex row that does NOT wrap above 767 px, it
+ * already carries four other children (the mark, the seat title, the «stays on
+ * the board» pill, the host controls and Collapse), and the seat's width is
+ * `calc(100% - 32px)` capped at 1040 px. So the row has to be measured in its
+ * own host, at the widths where the board is still a desktop.
+ */
+function Seat() {
+  return (
+    <div className="kb" style={{ height: "100%" }}>
+      <div className="kb-page" style={{ height: "100%" }}>
+        <section className="seat" data-kanban-seat={PROJECT} data-collapsed="0">
+          <section
+            className="flex h-full min-h-0 min-w-0 flex-col bg-card"
+            data-orchestrator-panel={PROJECT}
+            data-orchestrator-state="live"
+          >
+            <header className="seat-head">
+              <span className="av claude" aria-hidden><Bot /></span>
+              <span className="seat-title">
+                <strong>Orchestrator</strong>
+                <span className="proj" title="Atlas">Atlas</span>
+                <span className="state working" data-fixture-state><i />working</span>
+              </span>
+              <span className="lock" data-fixture-lock><Lock aria-hidden /><span>Stays on the board</span></span>
+              <IncumbentHeader
+                inline
+                project={PROJECT}
+                projectName="Atlas"
+                incumbent={null}
+                file={file}
+                catalog={null}
+                predecessorConversationId="conversation_predecessor"
+                promptVersion={ORCHESTRATOR_PROMPT_VERSION}
+                rotating={false}
+                opening={false}
+                onRotate={() => undefined}
+              />
+              {/* The host controls and Collapse, as the seat renders them: the
+                  two siblings the controls group must not be drawn over. */}
+              <span className="lock" data-fixture-host-controls><Bot aria-hidden /><span>running</span></span>
+              <button type="button" className="icon-btn" data-fixture-collapse aria-label="Collapse">▾</button>
+            </header>
+            <div className="min-h-0 flex-1 p-3 text-ui text-muted">The seat conversation goes here.</div>
+          </section>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 /** The phone's seat sheet over a dimmed board, and the tick sheet its row
     opens — the card's own wiring, verbatim. */
 function Phone() {
@@ -196,8 +269,8 @@ function Phone() {
   );
 }
 
-const params = new URLSearchParams(window.location.search);
 const dock = Number(params.get("dock")) || 440;
+const surface = params.get("surface");
 createRoot(document.getElementById("root")!).render(
-  params.get("surface") === "phone" ? <Phone /> : <Desktop dock={dock} />,
+  surface === "phone" ? <Phone /> : surface === "seat" ? <Seat /> : <Desktop dock={dock} />,
 );

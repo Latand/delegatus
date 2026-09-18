@@ -87,10 +87,22 @@ export function IncumbentHeader({
   return (
     <div
       data-orchestrator-incumbent
-      className={inline ? "flex min-w-0 flex-1 items-center gap-2" : "flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"}
+      /* `incumbent-host` declares the query container the tick's face and the
+         predecessor link give way inside (globals.css). It is a CONTAINER
+         query and not a media query because the two hosts of this row have
+         unrelated widths at the same viewport: the dock is the operator's own
+         360–440 px, and the kanban seat is `calc(100% - 32px)` shared with
+         four other header children. A viewport breakpoint tuned for one is
+         wrong for the other. */
+      className={`incumbent-host ${
+        inline ? "incumbent-inline flex min-w-0 flex-1 items-center gap-2" : "flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"
+      }`}
       aria-label={t("orchPanel.incumbentAria")}
     >
-      <div className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}>
+      <div
+        data-orchestrator-identity
+        className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}
+      >
         {badge ? <Badge style={badge.style}>{badge.label}</Badge> : null}
         {model ? (
           /* A product name, so sans (design system §1.1 mono rule) — the tier

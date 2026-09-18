@@ -56,7 +56,7 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
         className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-control border border-border bg-card px-2 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
       >
         <Timer className="h-3 w-3" aria-hidden />
-        <span className="max-w-[72px] truncate">{reading.chip}</span>
+        <span data-seat-tick-face className="max-w-[72px] truncate">{reading.chip}</span>
         <SeatTickDot tone={reading.tone} />
       </button>
       {open ? (
