@@ -728,10 +728,10 @@ test("the composer budgets itself against the conversation, so the queue has roo
      680 px card on a 1080 px screen took a viewport-sized queue and had 44 px of
      transcript left.
 
-     happy-dom lays nothing out, so this pins the contract; the measurement is
-     `scripts/capture-issue-1629-queue-height.ts`, which mounts the assembled
-     conversation in a real browser at the phone's size and the board's own card
-     heights. */
+     happy-dom lays nothing out, so this pins the contract; the measurement
+     belongs in a real browser, at the phone's size and the board's own card
+     heights, through `scripts/capture-board-geometry.ts` (the one-shot #1629
+     script was deleted in #1761). */
   queueEntries = [{
     entryId: "budget-1", conversationId: CARD, binding: { threadId: "thread-1", accountId: "acct-1" },
     clientUserMessageId: "c-budget", nativeSubmissionId: "n-budget", revision: 1,
@@ -762,8 +762,8 @@ test("everything above the input shares ONE region; the input and Send never yie
      is `shrink-0` and pinned to the box's bottom edge, so a composition the
      budget cannot fit is scrolled through rather than laid out past the pane.
 
-     happy-dom lays nothing out, so this pins the contract; the measurement is
-     `scripts/capture-issue-1629-queue-height.ts`. */
+     happy-dom lays nothing out, so this pins the contract; the measurement
+     belongs in `scripts/capture-board-geometry.ts`. */
   observed = { conversationId: "conversation_native_queue" };
   queueEntries = [{
     entryId: "yield-1", conversationId: "conversation_native_queue", binding: { threadId: "thread-1", accountId: "acct-1" },

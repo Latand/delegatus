@@ -51,15 +51,9 @@ Production build (`next start`, `NODE_ENV=production`) against a disposable
 deterministic fixture home, driven by a cached `chrome-headless-shell` through
 puppeteer-core. The full harness — fixture materialization, server boot, live
 DOM assertions, panning to isolate a chip, screenshots — is
-[`capture.ts`](./capture.ts):
-
-```sh
-bun install && bun run build
-npx --yes @puppeteer/browsers install chrome-headless-shell@stable   # → LLV_474_CHS
-mkdir -p /tmp/llv-pptr && (cd /tmp/llv-pptr && bun add puppeteer-core@23.11.1)
-LLV_474_CHS=<shell> LLV_474_PPTR=/tmp/llv-pptr/node_modules \
-  bun docs/acceptance/issue-474/capture.ts
-```
+this directory's own `capture.ts`, deleted with the other per-issue capture
+scripts in #1761. The committed `evidence.json` is the record; a new capture of
+this surface goes through `scripts/capture-board-geometry.ts`.
 
 The fixture contains five live claude conversations in one project, each with a
 descriptive first prompt of *exactly* 48 or 60 characters (both lengths present)

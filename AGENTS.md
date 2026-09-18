@@ -183,3 +183,23 @@ Three consequences worth keeping:
   the image names `bun-container`, and the rehearsal passes that name down to
   the generations it starts.
 <!-- END:runtime-host-verification -->
+
+# Rendered evidence: call the driver that exists, do not write a new one
+
+A rendered surface is part of correctness, so new UI work still owes rendered
+evidence. What it does not owe is a new one-shot driver: #1761 deleted about
+22 000 lines of per-issue capture scripts and browser drivers that no workflow
+ran and no second issue reused. There is exactly one driver of each kind, and
+an issue adds a case to it:
+
+- board geometry in a real browser — `scripts/capture-board-geometry.ts`
+- run directories — `scripts/capture-directory.ts`
+- the kanban board — `src/components/kanban/kanbanBoard.browser.test.tsx`, one
+  `describe` block per issue over `issue1695Evidence.fixture.tsx`, gated by
+  `LLV_KANBAN_BROWSER_TEST=1` plus `CHROME_BIN`
+- the phone — `src/components/mobile/issue1671Evidence.browser.test.tsx`, gated
+  by `LLV_SWIPE_BROWSER_TEST=1`
+
+The committed `evidence/**/*.json` files are the record and stay, including the
+ones whose driver is gone. Do not name a new file after your issue number; a
+driver whose only caller is the issue that wrote it is dead the day it merges.

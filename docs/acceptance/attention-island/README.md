@@ -1,7 +1,7 @@
 # Attention island (#963) — visual evidence
 
-Captured by `scripts/capture-issue-963-attention.ts` against a **production
-build** (`next start`) on a dev port, with `HOME`/`XDG_CONFIG_HOME`/
+Captured by the #963 attention-island capture script (deleted with the other per-issue capture scripts in #1761) against a
+**production build** (`next start`) on a dev port, with `HOME`/`XDG_CONFIG_HOME`/
 `LLV_STATE_DIR`/`TMPDIR` pointed at a synthetic home under `/tmp` — never the
 operator's live state, and no host paths anywhere in the frames. Attention
 items are real pending questions: each fixture transcript tails an unanswered
@@ -12,18 +12,9 @@ tail) lights up with nothing stubbed.
 Per this repository's publication policy (synthetic-and-redacted-media-only),
 the committed record is `privacy-manifest.json`: deterministic redacted
 placeholders from `scripts/generate-privacy-placeholders.ts`, each recording
-the SHA-256 of the live capture it stands in for. To reproduce the real
-captures locally, run:
-
-```
-bun run build
-bun scripts/capture-issue-963-attention.ts
-```
-
-The run prints its resolved absolute `screenshots:` directory. The stable
-`<system-temp>/llv-issue-963-latest/out` link resolves to the newest run; when
-`ATTENTION_CAPTURE_DIR` selects an accepted parent, that parent contains the
-same `llv-issue-963-latest/out` link.
+the SHA-256 of the live capture it stands in for. The manifest and the table below are that record; the one-shot script that
+produced them is gone, and a new capture of this surface goes through
+`scripts/capture-board-geometry.ts`.
 
 | Capture | What it showed |
 | --- | --- |
