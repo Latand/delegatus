@@ -93,19 +93,34 @@ body {
  * Two thresholds, because the hosts differ in the one way that matters: the
  * dock's row WRAPS (`flex-wrap`) and the kanban seat's does not. A wrapping
  * row reflows and stays legible; a non-wrapping one crushes the model name and
- * then spills — so the inline host gives up BOTH the word and the link at the
- * width where the row stops fitting, and the dock keeps the word until
- * wrapping would cost it a second line.
+ * then spills — so the inline host gives up the tick's word and the
+ * predecessor link at the width where the row stops fitting, and the dock
+ * keeps the word until wrapping would cost it a second line.
  *
- * 539 px is measured, not chosen: the model name reaches its full width at a
- * 483 px host in English and a 531 px one in Ukrainian, and the next host the
- * seat lays out above 531 is 539. Below it the row is over-full, and giving up
- * the word alone does not save it — with the chip gone entirely the Ukrainian
- * model name is still 13 px at a 411 px host. The link is what costs the room:
- * 156 px in English, 186 px in Ukrainian. Both give way together at 539 px,
- * and `issue1681Evidence.browser.test.tsx` sweeps 768–1100 px in both locales
- * against that number rather than sampling three widths around it — the shape
- * of this defect is a BAND, and three points missed it once already.
+ * Above this width the link is drawn as its GLYPH alone (`IncumbentHeader`),
+ * so what it gives up here is 12 px and not the 156 px of its English label or
+ * the 186 px of its Ukrainian one. Small, and still worth taking: these are
+ * the hosts where the seat's own name is already down to 47 px of its 79 on
+ * the row the first paint draws. The driver sweeps that band with this half of
+ * the rule deleted from the page: the glyph kept there takes the name to
+ * 27 px at a 299 px host and
+ * pushes the controls group 5 px outside the row at a 267 px one — a 768 px
+ * viewport, where nothing below reflows.
+ *
+ * 539 px is measured, not chosen. On the row production draws — a designated
+ * incumbent, with its effort and its account — a 547 px host keeps the whole
+ * identity WITH the widest face the chip can carry («every 1439 min») in both
+ * locales, and 547 is the first host the seat lays out above this threshold.
+ * Kept below it, the word is what crushes the name: the driver sweeps the
+ * production band again with the other half deleted, and in the worst case
+ * there is — Ukrainian, «кожні 1439 хв» — the name is then whole only from a
+ * 495 px host, and 42 px of its 111 at a 399 px one, against 93 px with the
+ * rule in force. So the threshold carries about 44 px of margin, and the far
+ * side of it is a measurement rather than a story.
+ *
+ * It sweeps the whole band in both locales, at the narrowest face and the
+ * widest, against that number rather than sampling three widths around it —
+ * the shape of this defect is a BAND, and three points missed it once already.
  */
 @container incumbent-host (max-width: 539px) {
   .incumbent-inline [data-seat-tick-face] {

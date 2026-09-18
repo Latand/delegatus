@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { launchAccountCatalogOf } from "@/components/draft/AgentLaunchControls";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -11,6 +12,7 @@ import type { FileEntry } from "@/lib/types";
 import { Bot, Lock } from "lucide-react";
 
 import { MobileOrchestratorSheet } from "../mobile/MobileOrchestratorSheet";
+import type { OrchestratorIncumbent } from "./incumbent";
 import { IncumbentHeader } from "./IncumbentHeader";
 import type { OrchestratorPanelState } from "./seatState";
 import "../kanban/kanbanBoard.css";
@@ -23,19 +25,44 @@ import "../kanban/kanbanBoard.css";
  * `IncumbentHeader` — which is where the chip lives — inside a container of
  * the dock's own width, beside the rail and the board it is pushed between, so
  * the row wraps exactly as it does in the Viewer. The phone mounts the actual
- * `MobileOrchestratorSheet`. Only the SERVER is fixed: one settings answer, so
- * a measurement is of the layout rather than of whatever the operator's tick
- * happened to be doing.
+ * `MobileOrchestratorSheet`. Only the SERVER is fixed: the settings answer and
+ * the seat's status read are held still, so a measurement is of the layout
+ * rather than of whatever the operator's tick happened to be doing.
+ *
+ * What the query string picks is which fixed reading: `?face=` the chip's
+ * schedule and `?incumbent=` whether the status poll has answered yet. Both
+ * change the width of the row and nothing else about it.
  */
 
 const PROJECT = "atlas";
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-/** `?surface=` picks the host, `?dock=` its width, `?tick=` which reading. */
+/** `?surface=` picks the host, `?dock=` its width, `?tick=` which reading,
+    `?face=` which chip face, `?incumbent=` which status read. */
 const params = new URLSearchParams(window.location.search);
 
-/** Off the default and stale, so the chip carries its longest face («every 30
-    min») beside a warning dot, and the popover shows every section at once. */
+/**
+ * Which face the chip carries, because the row's spare room is what this
+ * fixture is measured for and the face is the widest thing in the controls
+ * group:
+ *
+ *   - `default` — the tick nobody has configured, which the chip draws as one
+ *     word («hourly»). The narrowest face the row ever carries.
+ *   - `configured` — off the default at 30 minutes, the reading the dock's and
+ *     the phone's samples are taken at.
+ *   - `longest` — every 1439 minutes, the widest face the chip can produce:
+ *     the last interval below a whole day, so the word cannot be shortened to
+ *     «every 1 d».
+ */
+type ChipFace = "default" | "configured" | "longest";
+const FACE_MINUTES: Record<ChipFace, number> = { default: 60, configured: 30, longest: 1439 };
+const face: ChipFace = params.get("face") === "default" ? "default" : params.get("face") === "longest" ? "longest" : "configured";
+const faceMinutes = FACE_MINUTES[face];
+
+/** Stale, so the chip carries a warning dot and the popover shows every
+    section at once, on the schedule `?face=` asks for. */
 function answer(): SeatTickSettingsAnswer {
+  const onDefault = face === "default";
+  const reason = onDefault ? null : "a release afternoon, so the seat is woken on a schedule of its own";
   return {
     project: PROJECT,
     changed: false,
@@ -44,28 +71,30 @@ function answer(): SeatTickSettingsAnswer {
     settings: {
       project: PROJECT,
       enabled: true,
-      wakeIntervalMinutes: 30,
-      reason: "a release afternoon, so the seat is woken twice an hour",
+      wakeIntervalMinutes: onDefault ? null : faceMinutes,
+      reason,
       monitorPrompt: null,
-      until: ago(-120),
-      updatedAt: ago(45),
-      setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+      until: onDefault ? null : ago(-120),
+      updatedAt: onDefault ? null : ago(45),
+      setBy: onDefault ? null : { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
     },
     effective: {
       enabled: true,
-      wakeIntervalMinutes: 30,
-      reason: "a release afternoon, so the seat is woken twice an hour",
+      wakeIntervalMinutes: faceMinutes,
+      reason,
       monitorPrompt: null,
-      until: ago(-120),
-      isDefault: false,
-      configured: true,
+      until: onDefault ? null : ago(-120),
+      isDefault: onDefault,
+      configured: !onDefault,
       lapsed: false,
-      updatedAt: ago(45),
+      updatedAt: onDefault ? null : ago(45),
     },
     defaults: { project: PROJECT, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
     defaultWakeIntervalMinutes: 60,
     monitorPromptLength: 0,
-    cardText: "This project's seat tick is not on its default settings\n\nwakes for this project are set to one every 30 minute(s).",
+    cardText: onDefault
+      ? null
+      : `This project's seat tick is not on its default settings\n\nwakes for this project are set to one every ${faceMinutes} minute(s).`,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
     state: {
       lastCheckAt: ago(23),
@@ -97,6 +126,39 @@ const accounts = {
   claude: { active: "primary", accounts: [{ id: "primary", label: "primary", authPresent: true, auth: { state: "ok", plan: "max" } }] },
   codex: { active: "codex-primary", accounts: [{ id: "codex-primary", label: "codex-primary", authPresent: true }] },
 };
+
+const catalog = launchAccountCatalogOf(accounts);
+
+/**
+ * The seat's status read, as `OrchestratorPanel` hands it to this header once
+ * the poll answers — which is the row production draws for all but the first
+ * moment of a mount: the incumbent is DESIGNATED, so it carries the effort it
+ * runs at beside its model and the account badge for the account it runs on,
+ * and it names the predecessor it replaced.
+ *
+ * Mounting the inline header on `incumbent: null` measured a row two children
+ * short of the real one, and the header's own crush lived in exactly those two
+ * children. `?incumbent=board` keeps the first-paint reading — the board's
+ * catalog entry alone, before the slower poll answers — so that band stays
+ * measured too.
+ */
+const designated: OrchestratorIncumbent = {
+  project: PROJECT,
+  designated: true,
+  conversationId: "conversation_orchestrator",
+  predecessorConversationId: "conversation_predecessor",
+  engine: "claude",
+  model: "claude-opus-5",
+  effort: "high",
+  accountId: "primary",
+  cwd: "/repo/atlas",
+  transcriptPath: "/transcripts/orchestrator.jsonl",
+  liveness: null,
+  context: { tokens: 240_000, limit: 1_000_000, percent: 24, estimated: false, basis: "" },
+  transcriptFacts: null,
+  rotation: null,
+};
+const incumbent = params.get("incumbent") === "board" ? null : designated;
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -168,9 +230,9 @@ function Desktop({ dock }: { dock: number }) {
         <IncumbentHeader
           project={PROJECT}
           projectName="Atlas"
-          incumbent={null}
+          incumbent={incumbent}
           file={file}
-          catalog={null}
+          catalog={catalog}
           predecessorConversationId="conversation_predecessor"
           promptVersion={ORCHESTRATOR_PROMPT_VERSION}
           rotating={false}
@@ -217,9 +279,9 @@ function Seat() {
                 inline
                 project={PROJECT}
                 projectName="Atlas"
-                incumbent={null}
+                incumbent={incumbent}
                 file={file}
-                catalog={null}
+                catalog={catalog}
                 predecessorConversationId="conversation_predecessor"
                 promptVersion={ORCHESTRATOR_PROMPT_VERSION}
                 rotating={false}

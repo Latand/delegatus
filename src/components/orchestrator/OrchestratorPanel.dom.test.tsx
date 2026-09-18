@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import type { FileEntry } from "@/lib/types";
@@ -1615,6 +1615,48 @@ test.each(["ultra", "max"])("Astra/%s to Luna submits the displayed effort", asy
   expect(seatPosts).toHaveLength(1);
   expect(seatPosts[0]?.model).toBe("gpt-5.6-luna");
   expect(seatPosts[0]?.effort).toBe(expected || undefined);
+});
+
+test("the kanban seat's inline header draws the predecessor link as a glyph, with its words on the name and the title (#1681)", async () => {
+  /* `.kb .seat-head` is one flex row that does not wrap, and the identity
+     beside this link has a flex-basis of 0 — so a label here does not shrink,
+     it takes the model name and the account badge away. Inline the link is the
+     glyph alone; the dock's row wraps, so there it keeps its words. */
+  incumbentStatus = incumbent({ predecessorConversationId: "conversation_predecessor" });
+  const read = {
+    status: { seat: activeSeat({ predecessorConversationId: "conversation_predecessor" }), pending: null, exists: true, viewerMcpRegistered: true },
+    failed: false,
+    refresh: async () => undefined,
+  } as never;
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(
+    <OrchestratorPanel project="atlas" projectName="Atlas" projectCwd="/repos/atlas" files={[{ ...orchestratorFile, proc: "running", pid: 4_242 } as FileEntry]} onClose={() => undefined} variant="seat" seatRead={read} />,
+  ));
+  await settle();
+  flushSync(() => undefined);
+
+  const label = translate("en", "orchPanel.predecessor");
+  const inline = (host as unknown as HTMLElement).querySelector("[data-orchestrator-predecessor]") as HTMLAnchorElement;
+  expect(inline.getAttribute("data-orchestrator-predecessor")).toBe("conversation_predecessor");
+  expect(inline.getAttribute("href")).toBe("#c=conversation_predecessor");
+  /* No words in the row, and both of them reachable without it. */
+  expect(inline.textContent).toBe("");
+  expect(inline.getAttribute("aria-label")).toBe(label);
+  expect(inline.getAttribute("title")).toContain(label);
+  expect(inline.getAttribute("title")).toContain(translate("en", "orchPanel.predecessorTitle"));
+
+  /* The dock, for contrast: the same link, with its label drawn. */
+  incumbentStatus = incumbent({ conversationId: "conversation_successor", predecessorConversationId: "conversation_predecessor" });
+  seatStatus = { seat: activeSeat({ conversationId: "conversation_successor", path: "/transcripts/successor.jsonl", predecessorConversationId: "conversation_predecessor" }), pending: null, exists: true };
+  const dock = remount([{ ...orchestratorFile, path: "/transcripts/successor.jsonl", conversationId: "conversation_successor", proc: "running", pid: 4_243 } as FileEntry]);
+  await settle();
+  flushSync(() => undefined);
+  const docked = dock.querySelector("[data-orchestrator-predecessor]") as HTMLAnchorElement;
+  expect(docked.textContent).toBe(label);
+  expect(docked.getAttribute("aria-label")).toBeNull();
 });
 
 test("a panel handed its host's seat read shows that seat and never polls the seat route itself (#1695 kanban seat)", async () => {

@@ -29,9 +29,17 @@ import { translate } from "@/lib/i18n";
  *     floor: the row keeps both controls whole, the popover is portalled so the
  *     dock's `overflow: hidden` cannot clip it, and nothing overflows
  *     sideways;
- *   - the KANBAN SEAT's header at 1280, 1024 and 900 px in both locales: that
- *     row does not wrap and nothing scrolls, so the controls group must not be
- *     drawn outside it, and the model name it exists to show must survive;
+ *   - the KANBAN SEAT's header at 1280, 1048, 1024 and 900 px in both locales,
+ *     and at every 8 px from 900 to 1280: that row does not wrap and nothing
+ *     scrolls, so the controls group must not be drawn outside it, and the
+ *     model name it exists to show must survive — whole, wherever the row has
+ *     the room for it. It is measured on the row PRODUCTION draws, with the
+ *     status read's effort and account badge on it, at the narrowest face the
+ *     chip can carry and at the widest;
+ *   - both halves of the inline host's give-way rule, measured from the other
+ *     side: the same band and the same row with the stylesheet's own rule
+ *     deleted from the page, so what each half buys is a number rather than an
+ *     argument;
  *   - 390 × 844 in both locales, for a stale and a blocked reading: the tick
  *     row is at least 44 px, its label renders whole while the summary beside
  *     it truncates, the sheet opens and scrolls, and Save stays above a
@@ -176,7 +184,8 @@ function readSeatRow() {
   const controls = document.querySelector("[data-orchestrator-controls]") as HTMLElement;
   const chip = document.querySelector("[data-seat-tick-chip]") as HTMLElement;
   const rotate = document.querySelector("[data-orchestrator-rotate]") as HTMLElement;
-  const model = row.querySelector("[title]") as HTMLElement | null;
+  const model = row.querySelector("[data-orchestrator-model]") as HTMLElement | null;
+  const account = row.querySelector("[data-orchestrator-account]") as HTMLElement | null;
   const predecessor = document.querySelector("[data-orchestrator-predecessor]") as HTMLElement | null;
   const box = (element: Element | null) => {
     if (!element) return null;
@@ -226,9 +235,26 @@ function readSeatRow() {
     chipWidth: Math.round(chip.getBoundingClientRect().width),
     controlsWidth: Math.round(controls.getBoundingClientRect().width),
     modelWidth: model ? Math.round(model.getBoundingClientRect().width) : null,
+    /* What the name would take if the row had the room — `scrollWidth` on the
+       truncating span. Drawn/full is the reading the critique's table is in,
+       and the difference is exactly what the row took away from the seat's own
+       identity. */
+    modelFullWidth: model ? model.scrollWidth : null,
+    modelTruncated: model ? model.scrollWidth > model.clientWidth + 1 : false,
+    /* The two children the first-paint row does not have, and the ones the
+       crush lived in: the effort rides inside the model name, the account is
+       its own badge. Recorded so a fixture that stopped mounting the status
+       read cannot pass these assertions in silence. */
+    modelText: model ? model.textContent!.replace(/\s+/g, " ").trim() : null,
+    accountShown: account !== null && account.getBoundingClientRect().width > 0,
+    accountWidth: account ? Math.round(account.getBoundingClientRect().width) : 0,
     rotateVisible: rotate.getBoundingClientRect().width > 0,
     predecessorShown: predecessor !== null && predecessor.getBoundingClientRect().width > 0,
     predecessorWidth: predecessor ? Math.round(predecessor.getBoundingClientRect().width) : 0,
+    /* Inline the link is its glyph: no text node is drawn, and its words are
+       on the title and the accessible name instead. */
+    predecessorText: predecessor ? predecessor.textContent!.trim() : null,
+    predecessorLabel: predecessor ? predecessor.getAttribute("aria-label") : null,
     /* Drawn OVER a sibling: the controls group's right edge past a later
        sibling's left edge is the overlap the critique measured at 900 px. */
     overlapsSiblings: siblings.some((sibling) => controlsRight > sibling.x + 1),
@@ -245,8 +271,29 @@ function readSeatRow() {
  * cannot stand in for it, which is how a 1024 px seat check written into the
  * design note went unmeasured.
  */
-async function seat(browser: Browser, base: string, width: number, locale: "en" | "uk") {
-  const key = `seat-${width}-${locale}`;
+/**
+ * What the seat surface is mounted with (`issue1681Evidence.fixture.tsx`).
+ *
+ * `face` is the widest thing in the controls group and `incumbent` decides
+ * whether the row carries the two children the crush lived in — the effort
+ * beside the model name and the account badge. Production passes both as soon
+ * as the status poll answers, so `designated` is the row this file measures;
+ * `board` is the first paint, before that poll lands.
+ */
+interface SeatCase {
+  face?: ChipFace;
+  incumbent?: "designated" | "board";
+}
+type ChipFace = "default" | "configured" | "longest";
+/** The configured interval behind each face, for the chip's own title and
+    accessible label — which carry the whole summary at every width. */
+const FACE_MINUTES: Record<ChipFace, number> = { default: 60, configured: 30, longest: 1439 };
+const seatUrl = (base: string, { face = "configured", incumbent = "designated" }: SeatCase) =>
+  `${base}/?surface=seat&face=${face}&incumbent=${incumbent}`;
+const caseKey = ({ face = "configured", incumbent = "designated" }: SeatCase) => `${incumbent}-${face}`;
+
+async function seat(browser: Browser, base: string, width: number, locale: "en" | "uk", seatCase: SeatCase = {}) {
+  const key = `seat-${width}-${locale}-${caseKey(seatCase)}`;
   const context = await browser.newContext({ viewport: { width, height: 800 }, colorScheme: "dark" });
   /* The Viewer reads its locale from `localStorage`; the Ukrainian faces are
      the longest strings this row ever carries. */
@@ -254,14 +301,14 @@ async function seat(browser: Browser, base: string, width: number, locale: "en" 
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${base}/?surface=seat`);
+  await page.goto(seatUrl(base, seatCase));
   await page.waitForSelector("[data-seat-tick-chip]");
   await page.waitForTimeout(400);
 
   const measured = await page.evaluate(readSeatRow);
   await shot(page, key);
   await context.close();
-  return { key, viewport: { width, height: 800 }, locale, ...measured, errors };
+  return { key, viewport: { width, height: 800 }, locale, ...seatCase, ...measured, errors };
 }
 
 /**
@@ -291,47 +338,95 @@ const INLINE_GIVE_WAY_PX = 539;
  */
 const MODEL_BAR_HOST_PX = 299;
 
-/** The band the sweep walks, in the steps the critique measured in: every
-    desktop width from the phone shell's ceiling to the width where the seat's
-    own 1040 px cap makes every wider viewport measure the same row. */
-const SWEEP_FROM = 768;
-const SWEEP_TO = 1100;
+/**
+ * The bands the sweeps walk, in the steps the critique measured in.
+ *
+ * The PRODUCTION band is 900–1280: the row the status poll leaves behind is
+ * wider than the first paint's by an effort and an account badge, and 900 px
+ * is where the design note's own desktop claim starts. Above 1100 the seat's
+ * 1040 px cap makes every wider viewport measure the same row, and 1280 is in
+ * anyway because it is the width the crush was reported at.
+ *
+ * The FIRST-PAINT band starts at the phone shell's ceiling, where that lighter
+ * row is still whole. The production row is not whole down there — at 768–800
+ * px it loses its model name, which is recorded in the pull request as an
+ * after-merge item rather than swept here.
+ */
 const SWEEP_STEP = 8;
-const sweepWidths = (() => {
-  const widths: number[] = [];
-  for (let width = SWEEP_FROM; width <= SWEEP_TO; width += SWEEP_STEP) widths.push(width);
-  if (widths[widths.length - 1] !== SWEEP_TO) widths.push(SWEEP_TO);
-  return widths;
-})();
+const PRODUCTION_BAND = { from: 900, to: 1280 };
+const FIRST_PAINT_BAND = { from: 768, to: 1100 };
+/** The widths the critique's own table is in, so a sample of this sweep is
+    comparable to it rather than near it. */
+const NAMED_WIDTHS = [900, 1024, 1048, 1100, 1280];
+function bandWidths({ from, to }: { from: number; to: number }): number[] {
+  const widths = new Set<number>();
+  for (let width = from; width <= to; width += SWEEP_STEP) widths.add(width);
+  widths.add(to);
+  for (const width of NAMED_WIDTHS) if (width >= from && width <= to) widths.add(width);
+  return [...widths].sort((a, b) => a - b);
+}
 
 type SeatRow = ReturnType<typeof readSeatRow>;
 
 /**
- * The seat header across the whole desktop band, in one locale.
+ * The seat header across a whole desktop band, in one locale, for one face and
+ * one status read.
  *
- * Three named widths are three points, and the defect this driver was written
- * for came back BETWEEN them: the row was measured at a 399 px host and at a
- * 523 px host, and it was over-full at every host in between. A threshold is a
- * claim about a range, so the range is what gets measured — every 8 px from
- * 768 to 1100, with the assertions the named samples use, against this file's
- * unmodified fixture.
+ * Named widths are points, and this defect came back BETWEEN them twice: first
+ * over-full at every host between a 399 px and a 523 px sample, then whole at
+ * 1024 px and crushed at 1048 and above, where nobody had measured. A
+ * threshold is a claim about a range, so the range is what gets measured —
+ * every 8 px across the band, plus the widths the critique's own table is in,
+ * with the assertions the named samples use.
  *
  * One context, resized: the seat surface is flex and container queries only,
- * so a viewport change is the whole state change, and reloading 43 pages per
- * locale would buy nothing but minutes.
+ * so a viewport change is the whole state change, and reloading 51 pages per
+ * sweep would buy nothing but minutes.
  */
-async function sweepSeat(browser: Browser, base: string, locale: "en" | "uk") {
-  const context = await browser.newContext({ viewport: { width: SWEEP_TO, height: 800 }, colorScheme: "dark" });
+async function sweepSeat(
+  browser: Browser,
+  base: string,
+  locale: "en" | "uk",
+  seatCase: SeatCase = {},
+  band: { from: number; to: number } = PRODUCTION_BAND,
+  /** Sweep the same band with one half of the give-way rule DELETED from the
+      page — the what-if each half of the threshold is calibrated against. */
+  keep: "word" | "link" | null = null,
+) {
+  const widths = bandWidths(band);
+  const context = await browser.newContext({ viewport: { width: band.to, height: 800 }, colorScheme: "dark" });
   await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${base}/?surface=seat`);
+  await page.goto(seatUrl(base, seatCase));
   await page.waitForSelector("[data-seat-tick-chip]");
   await page.waitForTimeout(400);
+  /* The rule is DELETED from the loaded stylesheet rather than overridden by
+     one of this file's own: an override would be measuring whatever `display`
+     it happened to pick, and what the threshold is a claim about is the row
+     without that rule in it. The link's half of the same container rule is
+     left alone — this what-if is about the word. */
+  if (keep) {
+    await page.evaluate((marker) => {
+      const drop = (group: CSSGroupingRule): void => {
+        for (let index = group.cssRules.length - 1; index >= 0; index -= 1) {
+          const rule = group.cssRules[index];
+          const selector = (rule as CSSStyleRule).selectorText;
+          if (typeof selector === "string") {
+            if (selector.includes(marker) && selector.includes("incumbent-inline")) group.deleteRule(index);
+          } else if ((rule as CSSGroupingRule).cssRules) {
+            drop(rule as CSSGroupingRule);
+          }
+        }
+      };
+      for (const sheet of [...document.styleSheets]) drop(sheet as unknown as CSSGroupingRule);
+    }, keep === "word" ? "data-seat-tick-face" : "data-orchestrator-predecessor");
+    await page.waitForTimeout(100);
+  }
 
   const rows: (SeatRow & { width: number })[] = [];
-  for (const width of sweepWidths) {
+  for (const width of widths) {
     await page.setViewportSize({ width, height: 800 });
     /* Two frames, so the container query has re-evaluated and the flex row has
        been laid out again before anything is read out of it. */
@@ -342,7 +437,7 @@ async function sweepSeat(browser: Browser, base: string, locale: "en" | "uk") {
   }
   await context.close();
 
-  /* Recorded as a SUMMARY rather than 43 rows per locale: what a sweep is for
+  /* Recorded as a SUMMARY rather than 51 rows per sweep: what a sweep is for
      is its worst case, and the width it happened at is what a threshold gets
      calibrated against. The assertions below still run on every row. */
   const worstOf = (candidates: typeof rows) => candidates.reduce((worst, row) => ((row.modelWidth ?? 0) < (worst.modelWidth ?? 0) ? row : worst));
@@ -353,16 +448,22 @@ async function sweepSeat(browser: Browser, base: string, locale: "en" | "uk") {
     const widths = rows.filter(predicate).map((row) => row.hostContentWidth);
     return widths.length ? Math.min(...widths) : null;
   };
+  const { face = "configured", incumbent = "designated" } = seatCase;
   return {
     /* The SUMMARY is what lands in `geometry.json`; the rows stay here, for
        the assertions. 86 near-identical records would bury the three numbers
        that say whether the row holds. */
     summary: {
-      key: `sweep-${locale}`,
+      key: `sweep-${locale}-${caseKey(seatCase)}${keep ? `-${keep}-kept` : ""}`,
       locale,
-      band: { from: SWEEP_FROM, to: SWEEP_TO, step: SWEEP_STEP, samples: rows.length },
+      face,
+      incumbent,
+      /* Which half of the give-way rule was taken out of the page for this
+         sweep; null is the row as it ships. */
+      keptAtEveryWidth: keep,
+      band: { ...band, step: SWEEP_STEP, samples: rows.length },
       hostContentWidths: { min: Math.min(...rows.map((row) => row.hostContentWidth)), max: Math.max(...rows.map((row) => row.hostContentWidth)) },
-      minModelWidth: { width: worstModel.width, hostContentWidth: worstModel.hostContentWidth, modelWidth: worstModel.modelWidth },
+      minModelWidth: { width: worstModel.width, hostContentWidth: worstModel.hostContentWidth, modelWidth: worstModel.modelWidth, modelFullWidth: worstModel.modelFullWidth },
       /* The same worst case, over the hosts that owe the full bar. */
       minModelWidthAtBar: { width: worstModelAtBar.width, hostContentWidth: worstModelAtBar.hostContentWidth, modelWidth: worstModelAtBar.modelWidth },
       maxControlsSpill: { width: worstSpill.width, hostContentWidth: worstSpill.hostContentWidth, controlsSpill: worstSpill.controlsSpill },
@@ -374,6 +475,24 @@ async function sweepSeat(browser: Browser, base: string, locale: "en" | "uk") {
          stylesheet. */
       narrowestHostWithFace: shown((row) => row.chipFace !== null),
       narrowestHostWithPredecessor: shown((row) => row.predecessorShown),
+      /* The narrowest host that still draws the seat's identity WHOLE. Above
+         the give-way width every row owes this; below it the number says how
+         far the whole name survives anyway. */
+      narrowestHostWithWholeModel: shown((row) => !row.modelTruncated),
+      /* The critique's own table, at its own widths: what the model name is
+         drawn at, out of what it would take. */
+      named: rows
+        .filter((row) => NAMED_WIDTHS.includes(row.width))
+        .map((row) => ({
+          width: row.width,
+          hostContentWidth: row.hostContentWidth,
+          modelWidth: row.modelWidth,
+          modelFullWidth: row.modelFullWidth,
+          chipWidth: row.chipWidth,
+          chipFace: row.chipFace,
+          predecessorWidth: row.predecessorWidth,
+          accountWidth: row.accountWidth,
+        })),
     },
     rows,
     errors,
@@ -488,7 +607,8 @@ async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en",
  * row is DRAWN over its siblings rather than reflowing, and the model name the
  * row exists to show is what gets crushed first.
  */
-function expectSeatRow(read: SeatRow, locale: "en" | "uk", key: string): void {
+function expectSeatRow(read: SeatRow, locale: "en" | "uk", key: string, seatCase: SeatCase = {}): void {
+  const { face = "configured", incumbent = "designated" } = seatCase;
   /* The controls group must not be drawn one pixel outside the row that holds
      it, nor over the siblings that follow it. */
   expect(read.controlsSpill, `${key} controls spill`).toBe(0);
@@ -501,19 +621,39 @@ function expectSeatRow(read: SeatRow, locale: "en" | "uk", key: string): void {
   if (read.hostContentWidth >= MODEL_BAR_HOST_PX) {
     expect(read.modelWidth, `${key} model width`).toBeGreaterThan(40);
   }
+  /* Above the give-way width the row has room for everything it carries, so
+     the identity is drawn WHOLE — the defect this file was rewritten for was
+     a row that fitted, spilled nowhere, and showed «clau…» anyway. */
+  if (read.hostContentWidth > INLINE_GIVE_WAY_PX) {
+    expect(read.modelTruncated, `${key} model name whole`).toBe(false);
+  }
+  /* The row measured is the row production draws: once the status poll has
+     answered it carries the effort inside the model name and the account as
+     its own badge, and those two are what the crush lived in. */
+  if (incumbent === "designated") {
+    expect(read.modelText, `${key} model name and effort`).toBe("claude-opus-5 · high");
+    expect(read.accountShown, `${key} account badge`).toBe(true);
+  }
   expect(read.rotateVisible, `${key} Rotate visible`).toBe(true);
   expect(read.chipWidth, `${key} chip visible`).toBeGreaterThan(0);
   /* Whatever the face shows, the word it gave up is still reachable — on the
      chip's own title and its accessible label, in the row's own locale. */
-  const interval = translate(locale, "seatTick.everyMin", { n: 30 });
+  const interval = translate(locale, "seatTick.everyMin", { n: FACE_MINUTES[face] });
   expect(read.chipTitle, `${key} chip title`).toContain(interval);
   expect(read.chipLabel, `${key} chip label`).toContain(interval);
-  /* The word and the link are given up by the width, not by the locale, and
-     at the one threshold the row was calibrated to: above it both are drawn,
-     at or below it the row has already given them both up. */
+  /* The word and the link are given up by the width, not by the locale, and at
+     the one threshold the row was calibrated to: above it both are drawn, at
+     or below it the row has already given them both up. */
   if (read.hostContentWidth > INLINE_GIVE_WAY_PX) {
     expect(read.chipFace, `${key} chip face`).not.toBeNull();
     expect(read.predecessorShown, `${key} predecessor link`).toBe(true);
+    /* And where it IS drawn it is a glyph: no label in the row, its words on
+       the title and on the accessible name. That is what stopped 156 px (en)
+       and 186 px (uk) of a link that never shrinks coming off the seat's own
+       identity. */
+    expect(read.predecessorText, `${key} predecessor link is its glyph`).toBe("");
+    expect(read.predecessorLabel, `${key} predecessor accessible name`).toBe(translate(locale, "orchPanel.predecessor"));
+    expect(read.predecessorWidth, `${key} predecessor link width`).toBeLessThanOrEqual(24);
   } else {
     expect(read.chipFace, `${key} chip face collapsed`).toBeNull();
     expect(read.predecessorShown, `${key} predecessor link collapsed`).toBe(false);
@@ -560,16 +700,34 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
       roomy: await desktop(browser, base, 1440, 900, 440),
       wide: await desktop(browser, base, 1280, 800, 440),
       narrow: await desktop(browser, base, 640, 600, 360),
-      /* The seat header, which the dock's numbers say nothing about. */
+      /* The seat header, which the dock's numbers say nothing about — on the
+         row the status poll leaves behind, which is what production draws. */
       seatWide: await seat(browser, base, 1280, "en"),
+      seat1048: await seat(browser, base, 1048, "en"),
+      seat1048Uk: await seat(browser, base, 1048, "uk"),
       seat1024: await seat(browser, base, 1024, "en"),
       seat1024Uk: await seat(browser, base, 1024, "uk"),
       seat900: await seat(browser, base, 900, "en"),
       seat900Uk: await seat(browser, base, 900, "uk"),
-      /* Those five are points; the row broke BETWEEN them. The sweep walks the
-         whole desktop band in both locales, with the same bar. */
-      sweepEn: await sweepSeat(browser, base, "en"),
-      sweepUk: await sweepSeat(browser, base, "uk"),
+      /* Those are points; the row broke BETWEEN them. The sweeps walk the
+         band in both locales with the same bar, at the narrowest face the
+         chip can carry and at the widest — the two ends of the only thing in
+         the controls group whose width the operator can change. */
+      sweepEnDefault: await sweepSeat(browser, base, "en", { face: "default" }),
+      sweepEnLongest: await sweepSeat(browser, base, "en", { face: "longest" }),
+      sweepUkDefault: await sweepSeat(browser, base, "uk", { face: "default" }),
+      sweepUkLongest: await sweepSeat(browser, base, "uk", { face: "longest" }),
+      /* And the first paint, before the status poll answers: a lighter row,
+         swept down to the phone shell's ceiling. */
+      sweepFirstPaintEn: await sweepSeat(browser, base, "en", { incumbent: "board" }, FIRST_PAINT_BAND),
+      sweepFirstPaintUk: await sweepSeat(browser, base, "uk", { incumbent: "board" }, FIRST_PAINT_BAND),
+      /* The other side of the threshold, in the worst case there is: the same
+         band and the same row with the give-way rule taken out of the page. A
+         threshold nobody has measured the far side of is a story. */
+      sweepUkLongestWordKept: await sweepSeat(browser, base, "uk", { face: "longest" }, PRODUCTION_BAND, "word"),
+      /* The link's half of the same rule, in the band where it is the one that
+         costs: the first paint at the phone shell's ceiling. */
+      sweepFirstPaintUkLinkKept: await sweepSeat(browser, base, "uk", { incumbent: "board" }, FIRST_PAINT_BAND, "link"),
       phone: await phone(browser, base),
       /* The row's label is the thing that disappeared: the longest trailing
          clause, and the longest label, in the locale that has both. */
@@ -584,10 +742,11 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   /* The sweeps go in as their summaries: 86 near-identical records would bury
      the numbers that say whether the row holds, and the rows themselves are
      reproduced by re-running this driver. */
+  const sweepKeys = ["sweepEnDefault", "sweepEnLongest", "sweepUkDefault", "sweepUkLongest", "sweepFirstPaintEn", "sweepFirstPaintUk"] as const;
+  const whatIfKeys = ["sweepUkLongestWordKept", "sweepFirstPaintUkLinkKept"] as const;
   const recorded = {
     ...evidence,
-    sweepEn: (evidence.sweepEn as Awaited<ReturnType<typeof sweepSeat>>).summary,
-    sweepUk: (evidence.sweepUk as Awaited<ReturnType<typeof sweepSeat>>).summary,
+    ...Object.fromEntries([...sweepKeys, ...whatIfKeys].map((key) => [key, (evidence[key] as Awaited<ReturnType<typeof sweepSeat>>).summary])),
   };
   fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(recorded, null, 2)}\n`);
 
@@ -607,8 +766,14 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
       expect(read.chip.face, `${key} chip face`).toContain(translate("en", "seatTick.everyMin", { n: 30 }));
     } else {
       expect(read.chip.face, `${key} chip face collapsed`).toBeNull();
-      /* Collapsed rather than wrapped: the identity stays on one line. */
-      expect(read.row.identityLines, `${key} identity lines`).toBeLessThan(40);
+      /* The dock's row WRAPS, and on the row production draws — the status
+         read's effort and account badge included — a 336 px host spends a
+         second line on them rather than crushing the identity. That is this
+         host giving way the way it is built to, and it is bounded: two lines,
+         inside a dock that still does not overflow. The kanban seat's row has
+         no such give, which is why it is measured separately and why the two
+         hosts have thresholds of their own. */
+      expect(read.row.identityLines, `${key} identity lines`).toBeLessThanOrEqual(56);
     }
     expect(read.popoverInViewport, `${key} popover inside the viewport`).toBe(true);
     expect(read.popover.portalled, `${key} popover portalled`).toBe(true);
@@ -621,18 +786,54 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
     expect(read.closesOnOutsideClick, `${key} outside click closes`).toBe(true);
   }
   /* The kanban seat's header, which the dock's numbers said nothing about. */
-  for (const key of ["seatWide", "seat1024", "seat1024Uk", "seat900", "seat900Uk"] as const) {
+  for (const key of ["seatWide", "seat1048", "seat1048Uk", "seat1024", "seat1024Uk", "seat900", "seat900Uk"] as const) {
     const seatRead = evidence[key] as Awaited<ReturnType<typeof seat>>;
     expect(seatRead.errors, `${key} page errors`).toEqual([]);
     expectSeatRow(seatRead, seatRead.locale, key);
   }
   /* And the same assertions at every 8 px across the band, because the named
-     widths above are three points and the row broke between them. */
-  for (const key of ["sweepEn", "sweepUk"] as const) {
+     widths above are points and the row broke between them. */
+  for (const key of sweepKeys) {
     const sweep = evidence[key] as Awaited<ReturnType<typeof sweepSeat>>;
+    const seatCase = { face: sweep.summary.face, incumbent: sweep.summary.incumbent };
     expect(sweep.errors, `${key} page errors`).toEqual([]);
-    expect(sweep.rows.length, `${key} samples`).toBe(sweepWidths.length);
-    for (const row of sweep.rows) expectSeatRow(row, sweep.summary.locale, `${key} at ${row.width} px`);
+    expect(sweep.rows.length, `${key} samples`).toBe(bandWidths(sweep.summary.band).length);
+    for (const row of sweep.rows) expectSeatRow(row, sweep.summary.locale, `${key} at ${row.width} px`, seatCase);
+  }
+
+  /* What the give-way rule BUYS, measured rather than argued: the same band,
+     the same row, the same widest face, with the rule taken out of the page.
+     The word held at every width crushes the very name this row exists to
+     show — and the row does not spill while it does it, which is why only a
+     measurement finds it. */
+  {
+    const shipped = evidence.sweepUkLongest as Awaited<ReturnType<typeof sweepSeat>>;
+    const whatIf = evidence.sweepUkLongestWordKept as Awaited<ReturnType<typeof sweepSeat>>;
+    expect(whatIf.errors, "the word what-if page errors").toEqual([]);
+    expect(whatIf.summary.keptAtEveryWidth, "the what-if kept the word").toBe("word");
+    /* The rule really came out: below the threshold the face is drawn. */
+    expect(whatIf.summary.narrowestHostWithFace, "the what-if draws the face at every host").toBe(whatIf.summary.hostContentWidths.min);
+    /* And keeping it costs the identity: the whole name survives only from a
+       much wider host, and the worst case loses tens of pixels. */
+    expect(whatIf.summary.narrowestHostWithWholeModel!, "the what-if needs a wider host for a whole name")
+      .toBeGreaterThan(shipped.summary.narrowestHostWithWholeModel!);
+    expect(whatIf.summary.minModelWidth.modelWidth!, "the what-if crushes the name further")
+      .toBeLessThan(shipped.summary.minModelWidth.modelWidth! - 30);
+
+    /* The link's half, in the band where it is the one that costs: 12 px of
+       glyph, against a row that has nothing left to give. */
+    const shippedLink = evidence.sweepFirstPaintUk as Awaited<ReturnType<typeof sweepSeat>>;
+    const linkWhatIf = evidence.sweepFirstPaintUkLinkKept as Awaited<ReturnType<typeof sweepSeat>>;
+    expect(linkWhatIf.errors, "the link what-if page errors").toEqual([]);
+    expect(linkWhatIf.summary.keptAtEveryWidth, "the what-if kept the link").toBe("link");
+    expect(linkWhatIf.summary.narrowestHostWithPredecessor, "the what-if draws the link at every host").toBe(linkWhatIf.summary.hostContentWidths.min);
+    /* Kept there it takes the name further down AND pushes the controls group
+       outside the row that holds it — which is the failure this whole file
+       exists to catch. */
+    expect(linkWhatIf.summary.minModelWidthAtBar.modelWidth!, "the what-if crushes the name further")
+      .toBeLessThan(shippedLink.summary.minModelWidthAtBar.modelWidth!);
+    expect(linkWhatIf.summary.maxControlsSpill.controlsSpill, "the what-if spills past the row")
+      .toBeGreaterThan(shippedLink.summary.maxControlsSpill.controlsSpill);
   }
 
   /* The phone's row, in both locales and for the longest trailing clause it

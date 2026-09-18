@@ -69,7 +69,8 @@ export function IncumbentHeader({
   opening: boolean;
   onRotate: () => void;
   /** One row inside a header that already names the seat (the kanban seat,
-      #1695): no band of its own, and the predecessor link rides the row. */
+      #1695): no band of its own, and the predecessor link rides the row as its
+      glyph rather than as a line under it. */
   inline?: boolean;
 }) {
   const { t } = useLocale();
@@ -108,7 +109,11 @@ export function IncumbentHeader({
           /* A product name, so sans (design system §1.1 mono rule) — the tier
              rides with it because «opus» and «opus at high» are one answer to
              «what is this orchestrator». */
-          <span className="min-w-0 shrink truncate text-ui font-semibold text-primary" title={effort ? `${model} · ${effort}` : model}>
+          <span
+            data-orchestrator-model={model}
+            className="min-w-0 shrink truncate text-ui font-semibold text-primary"
+            title={effort ? `${model} · ${effort}` : model}
+          >
             {model}
             {effort ? <span className="font-normal text-muted"> · {effort}</span> : null}
           </span>
@@ -116,7 +121,7 @@ export function IncumbentHeader({
           <span className="text-ui text-muted">{t("orchPanel.incumbentUnknown")}</span>
         )}
         {account ? (
-          <Badge tone="neutral" shrinkable title={t("orchPanel.accountTitle", { account })}>
+          <Badge tone="neutral" shrinkable data-orchestrator-account={account} title={t("orchPanel.accountTitle", { account })}>
             <span className="min-w-0 truncate">{account}</span>
           </Badge>
         ) : null}
@@ -154,14 +159,28 @@ export function IncumbentHeader({
         </span>
       </div>
       {predecessorConversationId ? (
+        /* Inline, the link is its GLYPH — the words go on the title and the
+           accessible name instead of into the row.
+
+           It is a secondary affordance sharing one non-wrapping row with the
+           seat's own identity, and it does not shrink: the identity beside it
+           is `flex-basis: 0`, so every pixel the label takes comes off the
+           model name and the account badge, which are what this row exists to
+           show. Measured on the row production draws — a designated incumbent
+           with its effort and its account — the label cost 156 px in English
+           and 186 px in Ukrainian, and left the Ukrainian model name at 37 px
+           of its 111 px at 1280 px and at 19 px at 1048 px. The dock's row
+           wraps, so there the link is a line of its own and costs the identity
+           nothing; it keeps its words. */
         <a
           href={"#c=" + encodeURIComponent(predecessorConversationId)}
           data-orchestrator-predecessor={predecessorConversationId}
-          title={t("orchPanel.predecessorTitle")}
+          aria-label={inline ? t("orchPanel.predecessor") : undefined}
+          title={inline ? `${t("orchPanel.predecessor")}\n${t("orchPanel.predecessorTitle")}` : t("orchPanel.predecessorTitle")}
           className="inline-flex min-w-0 items-center gap-1 self-start text-caption text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           <CornerDownRight className="h-3 w-3 shrink-0" aria-hidden />
-          <span className="truncate">{t("orchPanel.predecessor")}</span>
+          {inline ? null : <span className="truncate">{t("orchPanel.predecessor")}</span>}
         </a>
       ) : null}
     </div>
