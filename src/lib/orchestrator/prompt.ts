@@ -32,7 +32,12 @@
  * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
  * launch that names no task is recorded somewhere else: on the card of a
  * conversation it names as parent or reviews, or on a placeholder card of its
- * own. */
+ * own. v15 (#1745) takes the Deploys section out of the shared body: it
+ * describes deploying Agent Log Viewer itself, every project's manager was
+ * receiving it, and a manager of an unrelated project read it as the way to
+ * deploy its own project. It is a delivered directive now, scoped to the
+ * Viewer's own seat, and a delivery to any other project strips the copy its
+ * stored mandate already carries. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -48,7 +53,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 14;
+export const ORCHESTRATOR_PROMPT_VERSION = 15;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -183,6 +188,43 @@ ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pip
 
 RECEIPTS ARE THE RECORD. Every one of these calls is keyed by clientRequestId. A retry of the SAME logical operation reuses its id and replays the original receipt; a new operation gets a new id. When an outcome is unknown, replay the original id and read what the receipt says. Re-issuing it under a fresh id is how one outcome ends up with two pipelines and two cards.`;
 
+/**
+ * Identifies the deploy section below inside a mandate, however its body was
+ * edited — and, unlike the two headings above, it is also what delivery REMOVES
+ * a section by (#1745).
+ *
+ * The literal is the heading the section has always carried, and it has to stay
+ * that literal: thirteen other projects' stored mandates carry `## Deploys`
+ * today, and recognizing it is the only thing that takes it back off them.
+ * The cost of a heading that short is that a manager's own `## Deploys` section
+ * about ITS project's release process is removed too — the operator's call,
+ * because what that seat loses is a paragraph it wrote, while what it keeps
+ * otherwise is an instruction to deploy someone else's production.
+ */
+export const ORCHESTRATOR_VIEWER_DEPLOYS_HEADING = "## Deploys";
+
+/**
+ * Deploying Agent Log Viewer itself (#795 contract, scoped by #1745).
+ *
+ * Delivered ONLY to a seat whose project is the Viewer's own. The tool it names
+ * deploys the repository that serves the Viewer and nothing else, so in any
+ * other project's mandate this section is an instruction to replace a
+ * production the seat does not own — which is what #1321 refuses server-side,
+ * and what this stops the prompt from proposing in the first place.
+ *
+ * The general "never ask the operator to confirm" rule does not leave with it:
+ * the start-by-default pipeline contract in the shared body carries that for
+ * every project. What leaves is the commit-hash confirmation, which only a
+ * Viewer deploy ever had.
+ */
+export const ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE = `${ORCHESTRATOR_VIEWER_DEPLOYS_HEADING}
+This section is about deploying Agent Log Viewer itself — the application serving this board — and about no other project's release.
+YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.
+1. Prepare: merges landed on origin/main, gates green. Never deploy red.
+2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.
+3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
+4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`;
+
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are the viewer's built-in Manager (issues #182, #691) — the agent that owns the board and runs the whole conveyor through the viewer's own HTTP API and MCP tools. You never act outside them.
 
 ${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}
@@ -226,7 +268,7 @@ Much of what you will meet has been met before, and the Viewer indexes every use
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## Conveyor rules
-Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> batched deploy -> cleanup.
+Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, where it has one -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
@@ -239,13 +281,6 @@ A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe
 ## Start-by-default pipeline contract
 When the operator asks for work, assess complexity, compose stages/roles, POST /api/pipelines with autoStart: true (or start it immediately after creation), and put the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: POST /api/pipelines with autoStart: false, report the draft id/link, and wait for the operator to press Start on the board. The explicit draft request may be asked in your own conversation or relayed through the gateway; both channels carry the same authority.
 
-## Deploys
-YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.
-1. Prepare: merges landed on origin/main, gates green. Never deploy red.
-2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.
-3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
-4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.
-
 ## Fences
 - Operate exclusively through the viewer API and MCP tools (spawn, flows, pipelines, tasks, files, agent/snapshot, conversation-host). No direct process or runtime manipulation.
 - If this checkout carries an llv-conveyor skill, it is your playbook, subordinate to this mandate wherever the two disagree; otherwise the conveyor rules above are the playbook.
@@ -257,11 +292,116 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
     reworded the body under it keeps their wording; the initial-status contract
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
-const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
+const DELIVERED_DIRECTIVES: readonly {
+  marker: string;
+  directive: string;
+  /** Delivered only to the Viewer's own project's seat, and REMOVED from every
+      other project's delivery. Such a marker is a heading line, because the
+      removal has to find where the section starts and where it ends. */
+  viewerOnly?: true;
+}[] = [
+  { marker: ORCHESTRATOR_VIEWER_DEPLOYS_HEADING, directive: ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE, viewerOnly: true },
   { marker: ORCHESTRATOR_TASK_OWNERSHIP_HEADING, directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { marker: ORCHESTRATOR_VIEWER_CLOCK_HEADING, directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
+
+/** A Markdown heading line and its level, or 0 when the line is not a heading.
+    The shape matches what `normalizeMarkers` in `handoffDigest.ts` neutralizes,
+    so the two modules agree on what counts as a heading. */
+function headingLevel(line: string): number {
+  return /^(#{1,6})[ \t]+/.exec(line)?.[1]!.length ?? 0;
+}
+
+/** A fenced code block's delimiter: three or more backticks or tildes, indented
+    by at most three spaces. An opening backtick fence's info string may not
+    itself contain a backtick; a closing fence carries no info string at all. */
+function fenceDelimiter(line: string): { char: string; length: number; info: string } | null {
+  const match = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!match) return null;
+  return { char: match[1]![0]!, length: match[1]!.length, info: match[2]!.trim() };
+}
+
+/**
+ * The heading level of every line, with fenced code blocks blanked out.
+ *
+ * A mandate is prose that quotes commands, and a fenced block is where a `#`
+ * comment or a `### ` in a sample lives. Such a line is not a section boundary:
+ * treating one as a heading would end the deploy section early and leave the
+ * rest of it — `deploy_exact_sha` and all — in a foreign project's delivery.
+ */
+function headingLevels(lines: readonly string[]): number[] {
+  let open: { char: string; length: number } | null = null;
+  return lines.map((line) => {
+    const delimiter = fenceDelimiter(line);
+    if (open) {
+      if (delimiter && delimiter.char === open.char && delimiter.length >= open.length && !delimiter.info) open = null;
+      return 0;
+    }
+    if (delimiter && !(delimiter.char === "`" && delimiter.info.includes("`"))) {
+      open = { char: delimiter.char, length: delimiter.length };
+      return 0;
+    }
+    return headingLevel(line);
+  });
+}
+
+/** The lines at which this heading opens a section of the mandate. Anchored to
+    a whole line and outside fenced blocks, unlike the substring test the
+    every-project directives use: prose that mentions `## Deploys` mid-sentence
+    is not a section, and treating it as one would withhold the real section
+    from the seat entitled to it. */
+function sectionStarts(lines: readonly string[], heading: string): number[] {
+  const levels = headingLevels(lines);
+  const starts: number[] = [];
+  lines.forEach((line, index) => {
+    if (levels[index]! > 0 && line.trimEnd() === heading) starts.push(index);
+  });
+  return starts;
+}
+
+/** Whether a heading names a section of this mandate. */
+function carriesSection(mandate: string, heading: string): boolean {
+  return sectionStarts(mandate.split("\n"), heading).length > 0;
+}
+
+/**
+ * The mandate with EVERY section this heading names removed — each heading line
+ * and everything under it up to the next heading of the same or shallower
+ * level, and nothing beyond that.
+ *
+ * Three things a reworded section does that a single pass to the next heading
+ * of any level got wrong, each of which left `deploy_exact_sha` text in a
+ * foreign project's delivered mandate: a `### ` sub-heading belongs to the
+ * section it sits under, a heading-looking line inside a fenced block is not a
+ * heading at all, and a mandate that carries the section twice must lose both
+ * copies. Removal repeats until the heading names nothing left in the text.
+ *
+ * The body is never compared: a caller who reworded it under the recognised
+ * heading wrote their own version of the same section, and this is a delivery
+ * that must not carry either version. Everything from the next heading of the
+ * marker's own level onwards survives byte for byte.
+ */
+function withoutSection(mandate: string, heading: string): string {
+  const level = headingLevel(heading);
+  let lines = mandate.split("\n");
+  /* Mid-mandate the removed range takes the blank line that separated the
+     section from the next heading with it, so the seam already reads right; a
+     section that ran to the end of the mandate leaves the blank line that
+     preceded it. */
+  let reachedEnd = false;
+  for (;;) {
+    const levels = headingLevels(lines);
+    const start = sectionStarts(lines, heading)[0];
+    if (start === undefined) break;
+    let end = start + 1;
+    while (end < lines.length && !(levels[end]! > 0 && levels[end]! <= level)) end += 1;
+    reachedEnd ||= end === lines.length;
+    lines = [...lines.slice(0, start), ...lines.slice(end)];
+  }
+  const kept = lines.join("\n");
+  return reachedEnd ? kept.trimEnd() : kept;
+}
 
 /** Every seat receives the initial-status contract, the clock handover AND the
     task-ownership section (#1720), whatever mandate it holds. Each is appended
@@ -271,10 +411,25 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
     the current prompt version and a rotation passes the incumbent's version
     through unchanged — so a version number
     cannot say which paragraphs a mandate actually contains. The stored mandate
-    stays raw, and a retry appends each directive at most once. */
-export function orchestratorMandateForDelivery(mandate: string): string {
-  return DELIVERED_DIRECTIVES.reduce(
-    (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
-    mandate,
-  );
+    stays raw, and a retry appends each directive at most once.
+
+    `viewerSeat` decides the one directive that is not for everybody (#1745):
+    the Viewer's own seat receives the deploy section, every other project's
+    delivery has it removed — including the thirteen stored mandates that carry
+    it from the years it lived in the shared body. The caller answers that
+    question with `isViewerOwnProject` in `viewerProject.ts`, which reads the
+    same Viewer-project resolver the deploy refusal does; it is not answered
+    here because this module is also imported by the seat's client surfaces,
+    which cannot reach the server's own state. Delivering to no named seat is not
+    delivering to the Viewer's, which is the safe direction: the section is
+    withheld rather than guessed into place. */
+export function orchestratorMandateForDelivery(
+  mandate: string,
+  { viewerSeat = false }: { viewerSeat?: boolean } = {},
+): string {
+  return DELIVERED_DIRECTIVES.reduce((text, { marker, directive, viewerOnly }) => {
+    if (viewerOnly && !viewerSeat) return withoutSection(text, marker);
+    const carried = viewerOnly ? carriesSection(text, marker) : text.includes(marker);
+    return carried ? text : `${text}\n\n${directive}`;
+  }, mandate);
 }
