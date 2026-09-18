@@ -135,10 +135,14 @@ const READ_GRAPH = (scopeSelector: string) => (page: Page) => page.evaluate((sel
     const id = path.getAttribute("data-edge") ?? "";
     const label = graph.querySelector<HTMLElement>(`[data-edge-label="${id}"]`);
     const cls = path.getAttribute("class") ?? "";
-    /* A label is absolutely positioned inside `.pgraph`, whose own width is what
-       the layout reserved; `offsetLeft`/`offsetWidth` are untouched by the
-       modal's scale transform, so this is the same number at any zoom. */
-    const overflowX = label ? Math.max(0, label.offsetLeft + label.offsetWidth - graph.offsetWidth) : 0;
+    /* Painted boxes, not layout boxes: a label carries a translate of its own
+       (centred on its point, or only vertically when it sits beside the return
+       lane), so only the rendered rectangle says whether the graph box cuts it.
+       Both rects are in the same scaled space, so dividing by the graph's own
+       scale gives the answer in layout px at any zoom. */
+    const overflowX = label
+      ? Math.max(0, (label.getBoundingClientRect().right - graph.getBoundingClientRect().right) / Math.max(drawn, 0.01))
+      : 0;
     const fill = label ? getComputedStyle(label).backgroundColor : "";
     const labelRect = label?.getBoundingClientRect();
     return {
