@@ -12,6 +12,7 @@ import type { LaunchAccountCatalog } from "@/components/draft/AgentLaunchControl
 
 import type { IncumbentContext, OrchestratorIncumbent } from "./incumbent";
 import { ROTATION_CONTEXT_PERCENT } from "./seatState";
+import { SeatTickChip } from "./SeatTickChip";
 
 /**
  * WHO is holding the seat, above the conversation they are holding it with
@@ -25,8 +26,16 @@ import { ROTATION_CONTEXT_PERCENT } from "./seatState";
  *
  * It is also the only place rotation is offered. The advisory below states the
  * recommendation; the button here performs it, and ONLY when pressed.
+ *
+ * The seat tick's chip rides the same row (#1681), before Rotate. Whether the
+ * Viewer wakes this seat, and how often, is a property OF the seat — so it
+ * belongs beside who holds it rather than in a panel of its own, and mounting
+ * it here reaches both hosts of this row at once: the dock and the kanban
+ * seat's inline header.
  */
 export function IncumbentHeader({
+  project,
+  projectName,
   incumbent,
   file,
   catalog,
@@ -37,6 +46,11 @@ export function IncumbentHeader({
   onRotate,
   inline = false,
 }: {
+  /** The canonical project this seat holds. The tick is per project, and the
+      chip must never silently target another one. */
+  project: string;
+  /** The project as the operator reads it, for the tick popover's own head. */
+  projectName: string;
   /** The status read, once it has answered. */
   incumbent: OrchestratorIncumbent | null;
   /** The default version the seat's mandate is based on, null for bespoke
@@ -104,19 +118,28 @@ export function IncumbentHeader({
             {t("orchPanel.mandateStale", { version: promptVersion, current: ORCHESTRATOR_PROMPT_VERSION })}
           </span>
         ) : null}
-        <button
-          type="button"
-          data-orchestrator-rotate
-          onClick={onRotate}
-          disabled={rotating || opening}
-          title={t("orchPanel.rotateTitle")}
-          className="ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-control border border-border bg-card px-2 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
-        >
-          {opening
-            ? <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden />
-            : <RefreshCw className="h-3 w-3" aria-hidden />}
-          {t("orchPanel.rotate")}
-        </button>
+        {/* The row's two CONTROLS, in one group at its right edge. The group
+            is what carries the auto margin and what wraps: with the margin on
+            the chip alone, a tight row (the dock at its 360 px floor) sent
+            Rotate to a second line by itself while the chip stayed on the
+            first — measured at 640 px, `issue1681Evidence.browser.test.tsx`.
+            Together they wrap together, and they stay adjacent. */}
+        <span className="ml-auto flex shrink-0 items-center gap-2" data-orchestrator-controls>
+          <SeatTickChip project={project} projectName={projectName} />
+          <button
+            type="button"
+            data-orchestrator-rotate
+            onClick={onRotate}
+            disabled={rotating || opening}
+            title={t("orchPanel.rotateTitle")}
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-control border border-border bg-card px-2 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+          >
+            {opening
+              ? <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden />
+              : <RefreshCw className="h-3 w-3" aria-hidden />}
+            {t("orchPanel.rotate")}
+          </button>
+        </span>
       </div>
       {predecessorConversationId ? (
         <a

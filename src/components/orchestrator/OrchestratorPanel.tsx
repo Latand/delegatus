@@ -389,6 +389,8 @@ export function OrchestratorPanel({
           {state.kind === "live" && !rotating && !collapsed ? (
             <IncumbentHeader
               inline
+              project={project}
+              projectName={projectName}
               incumbent={incumbent}
               file={file}
               catalog={catalog}
@@ -496,6 +498,8 @@ export function OrchestratorPanel({
         <div className="flex min-h-0 flex-1 flex-col">
           {variant === "seat" ? null : (
             <IncumbentHeader
+              project={project}
+              projectName={projectName}
               incumbent={incumbent}
               file={file}
               catalog={catalog}

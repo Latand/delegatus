@@ -36,6 +36,7 @@ import type { SeatConfirmLaunch } from "../orchestrator/useSeatConfirm";
 import { humanizeDuration } from "../turnDuration";
 import { statePhrase } from "./MobileBoard";
 import { MobileMeter } from "./MobileMeter";
+import { MobileSeatTickRow, MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileSheet } from "./MobileSheet";
 import { mobileRowState } from "./mobileBoardModel";
 import { readSeatDraftField, readSeatFlowField, writeSeatDraftField, writeSeatFlowField } from "./orchestratorDraftStorage";
@@ -153,22 +154,39 @@ export interface SeatRotateFlow {
  *    draft over a vacancy: the same surface with a different primary. It keeps
  *    #1004's keyboard budget verbatim, because that budget was measured
  *    against a surface that owns the whole viewport.
+ *  - `tick` — the compact bottom sheet for the seat tick (#1681), reached from
+ *    a row in the seat sheet and returning to it.
  *
- * They are two components rather than two branches so each owns its own modal
- * layer: switching from one to the other unmounts a surface and mounts the
- * other, which is what makes the focus return and the scroll lock balance.
+ * They are separate components rather than branches inside one so each owns
+ * its own modal layer: switching from one to another unmounts a surface and
+ * mounts the next, which is what makes the focus return and the scroll lock
+ * balance.
  */
 export function MobileOrchestratorSheet(props: SeatSheetProps) {
-  return props.sheet === "rotate" ? <SeatDraftSheet {...props} /> : <SeatStatusSheet {...props} />;
+  if (props.sheet === "rotate") return <SeatDraftSheet {...props} />;
+  /* The tick's own sheet REPLACES the seat sheet rather than stacking over it
+     (§3.3), and its close returns to the seat sheet the row was tapped in. */
+  if (props.sheet === "tick") {
+    return <MobileSeatTickSheet project={props.project} projectName={props.projectName} onClose={props.tick.onClose} />;
+  }
+  return <SeatStatusSheet {...props} />;
+}
+
+/** The seat tick's row and its sheet, as the card drives them. */
+export interface SeatTickFlow {
+  /** The row in the live seat sheet: swaps this sheet for the tick's. */
+  onOpen: () => void;
+  /** The tick sheet's × and scrim: back to the seat sheet. */
+  onClose: () => void;
 }
 
 interface SeatSheetProps {
   project: string;
   projectName: string;
   projectCwd?: string;
-  /** Which of the card's two sheets is open. The name decides the container;
-      the seat state decides what is inside it. */
-  sheet: "seat" | "rotate";
+  /** Which of the card's sheets is open. The name decides the container; the
+      seat state decides what is inside it. */
+  sheet: "seat" | "rotate" | "tick";
   state: OrchestratorPanelState;
   /** The seat read itself, for the rotate draft's own error state. */
   status: OrchestratorSeatStatus | null;
@@ -186,6 +204,7 @@ interface SeatSheetProps {
       same tick the card's badge does. */
   now: number;
   rotate: SeatRotateFlow;
+  tick: SeatTickFlow;
   onConfirm: (payload: SeatConfirmPayload) => void;
   onRecheck: () => void;
   onOpenConversation: () => void;
@@ -226,6 +245,7 @@ function SeatStatusSheet({
   submitting,
   now,
   rotate,
+  tick,
   onConfirm,
   onRecheck,
   onOpenConversation,
@@ -355,7 +375,7 @@ function SeatStatusSheet({
             ) : null}
           </Centered>
         ) : state.kind === "live" ? (
-          <LiveView state={state} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} />
+          <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} />
         ) : (
           /* A vacancy or a failed designation reached this sheet from somewhere
              other than the card (the platform's forward gesture onto a replaced
@@ -932,12 +952,15 @@ function MandateField({
  */
 function LiveView({
   state,
+  project,
   file,
   incumbent,
   now,
   onEditMandate,
+  onOpenTick,
 }: {
   state: Extract<OrchestratorPanelState, { kind: "live" }>;
+  project: string;
   file: FileEntry | null;
   incumbent: OrchestratorIncumbent | null;
   now: number;
@@ -945,6 +968,8 @@ function LiveView({
       from the rules it edits — because a mandate cannot change under a running
       orchestrator: a successor takes the seat. */
   onEditMandate: () => void;
+  /** The seat tick's row swaps this sheet for the tick's own (#1681). */
+  onOpenTick: () => void;
 }) {
   const { t } = useLocale();
   return (
@@ -956,6 +981,9 @@ function LiveView({
         now={now}
         predecessorConversationId={state.seat.predecessorConversationId}
       />
+      {/* The tick, directly under who holds the seat: whether the Viewer wakes
+          this seat, and how often, is a property of the seat (#1681). */}
+      <MobileSeatTickRow project={project} onOpen={onOpenTick} />
       {state.bindFailure ? (
         <div role="status" data-orchestrator-bind-failure={state.bindFailure} className="rounded-control border border-warning/30 bg-warning/10 px-3 py-2 text-ui text-primary">
           <p className="font-semibold">{t("orchPanel.bindStalled")}</p>

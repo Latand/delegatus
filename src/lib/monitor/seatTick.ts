@@ -2,6 +2,7 @@ import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
+import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickCard,
@@ -489,26 +490,34 @@ function settingsCards(input: SeatTickCheckInput): SeatTickCard[] {
   const settings = input.settings;
   if (!settings.configured) return [];
   const context = { reason: settings.reason, until: settings.until, setBy: settings.setBy, updatedAt: settings.updatedAt };
-  if (settings.isDefault) {
-    return [{
-      ref: SEAT_TICK_SETTINGS_REF,
-      kind: "tick-settings",
-      state: "resolved",
-      settings: context,
-      detail: settings.lapsed
-        ? "the recorded tick setting reached its expiry, so this project is back on the default wake interval"
-        : "this project is on the default tick settings",
-    }];
-  }
   return [{
     ref: SEAT_TICK_SETTINGS_REF,
     kind: "tick-settings",
-    state: "open",
+    state: settings.isDefault ? "resolved" : "open",
     settings: context,
-    detail: settings.enabled
-      ? `wakes for this project are set to one every ${Math.round(settings.wakeIntervalMs / MINUTE_MS)} minute(s)`
-      : "ticking is off for this project: no wake will be sent until it is turned back on",
+    detail: seatTickSettingsCardDetail(settings),
   }];
+}
+
+/**
+ * What a settings card says the SETTING is, in one clause.
+ *
+ * Exported because the operator's settings route shows the card text a change
+ * would raise before the next check raises it (#1681), and a second copy of
+ * this sentence is how the board and the control start wording one setting two
+ * ways.
+ */
+export function seatTickSettingsCardDetail(
+  settings: Pick<EffectiveSeatTickSettings, "enabled" | "wakeIntervalMs" | "isDefault" | "lapsed">,
+): string {
+  if (settings.isDefault) {
+    return settings.lapsed
+      ? "the recorded tick setting reached its expiry, so this project is back on the default wake interval"
+      : "this project is on the default tick settings";
+  }
+  return settings.enabled
+    ? `wakes for this project are set to one every ${Math.round(settings.wakeIntervalMs / MINUTE_MS)} minute(s)`
+    : "ticking is off for this project: no wake will be sent until it is turned back on";
 }
 
 /**

@@ -1,0 +1,142 @@
+{
+  "issue": 1681,
+  "wide": {
+    "key": "desktop-1280-dock-440",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "dock": 440,
+    "chip": {
+      "x": 421.640625,
+      "y": 74,
+      "width": 102.71875,
+      "height": 24,
+      "face": "every 30 min",
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 532.359375,
+      "y": 74,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "rowLines": 80,
+      "pageOverflow": false
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 204.359375,
+      "y": 106,
+      "width": 320,
+      "height": 560,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": false,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
+  "narrow": {
+    "key": "desktop-640-dock-360",
+    "viewport": {
+      "width": 640,
+      "height": 600
+    },
+    "dock": 360,
+    "chip": {
+      "x": 421.640625,
+      "y": 74,
+      "width": 102.71875,
+      "height": 24,
+      "face": "every 30 min",
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 532.359375,
+      "y": 74,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "rowLines": 80,
+      "pageOverflow": true
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 204.359375,
+      "y": 106,
+      "width": 320,
+      "height": 420,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": true,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
+  "phone": {
+    "key": "phone-390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "stale",
+      "text": "Seat tickevery 30 min · stale: last check 23m ago",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Seat tick · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 214.484375,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  }
+}

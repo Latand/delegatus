@@ -34,7 +34,7 @@ import { incumbentHostLive } from "../orchestrator/incumbent";
 import { useSeatBindingFeedback } from "../orchestrator/useSeatBindingFeedback";
 import { useSeatSurface } from "../orchestrator/useSeatSurface";
 import { MobileMeter } from "./MobileMeter";
-import { MobileOrchestratorSheet, SeatBadge, seatBadgeReading, type SeatConfirmPayload, type SeatRotateFlow } from "./MobileOrchestratorSheet";
+import { MobileOrchestratorSheet, SeatBadge, seatBadgeReading, type SeatConfirmPayload, type SeatRotateFlow, type SeatTickFlow } from "./MobileOrchestratorSheet";
 import { nowFragment } from "./mobileBoardModel";
 import { useMobileNav, useMobileNavStore } from "./mobileNav";
 import { readSeatDraftField, seatFlowStorage, writeSeatDraftField } from "./orchestratorDraftStorage";
@@ -159,9 +159,10 @@ export function MobileSeatCard({
      platform back gesture and the bar's ‹ close them exactly as they close
      every other sheet, and neither adds a history entry. */
   const [arm, setArm] = useState<SheetOpening | null>(null);
-  /* WHICH of the card's two sheets, when one is open: `seat` reads the seat as
-     a bottom sheet, `rotate` is the fullscreen draft that replaces it. */
-  const openName = navState.sheet === "seat" || navState.sheet === "rotate" ? navState.sheet : null;
+  /* WHICH of the card's sheets, when one is open: `seat` reads the seat as a
+     bottom sheet, `rotate` is the fullscreen draft that replaces it, `tick` is
+     the seat tick's own compact sheet (#1681). */
+  const openName = navState.sheet === "seat" || navState.sheet === "rotate" || navState.sheet === "tick" ? navState.sheet : null;
   const sheetOpen = openName !== null;
   /* The conversation the open rotate draft is replacing. Non-null IS the rotate
      mode, and matching it against the current seat is what closes the draft the
@@ -170,7 +171,7 @@ export function MobileSeatCard({
   /* Opening the rotate draft is a read first: see `openRotate`. */
   const [rotateOpening, setRotateOpening] = useState(false);
 
-  const openSheet = useCallback((name: "seat" | "rotate", opening: SheetOpening) => {
+  const openSheet = useCallback((name: "seat" | "rotate" | "tick", opening: SheetOpening) => {
     setArm(opening);
     nav.openSheet(name);
   }, [nav]);
@@ -411,6 +412,15 @@ export function MobileSeatCard({
     },
   };
 
+  /* The seat tick's sheet: the row inside the seat sheet opens it, and its ×
+     and scrim put the seat sheet back — the way out is the way in. Neither
+     direction is a handoff: nothing here changes which conversation holds the
+     seat. */
+  const tickFlow: SeatTickFlow = {
+    onOpen: () => openSheet("tick", { handoff: false, from: null }),
+    onClose: () => openSheet("seat", { handoff: false, from: null }),
+  };
+
   /* The draft, opened by something other than the card — the board's footer
      invitation, a route restored onto it — is armed the way the card's own tap
      would have armed it. The landing belongs to the seat, not to the control
@@ -474,6 +484,7 @@ export function MobileSeatCard({
       submitting={submitting}
       now={clock}
       rotate={rotateFlow}
+      tick={tickFlow}
       onConfirm={(payload) => void confirm(payload)}
       onRecheck={() => {
         void refresh();
