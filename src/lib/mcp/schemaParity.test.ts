@@ -938,11 +938,12 @@ test("the launch tools publish the task binding fields agents must pass", async 
    to be admitted. `create_pipeline` keeps its empty and whitespace entries,
    which the engine validates and answers for with a named violation. A blank
    `spawn_agent.taskId` is the one addition: nothing downstream refuses it — the
-   spawn route reads a blank id as no task, and the launch then joins the
-   CALLER's task through its lineage parent, so the outcome's card records
-   nothing and no duplicate card appears to give the mistake away — so the
-   boundary is the only place that can answer, and both launch tools now answer
-   the same malformed id the same way. */
+   spawn route reads a blank id as absent, and the launch lands on the tasks of
+   whatever parent or reviewed conversation the call named, or on a fresh
+   placeholder card when it named none. The outcome's card records nothing
+   either way and the caller is told nothing, so the boundary is the only place
+   that can answer, and both launch tools now answer the same malformed id the
+   same way. */
 test("declaring the task binding fields refuses nothing the launch surfaces already accepted", () => {
   const pipelineArgs = { clientRequestId: "binding-parity", task: "t", repoDir: "/repo", stages: [{ id: "build", kind: "run", "prompt": "Implement." }] };
   for (const taskIds of [undefined, [], ["board-task-fixture"], ["board-task-fixture", "second-task-fixture"], [""], ["  "]]) {
@@ -966,9 +967,10 @@ test("declaring the task binding fields refuses nothing the launch surfaces alre
   expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: 7 }).success).toBe(false);
 
   /* A blank spawn taskId is refused at the boundary, naming the field, because
-     the launch would read it as no task and bind the agent to the caller's own
-     card in silence. `create_pipeline` answers the same mistake from the
-     engine. */
+     the launch would read it as absent and admit the agent onto whatever the
+     call's parent or reviewed conversation holds — or onto a fresh placeholder
+     card when it names neither — while the outcome's card records nothing.
+     `create_pipeline` answers the same mistake from the engine. */
   for (const blank of ["", "   "]) {
     const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: blank });
     expect(parsed.success).toBe(false);
