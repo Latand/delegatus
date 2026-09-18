@@ -544,7 +544,14 @@ export function stageChipState(pipeline: Pipeline, stage: PipelineStage): StageC
     if (attempt.state === "passed") return "passed";
     if (attempt.state === "skipped") return "skipped";
     if (attempt.state === "failed") return "failed";
-    if (attempt.state === "needs_decision") return "needs_decision";
+    /* A needs_decision whose findings the engine routed along the fail edge
+       (#1785) is settled and the lane moved on, so it must not read as the one
+       thing the needs chip means — that the operator is holding the pipeline up.
+       It is the loop source it became: the failed chip, which the progress line
+       ranks below live work and `stageViews` folds to pending-again once the fix
+       stage re-runs. A parked needs_decision carries no such mark and keeps the
+       chip, the progress line and the sheet focus it has today. */
+    if (attempt.state === "needs_decision") return attempt.decisionRequested ? "failed" : "needs_decision";
   }
   const onCursor = pipeline.cursor?.stageId === stage.id;
   if (onCursor && pipelineCursorActive(pipeline)) {

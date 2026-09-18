@@ -16,6 +16,14 @@ type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
 type Pipeline = import("./types").Pipeline;
 
+/* The board projection the operator reads, over the record the engine wrote:
+   the card's own summarize + progress path, not a hand-built fixture (#1785). */
+const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
+const { pipelineProgress, stageDisplayName } = await import("@/components/kanban/PipelineSection");
+const { translate } = await import("@/lib/i18n");
+type TFunction = import("@/lib/i18n").TFunction;
+const t = ((key: string, params?: Record<string, unknown>) => translate("en", key as never, params as never)) as TFunction;
+
 registerPipelineTick(async () => {});
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
 
@@ -549,4 +557,42 @@ test("a plain fail still routes under its own heading, and a plain pass still ad
   expect(attemptsOf("verify")[1]!.state).toBe("passed");
   expect(attemptsOf("verify")[1]!.decisionRequested).toBeUndefined();
   expect(current().state).toBe("completed");
+});
+
+/** The card's own two lines for a pipeline: every stage chip, and the progress
+    sentence the operator reads under the title. */
+function card(): { chips: Array<{ id: string; state: string }>; progress: string } {
+  const pipeline = current();
+  const summary = summarizePipeline(pipeline);
+  return {
+    chips: summary.chips.map((chip) => ({ id: chip.stage.id, state: chip.state })),
+    progress: pipelineProgress(t, summary, (stage) => stageDisplayName(t, stage)),
+  };
+}
+
+test("a routed needs_decision leaves no chip claiming the operator is needed, while a parked one still reads needs you (#1785)", async () => {
+  const routed = harness();
+  await reachedVerify(routed, FIX_LOOP());
+  await routed.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([routed.endTurn(2, "Reviewed.")], routed.ports);
+  await tickPipelines([], routed.ports); // the fix stage is spawned and running
+
+  /* The lane is running the fix stage, and the card says so: the settled
+     needs_decision is the loop source it became, not a claim on the operator. */
+  const running = card();
+  expect(running.chips.some((chip) => chip.state === "needs_decision")).toBe(false);
+  expect(running.chips.find((chip) => chip.id === "build")!.state).toBe("running");
+  expect(running.progress).toContain("Build");
+  expect(running.progress).not.toBe(t("kanban.progress.needs", { stage: "Verify" }));
+
+  /* Same verdict with nothing to route: the pipeline parks and the card asks. */
+  const parked = harness();
+  await reachedVerify(parked, [stage("build", "verify"), stage("verify", null)]);
+  await parked.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "only you can choose" }] });
+  await tickPipelines([parked.endTurn(2, "Reviewed.")], parked.ports);
+
+  const waiting = card();
+  expect(current().state).toBe("needs_decision");
+  expect(waiting.chips.find((chip) => chip.id === "verify")!.state).toBe("needs_decision");
+  expect(waiting.progress).toBe(t("kanban.progress.needs", { stage: "Verify" }));
 });

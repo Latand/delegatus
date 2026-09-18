@@ -15,7 +15,8 @@ import { accountManager } from "@/lib/accounts/manager";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
-const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, tickPipelines } = engineModule;
+const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, terminalFlowStageVerdict, tickPipelines } = engineModule;
+const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { newRound, setRelayDeliveryForTest, tickFlow } = await import("@/lib/flows/engine");
 const { isRecoverableLegacyRelayFailurePause } = await import("@/lib/flows/commands");
@@ -10394,4 +10395,90 @@ test("the engine keeps a switched stage's attempt running across an unavailable 
   expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
   expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+/* ── #1785: which review-flow verdict the graph may route ────────────────── */
+
+const REVIEW_FINDING_BLOCK = [
+  "### Finding 1",
+  "- **Severity:** High",
+  "- **File:** src/lib/pipelines/engine.ts",
+  "- **Line:** 42",
+  "- **Title:** The fence is missing",
+  "- **Explanation:** Add the fence the round names.",
+  "",
+].join("\n");
+
+/** A terminal flow whose last round wrote the given findings artifact. */
+function flowWithFindings(h: ReturnType<typeof harness>, verdict: "COMMENT" | "REQUEST_CHANGES", body: string): Flow {
+  const flow = h.flows.get("flow-1")!;
+  const findingsPath = path.join(process.env.LLV_STATE_DIR!, `issue1785-${verdict}-${flow.rounds.length}-review.md`);
+  fs.writeFileSync(findingsPath, `VERDICT: ${verdict}\n\n${body}`);
+  flow.rounds.push({
+    n: flow.rounds.length + 1,
+    verdict,
+    findingsCount: body.includes("### Finding") ? 1 : 0,
+    findingsPath,
+    reviewHeadSha: ORIGIN_MAIN_SHA,
+    reviewedAt: "2026-09-19T04:19:00.000Z",
+    terminalAt: "2026-09-19T04:19:00.000Z",
+    reviewerPath: "/codex/reviewer.jsonl",
+    reviewerConversationId: "conversation_reviewer",
+  } as never);
+  flow.state = verdict === "COMMENT" ? "done_comment" : "needs_decision";
+  flow.stateDetail = null;
+  return flow;
+}
+
+async function parkedReviewStage(h: ReturnType<typeof harness>): Promise<void> {
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+}
+
+test("a COMMENT review flow routes only on findings the review itself reported (#1785)", async () => {
+  /* The reconcile path builds its parent stage's verdict from the round
+     artifact, and appends a placeholder line when the round reported no
+     finding of its own. That placeholder describes nothing to fix, so it must
+     never make a needs_decision routable; a round with a real finding does. */
+  const placeholder = harness();
+  await parkedReviewStage(placeholder);
+  const commentWithoutFindings = flowWithFindings(placeholder, "COMMENT", "The reviewer left a note.\n");
+  const placeholderVerdict = terminalFlowStageVerdict(commentWithoutFindings)!;
+  expect(placeholderVerdict.verdict.status).toBe("needs_decision");
+  expect(placeholderVerdict.verdict.findings!.some((finding) => finding.includes("open the round artifact"))).toBe(true);
+  expect(placeholderVerdict.syntheticFindings).toBe(true);
+  expect(verdictRoutesAsFail(placeholderVerdict)).toBe(false);
+
+  /* The reconcile path settles the parked stage on that verdict, and it parks. */
+  await tickPipelines([entry("/codex/reviewer.jsonl")], placeholder.ports);
+  await tickPipelines([entry("/codex/reviewer.jsonl")], placeholder.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.state).toBe("needs_decision");
+  const settledAttempt = settled.runs[1]!.attempts.at(-1)!;
+  expect(settledAttempt.state).toBe("needs_decision");
+  expect(settledAttempt.decisionRequested).toBeUndefined();
+
+  const real = harness();
+  await parkedReviewStage(real);
+  const commentWithFindings = flowWithFindings(real, "COMMENT", REVIEW_FINDING_BLOCK);
+  const realVerdict = terminalFlowStageVerdict(commentWithFindings)!;
+  expect(realVerdict.verdict.status).toBe("needs_decision");
+  expect(realVerdict.verdict.findings!.some((finding) => finding.includes("open the round artifact"))).toBe(false);
+  expect(realVerdict.syntheticFindings).toBeUndefined();
+  expect(verdictRoutesAsFail(realVerdict)).toBe(true);
+
+  /* A REQUEST_CHANGES flow is a fail and routes on its status alone, whether or
+     not the round wrote findings of its own — exactly as it did before. */
+  const changes = harness();
+  await parkedReviewStage(changes);
+  const changesVerdict = terminalFlowStageVerdict(flowWithFindings(changes, "REQUEST_CHANGES", "Repair the host claim.\n"))!;
+  expect(changesVerdict.verdict.status).toBe("fail");
+  expect(changesVerdict.syntheticFindings).toBe(true);
+  expect(verdictRoutesAsFail(changesVerdict)).toBe(true);
 });
