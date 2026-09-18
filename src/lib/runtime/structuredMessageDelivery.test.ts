@@ -9,7 +9,7 @@ import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import type { RuntimeHostClient } from "./client";
-import type { RuntimeSnapshot } from "./contracts";
+import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, type RuntimeSnapshot } from "./contracts";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapability } from "./runtimeImageStore";
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 
@@ -730,6 +730,62 @@ test("a caption at exactly the 32000-byte envelope boundary is admitted with ima
 
   expect(result).toMatchObject({ ok: true, outcome: "queued" });
   expect(commands).toBe(1);
+});
+
+/* #1771: the key the journal could never admit. Its bound is checked inside
+   the journal's own admission, one step PAST the reservation — so an over-bound
+   key used to reserve, claim its attempt, and then take the refusal as a throw
+   from transport, leaving the claimed reservation at `delivery-uncertain` with
+   nothing delivered and nothing able to prove it. A seat fenced behind such an
+   attempt got no wakes for a day. Refused here instead, before anything is
+   written. */
+test("a client message id longer than the runtime journal admits is refused before any reservation is held (#1771)", async () => {
+  const { registry, conversation } = registryWithConversation("default", "claude");
+  let commands = 0;
+  const client = {
+    snapshot: async () => snapshot(conversation.id, "claude", true),
+    command: async (command: { operationId: string; idempotencyKey: string }) => {
+      commands += 1;
+      return {
+        operationId: command.operationId,
+        replayed: false,
+        receipt: {
+          operationId: command.operationId,
+          idempotencyKey: command.idempotencyKey,
+          conversationId: conversation.id,
+          kind: "send",
+          status: "queued",
+          text: "",
+          imageCount: 0,
+          at: "2026-09-18T00:00:00.000Z",
+          revision: 1,
+        },
+      };
+    },
+  } as unknown as RuntimeHostClient;
+  const dependencies = { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} };
+  const send = (clientMessageId: string) => enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId,
+    text: "harvest the finished children",
+  }, dependencies);
+
+  const refused = await send(`over-bound-${"k".repeat(RUNTIME_IDEMPOTENCY_KEY_LIMIT)}`);
+  expect(refused).toMatchObject({ ok: false, outcome: "failed", status: 400 });
+  expect(refused).toMatchObject({ error: expect.stringContaining(`${RUNTIME_IDEMPOTENCY_KEY_LIMIT} characters`) });
+  /* Nothing written, nothing claimed, nothing sent: the refusal is definitive,
+     so the caller may compose a shorter key and send again. */
+  expect(Object.values(registry.snapshot().heldDeliveries)).toEqual([]);
+  expect(commands).toBe(0);
+
+  /* The bound itself, exercised at its edge: a key AT the limit is a key the
+     journal admits, so this guard must not take one character more than the
+     journal does. */
+  const boundary = "b".repeat(RUNTIME_IDEMPOTENCY_KEY_LIMIT);
+  expect(await send(boundary)).toMatchObject({ ok: true, outcome: "queued" });
+  expect(commands).toBe(1);
+  expect(Object.values(registry.snapshot().heldDeliveries).map((row) => row.clientMessageId)).toEqual([boundary]);
 });
 
 test("stale structured image capability rejects before blob storage or command admission", async () => {

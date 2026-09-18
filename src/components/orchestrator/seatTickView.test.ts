@@ -123,7 +123,7 @@ test("stale: a row with no check at all is stale rather than unknown, and no age
   expect(reading.state).toBe("stale");
   expect(reading.line).toBe("Tick: every 60 min · stale: no check recorded");
   expect(reading.rows.find((row) => row.label === "Last check")?.value).toBe("unknown");
-  expect(reading.rows.find((row) => row.label === "Last wake")?.value).toBe("never");
+  expect(reading.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("never");
 });
 
 test("blocked: the first thing holding the wake back is named, in the operator's order", () => {
@@ -159,7 +159,7 @@ test("paused: the face says off, the dot is muted, and the actual rows still rep
   expect(reading.chip).toBe("off");
   expect(reading.line).toBe("Tick: off since 2h ago · last check 3m ago");
   expect(reading.sentence).toBe("Off since 2h ago. No wake is sent. Checks still run.");
-  expect(reading.rows.find((row) => row.label === "Last wake")?.value).toBe("3h ago · interval");
+  expect(reading.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("3h ago · interval");
   expect(reading.rows.find((row) => row.label === "Last delivery")?.value).toBe("landed · 3h ago");
   expect(reading.rows.find((row) => row.label === "Blocker")?.value).toBe("none");
 });
@@ -225,6 +225,45 @@ test("a settings read that never answered says so, and claims nothing about the 
   expect(failed.tone).toBe("unknown");
   expect(failed.rows).toEqual([]);
   expect(read(null).line).toBe("Tick: reading…");
+});
+
+/* #1771: a tick whose every wake is refused reads as enabled, checking and
+   recently delivering. The last DELIVERED wake beside when the next one is due
+   is what makes that visible on the board instead of by asking the seat. */
+test("the next wake is read beside the last delivered one, and never invented (#1771)", () => {
+  const due = read(answer({ state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z", lastWakeReasons: ["interval"] }) }));
+  expect(due.rows.find((row) => row.label === "Last wake delivered")?.value).toBe("30m ago · interval");
+  /* An hour after the last landing, on the hour's cadence. */
+  expect(due.rows.find((row) => row.label === "Next wake")?.value).toBe("in 30 min");
+
+  /* The interval already spent: the next check is the answer, never an instant
+     in the past dressed up as a schedule. */
+  const overdue = read(answer({ state: state({ lastWakeAt: "2026-09-18T09:00:00.000Z" }) }));
+  expect(overdue.rows.find((row) => row.label === "Next wake")?.value).toBe("at the next check");
+  /* A row that has never landed a wake is due at the next check too. */
+  expect(read(answer({ state: state() })).rows.find((row) => row.label === "Next wake")?.value).toBe("at the next check");
+
+  /* A fence is not a schedule: while something holds the next wake back, the
+     row says so and the Blocker row beside it says what. */
+  const fenced = read(answer({
+    state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z", outstandingWake: { preparedAt: "2026-09-18T10:00:00.000Z", dispatch: "refused" } }),
+  }));
+  expect(fenced.rows.find((row) => row.label === "Next wake")?.value).toBe("held back while the blocker stands");
+
+  /* Off means nothing is due, and a project with no row says the word. */
+  const off = read(answer({
+    effective: { ...answer().effective, enabled: false },
+    state: state({ lastWakeAt: "2026-09-18T11:30:00.000Z" }),
+  }));
+  expect(off.rows.find((row) => row.label === "Next wake")?.value).toBe("none while the tick is off");
+  expect(read(answer()).rows.find((row) => row.label === "Next wake")?.value).toBe("unknown");
+
+  /* A long cadence collapses into hours rather than counting minutes. */
+  const daily = read(answer({
+    effective: { ...answer().effective, wakeIntervalMinutes: 1440 },
+    state: state({ lastWakeAt: "2026-09-18T09:00:00.000Z" }),
+  }));
+  expect(daily.rows.find((row) => row.label === "Next wake")?.value).toBe("in 21 h");
 });
 
 test("both locales carry every wake reason", () => {

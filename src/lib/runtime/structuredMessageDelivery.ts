@@ -21,7 +21,14 @@ import {
 
 import type { MessageOrigin } from "./messageOrigin";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
-import type { RuntimeOperationReceipt, RuntimeOperationResult, RuntimeSendSettings, RuntimeSession } from "./contracts";
+import {
+  RUNTIME_IDEMPOTENCY_KEY_LIMIT,
+  runtimeIdempotencyKeyAdmissible,
+  type RuntimeOperationReceipt,
+  type RuntimeOperationResult,
+  type RuntimeSendSettings,
+  type RuntimeSession,
+} from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
@@ -200,6 +207,34 @@ function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok:
   };
 }
 
+/**
+ * A key the runtime journal could never admit, refused here instead (#1771).
+ *
+ * The journal's bound is checked inside its own admission, before it opens a
+ * transaction — so an over-bound key used to be discovered one step too late:
+ * the reservation was already held and CLAIMED, the throw came back from
+ * transport, and the claimed reservation was left at `delivery-uncertain` for
+ * ever. That is the worst of both readings — nothing was delivered and nothing
+ * could prove it, so the key stayed bound to an attempt no evidence could
+ * settle and its sender was fenced behind it.
+ *
+ * Asked before anything is reserved, so the refusal is definitive: nothing is
+ * written, nothing is claimed, and the caller is told what it has to change.
+ * Every composer still owes its own bound — see the seat tick's
+ * `boundedWakeIdentity` — because a refused send is still a send that did not
+ * happen.
+ */
+function refusedIdempotencyKey(key: string): Extract<StructuredMessageResult, { ok: false }> | null {
+  if (runtimeIdempotencyKeyAdmissible(key)) return null;
+  return {
+    ok: false,
+    structured: true,
+    outcome: "failed",
+    error: `clientMessageId is longer than the ${RUNTIME_IDEMPOTENCY_KEY_LIMIT} characters the runtime journal admits, so no send was reserved`,
+    status: 400,
+  };
+}
+
 function commandInput(request: StructuredMessageRequest) {
   return {
     ...(request.operationId ? { operationId: request.operationId } : {}),
@@ -312,6 +347,8 @@ function holdDuringRuntimeSynchronization(
   try {
     assertStructuredTextEnvelope(request.text);
     const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
+    const overlong = refusedIdempotencyKey(idempotencyKey);
+    if (overlong) return overlong;
     const refs = request.imageRefs ?? [];
     if (!request.text && refs.length === 0) throw new Error("held delivery must contain at most 32000 characters");
     const content = refs.length ? structuredContent(request.text, refs) : null;
@@ -775,6 +812,8 @@ export async function enqueueStructuredMessage(
   let conversation = registry.conversation(session.conversationId as ViewerConversationId);
   if (!conversation) return ownershipUnavailable();
   const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
+  const overlong = refusedIdempotencyKey(idempotencyKey);
+  if (overlong) return overlong;
   let refs: StructuredImageRef[];
   let content: ReturnType<typeof structuredContent>;
   let terminalReplay: HeldDelivery | null;
