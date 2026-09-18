@@ -159,6 +159,84 @@ async function desktop(browser: Browser, base: string, width: number, height: nu
 }
 
 /**
+ * The seat header row's geometry, read inside the page.
+ *
+ * Module-level and closure-free so `page.evaluate` can take it by reference
+ * from BOTH callers below — the named samples and the width sweep. One copy
+ * of this code produces every number in the evidence, so a width the sweep
+ * reports cannot be a second reading written a second way.
+ */
+function readSeatRow() {
+  const contentWidth = (element: HTMLElement) => {
+    const style = getComputedStyle(element);
+    return Math.round(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  };
+  const head = document.querySelector(".seat-head") as HTMLElement;
+  const row = document.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
+  const controls = document.querySelector("[data-orchestrator-controls]") as HTMLElement;
+  const chip = document.querySelector("[data-seat-tick-chip]") as HTMLElement;
+  const rotate = document.querySelector("[data-orchestrator-rotate]") as HTMLElement;
+  const model = row.querySelector("[title]") as HTMLElement | null;
+  const predecessor = document.querySelector("[data-orchestrator-predecessor]") as HTMLElement | null;
+  const box = (element: Element | null) => {
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { x: Math.round(rect.x), right: Math.round(rect.right), width: Math.round(rect.width) };
+  };
+  /* What the row is drawn over, if anything: every sibling of the incumbent
+     row inside the header, and the row's own right edge against them. */
+  const siblings = [...head.children]
+    .filter((child) => child !== row)
+    .map((child) => ({ mark: child.getAttribute("data-fixture-host-controls") !== null || child.getAttribute("data-fixture-collapse") !== null, ...box(child)! }))
+    .filter((child) => child.mark);
+  const identity = document.querySelector("[data-orchestrator-identity]") as HTMLElement;
+  const controlsRight = controls.getBoundingClientRect().right;
+  /* The precise symptom: `.seat-head` does not wrap and nothing scrolls, so
+     a shrink-0 group inside a shrunk row SPILLS past its parent's right edge
+     and is painted under whatever follows it in the DOM. `scrollWidth` reads
+     0 for it, because flex absorbed the pressure by crushing the row's
+     flexible children to nothing instead. */
+  const spill = Math.round(controlsRight - identity.getBoundingClientRect().right);
+  return {
+    /* The container query reads the HOST's width; the identity row inside it
+       is what gets crushed. Both are recorded so the thresholds are
+       calibrated against a measurement rather than a guess. */
+    hostWidth: Math.round(row.getBoundingClientRect().width),
+    hostContentWidth: contentWidth(row),
+    identityWidth: Math.round(identity.getBoundingClientRect().width),
+    /* How far the controls group is drawn outside the row that holds it. */
+    controlsSpill: Math.max(0, spill),
+    /* And past the link that is painted over it — only while the link is
+       actually drawn: a `display: none` element measures a zero rect at the
+       origin, and subtracting that reports the whole viewport as a spill. */
+    spillPastPredecessor: predecessor && predecessor.getBoundingClientRect().width > 0
+      ? Math.max(0, Math.round(controlsRight - predecessor.getBoundingClientRect().x))
+      : 0,
+    headOverflow: Math.round(head.scrollWidth - head.clientWidth),
+    rowOverflow: Math.round(row.scrollWidth - row.clientWidth),
+    /* RENDERED, not `textContent`: a collapsed face is `display: none` and
+       still carries its words in the DOM. */
+    chipFace: (() => {
+      const face = chip.querySelector("[data-seat-tick-face]") as HTMLElement | null;
+      return face && face.getBoundingClientRect().width > 0 ? face.textContent!.trim() : null;
+    })(),
+    /* The whole summary stays reachable whatever the face shows. */
+    chipTitle: chip.getAttribute("title"),
+    chipLabel: chip.getAttribute("aria-label"),
+    chipWidth: Math.round(chip.getBoundingClientRect().width),
+    controlsWidth: Math.round(controls.getBoundingClientRect().width),
+    modelWidth: model ? Math.round(model.getBoundingClientRect().width) : null,
+    rotateVisible: rotate.getBoundingClientRect().width > 0,
+    predecessorShown: predecessor !== null && predecessor.getBoundingClientRect().width > 0,
+    predecessorWidth: predecessor ? Math.round(predecessor.getBoundingClientRect().width) : 0,
+    /* Drawn OVER a sibling: the controls group's right edge past a later
+       sibling's left edge is the overlap the critique measured at 900 px. */
+    overlapsSiblings: siblings.some((sibling) => controlsRight > sibling.x + 1),
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+  };
+}
+
+/**
  * The kanban seat's header, in its own host, in both locales.
  *
  * `.kb .seat-head` is one flex row that does not wrap above 767 px, so an
@@ -180,78 +258,126 @@ async function seat(browser: Browser, base: string, width: number, locale: "en" 
   await page.waitForSelector("[data-seat-tick-chip]");
   await page.waitForTimeout(400);
 
-  const measured = await page.evaluate(() => {
-    const contentWidth = (element: HTMLElement) => {
-      const style = getComputedStyle(element);
-      return Math.round(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
-    };
-    const head = document.querySelector(".seat-head") as HTMLElement;
-    const row = document.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
-    const controls = document.querySelector("[data-orchestrator-controls]") as HTMLElement;
-    const chip = document.querySelector("[data-seat-tick-chip]") as HTMLElement;
-    const rotate = document.querySelector("[data-orchestrator-rotate]") as HTMLElement;
-    const model = row.querySelector("[title]") as HTMLElement | null;
-    const predecessor = document.querySelector("[data-orchestrator-predecessor]") as HTMLElement | null;
-    const box = (element: Element | null) => {
-      if (!element) return null;
-      const rect = element.getBoundingClientRect();
-      return { x: Math.round(rect.x), right: Math.round(rect.right), width: Math.round(rect.width) };
-    };
-    /* What the row is drawn over, if anything: every sibling of the incumbent
-       row inside the header, and the row's own right edge against them. */
-    const siblings = [...head.children]
-      .filter((child) => child !== row)
-      .map((child) => ({ mark: child.getAttribute("data-fixture-host-controls") !== null || child.getAttribute("data-fixture-collapse") !== null, ...box(child)! }))
-      .filter((child) => child.mark);
-    const identity = document.querySelector("[data-orchestrator-identity]") as HTMLElement;
-    const controlsRight = controls.getBoundingClientRect().right;
-    /* The precise symptom: `.seat-head` does not wrap and nothing scrolls, so
-       a shrink-0 group inside a shrunk row SPILLS past its parent's right edge
-       and is painted under whatever follows it in the DOM. `scrollWidth` reads
-       0 for it, because flex absorbed the pressure by crushing the row's
-       flexible children to nothing instead. */
-    const spill = Math.round(controlsRight - identity.getBoundingClientRect().right);
-    return {
-      /* The container query reads the HOST's width; the identity row inside it
-         is what gets crushed. Both are recorded so the thresholds are
-         calibrated against a measurement rather than a guess. */
-      hostWidth: Math.round(row.getBoundingClientRect().width),
-      hostContentWidth: contentWidth(row),
-      identityWidth: Math.round(identity.getBoundingClientRect().width),
-      /* How far the controls group is drawn outside the row that holds it. */
-      controlsSpill: Math.max(0, spill),
-      /* And past the link that is painted over it — only while the link is
-         actually drawn: a `display: none` element measures a zero rect at the
-         origin, and subtracting that reports the whole viewport as a spill. */
-      spillPastPredecessor: predecessor && predecessor.getBoundingClientRect().width > 0
-        ? Math.max(0, Math.round(controlsRight - predecessor.getBoundingClientRect().x))
-        : 0,
-      headOverflow: Math.round(head.scrollWidth - head.clientWidth),
-      rowOverflow: Math.round(row.scrollWidth - row.clientWidth),
-      /* RENDERED, not `textContent`: a collapsed face is `display: none` and
-         still carries its words in the DOM. */
-      chipFace: (() => {
-        const face = chip.querySelector("[data-seat-tick-face]") as HTMLElement | null;
-        return face && face.getBoundingClientRect().width > 0 ? face.textContent!.trim() : null;
-      })(),
-      /* The whole summary stays reachable whatever the face shows. */
-      chipTitle: chip.getAttribute("title"),
-      chipLabel: chip.getAttribute("aria-label"),
-      chipWidth: Math.round(chip.getBoundingClientRect().width),
-      controlsWidth: Math.round(controls.getBoundingClientRect().width),
-      modelWidth: model ? Math.round(model.getBoundingClientRect().width) : null,
-      rotateVisible: rotate.getBoundingClientRect().width > 0,
-      predecessorShown: predecessor !== null && predecessor.getBoundingClientRect().width > 0,
-      predecessorWidth: predecessor ? Math.round(predecessor.getBoundingClientRect().width) : 0,
-      /* Drawn OVER a sibling: the controls group's right edge past a later
-         sibling's left edge is the overlap the critique measured at 900 px. */
-      overlapsSiblings: siblings.some((sibling) => controlsRight > sibling.x + 1),
-      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
-    };
-  });
+  const measured = await page.evaluate(readSeatRow);
   await shot(page, key);
   await context.close();
   return { key, viewport: { width, height: 800 }, locale, ...measured, errors };
+}
+
+/**
+ * The inline host's one give-way width, mirroring `globals.css`.
+ *
+ * The stylesheet is where it takes effect; here it is what the assertions
+ * below read, so a threshold moved in one place and not the other fails this
+ * driver instead of shipping.
+ */
+const INLINE_GIVE_WAY_PX = 539;
+
+/**
+ * The host width from which the model name must hold its full bar.
+ *
+ * Below a 299 px host — an 800 px viewport — the room is gone before this row
+ * is reached: `.seat-head` has already spent it on the seat mark, the title,
+ * the «stays on the board» pill, the host controls and Collapse, and the
+ * incumbent row is what is left. Nothing this row gives up buys it back; it
+ * has given up everything it has by then. That narrow band is the seat
+ * TITLE's to give way in, and it is recorded in the PR rather than fixed
+ * here.
+ *
+ * What the band below the bar still owes, and what is asserted there, is that
+ * the row holds together: no spill, no overlap, no overflow, and a model name
+ * that is still drawn. That is the part main got wrong — at 768–792 px main
+ * spilled 64–131 px and drew nothing for a model name at all.
+ */
+const MODEL_BAR_HOST_PX = 299;
+
+/** The band the sweep walks, in the steps the critique measured in: every
+    desktop width from the phone shell's ceiling to the width where the seat's
+    own 1040 px cap makes every wider viewport measure the same row. */
+const SWEEP_FROM = 768;
+const SWEEP_TO = 1100;
+const SWEEP_STEP = 8;
+const sweepWidths = (() => {
+  const widths: number[] = [];
+  for (let width = SWEEP_FROM; width <= SWEEP_TO; width += SWEEP_STEP) widths.push(width);
+  if (widths[widths.length - 1] !== SWEEP_TO) widths.push(SWEEP_TO);
+  return widths;
+})();
+
+type SeatRow = ReturnType<typeof readSeatRow>;
+
+/**
+ * The seat header across the whole desktop band, in one locale.
+ *
+ * Three named widths are three points, and the defect this driver was written
+ * for came back BETWEEN them: the row was measured at a 399 px host and at a
+ * 523 px host, and it was over-full at every host in between. A threshold is a
+ * claim about a range, so the range is what gets measured — every 8 px from
+ * 768 to 1100, with the assertions the named samples use, against this file's
+ * unmodified fixture.
+ *
+ * One context, resized: the seat surface is flex and container queries only,
+ * so a viewport change is the whole state change, and reloading 43 pages per
+ * locale would buy nothing but minutes.
+ */
+async function sweepSeat(browser: Browser, base: string, locale: "en" | "uk") {
+  const context = await browser.newContext({ viewport: { width: SWEEP_TO, height: 800 }, colorScheme: "dark" });
+  await context.addInitScript((value) => window.localStorage.setItem("llv_lang", value), locale);
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${base}/?surface=seat`);
+  await page.waitForSelector("[data-seat-tick-chip]");
+  await page.waitForTimeout(400);
+
+  const rows: (SeatRow & { width: number })[] = [];
+  for (const width of sweepWidths) {
+    await page.setViewportSize({ width, height: 800 });
+    /* Two frames, so the container query has re-evaluated and the flex row has
+       been laid out again before anything is read out of it. */
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    rows.push({ width, ...(await page.evaluate(readSeatRow)) });
+  }
+  await context.close();
+
+  /* Recorded as a SUMMARY rather than 43 rows per locale: what a sweep is for
+     is its worst case, and the width it happened at is what a threshold gets
+     calibrated against. The assertions below still run on every row. */
+  const worstOf = (candidates: typeof rows) => candidates.reduce((worst, row) => ((row.modelWidth ?? 0) < (worst.modelWidth ?? 0) ? row : worst));
+  const worstModel = worstOf(rows);
+  const worstModelAtBar = worstOf(rows.filter((row) => row.hostContentWidth >= MODEL_BAR_HOST_PX));
+  const worstSpill = rows.reduce((worst, row) => (row.controlsSpill > worst.controlsSpill ? row : worst));
+  const shown = (predicate: (row: SeatRow) => boolean) => {
+    const widths = rows.filter(predicate).map((row) => row.hostContentWidth);
+    return widths.length ? Math.min(...widths) : null;
+  };
+  return {
+    /* The SUMMARY is what lands in `geometry.json`; the rows stay here, for
+       the assertions. 86 near-identical records would bury the three numbers
+       that say whether the row holds. */
+    summary: {
+      key: `sweep-${locale}`,
+      locale,
+      band: { from: SWEEP_FROM, to: SWEEP_TO, step: SWEEP_STEP, samples: rows.length },
+      hostContentWidths: { min: Math.min(...rows.map((row) => row.hostContentWidth)), max: Math.max(...rows.map((row) => row.hostContentWidth)) },
+      minModelWidth: { width: worstModel.width, hostContentWidth: worstModel.hostContentWidth, modelWidth: worstModel.modelWidth },
+      /* The same worst case, over the hosts that owe the full bar. */
+      minModelWidthAtBar: { width: worstModelAtBar.width, hostContentWidth: worstModelAtBar.hostContentWidth, modelWidth: worstModelAtBar.modelWidth },
+      maxControlsSpill: { width: worstSpill.width, hostContentWidth: worstSpill.hostContentWidth, controlsSpill: worstSpill.controlsSpill },
+      maxSpillPastPredecessor: Math.max(...rows.map((row) => row.spillPastPredecessor)),
+      maxHeadOverflow: Math.max(...rows.map((row) => row.headOverflow)),
+      overlapsSiblings: rows.some((row) => row.overlapsSiblings),
+      /* The narrowest host at which each thing is still drawn — the
+         thresholds, read off the rendered row instead of off the
+         stylesheet. */
+      narrowestHostWithFace: shown((row) => row.chipFace !== null),
+      narrowestHostWithPredecessor: shown((row) => row.predecessorShown),
+    },
+    rows,
+    errors,
+  };
 }
 
 async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en", tick: "stale" | "blocked" = "stale") {
@@ -354,6 +480,46 @@ async function phone(browser: Browser, base: string, locale: "en" | "uk" = "en",
   };
 }
 
+/**
+ * What the seat's header must hold, wherever it is measured.
+ *
+ * Shared between the named widths and the sweep so the bar is one bar: the
+ * row does not wrap and nothing scrolls, so a control group inside a shrunk
+ * row is DRAWN over its siblings rather than reflowing, and the model name the
+ * row exists to show is what gets crushed first.
+ */
+function expectSeatRow(read: SeatRow, locale: "en" | "uk", key: string): void {
+  /* The controls group must not be drawn one pixel outside the row that holds
+     it, nor over the siblings that follow it. */
+  expect(read.controlsSpill, `${key} controls spill`).toBe(0);
+  expect(read.spillPastPredecessor, `${key} spill past the predecessor link`).toBe(0);
+  expect(read.overlapsSiblings, `${key} overlaps the header's other controls`).toBe(false);
+  expect(read.headOverflow, `${key} header overflow`).toBe(0);
+  /* And the identity the row exists for stays readable: a model name crushed
+     to nothing is the row losing its own subject. */
+  expect(read.modelWidth, `${key} model name drawn`).toBeGreaterThan(0);
+  if (read.hostContentWidth >= MODEL_BAR_HOST_PX) {
+    expect(read.modelWidth, `${key} model width`).toBeGreaterThan(40);
+  }
+  expect(read.rotateVisible, `${key} Rotate visible`).toBe(true);
+  expect(read.chipWidth, `${key} chip visible`).toBeGreaterThan(0);
+  /* Whatever the face shows, the word it gave up is still reachable — on the
+     chip's own title and its accessible label, in the row's own locale. */
+  const interval = translate(locale, "seatTick.everyMin", { n: 30 });
+  expect(read.chipTitle, `${key} chip title`).toContain(interval);
+  expect(read.chipLabel, `${key} chip label`).toContain(interval);
+  /* The word and the link are given up by the width, not by the locale, and
+     at the one threshold the row was calibrated to: above it both are drawn,
+     at or below it the row has already given them both up. */
+  if (read.hostContentWidth > INLINE_GIVE_WAY_PX) {
+    expect(read.chipFace, `${key} chip face`).not.toBeNull();
+    expect(read.predecessorShown, `${key} predecessor link`).toBe(true);
+  } else {
+    expect(read.chipFace, `${key} chip face collapsed`).toBeNull();
+    expect(read.predecessorShown, `${key} predecessor link collapsed`).toBe(false);
+  }
+}
+
 browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and the row and sheet at 390", async () => {
   fs.mkdirSync(OUT, { recursive: true });
   fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -400,6 +566,10 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
       seat1024Uk: await seat(browser, base, 1024, "uk"),
       seat900: await seat(browser, base, 900, "en"),
       seat900Uk: await seat(browser, base, 900, "uk"),
+      /* Those five are points; the row broke BETWEEN them. The sweep walks the
+         whole desktop band in both locales, with the same bar. */
+      sweepEn: await sweepSeat(browser, base, "en"),
+      sweepUk: await sweepSeat(browser, base, "uk"),
       phone: await phone(browser, base),
       /* The row's label is the thing that disappeared: the longest trailing
          clause, and the longest label, in the locale that has both. */
@@ -411,7 +581,15 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
     await browser.close();
     server.stop(true);
   }
-  fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(evidence, null, 2)}\n`);
+  /* The sweeps go in as their summaries: 86 near-identical records would bury
+     the numbers that say whether the row holds, and the rows themselves are
+     reproduced by re-running this driver. */
+  const recorded = {
+    ...evidence,
+    sweepEn: (evidence.sweepEn as Awaited<ReturnType<typeof sweepSeat>>).summary,
+    sweepUk: (evidence.sweepUk as Awaited<ReturnType<typeof sweepSeat>>).summary,
+  };
+  fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify(recorded, null, 2)}\n`);
 
   for (const key of ["roomy", "wide", "narrow"] as const) {
     const read = evidence[key] as Awaited<ReturnType<typeof desktop>>;
@@ -446,29 +624,15 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   for (const key of ["seatWide", "seat1024", "seat1024Uk", "seat900", "seat900Uk"] as const) {
     const seatRead = evidence[key] as Awaited<ReturnType<typeof seat>>;
     expect(seatRead.errors, `${key} page errors`).toEqual([]);
-    /* The row does not wrap and nothing scrolls, so the controls group must
-       not be drawn one pixel outside the row that holds it, nor over the
-       siblings that follow it. */
-    expect(seatRead.controlsSpill, `${key} controls spill`).toBe(0);
-    expect(seatRead.spillPastPredecessor, `${key} spill past the predecessor link`).toBe(0);
-    expect(seatRead.overlapsSiblings, `${key} overlaps the header's other controls`).toBe(false);
-    expect(seatRead.headOverflow, `${key} header overflow`).toBe(0);
-    /* And the identity the row exists for stays readable: a model name crushed
-       to nothing is the row losing its own subject. */
-    expect(seatRead.modelWidth, `${key} model width`).toBeGreaterThan(40);
-    expect(seatRead.rotateVisible, `${key} Rotate visible`).toBe(true);
-    expect(seatRead.chipWidth, `${key} chip visible`).toBeGreaterThan(0);
-    /* Whatever the face shows, the word it gave up is still reachable — on the
-       chip's own title and its accessible label, in the row's own locale. */
-    const interval = translate(seatRead.locale, "seatTick.everyMin", { n: 30 });
-    expect(seatRead.chipTitle, `${key} chip title`).toContain(interval);
-    expect(seatRead.chipLabel, `${key} chip label`).toContain(interval);
-    /* The word is given up by the width, not by the locale. */
-    if (seatRead.hostContentWidth > 539) {
-      expect(seatRead.chipFace, `${key} chip face`).not.toBeNull();
-    } else {
-      expect(seatRead.chipFace, `${key} chip face collapsed`).toBeNull();
-    }
+    expectSeatRow(seatRead, seatRead.locale, key);
+  }
+  /* And the same assertions at every 8 px across the band, because the named
+     widths above are three points and the row broke between them. */
+  for (const key of ["sweepEn", "sweepUk"] as const) {
+    const sweep = evidence[key] as Awaited<ReturnType<typeof sweepSeat>>;
+    expect(sweep.errors, `${key} page errors`).toEqual([]);
+    expect(sweep.rows.length, `${key} samples`).toBe(sweepWidths.length);
+    for (const row of sweep.rows) expectSeatRow(row, sweep.summary.locale, `${key} at ${row.width} px`);
   }
 
   /* The phone's row, in both locales and for the longest trailing clause it

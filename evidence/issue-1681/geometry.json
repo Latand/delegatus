@@ -195,7 +195,7 @@
     "locale": "en",
     "hostWidth": 523,
     "hostContentWidth": 523,
-    "identityWidth": 359,
+    "identityWidth": 523,
     "controlsSpill": 0,
     "spillPastPredecessor": 0,
     "headOverflow": 0,
@@ -207,8 +207,8 @@
     "controlsWidth": 112,
     "modelWidth": 79,
     "rotateVisible": true,
-    "predecessorShown": true,
-    "predecessorWidth": 156,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
     "overlapsSiblings": false,
     "pageOverflow": false,
     "errors": []
@@ -222,7 +222,7 @@
     "locale": "uk",
     "hostWidth": 523,
     "hostContentWidth": 523,
-    "identityWidth": 328,
+    "identityWidth": 523,
     "controlsSpill": 0,
     "spillPastPredecessor": 0,
     "headOverflow": 0,
@@ -232,10 +232,10 @@
     "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
     "chipWidth": 40,
     "controlsWidth": 125,
-    "modelWidth": 77,
+    "modelWidth": 79,
     "rotateVisible": true,
-    "predecessorShown": true,
-    "predecessorWidth": 186,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
     "overlapsSiblings": false,
     "pageOverflow": false,
     "errors": []
@@ -293,6 +293,74 @@
     "overlapsSiblings": false,
     "pageOverflow": false,
     "errors": []
+  },
+  "sweepEn": {
+    "key": "sweep-en",
+    "locale": "en",
+    "band": {
+      "from": 768,
+      "to": 1100,
+      "step": 8,
+      "samples": 43
+    },
+    "hostContentWidths": {
+      "min": 267,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "modelWidth": 28
+    },
+    "minModelWidthAtBar": {
+      "width": 800,
+      "hostContentWidth": 299,
+      "modelWidth": 60
+    },
+    "maxControlsSpill": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 547,
+    "narrowestHostWithPredecessor": 547
+  },
+  "sweepUk": {
+    "key": "sweep-uk",
+    "locale": "uk",
+    "band": {
+      "from": 768,
+      "to": 1100,
+      "step": 8,
+      "samples": 43
+    },
+    "hostContentWidths": {
+      "min": 267,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "modelWidth": 15
+    },
+    "minModelWidthAtBar": {
+      "width": 1048,
+      "hostContentWidth": 547,
+      "modelWidth": 42
+    },
+    "maxControlsSpill": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 547,
+    "narrowestHostWithPredecessor": 547
   },
   "phone": {
     "key": "phone-390-en-stale",

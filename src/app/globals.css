@@ -77,10 +77,10 @@ body {
  * the group spilled 66 px (en) and 106 px (uk) past the row that holds it, and
  * the model name was 0 px wide at 900 px and 18 px at 1024 px in Ukrainian.
  *
- * So the row gives things up, in order, before it overflows: first the tick's
- * WORD (the glyph and the state dot carry the chip, and the whole summary is
- * on its title and accessible label either way), then the predecessor link,
- * which is a convenience — the same conversation is reachable from the board.
+ * So the row gives things up before it overflows: the tick's WORD (the glyph
+ * and the state dot carry the chip, and the whole summary is on its title and
+ * accessible label either way) and the predecessor link, which is a
+ * convenience — the same conversation is reachable from the board.
  *
  * A container query rather than a media query, because the same viewport gives
  * these two hosts unrelated widths, and a named one so a host that has not
@@ -93,11 +93,27 @@ body {
  * Two thresholds, because the hosts differ in the one way that matters: the
  * dock's row WRAPS (`flex-wrap`) and the kanban seat's does not. A wrapping
  * row reflows and stays legible; a non-wrapping one crushes the model name and
- * then spills. So the inline host gives the word up while there is still room
- * to spare, and the dock keeps it until wrapping would cost a second line.
+ * then spills — so the inline host gives up BOTH the word and the link at the
+ * width where the row stops fitting, and the dock keeps the word until
+ * wrapping would cost it a second line.
+ *
+ * 539 px is measured, not chosen: the model name reaches its full width at a
+ * 483 px host in English and a 531 px one in Ukrainian, and the next host the
+ * seat lays out above 531 is 539. Below it the row is over-full, and giving up
+ * the word alone does not save it — with the chip gone entirely the Ukrainian
+ * model name is still 13 px at a 411 px host. The link is what costs the room:
+ * 156 px in English, 186 px in Ukrainian. Both give way together at 539 px,
+ * and `issue1681Evidence.browser.test.tsx` sweeps 768–1100 px in both locales
+ * against that number rather than sampling three widths around it — the shape
+ * of this defect is a BAND, and three points missed it once already.
  */
 @container incumbent-host (max-width: 539px) {
   .incumbent-inline [data-seat-tick-face] {
+    display: none;
+  }
+  /* Inline only: in the dock the link is a row of its own under the identity,
+     so it costs the controls nothing and stays at every width. */
+  .incumbent-inline [data-orchestrator-predecessor] {
     display: none;
   }
 }
@@ -107,13 +123,6 @@ body {
      360 px floor measures 336 px — the width at which its row was wrapping to
      a second line and taking the header from 56 px to 80 px. */
   [data-seat-tick-face] {
-    display: none;
-  }
-}
-@container incumbent-host (max-width: 409px) {
-  /* Inline only: in the dock the link is a row of its own under the identity,
-     so it costs the controls nothing and stays at every width. */
-  .incumbent-inline [data-orchestrator-predecessor] {
     display: none;
   }
 }
