@@ -11,7 +11,8 @@
  * provenance and the publication gate refuses committed rasters. The
  * orchestrator runs this to produce pictures for the operator.
  *
- * The pattern is scripts/capture-issue-979-mobile-orchestrator.ts: playwright
+ * The pattern is src/components/mobile/issue1671Evidence.browser.test.tsx,
+ * the one mobile harness (#1761): playwright
  * over the locally installed Chrome, one emulated phone context per colour
  * scheme and frame, and gates on every frame:
  *

@@ -39,8 +39,8 @@ import type { FileEntry } from "@/lib/types";
  * screen with the rest of the strip and lane 6 made it the board's first CARD
  * (`mobile-orchestrator-slot`), so it is measured where it now lives, inside
  * the REAL `ProjectDashboard` board leaf rather than in markup copied out of
- * it. The keyboard-open case is a live measurement and lives in
- * `scripts/capture-issue-979-mobile-orchestrator.ts`.
+ * it. The keyboard-open case is a live measurement and lived in the #979
+ * orchestrator capture script, deleted in #1761.
  *
  * Every measurement is written to `evidence/issue-1347-1348/geometry.json`;
  * the frames and HTML beside it are regenerated on demand and not committed.
