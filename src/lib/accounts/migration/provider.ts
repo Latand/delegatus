@@ -19,7 +19,7 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
-import { materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
@@ -408,8 +408,10 @@ async function publishClaudeSuccessorHost(
     );
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
-      claudeConfigDir: input.target.kind === "managed" ? input.target.home : undefined,
       claudeProjectsDir: input.target.transcriptRoot,
+      /* The successor is a re-host like any other, so it carries the viewer
+         connector the same way boot adoption and a fresh spawn do (#1732). */
+      ...claudeHostLaunchPaths(input.target),
       env: access.env,
       /* Transcripts keep dated provider ids the CLI may refuse as a launch
          argument; the launcher that used to project them is gone, so the

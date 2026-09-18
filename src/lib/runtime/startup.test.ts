@@ -263,6 +263,69 @@ test("server startup delegates managed rows with file credentials and their laun
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("server startup resumes a legacy-owned Claude row against its own home and MCP state (#1732)", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-legacy-"));
+  const stateDirectory = path.join(directory, "state");
+  const previousStateDirectory = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = stateDirectory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  /* The legacy home is `<root>/.claude`; the state that registers its MCP
+     servers sits beside it rather than inside it. */
+  const operatorRoot = path.join(directory, "operator");
+  const accountHome = path.join(operatorRoot, ".claude");
+  const sessionId = "legacy-startup-thread";
+  registry.upsert({
+    key: { engine: "claude", sessionId },
+    artifactPath: `${accountHome}/projects/-repo/${sessionId}.jsonl`,
+    cwd: "/repo",
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", mcpServers: ["viewer"] }),
+    status: "dead",
+    host: null,
+    claimEpoch: 1,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  let claudeOptions: unknown;
+  try {
+    await adoptStructuredHostsAtStartup({
+      registry,
+      client: null,
+      orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {},
+      resolveCodexOwner: () => null,
+      resolveClaudeOwner: () => ({
+        home: accountHome,
+        kind: "legacy",
+        transcriptRoot: path.join(accountHome, "projects"),
+        env: { NODE_ENV: "test", HOME: operatorRoot },
+      }),
+      adopt: async () => [],
+      adoptClaude: async (received, optionsFor) => {
+        claudeOptions = optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
+        return [];
+      },
+    });
+  } finally {
+    if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDirectory;
+  }
+  /* A legacy owner answers the same launch paths a fresh spawn of that account
+     would: without them the resumed CLI is handed a bare `--strict-mcp-config`
+     and the seat loses every viewer tool on its next turn. */
+  expect(claudeOptions).toMatchObject({
+    cwd: "/repo",
+    claudeConfigDir: accountHome,
+    claudeProjectsDir: path.join(accountHome, "projects"),
+    mcpStatePath: path.join(operatorRoot, ".claude.json"),
+    mcpServers: ["viewer"],
+    spawnPolicyBaseSettingsPath: null,
+    env: { HOME: operatorRoot },
+  });
+  (claudeOptions as { releaseCleanup?: () => void }).releaseCleanup?.();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
 function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),

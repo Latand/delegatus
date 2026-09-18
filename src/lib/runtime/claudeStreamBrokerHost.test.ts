@@ -33,6 +33,7 @@ import {
   startClaudeStructuredHost,
   structuredHostsEnabled,
 } from "./registry";
+import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 
 class MemoryEventStore implements RuntimeEventStore {
   private readonly events = new Map<string, RuntimeEvent[]>();
@@ -1664,6 +1665,137 @@ describe("ClaudeStreamBrokerHost", () => {
       },
     });
     await restarted[0]!.host.release();
+  });
+
+  test("a legacy-owned host severed mid-turn is re-hosted with its Viewer MCP connector (#1732)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-legacy-rehost-"));
+    /* The legacy layout: the account home is `<root>/.claude` and the MCP
+       state it registers servers in sits beside it, at `<root>/.claude.json`. */
+    const root = path.join(directory, "operator");
+    const accountHome = path.join(root, ".claude");
+    fs.mkdirSync(accountHome, { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude.json"), JSON.stringify({
+      mcpServers: {
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+      },
+    }));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const sessionId = "legacy-seat-session";
+    registry.upsert({
+      key: { engine: "claude", sessionId },
+      artifactPath: `/sessions/${sessionId}.jsonl`,
+      cwd: "/repo",
+      accountId: null,
+      status: "dead",
+      host: null,
+      structuredHost: {
+        kind: "claude-broker",
+        endpoint: "stdio:old",
+        process: null,
+        eventCursor: 4,
+        protocolVersion: "2.1.196",
+        writerClaimEpoch: 2,
+        /* Severed mid-turn: the retiring release released this host while the
+           seat's own turn was still open, which is how the deploy of #1732
+           took the manager seat down. */
+        activeTurnRef: "severed-turn",
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 2,
+      claimOwner: null,
+      pendingAction: null,
+    });
+    const owner: ClaudeStartupOwner = {
+      home: accountHome,
+      kind: "legacy",
+      transcriptRoot: path.join(accountHome, "projects"),
+      env: {
+        NODE_ENV: "test",
+        LLV_STATE_DIR: "fixture-state",
+        LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+        LLV_VIEWER_PORT: "8898",
+      },
+    };
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const adopted = await adoptClaudeRegistryHosts(
+      registry,
+      (entry) => ({
+        /* The production boot builder, not a hand-written option object. The
+           #1346 fix was asserted against its own options, so nothing ever ran
+           this and the managed-only config dir it answered stayed invisible. */
+        ...claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
+        deliveryLedger: ledger,
+        eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),
+        readTranscript: () => [],
+        spawnProcess: fakeSpawn(child, captured),
+      }),
+      { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+    );
+
+    expect(adopted).toHaveLength(1);
+    expect(captured.args).toContain("--resume");
+    expect(captured.args).toContain("--mcp-config");
+    const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
+    expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({
+      mcpServers: {
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+      },
+    });
+    expect(captured.options?.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: accountHome,
+      LLV_STATE_DIR: "fixture-state",
+      LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+      LLV_VIEWER_PORT: "8898",
+    });
+
+    /* The seat's next turn calls a viewer tool and gets an answer: the
+       connector came back with the process, so nothing retracts the toolset
+       as `not_configured`. */
+    const host = adopted[0]!.host;
+    const sent = host.send({ id: "next-turn", text: "continue" });
+    child.emitJson({
+      type: "user",
+      isReplay: true,
+      session_id: sessionId,
+      uuid: "next-turn-user",
+      message: { role: "user", content: [{ type: "text", text: "continue" }] },
+    });
+    await sent;
+    const events = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+    child.emitJson({
+      type: "assistant",
+      session_id: sessionId,
+      uuid: "next-turn-call",
+      message: { role: "assistant", content: [
+        { type: "tool_use", id: "toolu_viewer", name: "mcp__viewer__get_task", input: { taskId: "task_fixture" } },
+      ] },
+    });
+    child.emitJson({
+      type: "user",
+      session_id: sessionId,
+      uuid: "next-turn-result",
+      message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "toolu_viewer", content: [{ type: "text", text: "{\"ok\":true}" }] },
+      ] },
+    });
+    child.emitJson({ type: "result", subtype: "success", session_id: sessionId });
+    expect(await nextEvent(events)).toMatchObject({
+      kind: "item",
+      phase: "completed",
+      item: { type: "assistant", uuid: "next-turn-call", message: { content: [{ type: "tool_use", name: "mcp__viewer__get_task" }] } },
+    });
+    expect(await nextEvent(events)).toMatchObject({
+      kind: "item",
+      phase: "completed",
+      item: { type: "user", uuid: "next-turn-result", message: { content: [{ type: "tool_result", tool_use_id: "toolu_viewer" }] } },
+    });
+    expect(await nextEvent(events)).toMatchObject({ kind: "turn-ended", status: "completed" });
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 
   test("startup adoption retains an unreaped Claude child until late cleanup converges", async () => {
