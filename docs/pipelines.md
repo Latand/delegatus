@@ -62,6 +62,12 @@ A read-only `run` stage may declare repository-relative `outputs`, such as a rep
 
 Resolution follows this order for each runtime field: explicit stage value, referenced role preset, Builder preset from the shared role registry. The current Builder preset is Codex GPT-5.6-Sol with medium effort. Pipeline creation fails closed when the registry cannot provide Builder, preventing a second embedded default from drifting away from the registry. A raw-prompt stage receives the task/spec context and structured verdict contract without a role scaffold. A referenced role receives its registry scaffold. Creation persists one immutable effective-role snapshot on each stage, and every attempt clones that snapshot so later registry edits cannot change first execution or retries.
 
+### UI lane order
+
+A lane whose diff touches UI runs three stages in this order: the **builder**, then a **design critique** whose `onFail` edge points back to the builder, then **one code review** at the final head. The critique judges the rendered result — weight, wording, hierarchy — and its `fail` verdict returns the lane to the builder for another pass inside the edge's `maxRounds`. The single review then reads the head the critique passed, so no approval is ever given to a head nobody has looked at.
+
+Blocking layout breakage is not the critique's private business. Every review scaffold carries the standing rule that rendered surfaces are part of correctness (`REVIEW_FRAME_RULES` in `src/lib/roles/defaults.ts`): a UI diff is reviewed against the rendered result as well as the code, evidence that skips a surface the requirement names is REQUEST_CHANGES on its own, and overflow, clipped or zero-width controls, overlap and unreadable states are severity-ranked findings carrying the viewport and the measured numbers, rendered from an export of the reviewed HEAD — never the live worktree, never the operator's Viewer.
+
 ## Structured stage verdicts
 
 A run stage completes only when its finished turn ends with a fenced JSON block matching this contract:
