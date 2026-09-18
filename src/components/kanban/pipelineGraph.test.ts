@@ -150,6 +150,35 @@ test("review rounds are the bound flow's rounds; Past attempts list every finish
   expect(pastAttempts([deciding], new Map())).toEqual([]);
 });
 
+test("retries of a fail edge's target spend no round: the card's counter reads the traversals (#1754)", () => {
+  /* Implement's first round spawn failed and was retried twice; all three
+     attempts carry the one Verify failure that activated them. */
+  const activation = { stageId: "verify", attempt: 1, edge: "fail" as const };
+  const record = pipeline(retryStages, [
+    { stageId: "implement", attempts: [
+      attempt(1, "passed", "2026-09-14T10:00:00.000Z"),
+      attempt(2, "failed", "2026-09-14T11:00:00.000Z", { activatedBy: activation }),
+      attempt(3, "failed", "2026-09-14T11:10:00.000Z", { activatedBy: activation }),
+      attempt(4, "running", "2026-09-14T11:20:00.000Z", { activatedBy: activation }),
+    ] },
+    { stageId: "review", attempts: [attempt(1, "passed", "2026-09-14T10:20:00.000Z")] },
+    { stageId: "verify", attempts: [attempt(1, "failed", "2026-09-14T10:40:00.000Z")] },
+  ], { stageId: "implement", state: "running", input: null, activatedBy: null });
+  expect(edgeFired(record, { from: "verify", to: "implement", kind: "fail" })).toBe(1);
+
+  /* A second Verify failure is the second traversal, whatever the retries did. */
+  const second = pipeline(retryStages, [
+    { stageId: "implement", attempts: [
+      attempt(1, "passed", "2026-09-14T10:00:00.000Z"),
+      attempt(2, "passed", "2026-09-14T11:00:00.000Z", { activatedBy: activation }),
+      attempt(3, "running", "2026-09-14T12:00:00.000Z", { activatedBy: { stageId: "verify", attempt: 2, edge: "fail" as const } }),
+    ] },
+    { stageId: "review", attempts: [attempt(1, "passed", "2026-09-14T10:20:00.000Z")] },
+    { stageId: "verify", attempts: [attempt(1, "failed", "2026-09-14T10:40:00.000Z"), attempt(2, "failed", "2026-09-14T11:40:00.000Z")] },
+  ], { stageId: "implement", state: "running", input: null, activatedBy: null });
+  expect(edgeFired(second, { from: "verify", to: "implement", kind: "fail" })).toBe(2);
+});
+
 test("a lineage-adopted helper attempt is evidence: it spends no retry, is not the latest or counted attempt, marks no edge, and is listed as a helper conversation", () => {
   const helper = attempt(3, "passed", "2026-09-14T11:30:00.000Z", {
     historical: true,
