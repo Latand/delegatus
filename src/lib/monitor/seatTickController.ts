@@ -3,7 +3,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
-import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { mutateTasksFile } from "@/lib/tasks/store";
 
@@ -103,6 +103,10 @@ export interface SeatTickControllerDependencies {
   proposalIssues?: (project: string, sources: SeatTickSources) => Promise<ProposalIssue[]>;
   /** Whether this release still owns viewer traffic, re-asked per sweep. */
   ownsTraffic?: () => boolean | Promise<boolean>;
+  /** Reconcile this project's ACTIVE seat against the launch it was activated
+      on, before the check reads a seat (#1757). See
+      {@link reconcileProvisionalSeat}. */
+  reconcileSeat?: (project: string) => Promise<StillbornSeatRollback | null> | StillbornSeatRollback | null;
 }
 
 /** The family of refs for the card that says a prepared wake has been
@@ -1065,9 +1069,14 @@ async function check(
   const deliver = dependencies.deliver ?? deliverConversationMessage;
   const ensureCard = dependencies.ensureCard ?? ensureSeatTickCard;
 
-  /* Before anything is READ, let alone decided: settle the wake this project
-     left outstanding. It has to come first because both of its answers change
-     what the rest of this check may conclude — a landing moves the event cursor
+  /* BEFORE A SEAT IS READ AT ALL (#1757): converge the active seat with the
+     launch it was activated on, so this check opens on the seat the operator
+     can actually reach rather than on a provisional one whose launch died. */
+  const rollbackDetail = await reconcileProvisionalSeat(canonical, dependencies);
+
+  /* Then, before anything else is READ, let alone decided: settle the wake
+     this project left outstanding. It comes before the rest because both of
+     its answers change what this check may conclude — a landing moves the event cursor
      the gather pages from and starts the hourly bound, and a rotation means
      taking the payload back out of the queue the row carried it across the
      rotation for. */
@@ -1325,10 +1334,54 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [verdictDetail(verdict), fenceDetail].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
+}
+
+/**
+ * BOUND THE PROVISIONAL WINDOW WITH THE DRIVER THAT ALREADY EXISTS (#1757).
+ *
+ * A seat activated on a durably accepted spawn is provisional until the Viewer
+ * can resolve its conversation. The routes reconcile that window whenever one
+ * is called, and if nobody calls one the project keeps a seat nothing can read
+ * — the board still showing its composer — for as long as that lasts. The
+ * incident's operator waited a morning.
+ *
+ * This tick is the in-process clock the release that owns traffic already runs,
+ * its project set is built from the active seats, and it comes round on its own
+ * every few minutes. So the same reconciliation runs here, unchanged in
+ * substance: readable outranks the receipt, only a terminally failed launch
+ * rolls a seat back, and an unsettled launch is left exactly where it is.
+ *
+ * It RECONCILES ONLY. It starts nothing, sends nothing, and waits on no launch.
+ * A reconciliation that throws is logged and the check goes on — a repair that
+ * could not run must not cost the project its check.
+ *
+ * Imported lazily, for the reason {@link releaseOwnsTraffic} is: the seat
+ * command's graph reaches the spawn route, and the tick has no business pulling
+ * that into its static imports.
+ */
+async function reconcileProvisionalSeat(
+  project: string,
+  dependencies: SeatTickControllerDependencies,
+): Promise<string | null> {
+  try {
+    const reconcile = dependencies.reconcileSeat ?? (async (target: string) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      return reconcileActiveOrchestratorSeat(target);
+    });
+    const rolledBack = await reconcile(project);
+    if (!rolledBack) return null;
+    const restored = rolledBack.restored;
+    return `the seat this check opened on was stillborn and has been rolled back: ${redactMonitorText(rolledBack.terminalized.seat.intent.error ?? "no reason was recorded")}; ${restored?.conversationId
+      ? `the project is designated on ${restored.conversationId} again at epoch ${restored.seatEpoch}`
+      : "the project is left undesignated, which is what create_orchestrator answers"}`;
+  } catch (error) {
+    console.error("[seat tick] the active seat could not be reconciled", error instanceof Error ? error.name : "unknown");
+    return null;
+  }
 }
 
 /** The project's wake interval as it stands, for the bound on an attempt

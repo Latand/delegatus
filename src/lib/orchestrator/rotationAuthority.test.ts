@@ -207,6 +207,7 @@ function dependencies(): { deps: SeatCommandDependencies; spawns: Record<string,
     launchSettlement: () => ({ kind: "unknown" }),
     stampRegistryIdentity: () => {},
     runtimeIdentity: () => ({ engine: null, model: null }),
+    resolvedConversation: (conversationId) => ({ conversationId, path: `/tmp/${conversationId.slice(-4)}.jsonl`, holdsTurns: true, cwd: "/workspace" }),
     now: () => AT,
   };
   setSeatCommandDependenciesForTests(deps);

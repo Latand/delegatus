@@ -97,6 +97,15 @@ function dependencies(overrides: Partial<SeatCommandDependencies> = {}): { deps:
     },
     launchSettlement: () => ({ kind: "unknown" }),
     runtimeIdentity: () => ({ engine: null, model: null }),
+    /* Predecessors resolve and hold turns unless a test says otherwise: the
+       handover's lineage walk (#1757) asks this before naming a conversation to
+       read, and asks it WITHOUT requiring a cwd. */
+    resolvedConversation: (conversationId) => ({
+      conversationId,
+      path: `/tmp/${conversationId.slice(-4)}.jsonl`,
+      holdsTurns: true,
+      cwd: "/workspace",
+    }),
     now: () => AT,
     ...overrides,
   };
@@ -285,7 +294,15 @@ test("a completed seat replay repairs a failed registry stamp without revalidati
     conversationId: OLD_ID,
   };
 
-  await expect(executeOrchestratorSeatRequest(request, deps)).rejects.toThrow("temporary registry write failure");
+  /* The stamp throws AFTER the activation write, so there is no pending intent
+     left to record it on; what #1757 guarantees is that the caller is answered
+     with the reason instead of an unhandled rejection reaching the route as a
+     bodyless 500. The replay below is what repairs the stamp. */
+  const interrupted = await executeOrchestratorSeatRequest(request, deps);
+  expect(interrupted).toMatchObject({
+    status: 500,
+    body: { code: "seat_transition_failed", error: "temporary registry write failure" },
+  });
   const replay = await executeOrchestratorSeatRequest(request, deps);
 
   expect(replay).toMatchObject({ status: 200, body: { replayed: true, conversationId: OLD_ID } });
@@ -398,6 +415,12 @@ test("a restarted caller replays the accepted launch from the durable seat recei
     spawn: async () => {
       throw new Error("a completed accepted launch must replay from durable state");
     },
+    /* Still launching: the reserved conversation has no transcript yet, which
+       is what «accepted» means and what the answer below reports. The Viewer
+       cannot resolve it either — that is the same fact, asked the way the
+       reconciler asks it. */
+    conversationTarget: () => null,
+    resolvedConversation: () => null,
   });
 
   const replay = await executeOrchestratorSeatRequest(spawnRequest("req_00000015"), resumed);
@@ -409,15 +432,19 @@ test("a restarted caller replays the accepted launch from the durable seat recei
   expect(recorded.spawns).toEqual([]);
 });
 
-test("a failed spawn leaves no active seat and keeps a recoverable pending intent", async () => {
+test("a failed spawn leaves no active seat and terminalizes the attempt with its reason", async () => {
   const { deps } = dependencies({
     spawn: async () => ({ status: 400, body: { error: "directory does not exist" } }),
   });
   const result = await executeOrchestratorSeatRequest(spawnRequest(), deps);
   expect(result.status).toBe(400);
-  const { active, pending } = orchestratorSeatFor("proj-a");
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
   expect(active).toBeNull();
-  expect(pending?.intent.error).toBe("directory does not exist");
+  /* Issue #1757: the burnt epoch is readable history at once, and the answer
+     carries the row that was written. */
+  expect(pending).toBeNull();
+  expect(history).toMatchObject([{ reason: "terminal_error", seat: { intent: { error: "directory does not exist" } } }]);
+  expect(result.body.seat).toMatchObject({ intent: { error: "directory does not exist" } });
 });
 
 test("a retry after a failed spawn replays the SAME clientAttemptId and completes exactly once", async () => {
@@ -570,7 +597,11 @@ test("a failed delivery keeps the incumbent seated and reports a recoverable sta
   expect(result.status).toBe(502);
   expect(result.body.code).toBe("mandate_delivery_failed");
   expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe("host is dead");
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+  expect(orchestratorSeatFor("proj-a").history.at(-1)).toMatchObject({
+    reason: "terminal_error",
+    seat: { intent: { error: "host is dead" } },
+  });
 });
 
 test("AXIS 1/2 SEPARATION: replacement revokes MANAGER-LEVEL authority only — the predecessor's session is never touched", async () => {
@@ -881,7 +912,7 @@ test("a same-key retry after a TERMINAL spawn rejection recomposes instead of re
     },
   });
   await executeOrchestratorSeatRequest(spawnRequest(), deps);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe("transient");
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("transient");
 
   /* Ambiguous failures keep the key client-side, so the retry arrives on the
      SAME one. The errored intent is terminal: it is cleared, not replayed, and
@@ -980,13 +1011,15 @@ test("the stuck shape from #878: an errored pending intent no longer blocks rota
   const { deps } = dependencies();
   await executeOrchestratorSeatRequest(spawnRequest("req_00000041"), deps);
 
-  /* Wedge the project: a replacement attempt whose spawn terminally failed
-     leaves a pending intent carrying the error. */
+  /* The attempt that used to wedge the project: a replacement whose spawn
+     terminally failed. Since #1757 its error is terminalized on the spot; what
+     this test still proves is that the evidence survives and the next rotation
+     is not refused behind it. */
   const failing = dependencies({
     spawn: async () => ({ status: 409, body: { error: "spawn attempt conflicts with its original request" } }),
   });
   await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000042"), replaceIncumbent: true }, failing.deps);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe("spawn attempt conflicts with its original request");
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("spawn attempt conflicts with its original request");
 
   const SUCCESSOR = "conversation_88888888-8888-4888-8888-888888888888";
   const rotating = dependencies({
@@ -1125,7 +1158,7 @@ test("an unsettled legacy pending seat fails closed when runtime provenance is u
     body: { code: "legacy_runtime_identity_unavailable" },
   });
   expect(recorded.spawns).toEqual([]);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toContain("runtime identity");
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toContain("runtime identity");
 });
 
 test("a pending intent whose launch terminally failed records the failure and stops blocking a fresh designation", async () => {
@@ -1570,7 +1603,7 @@ test("AC5: a designation whose delivery fails is terminal and the next rotation 
   const failed = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00001041" }, failing.deps);
 
   expect(failed.status).toBe(413);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe(envelopeError);
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe(envelopeError);
   expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
 
   const successor = successorId(9);
@@ -1602,7 +1635,7 @@ test("AC5: an existing-mode designation whose delivery fails is cleared by the n
   }, failing.deps);
 
   expect(failed.status).toBe(502);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe("host is dead");
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("host is dead");
 
   const { deps } = dependencies();
   const created = await executeOrchestratorSeatRequest({
@@ -1642,7 +1675,7 @@ test("AC5: retrying a failed rotation with its OWN key delivers the recomposed m
   }, failing.deps);
 
   expect(failed.status).toBe(502);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe(envelopeError);
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe(envelopeError);
 
   const successor = successorId(11);
   const retry = dependencies({
@@ -1685,7 +1718,7 @@ test("AC5: retrying a failed existing-mode designation with its OWN key clears i
   }, failing.deps);
 
   expect(failed.status).toBe(502);
-  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBe("host is dead");
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("host is dead");
 
   const { deps, recorded } = dependencies();
   const retried = await executeOrchestratorSeatRequest({

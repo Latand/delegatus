@@ -136,14 +136,18 @@ test("editing the mandate for the SAME conversation revokes nothing", () => {
   expect(orchestratorSeatFor("proj-a").active?.mandate).toBe("v2");
 });
 
-test("a failed intent stays pending with its error and never unseats the incumbent", () => {
+test("a failed intent is terminalized with its error at once and never unseats the incumbent", () => {
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "first", clientRequestId: "req_0000001", mode: "spawn", now: AT });
   completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000001", conversationId: "conversation_a", path: null, now: AT });
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "second", clientRequestId: "req_0000002", mode: "spawn", now: AT });
-  failOrchestratorSeatIntent("proj-a", "req_0000002", "spawn failed");
-  const { active, pending } = orchestratorSeatFor("proj-a");
+  const terminalized = failOrchestratorSeatIntent("proj-a", "req_0000002", "spawn failed");
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
   expect(active?.conversationId).toBe("conversation_a");
-  expect(pending?.intent.error).toBe("spawn failed");
+  /* Issue #1757: the failure is readable history the moment it happens, rather
+     than a pending row waiting for a next designation that may never come. */
+  expect(pending).toBeNull();
+  expect(history).toMatchObject([{ reason: "terminal_error", seat: { intent: { clientRequestId: "req_0000002", error: "spawn failed" } } }]);
+  expect(terminalized?.seat.intent.error).toBe("spawn failed");
 });
 
 test("a concurrent key cannot displace a pending intent, and a stale completion reports missing", () => {
@@ -181,9 +185,9 @@ function seatRow(overrides: {
   };
 }
 
-test("a pending intent carrying a terminal error is terminalized into durable history and a NEW key proceeds", () => {
+test("a failed intent is terminalized into durable history and a NEW key proceeds", () => {
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "first try", clientRequestId: "req_0000001", mode: "spawn", now: AT });
-  failOrchestratorSeatIntent("proj-a", "req_0000001", "spawn attempt conflicts with its original request");
+  failOrchestratorSeatIntent("proj-a", "req_0000001", "spawn attempt conflicts with its original request", LATER);
 
   const begun = beginOrchestratorSeatIntent({ project: "proj-a", mandate: "second try", clientRequestId: "req_0000002", mode: "spawn", now: LATER });
   expect(begun.kind).toBe("begun");
@@ -249,9 +253,9 @@ test("a genuinely in-flight intent — no error, epoch at or above the active se
    the very text that failed — and kept the failed row in the blocking pending
    position, which is the permanent "last designation failed" banner in the
    incident. The next begin now clears it whichever key sends it. */
-test("an errored pending intent is terminalized by its OWN key, not replayed", () => {
+test("a failed intent is not replayed by its OWN key: the retry composes afresh", () => {
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "oversized", clientRequestId: "req_0000001", mode: "spawn", now: AT });
-  failOrchestratorSeatIntent("proj-a", "req_0000001", "structured message text exceeds the 32000-byte envelope bound");
+  failOrchestratorSeatIntent("proj-a", "req_0000001", "structured message text exceeds the 32000-byte envelope bound", AT);
 
   const again = beginOrchestratorSeatIntent({ project: "proj-a", mandate: "recomposed and small", clientRequestId: "req_0000001", mode: "spawn", now: AT });
 
@@ -259,7 +263,6 @@ test("an errored pending intent is terminalized by its OWN key, not replayed", (
   /* The fresh intent carries the RECOMPOSED mandate, not the stored one. */
   expect(again.seat.mandate).toBe("recomposed and small");
   expect(again.seat.intent.error).toBeNull();
-  if (again.kind === "begun") expect(again.terminalized?.reason).toBe("terminal_error");
   const seats = orchestratorSeatFor("proj-a");
   expect(seats.history).toMatchObject([{
     reason: "terminal_error",
@@ -390,12 +393,12 @@ test("a pending seat protects its conversation from reading as revoked", () => {
 });
 
 test("a pending intent that failed terminally stops masking the revocation", () => {
-  /* The protection above lapses at the error. A recorded error is the intent's
-     TERMINAL state, and the row keeps its pending position until the NEXT
-     designation for that project moves it to history — a call that may never
-     come. Reading the failed row as a seat would leave the predecessor's
-     revocation masked, and its host running, indefinitely: the revoked seat
-     that keeps acting is the whole reason #1245 exists. */
+  /* The protection above lapses at the error. Reading a failed designation as
+     one that seats somebody would leave the predecessor's revocation masked,
+     and its host running: the revoked seat that keeps acting is the whole
+     reason #1245 exists. Since #1757 the failure leaves the pending position
+     in the same write, which is what ends the protection — nothing has to
+     come along later and move it. */
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "first", clientRequestId: "req_0000001", mode: "spawn", now: AT });
   completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000001", conversationId: "conversation_a", path: null, now: AT });
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "second", clientRequestId: "req_0000002", mode: "spawn", now: AT });
@@ -407,9 +410,11 @@ test("a pending intent that failed terminally stops masking the revocation", () 
   });
   expect([...revokedOrchestratorSeatConversationsOrUnknown()!]).toEqual([]);
 
-  failOrchestratorSeatIntent("proj-c", "req_0000004", "the mandate could not be delivered");
-  /* Still in the pending position, and no longer protecting anything. */
-  expect(readOrchestratorSeatFile().pending["proj-c"]?.intent.error).toBe("the mandate could not be delivered");
+  failOrchestratorSeatIntent("proj-c", "req_0000004", "the mandate could not be delivered", AT);
+  /* Out of the pending position and into history (#1757), and protecting
+     nothing on the way out. */
+  expect(readOrchestratorSeatFile().pending["proj-c"]).toBeUndefined();
+  expect(readOrchestratorSeatFile().history.at(-1)?.seat.intent.error).toBe("the mandate could not be delivered");
   expect([...revokedOrchestratorSeatConversationsOrUnknown()!]).toEqual(["conversation_a"]);
 });
 
