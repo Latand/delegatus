@@ -232,8 +232,10 @@ test("Claude publication waits for controller startup before replacing its verif
       stateListener?.({ ...state, status: "dead", endpoint: "stdio:released", pid: null });
     },
   } as unknown as ClaudeStreamBrokerHost & EngineHost;
-  const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async () => {
+  const adoptOptions: Array<Record<string, unknown>> = [];
+  const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async (_sessionId, options) => {
     adoptions += 1;
+    adoptOptions.push(options as unknown as Record<string, unknown>);
     return fakeHost;
   });
   const provider = new RegisteredSuccessorProvider({
@@ -268,7 +270,9 @@ test("Claude publication waits for controller startup before replacing its verif
     engine: "claude" as const,
     conversationId: "conversation_claude_controller_startup" as const,
     targetAccountId: "target",
-    launchProfile: emptyLaunchProfile({ cwd: base }),
+    /* A row granted more than the default: the successor must carry the grant
+       the conversation already holds, not a fresh default (#1732). */
+    launchProfile: emptyLaunchProfile({ cwd: base, mcpServers: ["viewer", "telegram"] }),
   };
   const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
   process.env.LLV_STRUCTURED_HOSTS = "1";
@@ -309,6 +313,17 @@ test("Claude publication waits for controller startup before replacing its verif
       adoptions: 2,
       releases: 2,
     });
+    /* Every successor launch reads the target account's own configuration and
+       replays the row's grant, so the connector survives the migration the
+       same way it survives a boot re-host (#1732). */
+    expect(adoptOptions).toHaveLength(2);
+    for (const options of adoptOptions) {
+      expect(options).toMatchObject({
+        claudeConfigDir: target.home,
+        mcpStatePath: path.join(target.home, ".claude.json"),
+        mcpServers: ["viewer", "telegram"],
+      });
+    }
   } finally {
     controller.registerActiveHost = originalRegister;
     adopt.mockRestore();
