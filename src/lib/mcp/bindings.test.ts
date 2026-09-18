@@ -28,6 +28,8 @@ import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings } from 
 import type { SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { SEAT_TICK_PROMPT_LIMIT } from "@/lib/monitor/seatTickSettings";
+import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { emptySeatTickState } from "@/lib/monitor/types";
 import {
   createMcpToolService,
   MemoryMcpReceiptStore,
@@ -2585,6 +2587,48 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
      itself does at its next check. */
   const read = await bindings.seat_tick_settings({ clientRequestId: "tick-read-back" });
   expect(read).toMatchObject({ changed: false, effective: { enabled: false } });
+});
+
+/* Why the tick is mute, in the answer the seat reads when it asks (#1746). The
+   seat in #1672 was enabled, on its cadence, and receiving nothing for hours;
+   the fence lived in the accounting row and no surface carried it. */
+test("seat_tick_settings says which attempt holds this project's wakes, since when and when that ends (#1746)", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-tick-fence-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+
+  /* A project whose tick is on and whose row carries one unresolved attempt,
+     prepared inside its own bound: the shape a seat asks about. */
+  const key = "seat-tick:viewer:169:2026-09-18T03:31:36.000Z:child-terminal:fp-1";
+  const preparedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+  writeSeatTickState("viewer", {
+    ...emptySeatTickState(),
+    seatEpoch: 169,
+    outstandingWake: {
+      clientMessageId: key, conversationId: TICK_SEAT, seatEpoch: 169, operationId: null, preparedAt,
+      commit: { proposal: false, reasons: ["child-terminal"], fingerprint: "fp-1", eventsThrough: 7, children: [] },
+    },
+  });
+
+  const { bindings } = tickSettingsBindings();
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as {
+    fence: { clientMessageId: string; slot: string; since: string; lapsesAt: string; keptPastBound: boolean } | null;
+    fenceDetail: string;
+    fenceError: string | null;
+  };
+  expect(read.fence).toMatchObject({ clientMessageId: key, slot: "outstanding", since: preparedAt, keptPastBound: false });
+  /* Two of the project's wake intervals, and never less than an hour. */
+  expect(read.fence!.lapsesAt).toBe(new Date(Date.parse(preparedAt) + 2 * 60 * 60_000).toISOString());
+  expect(read.fenceDetail).toContain(`under key ${key}`);
+  expect(read.fenceDetail).toContain("the fence lapses at");
+  expect(read.fenceError).toBeNull();
+
+  /* And a project with nothing prepared says that, rather than nothing. */
+  const other = tickSettingsBindings({ callerProject: "quiet-project" });
+  const quiet = await other.bindings.seat_tick_settings({ clientRequestId: "tick-fence-quiet" }) as { fence: unknown; fenceDetail: string };
+  expect(quiet.fence).toBeNull();
+  expect(quiet.fenceDetail).toBe("no attempt is holding this project's wakes back");
 });
 
 test("seat_tick_settings sets a cadence and restores the default", async () => {

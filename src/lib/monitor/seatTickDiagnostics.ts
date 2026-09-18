@@ -4,10 +4,11 @@ import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactMonitorText } from "./redact";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "./seatTick";
 import { seatTickAttemptExits } from "./seatTickController";
+import { seatTickFenceDetail, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceStands, seatTickReportedFence, type SeatTickFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "./seatTickSettings";
 import { wakeRecordPorts, wakeStateFromRecord, type SeatTickWakeObservation } from "./seatTickSources";
 import { peekSeatTickState } from "./seatTickState";
-import type { SeatTickOutstandingWake, SeatTickProjectState, SeatTickRunRecord } from "./types";
+import type { SeatTickOutstandingWake, SeatTickProjectState, SeatTickRetirementReason, SeatTickRunRecord } from "./types";
 
 /**
  * One project's seat tick, read whole and read only.
@@ -43,10 +44,18 @@ export interface SeatTickAttemptDiagnostic {
   commit: { proposal: boolean; reasons: string[]; eventsThrough: number; children: number };
   retiredAt: string | null;
   supersededBy: { conversationId: string; seatEpoch: number } | null;
+  /** Why it was retired, for a retired attempt: the seat moved on, or its age
+      bound was spent with nothing proved (#1746). Null while it is
+      outstanding. */
+  retiredFor: SeatTickRetirementReason | null;
   /** Whether this attempt holds back the project's next wake right now: an
-      outstanding attempt always does, a retired one only while it is
-      addressed to the conversation that is the seat again (#1594). */
+      outstanding attempt does, a retired one only while it is addressed to the
+      conversation that is the seat again (#1594) — and either only inside its
+      age bound (#1746). */
   withholds: boolean;
+  /** When it stops withholding whatever its holder says by then, or null when
+      the row records no instant to measure its age from. */
+  fenceLapsesAt: string | null;
   observation: SeatTickWakeObservation | { state: "unreadable"; reason: string };
   /** What would end it, in the card's own words. */
   exits: string[];
@@ -77,6 +86,15 @@ export interface SeatTickDiagnostics {
     accounting: { revision: number; gap: string | null } | null;
   };
   attempts: SeatTickAttemptDiagnostic[];
+  /** The attempt a check would meet holding this project's wakes back, read off
+      the row alone — bounded by age, and naming an attempt whose bound is spent
+      while the row still carries it, because that is what the next check runs
+      into (#1746). Whether it still holds once its holder has been asked is the
+      attempt's own `withholds`. */
+  fence: SeatTickFence | null;
+  /** That reading in plain words, so "the tick is fenced" never has to be
+      inferred from a run of deferrals. */
+  fenceDetail: string;
   /** This project's newest checks, oldest first. */
   journal: SeatTickRunRecord[];
 }
@@ -103,8 +121,13 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
   const seat = active ? { conversationId: active.conversationId ?? null, seatEpoch: active.seatEpoch } : null;
   const observe = ports.observe ?? ((wake: SeatTickOutstandingWake) => wakeStateFromRecord(wake, wakeRecordPorts({ end: false })));
 
+  const fence = seatTickReportedFence(state, seat, now, settings.wakeIntervalMs);
   const attempts: SeatTickAttemptDiagnostic[] = [];
-  const describe = async (slot: SeatTickAttemptDiagnostic["slot"], wake: SeatTickOutstandingWake, retired: { retiredAt: string; supersededBy: SeatTickAttemptDiagnostic["supersededBy"] } | null): Promise<void> => {
+  const describe = async (slot: SeatTickAttemptDiagnostic["slot"], wake: SeatTickOutstandingWake, retired: { retiredAt: string; supersededBy: SeatTickAttemptDiagnostic["supersededBy"]; reason: SeatTickRetirementReason } | null): Promise<void> => {
+    /* The instant an age is measured from: when the attempt was prepared, or
+       — for one written before that instant existed — when it was retired. */
+    const since = wake.preparedAt ?? retired?.retiredAt ?? null;
+    const lapsesAt = seatTickFenceLapsesAt(since, settings.wakeIntervalMs);
     let observation: SeatTickAttemptDiagnostic["observation"];
     try {
       observation = await observe(wake);
@@ -123,13 +146,27 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
       commit: { proposal: wake.commit.proposal, reasons: [...wake.commit.reasons], eventsThrough: wake.commit.eventsThrough, children: wake.commit.children.length },
       retiredAt: retired?.retiredAt ?? null,
       supersededBy: retired?.supersededBy ?? null,
-      withholds: slot === "outstanding" || wake.conversationId === seat?.conversationId,
+      retiredFor: retired?.reason ?? null,
+      /* What this attempt does to the project's next wake right now, read the
+         way the check reads it (#1746). A retired attempt fences only while it
+         is addressed to the conversation that is the seat again (#1594) and
+         only inside its bound, because nothing will move it further. The
+         outstanding one fences inside its bound, and past it while no check may
+         retire it — a holder that still accounts for the payload, or a
+         transport call of its own that has not returned. */
+      withholds: slot === "retired"
+        ? wake.conversationId === seat?.conversationId && seatTickFenceStands(since, now, settings.wakeIntervalMs)
+        : seatTickFenceStands(since, now, settings.wakeIntervalMs)
+          || !seatTickFenceRetirableOnAge(wake, "state" in observation ? observation.state : null, now, settings.wakeIntervalMs),
+      fenceLapsesAt: lapsesAt,
       observation,
-      exits: seatTickAttemptExits("evidence" in observation ? observation.evidence : null),
+      exits: seatTickAttemptExits("evidence" in observation ? observation.evidence : null, lapsesAt),
     });
   };
   if (state.outstandingWake) await describe("outstanding", state.outstandingWake, null);
-  for (const entry of state.retiredWakes ?? []) await describe("retired", entry.wake, { retiredAt: entry.retiredAt, supersededBy: entry.supersededBy });
+  for (const entry of state.retiredWakes ?? []) {
+    await describe("retired", entry.wake, { retiredAt: entry.retiredAt, supersededBy: entry.supersededBy, reason: entry.reason ?? "seat-superseded" });
+  }
 
   const bounded = Math.min(Math.max(1, Math.floor(limit)), SEAT_TICK_DIAGNOSTICS_MAX_LIMIT);
   const journal = (ports.records ?? readSeatTickRecords)(SEAT_TICK_RUN_HISTORY)
@@ -158,6 +195,8 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
       accounting: state.accounting ? { revision: state.accounting.revision, gap: state.accounting.gap } : null,
     },
     attempts,
+    fence,
+    fenceDetail: seatTickFenceDetail(fence),
     journal,
   };
 }

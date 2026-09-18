@@ -338,8 +338,42 @@ test("attempts retired to a superseded seat survive the rotation and read back w
   };
   const file = path.join(SANDBOX, "retired.json");
   writeSeatTickState("viewer", { ...row, retiredWakes: [retired] }, file);
-  expect(readSeatTickState("viewer", file).retiredWakes).toEqual([retired]);
-  expect(seatTickStateForEpoch(readSeatTickState("viewer", file), 8).retiredWakes).toEqual([retired]);
+  /* An entry that names a superseding seat and no reason is read back as the
+     supersession it is: that was the only retirement there was before #1746. */
+  const superseded = { ...retired, reason: "seat-superseded" as const };
+  expect(readSeatTickState("viewer", file).retiredWakes).toEqual([superseded]);
+  expect(seatTickStateForEpoch(readSeatTickState("viewer", file), 8).retiredWakes).toEqual([superseded]);
+});
+
+/* The second reason an attempt may be retired (#1746): its age bound ran out
+   inside one epoch, so there is no superseding seat to name and the row has to
+   say so rather than be dropped for want of proof it cannot have. */
+test("an attempt retired on its age bound reads back with its reason and no superseding seat", () => {
+  const aged = {
+    wake: { ...row.outstandingWake, clientMessageId: "seat-tick:viewer:7:first:interval:fp-2", seatEpoch: 7,
+      operationId: null, text: "this seat's own wake", preparedAt: "2026-08-28T10:00:00.000Z",
+      dispatch: { token: "dispatch-token", state: "refused" as const } },
+    retiredAt: "2026-08-28T12:00:00.000Z",
+    supersededBy: null,
+    reason: "unresolved-age" as const,
+  };
+  const file = path.join(SANDBOX, "retired-aged.json");
+  writeSeatTickState("viewer", { ...row, retiredWakes: [aged] }, file);
+  expect(readSeatTickState("viewer", file).retiredWakes).toEqual([aged]);
+  expect(seatTickStateForEpoch(readSeatTickState("viewer", file), 8).retiredWakes).toEqual([aged]);
+
+  /* And the two halves of the shape are checked against each other: an age
+     retirement that names a seat, or a supersession that names none, is a row
+     nobody wrote and is not half-trusted. */
+  const contradictory = path.join(SANDBOX, "retired-contradictory.json");
+  fs.writeFileSync(contradictory, JSON.stringify({
+    version: 2,
+    projects: { viewer: { ...row, retiredWakes: [
+      { ...aged, supersededBy: { conversationId: CONVERSATION, seatEpoch: 8 } },
+      { ...aged, reason: "because-i-said-so" },
+    ] } },
+  }));
+  expect(readSeatTickState("viewer", contradictory).retiredWakes).toEqual([]);
 });
 
 /* Every row written before the slot existed carries no such field, and that is
