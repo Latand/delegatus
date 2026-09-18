@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineGraphEdit, PipelineStage } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
@@ -34,6 +34,24 @@ export const ROLE_GLYPH: Record<string, React.ReactNode> = {
 };
 
 const LIVE_CHIP_STATES = new Set<StageChipState>(["running", "reviewing", "committing"]);
+
+/** The latest graph edit, signed by whoever made it (graph slice 1). */
+function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
+  const { t } = useLocale();
+  const who = edit.actor.kind === "operator"
+    ? t("kanban.graph.editedByOperator")
+    : [edit.actor.role ?? "agent", edit.actor.conversationId].filter(Boolean).join(" ");
+  const change = [
+    t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
+    edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
+  ].filter(Boolean).join(" · ");
+  const at = Date.parse(edit.at);
+  return (
+    <p className="graph-edit" data-graph-edit={edit.seq} data-graph-edit-actor={edit.actor.kind} title={edit.summary}>
+      {t("kanban.graph.edited", { who, age: Number.isFinite(at) ? fmtAge(at / 1000) : "", change })}
+    </p>
+  );
+}
 
 /** A stage's name: its role, unless another stage of the same pipeline has that
     role too, where the stage's own id tells them apart. */
@@ -158,6 +176,7 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
           <PipelineChips summary={summary} nameOf={nameOf} selected={selected} onOpenStage={onOpenStage} />
         )}
       </div>
+      {pipeline.graphEdits?.length ? <GraphEditLine edit={pipeline.graphEdits.at(-1)!} /> : null}
     </div>
   );
 }

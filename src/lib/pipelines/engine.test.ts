@@ -6989,6 +6989,83 @@ test("an unpinned usage-limited stage respawns on another allowed account (#1371
   expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
 });
 
+test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-engine-override", resetsAt) });
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  await tickPipelines([], h.ports);
+  const retrying = loadPipelines()[0]!.runs[0]!.attempts[1]!;
+  expect(retrying).toMatchObject({ state: "pending", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retrying.definition).toBeUndefined();
+
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "applied", appliesFromAttempt: 2 });
+
+  /* The Claude account shares the limited Codex account's id and never hit a limit. */
+  const checks: Array<{ engine: string; unavailableIds: string[] }> = [];
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex", request: { unavailableIds?: string[] }) => {
+      checks.push({ engine, unavailableIds: [...(request.unavailableIds ?? [])] });
+      return { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+
+  const launched = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(launched.state).toBe("running");
+  expect(launched.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: LIMITED_ACCOUNT });
+  expect(launched.runs[0]!.attempts[1]!.effectiveRole.engine).toBe("claude");
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
+});
+
+test("a usage limit hit after the stage moved to another engine retries there without checking the old engine (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "pending-next-attempt", appliesFromAttempt: 2 });
+
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("limit-after-engine-override", resetsAt) });
+  const checks: string[] = [];
+  usageLimitPorts(h, { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex") => {
+      checks.push(engine);
+      return { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  const retried = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(retried.state).toBe("running");
+  expect(retried.runs[0]!.attempts[0]).toMatchObject({ state: "failed", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retried.runs[0]!.attempts[1]).toMatchObject({ state: "running" });
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
+});
+
 test("a failover whose remaining capacity disappears parks with the limit detail (#1371)", async () => {
   const h = harness();
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
@@ -7059,8 +7136,8 @@ test("successive usage limits park on the earliest reset across failed-over acco
     stateDetail: `rate limited until ${new Date(firstReset * 1_000).toISOString()}, account ${SPARE_ACCOUNT_LABEL}`,
   });
   expect(parked.runs[0]!.attempts[1]?.usageLimitedAccounts).toEqual([
-    { accountId: LIMITED_ACCOUNT, resetsAt: firstReset },
-    { accountId: SPARE_ACCOUNT, resetsAt: secondReset },
+    { accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt: firstReset },
+    { accountId: SPARE_ACCOUNT, engine: "codex", resetsAt: secondReset },
   ]);
 });
 
@@ -7315,7 +7392,7 @@ test("reviewNote parks a too-long directive for raw and role-backed review stage
   expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
 });
 
-test("override-stage re-configures an unstarted stage and rejects a started one (issue #118)", async () => {
+test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
   const { ports } = harness();
   const created = await create(ports);
   /* The trailing "build" stage has not run yet, so its config is still editable. */
@@ -7334,7 +7411,8 @@ test("override-stage re-configures an unstarted stage and rejects a started one 
   expect(cleared.error).toBeUndefined();
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "build")!.effectiveRole.model).toBeNull();
 
-  /* Once the stage has an attempt it is frozen: the override 409s. */
+  /* A running attempt recorded without a bound definition would read the live
+     stage on a re-issued launch, so its stage refuses the override until it settles. */
   const started = loadPipelines()[0]!;
   const buildStage = started.stages.find((stage) => stage.id === "build")!;
   started.runs.find((run) => run.stageId === "build")!.attempts.push({
@@ -7593,10 +7671,11 @@ test("draft-only mutations cannot rewrite or delete an active pipeline", async (
   const { ports } = harness();
   const active = await create(ports);
   const before = structuredClone(loadPipelines()[0]!);
+  /* add-stage, reorder-stage, set-edge and override-stage edit a started graph
+     (graph slice 1, graphEdits.test.ts); the cursor stage keeps its place. */
   const attempts = [
     { action: "start" },
     { action: "update-draft", task: "rewritten" },
-    { action: "add-stage", stage: { id: "extra", kind: "run", prompt: "extra", next: null } },
     { action: "remove-stage", stageId: "plan" },
     { action: "reorder-stage", stageId: "plan", toIndex: 1 },
     { action: "delete" },
@@ -9725,7 +9804,7 @@ test("override-stage with expectedStageDigest writes only against the digest the
   expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine at last.");
 });
 
-test("a started stage keeps its already-started answer even against a stale digest, and an override without a digest is unchanged", async () => {
+test("a started stage answers a stale digest with STAGE_CHANGED, and an attempt launched before definitions were bound holds its stage until it settles", async () => {
   const { ports } = harness();
   const created = await create(ports);
   const stale = stageDigest(buildStageOf());
@@ -9737,7 +9816,12 @@ test("a started stage keeps its already-started answer even against a stale dige
     startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
   });
   savePipelines([started]);
-  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports)).toEqual({ error: "stage has already started", status: 409 });
+  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports))
+    .toMatchObject({ status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+  const legacy = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()) }, ports);
+  expect(legacy.status).toBe(409);
+  expect(legacy.error).toContain("before attempts recorded their own definition");
+  expect(buildStageOf().prompt).toBe("Build v2");
 });
 
 test("guard values that are present but malformed, or stated on an action they do not guard, are refused before anything changes", async () => {

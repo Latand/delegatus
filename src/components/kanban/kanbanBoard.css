@@ -246,6 +246,7 @@
 .kb .stage-section .sec-head .kind { flex-shrink: 0; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--surface-card); border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 .kb .stage-section .sec-head .progress { color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .stage-section .sec-head .grow { flex: 1; }
+.kb .stage-section .graph-edit { margin: 2px 0 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card.shelf .stage-section .sec-head { flex-wrap: wrap; row-gap: 2px; }
 .kb .card.shelf .stage-section .sec-head .kind { display: none; }
 .kb .card.shelf .stage-section .sec-head .progress { order: 10; flex-basis: 100%; }

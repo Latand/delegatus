@@ -56,7 +56,7 @@ mock.module("@/lib/pipelines/engine", () => ({
 }));
 
 const { DELETE, GET, PATCH } = await import("./route");
-const { stageDigest } = await import("@/lib/pipelines/stageDigest");
+const { graphDigest, stageDigest } = await import("@/lib/pipelines/stageDigest");
 const { GET: GET_COLLECTION } = await import("../route");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 
@@ -66,8 +66,8 @@ test("pipeline GET returns the full record for a known id", async () => {
     { params: Promise.resolve({ id: "pipeline-1" }) },
   );
   expect(response.status).toBe(200);
-  /* #1695 C7: each stage's digest rides along, for a guarded override-stage. */
-  expect(await response.json()).toEqual({ ok: true, pipeline, stageDigests: { build: stageDigest(pipeline.stages[0] as never) } });
+  /* #1695 C7 and graph slice 1: the stage digests and the plan's digest ride along, for guarded graph edits. */
+  expect(await response.json()).toEqual({ ok: true, pipeline, stageDigests: { build: stageDigest(pipeline.stages[0] as never) }, graphDigest: graphDigest(pipeline.stages as never) });
 });
 
 test("pipeline PATCH forwards a malformed guard's field without a code", async () => {

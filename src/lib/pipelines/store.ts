@@ -10,7 +10,7 @@ import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { normalizeStageOutputPath } from "./stageAccess";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
@@ -154,9 +154,10 @@ function isAttempt(value: unknown, index: number): boolean {
         && !Array.isArray(limited)
         && typeof limited.accountId === "string"
         && limited.accountId.length > 0
+        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
       ))
-      && new Set(attempt.usageLimitedAccounts.map((limited) => limited.accountId)).size === attempt.usageLimitedAccounts.length
+      && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
@@ -170,9 +171,42 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
+    isAttemptDefinition(attempt.definition) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isUnresolvedTermination(attempt.unresolvedTermination)
   );
+}
+
+function isAttemptDefinition(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  const definition = value as Record<string, unknown>;
+  const role = definition.role;
+  return typeof definition.boundAt === "string"
+    && typeof definition.stageDigest === "string"
+    && typeof definition.prompt === "string"
+    && isNullableString(definition.account)
+    && (role === null || Boolean(role && typeof role === "object" && !Array.isArray(role) && (PIPELINE_ROLE_IDS as readonly unknown[]).includes((role as { roleId?: unknown }).roleId)))
+    && (definition.sandbox === null || definition.sandbox === "full" || definition.sandbox === "restricted")
+    && (definition.outputs === null || (Array.isArray(definition.outputs) && definition.outputs.every((output) => typeof output === "string")));
+}
+
+const GRAPH_EDIT_ACTION_NAMES: readonly string[] = ["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"];
+
+function isGraphEdit(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const edit = value as Record<string, unknown>;
+  const actor = edit.actor as Record<string, unknown> | null;
+  return Number.isSafeInteger(edit.seq) && (edit.seq as number) >= 1
+    && typeof edit.at === "string"
+    && Boolean(actor && typeof actor === "object" && (actor.kind === "operator"
+      || (actor.kind === "agent" && isNullableString(actor.role) && isNullableString(actor.conversationId))))
+    && GRAPH_EDIT_ACTION_NAMES.includes(String(edit.action))
+    && isNullableString(edit.stageId)
+    && typeof edit.pipelineState === "string"
+    && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
+    && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
+    && typeof edit.summary === "string";
 }
 
 function isRetiredLaunches(value: unknown): boolean {
@@ -394,6 +428,7 @@ function isPipeline(value: unknown): value is Pipeline {
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
+    (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
       Number.isFinite(pipeline.pos.x) && Number.isFinite(pipeline.pos.y)

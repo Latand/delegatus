@@ -309,6 +309,22 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const pipelineById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
   const flowsById = new Map((input.flows ?? []).map((flow) => [flow.id, flow] as const));
   const flowsByDeck = new Map((input.flows ?? []).map(flow => [deckKey(flow.id), flow]));
+  // A pipeline's own recency: the newest agent work of any attempt it recorded,
+  // historical ones included, and of the reviewers its review-loop flows bound.
+  // Memoized per pipeline, so a pipeline shared by several cards is read once.
+  const pipelineWorkById = new Map<string, number>();
+  const pipelineWorkAt = (pipeline: Pipeline): number => {
+    const cached = pipelineWorkById.get(pipeline.id);
+    if (cached !== undefined) return cached;
+    let latest = 0;
+    for (const run of pipeline.runs) for (const attempt of run.attempts) {
+      if (attempt.conversationId) latest = Math.max(latest, workByIdentity.get(attempt.conversationId) ?? 0);
+      if (attempt.agentPath) latest = Math.max(latest, workByIdentity.get(attempt.agentPath) ?? 0);
+      if (attempt.flowId) latest = Math.max(latest, reviewerWorkAt(flowsById.get(attempt.flowId)));
+    }
+    pipelineWorkById.set(pipeline.id, latest);
+    return latest;
+  };
   const stageByPath = new Map<string, { pipeline: Pipeline; stage: PipelineStage }>();
   for (const pipeline of pipelines) {
     for (const stage of pipeline.stages) {
@@ -366,7 +382,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       for (const reference of execution.references) countReference(reference);
     }
 
-    const summaries = [...cardPipelines.values()].map((pipeline) => summarizePipeline(pipeline, flowsById));
+    /* Newest agent work first; a pipeline with no recorded work sorts last. */
+    const summaries = [...cardPipelines.values()]
+      .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
+      .map((pipeline) => summarizePipeline(pipeline, flowsById));
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
     const pipelineNeeds = summaries.some((summary) => summary.pipeline.state === "needs_decision");
     const working = members.filter((member) => member.working).length;
