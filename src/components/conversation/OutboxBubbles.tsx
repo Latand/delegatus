@@ -10,7 +10,9 @@ import { DELIVERY_WAIT_TICK_MS, deliveryWaitFor, deliveryWaitText } from "@/comp
 import type { HostAxis, TurnAxis } from "@/components/runtime/runtimeModel";
 import { type TFunction, useLocale } from "@/lib/i18n";
 
-import { cancelOutbox, retryOutbox, type OutboxEntry } from "./outbox";
+import { appendComposerDraft } from "@/components/TmuxComposer";
+
+import { cancelOutbox, clearParkedOutbox, retryOutbox, type OutboxEntry } from "./outbox";
 
 /**
  * The conversation's own host and turn axes (issue #1213).
@@ -134,6 +136,7 @@ export function OutboxBubblesView({
   nowMs = 0,
   onCancel,
   onRetry,
+  onClear,
   switchHold = null,
   session = null,
 }: {
@@ -145,6 +148,11 @@ export function OutboxBubblesView({
   nowMs?: number;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
+  /** Takes a parked bubble nothing can address back to the composer (#1593).
+      Optional because this view is also mounted by render-only surfaces with no
+      composer behind them, and a surface that cannot take the message back does
+      not offer to. */
+  onClear?: (id: string) => void;
   switchHold?: SwitchHold | null;
   /** The conversation's live host/turn axes — see {@link OutboxSessionAxes}. */
   session?: OutboxSessionAxes | null;
@@ -224,6 +232,25 @@ export function OutboxBubblesView({
                     <X className="h-3 w-3" aria-hidden />
                   </button>
                 ) : null}
+                {/* A bubble parked with no operation id and no receipt (#1593):
+                    the send was refused or lost above any admission, so no
+                    receipt can settle it and neither the journal's retry nor its
+                    discard can name it. The one control that can end it takes
+                    the message back to the composer, where the operator decides
+                    what to do with the words. Never offered where an operation
+                    exists — there the message may really be in the journal. */}
+                {entry.deliveryUncertain && !entry.operationId && !entry.deliveryReceipt && onClear ? (
+                  <button
+                    type="button"
+                    data-outbox-clear={entry.id}
+                    aria-label={t("outbox.clearParked")}
+                    title={t("outbox.clearParked")}
+                    onClick={() => onClear(entry.id)}
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -259,6 +286,16 @@ export function OutboxBubbles({
       nowMs={nowMs}
       onCancel={(id) => cancelOutbox(cardId, id)}
       onRetry={(id) => retryOutbox(cardId, id)}
+      /* The row goes and its words come back, appended to whatever the operator
+         has already typed — never over it, the same gesture that drops context
+         into a composer from elsewhere. Attachments cannot come back: their
+         bytes were memory-only and a reload is usually what left this bubble
+         parked, so the text returns alone and says nothing about files that no
+         longer exist. */
+      onClear={(id) => {
+        const cleared = clearParkedOutbox(cardId, id);
+        if (cleared?.text.trim()) appendComposerDraft(cardId, cleared.text);
+      }}
       switchHold={switchHold}
       session={session}
     />

@@ -2847,7 +2847,13 @@ test("terminal operation replay survives registry and runtime journal compaction
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
   }
-});
+  /* A hundred and one terminal deliveries past the registry's retention cap,
+     each one a registry write, and a runtime journal compacted and reopened
+     on the same disk. The case asserts no duration — it asserts that the
+     original operation still replays afterwards — so the budget it runs under
+     is explicit and generous rather than the default five seconds, which was
+     close enough to this work that a contended runner answered for it. */
+}, 60_000);
 
 test("provisional adoption preserves runtime idempotency across Codex and Claude", async () => {
   const scenarios = [
