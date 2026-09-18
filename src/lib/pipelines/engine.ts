@@ -46,6 +46,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
+import { failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
@@ -2065,16 +2066,6 @@ function retryTerminalStagePublication(
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
   attempt.error = null;
   advancePipeline(pipeline, stage, ports, attempt);
-}
-
-/** Attempts of the fail edge's target that this stage's fail edge activated —
-    the derived (never stored) loop budget, so counts cannot drift from the
-    durable evidence. */
-function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): number {
-  if (!stage.onFail) return 0;
-  const target = runFor(pipeline, stage.onFail.to);
-  if (!target) return 0;
-  return target.attempts.filter((attempt) => !attempt.historical && attempt.activatedBy?.edge === "fail" && attempt.activatedBy.stageId === stage.id).length;
 }
 
 /** The `{{prev.output}}` payload a fail edge forwards: the failed attempt's
