@@ -158,10 +158,48 @@ test("paused: the face says off, the dot is muted, and the actual rows still rep
   expect(reading.tone).toBe("muted");
   expect(reading.chip).toBe("off");
   expect(reading.line).toBe("Tick: off since 2h ago · last check 3m ago");
-  expect(reading.sentence).toBe("Off since 2h ago. No wake is sent; checks still run.");
+  expect(reading.sentence).toBe("Off since 2h ago. No wake is sent. Checks still run.");
   expect(reading.rows.find((row) => row.label === "Last wake")?.value).toBe("3h ago · interval");
   expect(reading.rows.find((row) => row.label === "Last delivery")?.value).toBe("landed · 3h ago");
   expect(reading.rows.find((row) => row.label === "Blocker")?.value).toBe("none");
+});
+
+test("paused and not checked: the pause is stated without claiming checks still run", () => {
+  const off = {
+    settings: { ...answer().settings, enabled: false, reason: "nothing to do until Monday", updatedAt: "2026-09-18T10:00:00.000Z" },
+    effective: { ...answer().effective, enabled: false, reason: "nothing to do until Monday", isDefault: false, configured: true, updatedAt: "2026-09-18T10:00:00.000Z" },
+  };
+  /* The tick was paused deliberately AND its own checks have stopped. Both are
+     facts about this project and the section may not assert only the first. */
+  const stopped = read(answer({ ...off, state: state({ lastCheckAt: "2026-09-18T11:30:00.000Z" }) }));
+  expect(stopped.state).toBe("paused");
+  expect(stopped.chip).toBe("off");
+  /* The dot reports the ACTUAL state, so it cannot stay the muted grey of a
+     tick that is quiet on purpose and still being checked. */
+  expect(stopped.tone).toBe("warn");
+  expect(stopped.sentence).toBe("Off since 2h ago. No wake is sent. The tick is not checking either: the last check was 30m ago, so nothing is refreshing this reading.");
+  expect(stopped.sentence).not.toContain("Checks still run");
+  expect(stopped.line).toBe("Tick: off since 2h ago · stale: last check 30m ago");
+
+  /* Paused with the checks still running keeps the original reading. */
+  const checked = read(answer({ ...off, state: state() }));
+  expect(checked.state).toBe("paused");
+  expect(checked.tone).toBe("muted");
+  expect(checked.sentence).toBe("Off since 2h ago. No wake is sent. Checks still run.");
+
+  /* A row with no check at all, while off: the same qualifier, no age. */
+  const never = read(answer({ ...off, state: state({ lastCheckAt: null }) }));
+  expect(never.tone).toBe("warn");
+  expect(never.sentence).toContain("No check is recorded either");
+  expect(never.sentence).not.toContain("Checks still run");
+
+  /* Off with NO row: nothing has been measured, so the pause is stated and
+     the checks are reported as the unknown they are — never as «still run». */
+  const noRow = read(answer({ ...off, state: null }));
+  expect(noRow.state).toBe("paused");
+  expect(noRow.tone).toBe("muted");
+  expect(noRow.sentence).toBe("Off since 2h ago. No wake is sent. Actual state unknown: the tick has not recorded this project.");
+  expect(noRow.sentence).not.toContain("Checks still run");
 });
 
 test("unknown: no row is a hollow dot and the word, with no age anywhere", () => {

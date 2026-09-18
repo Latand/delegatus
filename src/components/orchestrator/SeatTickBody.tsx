@@ -80,9 +80,15 @@ function changeOf(draft: SeatTickDraft, record: SeatTickSettingsAnswer | null): 
   if (draft.enabled !== current.enabled) change.enabled = draft.enabled;
   if (draft.interval.trim() !== current.interval) {
     const raw = draft.interval.trim();
-    /* Empty is the DEFAULT interval, which the module spells `null`. A
-       non-numeric entry is handed over as it stands and refused by name. */
-    change.wakeIntervalMinutes = raw === "" ? null : Number(raw);
+    const parsed = Number(raw);
+    /* Empty is the DEFAULT interval, which the module spells `null`.
+       Everything else is handed over for the module to judge — and a
+       non-finite entry («abc», «1e400») is handed over AS TYPED rather than as
+       `Number(raw)`: NaN and Infinity both serialise to JSON `null`, which the
+       module reads as «restore the default», so coercing here would silently
+       discard the operator's interval instead of showing them the refusal that
+       names it. */
+    change.wakeIntervalMinutes = raw === "" ? null : Number.isFinite(parsed) ? parsed : raw;
   }
   if (draft.reason.trim() !== current.reason.trim()) change.reason = draft.reason.trim() || null;
   if (draft.until !== current.until) change.untilMinutes = draft.until === "" ? null : Number(draft.until);
@@ -325,11 +331,16 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             </div>
           ))}
         </dl>
+        {/* THAT a store failed belongs here; WHAT it said does not. An
+            `Error.message` off the state store carries the absolute path it
+            failed to open, and the primary view is the one place this control
+            promises to keep ids, keys and paths out of (#1681 acceptance 6).
+            The message itself is in Details, with the rest of the raw record. */}
         {read.answer?.stateError ? (
-          <p role="status" className="text-caption leading-4 text-warning">{t("seatTick.stateUnreadable", { error: read.answer.stateError })}</p>
+          <p role="status" data-seat-tick-state-unreadable className="text-caption leading-4 text-warning">{t("seatTick.stateUnreadable")}</p>
         ) : null}
         {read.answer?.journalError ? (
-          <p role="status" className="text-caption leading-4 text-warning">{t("seatTick.journalUnreadable", { error: read.answer.journalError })}</p>
+          <p role="status" data-seat-tick-journal-unreadable className="text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
       </div>
 
@@ -396,6 +407,18 @@ function SeatTickDetails({ record, now, locale, phone }: {
               age: seatTickAge(record.lastRun.at, now, t) ?? t("seatTick.unknown"),
               detail: record.lastRun.detail ?? t("seatTick.none"),
             })}
+          </p>
+        ) : null}
+        {/* Why a store could not be read, in its own words. It lands here
+            because a filesystem error names the path it failed on. */}
+        {record.stateError ? (
+          <p data-seat-tick-state-error className="min-w-0 break-words text-caption leading-4 text-warning">
+            {t("seatTick.stateErrorDetail", { error: record.stateError })}
+          </p>
+        ) : null}
+        {record.journalError ? (
+          <p data-seat-tick-journal-error className="min-w-0 break-words text-caption leading-4 text-warning">
+            {t("seatTick.journalErrorDetail", { error: record.journalError })}
           </p>
         ) : null}
         <a

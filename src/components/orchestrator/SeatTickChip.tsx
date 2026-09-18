@@ -82,7 +82,12 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
   const { t } = useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
   const state = useSeatTickDraft(read.record);
-  const { style } = useAnchoredBox(anchorRef, rootRef, POPOVER_WIDTH);
+  /* `onScreen` is consumed, not dropped (`SpeakAlert`'s reason, #1030): this
+     popover deliberately does not lock body scroll, so the surface underneath
+     it scrolls while it is open, and the placement math CLAMPS a scrolled-away
+     anchor back to the viewport edge rather than following it off. Clamped
+     there it is a 320 px panel pointing at nothing. */
+  const { style, onScreen } = useAnchoredBox(anchorRef, rootRef, POPOVER_WIDTH);
   /* Escape, the Tab trap and focus return are the layer's, as they are for
      every other dialog here. Body scroll is NOT locked: this popover hangs off
      a row inside a scrolling panel, and locking the page under it would freeze
@@ -109,7 +114,13 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (typeof document === "undefined") return null;
+  /* Gone with its chip. Closing rather than hiding, so the layer, the outside
+     listener and the focus return all unwind the way Escape unwinds them. */
+  useEffect(() => {
+    if (!onScreen) onClose();
+  }, [onScreen, onClose]);
+
+  if (typeof document === "undefined" || !onScreen) return null;
   return createPortal(
     <div
       ref={rootRef}

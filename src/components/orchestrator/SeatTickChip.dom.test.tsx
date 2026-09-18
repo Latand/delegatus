@@ -113,6 +113,14 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 const roots = new Set<Root>();
+
+/** Unmount and deregister, so a root is torn down exactly once and never
+    after the DOM under it has been cleared. */
+function unmount(root: Root): void {
+  if (!roots.delete(root)) return;
+  flushSync(() => root.unmount());
+}
+
 beforeEach(() => {
   resetSeatTickSettingsCacheForTests();
   requests.length = 0;
@@ -121,8 +129,7 @@ beforeEach(() => {
   putAnswers = [{ status: 200, body: record() }];
 });
 afterEach(() => {
-  for (const root of roots) flushSync(() => root.unmount());
-  roots.clear();
+  for (const root of [...roots]) unmount(root);
   dom.document.body.replaceChildren();
 });
 afterAll(() => {
@@ -358,14 +365,97 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   expect(rows()).toEqual([]);
 
   /* The case that would otherwise crash the whole incumbent row: a readable
-     200 carrying a body this client cannot read. */
+     200 carrying a body this client cannot read.
+
+     The first root is UNMOUNTED before the body is cleared: wiping
+     `document.body` under a live root leaves React's later unmount calling
+     `removeChild` on a node that is already gone, which reports as an
+     uncaught DOMException and is indistinguishable from a real unmount
+     regression in this component. */
+  unmount(refused.root);
   resetSeatTickSettingsCacheForTests();
-  dom.document.body.replaceChildren();
   getFails = "malformed";
   await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
   expect(chip().getAttribute("title")).toBe("Tick: could not be read");
   expect(chip().textContent).toContain("—");
+});
+
+test("an unreadable store is reported in the section and quoted only inside Details", async () => {
+  /* A filesystem error names the path it failed to open. Invented here rather
+     than lifted from a real run, and assembled so the literal never sits in
+     the source as one string. */
+  const path = ["/home", "someone", ".config", "agent-log-viewer", "state", "seat-tick.json"].join("/");
+  getAnswer = configured({
+    state: null,
+    stateError: `EACCES: permission denied, open '${path}'`,
+    journalError: `EACCES: permission denied, open '${path}l'`,
+  });
+  const { root } = await mount();
+  await open(root);
+
+  /* The FACT that each store failed is in the section — criterion 2 requires
+     the section to say so. */
+  const section = body().querySelector("[data-seat-tick-body]")!;
+  expect(section.querySelector("[data-seat-tick-state-unreadable]")?.getAttribute("role")).toBe("status");
+  expect(section.querySelector("[data-seat-tick-journal-unreadable]")?.getAttribute("role")).toBe("status");
+  expect(sentence()).toBe("Actual state unknown: the tick's record could not be read.");
+  for (const entry of rows()) expect(entry).toContain("unknown");
+
+  /* WHAT they said is behind the disclosure, with the rest of the raw record. */
+  const details = body().querySelector("[data-seat-tick-details]")!;
+  expect(details.querySelector("[data-seat-tick-state-error]")?.textContent).toContain(path);
+  expect(details.querySelector("[data-seat-tick-journal-error]")?.textContent).toContain(path);
+  const outside = popover()!.cloneNode(true) as HTMLElement;
+  outside.querySelector("[data-seat-tick-details]")?.remove();
+  expect(outside.textContent).not.toContain(path);
+  expect(outside.textContent).not.toContain("EACCES");
+  expect(chip().getAttribute("title")).not.toContain(path);
+});
+
+test("a non-finite interval is sent as typed, so the module refuses it instead of the tick silently restoring the default", async () => {
+  getAnswer = configured();
+  const { root } = await mount();
+  await open(root);
+  /* `Number("1e400")` is Infinity, which `JSON.stringify` writes as `null` —
+     and the module reads `null` as «restore the default». So the entry has to
+     reach the wire AS TYPED.
+
+     `1e400` is the reachable case: it is a value a number input accepts.
+     «abc» is not — the control rejects it and leaves the field empty, which
+     already means «the default» and is the documented entry for it, asserted
+     below so the narrowness is on the record rather than assumed. */
+  putAnswers = [{ status: 400, body: { error: "wakeIntervalMinutes must be a positive number of minutes, or null for the default" } }];
+  const input = field<HTMLInputElement>("[data-seat-tick-interval]");
+  type(input, "1e400");
+  flushSync(() => save().click());
+  await settle(root);
+  const sent = puts().at(-1)!.body;
+  expect(sent.wakeIntervalMinutes).toBe("1e400");
+  expect(sent.wakeIntervalMinutes).not.toBeNull();
+  /* Rolled back to the record, with the module's own words. */
+  expect(summary()).toContain("every 30 min");
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toContain("must be a positive number of minutes");
+
+  /* And the entry a number input cannot hold never becomes an interval at all. */
+  type(input, "abc");
+  expect(field<HTMLInputElement>("[data-seat-tick-interval]").value).toBe("");
+});
+
+test("the popover leaves with its chip rather than clamping to the viewport edge", async () => {
+  const { root } = await mount();
+  await open(root);
+  /* The popover does not lock body scroll, so the surface under it scrolls
+     while it is open; the placement math clamps a scrolled-away anchor back to
+     the edge instead of following it off, so the chip's own visibility is what
+     has to end the popover. */
+  const anchor = chip() as unknown as { getBoundingClientRect: () => unknown };
+  anchor.getBoundingClientRect = () => ({ top: -400, bottom: -376, left: 500, right: 600, width: 100, height: 24, x: 500, y: -400 });
+  flushSync(() => {
+    dom.window.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as never);
+  });
+  await settle(root, 2);
+  expect(popover()).toBeNull();
 });
 
 test("nothing outside Details carries an id, a key or a path", async () => {

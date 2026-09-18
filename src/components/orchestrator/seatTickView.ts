@@ -162,22 +162,33 @@ function blockerOf(answer: SeatTickSettingsAnswer, now: number, t: TFunction): s
   return null;
 }
 
-function stateKind(answer: SeatTickSettingsAnswer, blocker: string | null, now: number): SeatTickStateKind {
+/**
+ * Whether the tick's own checks have stopped for this project.
+ *
+ * A fact about the ROW, and deliberately independent of whether wakes are
+ * enabled: a check keeps running and keeps stamping `lastCheckAt` for a
+ * disabled project (`seatTickDecision`), so «off» and «the tick itself is
+ * down» are two different things and a paused project has to be able to say
+ * both. Null when there is no row to measure.
+ */
+function checksStopped(answer: SeatTickSettingsAnswer, now: number): boolean | null {
+  const state = answer.state;
+  if (!state) return null;
+  const stale = answer.policy.staleAfterMinutes;
+  const at = state.lastCheckAt ? Date.parse(state.lastCheckAt) : Number.NaN;
+  /* No check on a row that exists is stale, not unknown: the row proves the
+     tick has looked at this project before and has not since. */
+  if (!Number.isFinite(at)) return true;
+  /* Checks off in this Viewer: nothing will refresh that stamp, so however
+     recent it is, the tick is not running. */
+  return stale === null || now - at > stale * 60_000;
+}
+
+function stateKind(answer: SeatTickSettingsAnswer, blocker: string | null, stopped: boolean | null): SeatTickStateKind {
   if (!answer.effective.enabled) return "paused";
   if (blocker) return "blocked";
-  const state = answer.state;
-  if (state) {
-    const stale = answer.policy.staleAfterMinutes;
-    const at = state.lastCheckAt ? Date.parse(state.lastCheckAt) : Number.NaN;
-    /* No check on a row that exists is stale, not unknown: the row proves the
-       tick has looked at this project before and has not since. */
-    if (!Number.isFinite(at)) return "stale";
-    /* Checks off in this Viewer: nothing will refresh that stamp, so however
-       recent it is, the tick is not running. */
-    if (stale === null || now - at > stale * 60_000) return "stale";
-    return "healthy";
-  }
-  return "unknown";
+  if (stopped === null) return "unknown";
+  return stopped ? "stale" : "healthy";
 }
 
 const TONE: Record<SeatTickStateKind, SeatTickTone> = {
@@ -187,6 +198,14 @@ const TONE: Record<SeatTickStateKind, SeatTickTone> = {
   paused: "muted",
   unknown: "unknown",
 };
+
+/** The dot: the state's own tone, except that a paused tick nothing is
+    checking any more is a warning rather than the muted grey of a tick that is
+    quiet on purpose and working. The dot reports the ACTUAL state, so it
+    cannot keep reporting the configured intent once the checks have gone. */
+function toneOf(kind: SeatTickStateKind, stopped: boolean | null): SeatTickTone {
+  return kind === "paused" && stopped === true ? "warn" : TONE[kind];
+}
 
 function rowsOf(answer: SeatTickSettingsAnswer, blocker: string | null, now: number, t: TFunction): SeatTickRow[] {
   const unknown = t("seatTick.unknown");
@@ -215,12 +234,32 @@ function rowsOf(answer: SeatTickSettingsAnswer, blocker: string | null, now: num
   ];
 }
 
-function sentenceOf(answer: SeatTickSettingsAnswer, kind: SeatTickStateKind, blocker: string | null, now: number, t: TFunction): string {
+function sentenceOf(
+  answer: SeatTickSettingsAnswer,
+  kind: SeatTickStateKind,
+  blocker: string | null,
+  stopped: boolean | null,
+  now: number,
+  t: TFunction,
+): string {
   const checkAge = seatTickAge(answer.state?.lastCheckAt ?? null, now, t);
   switch (kind) {
     case "paused": {
+      /* TWO clauses, because they rest on two different things. The pause is
+         the SETTING, which the record proves. Whether checks are still running
+         is the ACTUAL state, which only the row can say — and «checks still
+         run» asserted over a row that stopped being stamped hours ago, or over
+         no row at all, is exactly the conflation this module exists to refuse.
+         So the pause is stated, and then what is actually known about the
+         checks is stated beside it. */
       const age = seatTickAge(answer.effective.updatedAt, now, t);
-      return age ? t("seatTick.sentence.pausedSince", { age }) : t("seatTick.sentence.paused");
+      const pause = age ? t("seatTick.sentence.pausedSince", { age }) : t("seatTick.sentence.paused");
+      const checks = stopped === null
+        ? (answer.stateError ? t("seatTick.sentence.unknownUnreadable") : t("seatTick.sentence.unknownNoRow"))
+        : stopped
+          ? (checkAge ? t("seatTick.sentence.pausedStopped", { check: checkAge }) : t("seatTick.sentence.pausedNoCheck"))
+          : t("seatTick.sentence.pausedChecking");
+      return `${pause} ${checks}`;
     }
     case "blocked":
       return t("seatTick.sentence.blocked", { blocker: blocker ?? t("seatTick.unknown") });
@@ -266,7 +305,8 @@ export function seatTickReading(
   const answer = read.answer;
   const { effective } = answer;
   const blocker = blockerOf(answer, now, t);
-  const kind = stateKind(answer, blocker, now);
+  const stopped = checksStopped(answer, now);
+  const kind = stateKind(answer, blocker, stopped);
   const interval = seatTickIntervalWord(effective.wakeIntervalMinutes, t);
 
   /* The face: the SCHEDULE, in as few characters as the incumbent row can
@@ -283,10 +323,13 @@ export function seatTickReading(
     : offAge ? t("seatTick.offSince", { age: offAge }) : t("seatTick.chip.off");
 
   const checkAge = seatTickAge(answer.state?.lastCheckAt ?? null, now, t);
+  /* A paused tick whose checks have stopped says so on the closed line too:
+     the summary is the only thing most readings are ever read from. */
+  const staleClause = checkAge ? t("seatTick.line.stale", { age: checkAge }) : t("seatTick.line.staleNoCheck");
   const actual = kind === "blocked"
     ? t("seatTick.line.blocked", { blocker: blocker ?? t("seatTick.unknown") })
-    : kind === "stale"
-      ? (checkAge ? t("seatTick.line.stale", { age: checkAge }) : t("seatTick.line.staleNoCheck"))
+    : kind === "stale" || (kind === "paused" && stopped === true)
+      ? staleClause
       : kind === "unknown"
         ? t("seatTick.line.unknown")
         : checkAge ? t("seatTick.line.lastCheck", { age: checkAge }) : t("seatTick.line.unknown");
@@ -294,12 +337,12 @@ export function seatTickReading(
   const summary = t("seatTick.summary", { configured, actual });
   return {
     state: kind,
-    tone: TONE[kind],
+    tone: toneOf(kind, stopped),
     chip,
     configured,
     summary,
     line: t("seatTick.line", { summary }),
-    sentence: sentenceOf(answer, kind, blocker, now, t),
+    sentence: sentenceOf(answer, kind, blocker, stopped, now, t),
     rows: rowsOf(answer, blocker, now, t),
     blocker,
     offDefault: !effective.isDefault,

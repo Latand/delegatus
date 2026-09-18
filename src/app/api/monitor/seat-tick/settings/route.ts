@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { agentRegistry } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import {
   applySeatTickSettingsChange,
@@ -9,7 +10,7 @@ import {
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
 import { seatTickSettingsAnswer, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
-import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -48,20 +49,41 @@ function projectFrom(value: unknown): string | null {
 }
 
 /**
+ * The caller's OWN canonical project, resolved the way the tool resolves it
+ * (`seat_tick_settings`): the project whose active seat it holds, else the
+ * project the registry records it owning. Server records only — a body cannot
+ * claim a project.
+ *
+ * `null` is a real answer and stays one. The tool has a third fallback, the
+ * launch directory of the calling PROCESS, which an HTTP request has no
+ * standing to resolve; a caller that holds no seat and owns no project has no
+ * own project the record can prove, and the card says exactly that by leaving
+ * the clause off.
+ */
+function callerOwnProject(conversationId: string): string | null {
+  const seat = activeOrchestratorSeats().find((candidate) => candidate.conversationId === conversationId);
+  if (seat?.project) return canonicalOrchestratorProject(seat.project);
+  const owned = agentRegistry().conversation(conversationId as `conversation_${string}`)?.projectOwnership?.project;
+  return owned ? canonicalOrchestratorProject(owned) : null;
+}
+
+/**
  * Who this request is, decided from the request alone.
  *
  * A seat governing its OWN project is the `manager` the record already knows,
  * carrying the epoch of the seat it holds; the same seat naming another
- * project is an `agent` there, which is what the card prints and what makes a
- * foreign change visible.
+ * project is an `agent` there, and it carries its own project so the board
+ * card can say «whose own project is X» (`seatTickSettingsCardText`) — the
+ * whole point of attributing a foreign change rather than refusing it.
  */
 function settingsActor(req: NextRequest, project: string): SeatTickSettingsActor {
   const conversationId = callerConversationId(req);
   if (!conversationId) return { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
   const active = orchestratorSeatFor(project).active ?? null;
-  return active && active.conversationId === conversationId
-    ? { kind: "manager", conversationId, project, seatEpoch: active.seatEpoch }
-    : { kind: "agent", conversationId, project: null, seatEpoch: null };
+  if (active && active.conversationId === conversationId) {
+    return { kind: "manager", conversationId, project, seatEpoch: active.seatEpoch };
+  }
+  return { kind: "agent", conversationId, project: callerOwnProject(conversationId), seatEpoch: null };
 }
 
 const NO_STORE = { "Cache-Control": "no-store" };

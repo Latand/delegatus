@@ -62,6 +62,7 @@ const PROJECT = "viewer";
 const CAPABILITY = "c".repeat(43);
 const SEAT_CONVERSATION = "conversation_seat_of_viewer";
 const OTHER_CONVERSATION = "conversation_some_worker";
+const OTHER_PROJECT = "other-project";
 
 let settingsFile = "";
 
@@ -91,22 +92,30 @@ const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1
 const put = (body: unknown, headers: Record<string, string> = browser) =>
   PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
 
-/** The active seat this project's `manager` attribution is measured against. */
-function seatFile(conversationId: string, seatEpoch: number): void {
-  const seat = {
-    project: PROJECT,
-    seatEpoch,
-    conversationId,
+/** The active seats attribution is measured against: which conversation holds
+    the target project's seat, and which holds another project's. */
+function seatFile(...held: Array<{ project: string; conversationId: string; seatEpoch: number }>): void {
+  const seats = Object.fromEntries(held.map((entry) => [entry.project, {
+    project: entry.project,
+    seatEpoch: entry.seatEpoch,
+    conversationId: entry.conversationId,
     path: null,
     mandate: "run the board",
     state: "active",
-    intent: { clientRequestId: "req-seat", mode: "spawn", launchId: null, error: null },
+    intent: { clientRequestId: `req-seat-${entry.project}`, mode: "spawn", launchId: null, error: null },
     designatedAt: "2026-09-18T08:00:00.000Z",
     activatedAt: "2026-09-18T08:00:01.000Z",
-  };
+  }]));
   fs.writeFileSync(
     path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"),
-    JSON.stringify({ schemaVersion: 1, nextSeatEpoch: seatEpoch + 1, seats: { [PROJECT]: seat }, pending: {}, revocations: [], history: [] }),
+    JSON.stringify({
+      schemaVersion: 1,
+      nextSeatEpoch: Math.max(...held.map((entry) => entry.seatEpoch)) + 1,
+      seats,
+      pending: {},
+      revocations: [],
+      history: [],
+    }),
     "utf8",
   );
 }
@@ -179,7 +188,7 @@ test("a browser change records as the operator's own session, whatever the body 
 });
 
 test("the target project's own seat records as the manager with its epoch; any other identified caller records as an agent", async () => {
-  seatFile(SEAT_CONVERSATION, 12);
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
   setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
   const managed = await (await put(
     { project: PROJECT, enabled: false, reason: "nothing to do until the release lands" },
@@ -199,6 +208,45 @@ test("the target project's own seat records as the manager with its epoch; any o
     wakeIntervalMinutes: 15,
     setBy: { kind: "agent", conversationId: OTHER_CONVERSATION, project: null },
   });
+});
+
+test("a seat changing ANOTHER project's tick carries its own project, so the board card can name the foreign change", async () => {
+  /* The card's «whose own project is X» clause (`seatTickSettingsCardText`) is
+     the whole reason a foreign change is attributed rather than refused, and
+     it reads `setBy.project`. The MCP tool carries the caller's own project
+     there; the route has to agree, or the same change made over HTTP produces
+     a card that names the actor and not its project. */
+  seatFile(
+    { project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 },
+    { project: OTHER_PROJECT, conversationId: OTHER_CONVERSATION, seatEpoch: 3 },
+  );
+  setCallerConversationResolverForTests(() => OTHER_CONVERSATION);
+  const body = await (await put(
+    { project: PROJECT, wakeIntervalMinutes: 15, reason: "quieting a neighbour while its release runs" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  )).json() as SeatTickSettingsAnswer;
+
+  expect(body.actor).toEqual({ kind: "agent", conversationId: OTHER_CONVERSATION, project: OTHER_PROJECT, seatEpoch: null });
+  /* It holds no seat HERE, so no epoch is claimed for this project. */
+  expect(readSeatTickSettings(PROJECT, settingsFile).setBy).toEqual({
+    kind: "agent",
+    conversationId: OTHER_CONVERSATION,
+    project: OTHER_PROJECT,
+    seatEpoch: null,
+  });
+  expect(body.cardText).toContain(`whose own project is ${OTHER_PROJECT}`);
+});
+
+test("an identified caller that holds no seat and owns no project names none, rather than inventing one", async () => {
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  setCallerConversationResolverForTests(() => OTHER_CONVERSATION);
+  const body = await (await put(
+    { project: PROJECT, enabled: false, reason: "a worker quieting a project it has no claim on" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  )).json() as SeatTickSettingsAnswer;
+  expect(body.actor).toEqual({ kind: "agent", conversationId: OTHER_CONVERSATION, project: null, seatEpoch: null });
+  expect(body.cardText).toContain("Set by an agent session");
+  expect(body.cardText).not.toContain("whose own project is");
 });
 
 test("the module's rules hold verbatim, and a refusal stores nothing", async () => {

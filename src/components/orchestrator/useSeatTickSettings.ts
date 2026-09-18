@@ -27,7 +27,14 @@ export const SEAT_TICK_POLL_MS = 60_000;
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
   enabled?: boolean;
-  wakeIntervalMinutes?: number | null;
+  /**
+   * Minutes, or `null` for the default — and a `string` for an entry that is
+   * neither, which is handed to the server AS TYPED so the module names it in
+   * the refusal. Coercing it here is how a typo becomes a silent restore of
+   * the default: `Number("abc")` and `Number("1e400")` both serialise to JSON
+   * `null`, which the module reads as «restore the default».
+   */
+  wakeIntervalMinutes?: number | string | null;
   reason?: string | null;
   untilMinutes?: number | null;
 }
@@ -120,10 +127,14 @@ export async function fetchSeatTickSettings(project: string, signal?: AbortSigna
  * previous answer replaces it wholesale when the route refuses.
  */
 function optimistic(answer: SeatTickSettingsAnswer, change: SeatTickChange): SeatTickSettingsAnswer {
+  /* An interval the server is about to refuse has nothing to display
+     optimistically, so the record's own keeps the screen until the refusal
+     lands and rolls the display back. */
+  const interval = typeof change.wakeIntervalMinutes === "string" ? undefined : change.wakeIntervalMinutes;
   const settings = {
     ...answer.settings,
     ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
-    ...(change.wakeIntervalMinutes !== undefined ? { wakeIntervalMinutes: change.wakeIntervalMinutes } : {}),
+    ...(interval !== undefined ? { wakeIntervalMinutes: interval } : {}),
     ...(change.reason !== undefined ? { reason: change.reason } : {}),
   };
   const isDefault = settings.enabled && settings.wakeIntervalMinutes === null;
