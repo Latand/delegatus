@@ -23,7 +23,10 @@ test("a wake says why, lists the items, and carries the contract every clause of
   expect(text).toContain("[pipeline] pipeline_a1 — ship the exporter — parked");
   expect(text).toContain("2 more item(s) held back for the next wake");
   expect(text).toContain("the last deployment ended rolled-back");
-  expect(text).toContain("Act on the listed items only");
+  /* The line that fenced a seat to its agenda is gone (#1749), and nothing
+     replaces the assertion: the wording of what stands in its place is the
+     operator's to change without a test to update. */
+  expect(text).not.toContain("Act on the listed items only");
   expect(text).toContain("mark its task blocked with the reason");
   expect(text).toContain("Do not schedule yourself");
   /* #1275: the brief that forbids self-scheduling has to name the lever on the
@@ -140,7 +143,7 @@ test("a wake carries the project's own monitor prompt beside what the tick deriv
   expect(text).toContain("interval: the wake interval elapsed while work is open");
   expect(text).toContain("[pipeline] pipeline_a1 — ship the exporter — running");
   expect(text).toContain("the last deployment ended rolled-back");
-  expect(text).toContain("Act on the listed items only");
+  expect(text).not.toContain("Act on the listed items only");
   expect(text).toContain("Do not schedule yourself");
   expect(text).toContain("Do not wait on the operator inside this turn");
   /* And the contract has the last word, so a prompt cannot read as the thing

@@ -1233,6 +1233,9 @@ async function check(
         reasons: verdict.reasons,
         items: verdict.items,
         deferred: verdict.deferred,
+        /* Said once, as a count (#1749): the children this check declined to
+           list because their outcomes are a retired seat's, not this one's. */
+        staleChildren: verdict.staleChildren,
         signals: input.signals,
         /* What the check could not read travels with the wake it could still
            raise (#1298), so the seat acts on the rest knowing what is missing

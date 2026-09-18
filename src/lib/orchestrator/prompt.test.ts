@@ -62,13 +62,15 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 16, and a v15 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(16);
+test("the default mandate is at version 17, and a v16 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(17);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
-     section until its next spawn, adoption or rotation. */
-  expect(orchestratorMandateStale(15)).toBe(true);
-  expect(orchestratorMandateStale(16)).toBe(false);
+     section until its next spawn, adoption or rotation. #1749 is the change
+     v17 carries: the clock paragraph no longer fences a wake to its items. */
+  expect(orchestratorMandateStale(16)).toBe(true);
+  expect(orchestratorMandateStale(17)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
 });
 
 /* #1428 v13 — the index over every message of every transcript existed, and no
