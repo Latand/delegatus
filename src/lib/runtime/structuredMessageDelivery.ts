@@ -13,6 +13,11 @@ import { requestAccountMigrationTick } from "@/lib/accounts/migration/controller
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+import {
+  conversationDeliverabilityFromRecord,
+  deliverabilityFailureMessage,
+  type ConversationDeliverabilityCondition,
+} from "@/lib/conversation/deliverability";
 
 import type { MessageOrigin } from "./messageOrigin";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -35,7 +40,7 @@ export interface StructuredMessageRequest {
   conversationId?: string | null;
   clientMessageId?: string | null;
   operationId?: string;
-  kind?: "send" | "steer";
+  kind?: "send" | "steer" | "inject";
   policy?: "queue" | "steer-if-active" | "interrupt-active";
   turnId?: string | null;
   text: string;
@@ -127,12 +132,12 @@ export interface HeldStructuredMessageDependencies {
 
 export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | null;
 
-function ownershipUnavailable(): StructuredMessageResult {
+function ownershipUnavailable(condition: ConversationDeliverabilityCondition = "synchronizing"): StructuredMessageResult {
   return {
     ok: false,
     structured: true,
     outcome: "failed",
-    error: "structured host ownership is unavailable; retry after runtime synchronization",
+    error: deliverabilityFailureMessage({ condition }),
     status: 503,
   };
 }
@@ -219,12 +224,23 @@ function persistedCurrentOwner(
     : registry.conversationForPath(request.path);
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
-  const entry = registry.readOnlySnapshot().entries[`${conversation.engine}:${generation.id}`];
+  const snapshot = registry.readOnlySnapshot();
+  const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
   if (!entry || entry.artifactPath !== generation.path) return null;
-  const structured = entry.structuredHost !== null && entry.structuredHost !== undefined;
-  const legacy = entry.host !== null;
-  if (structured === legacy) return null;
-  return { kind: structured ? "structured" : "legacy", conversation };
+  const deliverability = conversationDeliverabilityFromRecord(snapshot, {
+    conversationId: conversation.id,
+    transcriptPath: generation.path,
+  });
+  /* A current legacy host wins over retained structured adapter metadata, the
+     same verdict conversation_deliverability exposes. This keeps a stale
+     runtime projection from recovering over the pane resume just settled. */
+  if (deliverability.deliverable && deliverability.transport === "legacy") {
+    return { kind: "legacy", conversation };
+  }
+  if (entry.host === null && entry.structuredHost !== null && entry.structuredHost !== undefined) {
+    return { kind: "structured", conversation };
+  }
+  return null;
 }
 
 function heldOutcomeDuringRuntimeSynchronization(
@@ -239,6 +255,7 @@ function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
   requestTick: () => void,
+  allowReclaimed = false,
 ): StructuredMessageResult | null {
   const owner = persistedCurrentOwner(request, registry);
   const unresolvedConversation = request.conversationId?.startsWith("conversation_")
@@ -255,12 +272,40 @@ function holdDuringRuntimeSynchronization(
     && unresolvedGeneration?.accountId !== undefined
     && activeAccountId !== null
     && unresolvedGeneration.accountId !== activeAccountId;
-  if (!owner && !accountReseatWithoutOwner) return ownershipUnavailable();
+  if (!owner && !accountReseatWithoutOwner && !allowReclaimed) {
+    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+      conversationId: request.conversationId,
+      transcriptPath: request.path,
+    });
+    return ownershipUnavailable(deliverability.condition);
+  }
   const persistedConversation = owner?.conversation ?? unresolvedConversation!;
   const rejectedHold = supersededRejection(registry, persistedConversation);
   if (rejectedHold) return rejectedHold;
   if (owner?.kind === "legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   let conversation = persistedConversation;
+  /**
+   * #1560: the last way an injection could become a held reservation.
+   *
+   * Everything this function admits is drained by the migration coordinator
+   * alone, which replays it against the SUCCESSOR generation — a different
+   * thread. That is right for a message and wrong for an injection, whose whole
+   * meaning is "put this into the history of the thread I am looking at". The
+   * refusal further down covers a switch that is already pending; this covers
+   * the other way in, where the runtime-host socket is unavailable at admission
+   * and a switch commits before the drain. Refused before any reservation
+   * exists, so nothing is written and the operator can inject again once the
+   * runtime is reachable.
+   */
+  if (request.kind === "inject") {
+    return {
+      ok: false,
+      structured: true,
+      outcome: "failed",
+      error: "structured delivery ownership is unavailable; injected context cannot be held for a later generation",
+      status: 503,
+    };
+  }
   if (request.hasImages || request.images?.length) {
     return { ok: false, structured: true, outcome: "failed", error: "structured host image delivery is unavailable", status: 409 };
   }
@@ -309,6 +354,7 @@ function holdDuringRuntimeSynchronization(
       refs,
       contentDigest,
       commandInput(request),
+      { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
     );
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(reservation, idempotencyKey, conversation.id, false);
@@ -441,6 +487,102 @@ function deliveredReservationReplay(
   };
 }
 
+function uncertainReservationFailure(reservation: HeldDelivery): StructuredMessageResult {
+  return {
+    ok: false,
+    structured: true,
+    outcome: "failed",
+    error: reservation.error || "the previous delivery outcome is unknown; verify its receipt before sending again",
+    status: 409,
+    operationId: reservation.command.operationId,
+    transportUncertain: true,
+  };
+}
+
+function requestDeliveryDrain(kick: () => void | Promise<void>): void {
+  try {
+    void Promise.resolve(kick()).catch((error) => {
+      console.error("[structured delivery] reclaimed host drain request failed", error);
+    });
+  } catch (error) {
+    console.error("[structured delivery] reclaimed host drain request failed", error);
+  }
+}
+
+/**
+ * A reclaimed current generation has no deliverable runtime host to inspect.
+ * Admission therefore starts from the durable conversation, reserves the
+ * instruction, and only then asks the existing recovery path to publish a host.
+ * The durable delivery queue remains the reserved operation's sole actuator
+ * after recovery. A resume still waiting for a process leaves that same
+ * operation held there.
+ */
+async function recoverReclaimedMessage(
+  request: StructuredMessageRequest,
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  dependencies: StructuredMessageDependencies,
+): Promise<StructuredMessageResult> {
+  const conversation = request.conversationId?.startsWith("conversation_")
+    ? registry.conversation(request.conversationId as ViewerConversationId)
+    : registry.conversationForPath(request.path);
+  if (!conversation) return ownershipUnavailable("unknown");
+  const admitted = holdDuringRuntimeSynchronization(
+    request,
+    registry,
+    dependencies.requestMigrationTick ?? requestAccountMigrationTick,
+    true,
+  );
+  if (!admitted) return ownershipUnavailable("unknown");
+  if (!admitted.ok || admitted.outcome === "delivered") return admitted;
+  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+    .find((candidate) => candidate.command.operationId === admitted.operationId);
+  if (reservation?.state === "delivery-uncertain") {
+    return uncertainReservationFailure(reservation);
+  }
+  if (!reservation || reservation.state === "held") return admitted;
+
+  let recovered: Awaited<ReturnType<typeof recoverDeadStructuredConversation>>;
+  try {
+    recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
+      path: request.path || conversation.generations.at(-1)?.path || "",
+      conversationId: conversation.id,
+    }, {
+      registry,
+      client,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      structured: true,
+      outcome: "failed",
+      error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`,
+      status: 503,
+      operationId: admitted.operationId,
+    };
+  }
+  if (!recovered) {
+    return {
+      ok: false,
+      structured: true,
+      outcome: "failed",
+      error: deliverabilityFailureMessage({ condition: "reclaimed" }),
+      status: 503,
+      operationId: admitted.operationId,
+    };
+  }
+
+  requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+  return {
+    ok: true,
+    structured: true,
+    target: null,
+    outcome: "held",
+    operationId: admitted.operationId,
+    ...(recovered.spawned ? { spawned: true } : {}),
+  };
+}
+
 export async function deliverHeldStructuredMessage(
   request: HeldStructuredMessageRequest,
   dependencies: HeldStructuredMessageDependencies = {},
@@ -462,9 +604,21 @@ export async function deliverHeldStructuredMessage(
   let session = snapshot.sessions.find((candidate) => candidate.conversationId === request.conversationId)
     ?? snapshot.sessions.find((candidate) => candidate.artifactPath === request.path);
   if (!session) {
-    if (persistedCurrentOwner(request, registry)?.kind !== "structured") {
+    const owner = persistedCurrentOwner(request, registry);
+    if (owner?.kind === "legacy") {
       return heldOutcomeDuringRuntimeSynchronization(request, registry);
     }
+    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+      conversationId: request.conversationId,
+      transcriptPath: request.path,
+    });
+    /* A resume already publishing ownership keeps this reservation held. A
+       second recovery would race the first host before either one could own
+       the operation. Only the durable reclaimed condition starts recovery. */
+    if (deliverability.condition === "synchronizing" || deliverability.condition === "deliverable") {
+      return "held";
+    }
+    if (deliverability.condition !== "reclaimed") return "delivery-uncertain";
     try {
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
@@ -513,7 +667,10 @@ export async function deliverHeldStructuredMessage(
       text: content.content.text,
       ...(refs.length ? { images: refs } : {}),
       contentDigest: content.contentDigest,
-      policy: command.policy,
+      /* Same rule on the drain path (#1560). `canonicalHeldDeliveryCommand`
+         always fills a policy in, so a persisted injection replayed from before
+         holds were refused would die here too. */
+      ...(command.kind === "inject" ? {} : { policy: command.policy }),
       ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
@@ -543,11 +700,16 @@ export async function enqueueStructuredMessage(
     return { ok: false, structured: true, outcome: "failed", error: imageAdmission.error.error, status: imageAdmission.error.status };
   }
   const rawImages = imageAdmission.images;
+  const registry = (dependencies.registry ?? agentRegistry)();
+  const durableOwner = persistedCurrentOwner(request, registry);
+  if (durableOwner?.kind === "legacy") {
+    return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
+  }
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
     return holdDuringRuntimeSynchronization(
       request,
-      (dependencies.registry ?? agentRegistry)(),
+      registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     );
   }
@@ -558,7 +720,7 @@ export async function enqueueStructuredMessage(
     console.error("[structured delivery] runtime snapshot failed", error);
     return holdDuringRuntimeSynchronization(
       request,
-      (dependencies.registry ?? agentRegistry)(),
+      registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     );
   }
@@ -568,15 +730,30 @@ export async function enqueueStructuredMessage(
     : undefined)
     ?? snapshot.sessions.find((candidate) => candidate.artifactPath === request.path);
   if (!session) {
+    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+      conversationId: request.conversationId,
+      transcriptPath: request.path,
+    });
+    if (deliverability.condition === "reclaimed") {
+      return recoverReclaimedMessage(request, registry, client, dependencies);
+    }
     return holdDuringRuntimeSynchronization(
       request,
-      (dependencies.registry ?? agentRegistry)(),
+      registry,
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     );
   }
-  const registry = (dependencies.registry ?? agentRegistry)();
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  if (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker") return ownershipUnavailable();
+  if (session.hostKind !== "codex-app-server" && session.hostKind !== "claude-broker") {
+    const deliverability = conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
+      conversationId: request.conversationId,
+      transcriptPath: request.path,
+    });
+    if (deliverability.condition === "reclaimed") {
+      return recoverReclaimedMessage(request, registry, client, dependencies);
+    }
+    return ownershipUnavailable(deliverability.condition);
+  }
   try {
     assertStructuredTextEnvelope(request.text);
   } catch (error) {
@@ -640,6 +817,27 @@ export async function enqueueStructuredMessage(
     } catch (error) {
       return deliveryFailure(error);
     }
+  }
+  /**
+   * #1560: an injection is never parked behind an account switch.
+   *
+   * A held delivery is replayed against the SUCCESSOR generation, which is a
+   * different thread. That is right for a message — the operator wants it said
+   * to whoever is answering now — and wrong for an injection, whose whole
+   * meaning is "put this into the history of the thread I am looking at".
+   * Replaying it elsewhere would write the operator's context into a thread
+   * they never aimed at, and dropping it would lose it silently. Refused here,
+   * before any reservation exists, so nothing is written and the operator can
+   * simply inject again once the switch has landed.
+   */
+  if (request.kind === "inject" && deliveryFence(conversation) === "held") {
+    return {
+      ok: false,
+      structured: true,
+      outcome: "failed",
+      error: "an account switch is pending for this conversation; injected context cannot be held across it",
+      status: 409,
+    };
   }
   let migrationOwnsSend = deliveryFence(conversation) === "held";
   /* Belt and braces for issue #1028: a send arriving while a switch is pending
@@ -710,9 +908,10 @@ export async function enqueueStructuredMessage(
   const recoveryRequired = !migrationOwnsSend
     && !successorAwaitsItsHost
     && requiresDeadConversationRecovery(session, registry, conversation);
+  let recoveryReservation: HeldDelivery | null = null;
   if (recoveryRequired && !wantsImages) {
     try {
-      registry.holdDelivery(
+      recoveryReservation = registry.holdDelivery(
         conversation.id,
         content.content.text,
         idempotencyKey,
@@ -723,6 +922,9 @@ export async function enqueueStructuredMessage(
       );
     } catch (error) {
       return deliveryFailure(error);
+    }
+    if (recoveryReservation.state === "delivery-uncertain") {
+      return uncertainReservationFailure(recoveryReservation);
     }
   }
   let recoveredHost = false;
@@ -742,11 +944,17 @@ export async function enqueueStructuredMessage(
         ok: false,
         structured: true,
         outcome: "failed",
-        error: error instanceof Error ? error.message : "structured host recovery failed",
+        error: `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`,
         status: 503,
+        ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
       };
     }
-    if (!recovered) return ownershipUnavailable();
+    if (!recovered) {
+      const failure = ownershipUnavailable("reclaimed");
+      return recoveryReservation
+        ? { ...failure, operationId: recoveryReservation.command.operationId }
+        : failure;
+    }
     recoveredHost = recovered.spawned;
     try {
       const refreshed = await client.snapshot();
@@ -821,6 +1029,20 @@ export async function enqueueStructuredMessage(
       reservation = registry.retryUncertainDelivery(reservation.id);
     }
     if (reservation.state === "held") {
+      /* The switch landed between the check above and the reservation. The
+         reservation exists but nothing has been handed to any engine, so
+         releasing it leaves the thread untouched (#1560). */
+      if (request.kind === "inject") {
+        registry.terminalizeHeldDelivery(reservation.id, "injected context cannot be held across an account switch");
+        return {
+          ok: false,
+          structured: true,
+          outcome: "failed",
+          error: "an account switch is pending for this conversation; injected context cannot be held across it",
+          status: 409,
+          operationId: reservation.command.operationId,
+        };
+      }
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       return {
         ok: true,
@@ -881,7 +1103,12 @@ export async function enqueueStructuredMessage(
       text: content.content.text,
       ...(refs.length ? { images: refs } : {}),
       contentDigest: content.contentDigest,
-      policy: request.policy ?? "interrupt-active",
+      /* #1560: an injection carries NO policy. There is no interrupt to choose
+         and no queue to fall back to, and the parser refuses one — so stamping
+         the send default here refused every injection at the journal, with
+         `thread/inject_items` never called. The default stays exactly what it
+         was for every other kind. */
+      ...(reservation.command.kind === "inject" ? {} : { policy: request.policy ?? "interrupt-active" }),
       ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
       ...(request.runtime ? { runtime: request.runtime } : {}),
       ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),

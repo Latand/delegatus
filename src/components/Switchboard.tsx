@@ -11,7 +11,7 @@ import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
-import type { FileEntry } from "@/lib/types";
+import type { ActionEvent, FileEntry } from "@/lib/types";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 
@@ -21,6 +21,8 @@ import { CornerStatus } from "./CornerStatus";
 import { EngineAccountSwitch } from "./EngineAccountSwitch";
 import { FlipRow } from "./FlipRow";
 import { SwitchCard, type SwitchCardTone } from "./SwitchCard";
+
+const EMPTY_EVENTS: ActionEvent[] = [];
 
 interface Props {
   files: FileEntry[];
@@ -100,16 +102,16 @@ export function Switchboard({ files, flows, project, loaded, catalogFailures = 0
   const inputRef = useRef<HTMLInputElement | null>(null);
   const timeline = useTimeline(project, open);
   const { archivedPaths, archive, unarchive } = useArchivedPaths(files);
-  const data = useSwitchboardData(files, timeline.events, query, now, archivedPaths, flows);
+  const data = useSwitchboardData(files, timeline.events, query, now, archivedPaths, flows, open);
   const catalogSearch = useConversationCatalog({ query, enabled: loaded && open && Boolean(query.trim()) });
-  const cornerData = useSwitchboardData(files, [], "", now, archivedPaths, flows);
+  const cornerData = useSwitchboardData(files, EMPTY_EVENTS, "", now, archivedPaths, flows);
   const archivedItems = useMemo(
     () =>
-      files
+      (open ? files : [])
         .filter((file) => archivedPaths.has(file.path))
         .map((file) => ({ file, title: cleanTitle(file.title), project: projectKey(file) }))
         .sort((a, b) => b.file.mtime - a.file.mtime),
-    [files, archivedPaths],
+    [files, archivedPaths, open],
   );
 
   useEffect(() => {

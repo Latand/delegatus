@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { CodexAccount } from "./codex";
+import { listCodexAccounts, UnknownAccountError, type CodexAccount } from "./codex";
 import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 import { statePath } from "../configDir";
 import {
   CodexAppServerClient,
   type AppServerAccountRead,
   type AppServerRateLimits,
+  type AppServerResetCreditOutcome,
+  type AppServerResetCredits,
   type DeviceCodeChallenge,
 } from "./codexAppServer";
 import type { AppServerEnvelope } from "./codexAppServerProtocol";
@@ -40,8 +42,21 @@ export interface ManagedCodexRuntimeOptions {
 export interface CodexQuotaProbe {
   account: AppServerAccountRead;
   rateLimits: AppServerRateLimits;
+  /** Usage-limit reset credits reported beside the limits (issue #1373). */
+  resetCredits: AppServerResetCredits | null;
   authenticated: boolean;
   envelope: AppServerEnvelope | null;
+}
+
+/** One redemption attempt (issue #1373): the reading taken just before, the
+    backend's answer, and the reading taken right after so the new window is
+    visible without a second round trip. `refusedLocally` marks the case where
+    the pre-read showed no available credit and nothing was sent. */
+export interface CodexResetCreditRedemption {
+  outcome: AppServerResetCreditOutcome;
+  refusedLocally: boolean;
+  before: CodexQuotaProbe;
+  after: CodexQuotaProbe;
 }
 
 type AttemptReason = "child-died" | "login-unsuccessful" | "cancelled" | "viewer-restarted" | "account-read-failed" | "start-failed";
@@ -72,6 +87,19 @@ interface ActiveAttempt extends PersistedAttempt {
 function canonicalHome(home: string): string {
   const resolved = path.resolve(home);
   try { return fs.realpathSync(resolved); } catch { return resolved; }
+}
+
+function currentCodexAccount(account: CodexAccount): CodexAccount {
+  try { fs.lstatSync(statePath("codex-accounts.json")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return account;
+    throw error;
+  }
+  const current = listCodexAccounts().find((candidate) => candidate.id === account.id);
+  if (!current || current.kind !== account.kind || canonicalHome(current.home) !== canonicalHome(account.home)) {
+    throw new UnknownAccountError(account.id);
+  }
+  return current;
 }
 
 function safeStoredAttempt(value: unknown): value is PersistedAttempt {
@@ -232,6 +260,10 @@ export class ManagedCodexRuntime {
   }
 
   async loginSnapshot(account: CodexAccount): Promise<ManagedLoginSnapshot> {
+    return await withAccountMutationLockAsync(async () => this.loginSnapshotLocked(currentCodexAccount(account)));
+  }
+
+  private async loginSnapshotLocked(account: CodexAccount): Promise<ManagedLoginSnapshot> {
     if (account.kind !== "managed") return { state: account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
     const home = canonicalHome(account.home);
     const active = this.active.get(home);
@@ -301,6 +333,10 @@ export class ManagedCodexRuntime {
 
   /** Performs the two read-only account calls on one app-server client. */
   async probeQuota(account: CodexAccount): Promise<CodexQuotaProbe> {
+    return await withAccountMutationLockAsync(async () => this.probeQuotaLocked(currentCodexAccount(account)));
+  }
+
+  private async probeQuotaLocked(account: CodexAccount): Promise<CodexQuotaProbe> {
     const active = this.active.get(canonicalHome(account.home));
     if (active?.client) return this.probeQuotaFrom(active.client);
     const client = await this.startClient(account.home);
@@ -317,8 +353,34 @@ export class ManagedCodexRuntime {
 
   private async probeQuotaFrom(client: CodexAppServerClient): Promise<CodexQuotaProbe> {
     const account = await client.readAccount();
-    const rateLimits = (await client.readRateLimits()).rateLimits;
-    return { account, rateLimits, authenticated: isSupportedChatGptAccount(account), envelope: client.inboundEnvelope() };
+    const { rateLimits, resetCredits } = await client.readRateLimits();
+    return { account, rateLimits, resetCredits, authenticated: isSupportedChatGptAccount(account), envelope: client.inboundEnvelope() };
+  }
+
+  /** Redeems one usage-limit reset credit for `account` (issue #1373) on a
+      single app-server client: read, consume, read again. A pre-read that
+      shows zero available credits refuses locally and sends nothing — the
+      backend is only asked to spend when the account is known to hold one. */
+  async redeemResetCredit(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+    return await withAccountMutationLockAsync(async () => this.redeemResetCreditLocked(currentCodexAccount(account), idempotencyKey));
+  }
+
+  private async redeemResetCreditLocked(account: CodexAccount, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+    const active = this.active.get(canonicalHome(account.home));
+    if (active?.client) return this.redeemResetCreditFrom(active.client, idempotencyKey);
+    const client = await this.startClient(account.home);
+    try { return await this.redeemResetCreditFrom(client, idempotencyKey); }
+    finally { client.close(); }
+  }
+
+  private async redeemResetCreditFrom(client: CodexAppServerClient, idempotencyKey: string): Promise<CodexResetCreditRedemption> {
+    const before = await this.probeQuotaFrom(client);
+    if (before.resetCredits !== null && before.resetCredits.availableCount === 0) {
+      return { outcome: "noCredit", refusedLocally: true, before, after: before };
+    }
+    const outcome = await client.consumeRateLimitResetCredit({ idempotencyKey });
+    const after = await this.probeQuotaFrom(client);
+    return { outcome, refusedLocally: false, before, after };
   }
 
   private owns(attempt: ActiveAttempt): boolean {

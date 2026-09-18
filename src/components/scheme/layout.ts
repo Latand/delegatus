@@ -115,6 +115,9 @@ export interface SchemeRect {
   y: number;
   w: number;
   h: number;
+  /** Uniform scale a band applied to the surface's natural size so it fits the
+      band's width (#1586); `w`/`h` are the fitted box. Absent means 1. */
+  fit?: number;
 }
 
 /** How a placed node stands in the canonical lineage (issue #828): what the
@@ -135,6 +138,11 @@ export interface NodeAncestry {
 }
 
 export interface SchemeNode extends SchemeRect {
+  /** Semantic density of the displayed surface (task bands, #1586): `native`
+      mounts the real reader, `summary` a 320×160 title/status tile, `chip` a
+      one-line identity strip for the overview scale. Absent on the free map. */
+  presentation?: "native" | "summary" | "chip";
+  readerScale?: number;
   file: FileEntry;
   /** Live background tasks docked inside the pane as collapsed strips. */
   tasks: FileEntry[];
@@ -159,6 +167,8 @@ export interface DraftNode extends SchemeRect {
 }
 
 export interface SchemeEdge {
+  route?: string;
+  routeCrosses?: boolean;
   to: string;
   /** Board key the edge leaves — the PARENT side. Present on every lineage
       edge (issue #828) so direction is carried by the model, not inferred from
@@ -199,6 +209,7 @@ export interface MiniStack {
 
 /** Review-round deck of a flow, sitting beside its implementer as the pair. */
 export interface DeckNode {
+  bandSurface?: boolean;
   key: string;
   flow: Flow;
   rounds: DeckRound[];
@@ -211,6 +222,9 @@ export interface DeckNode {
 /** A flow/pipeline group halo on the scheme (issue #118): the union region of
     every session belonging to one running flow or pipeline, plus its label. */
 export interface SchemeGroup extends SchemeGroupSpec, SchemeRect {
+  /** Dedicated heading in the task band. */
+  bandHeader?: boolean;
+  historical?: boolean;
   /** Display name shown on the halo's label chip (flow: implementer title;
       pipeline: task), pre-cleaned so the component only sizes and tints it. */
   label: string;
@@ -220,6 +234,8 @@ export interface SchemeGroup extends SchemeGroupSpec, SchemeRect {
     placeholder chat window in stage order (issue #196). Materializing a stage
     (its agent node / review deck placing) dissolves exactly its slot. */
 export interface StageSlot extends SchemeRect {
+  /** Band disclosure; absent on the free map. */
+  detailsExpanded?: boolean;
   key: string;
   pipeline: Pipeline;
   stage: PipelineStage;
@@ -269,6 +285,18 @@ export interface FlowLoop {
   x2: number;
   /** Shared top of the two cards. */
   y: number;
+  /** Task-band review connector (#1641): the routed port endpoints between the
+      implementer card and the reviewer deck as they are actually placed, and
+      the routed path between them. Present only on the band surface, where the
+      two can wrap to different rows; the free board leaves these unset and
+      LoopsLayer draws its side-by-side forward/return arcs from x1/x2/y. */
+  y1?: number;
+  y2?: number;
+  route?: string;
+  /** Where the ⟳ hub sits: a point on `route` clear of every card but the
+      two endpoints. Set with `route`; without it the hub falls back to the
+      free board's corridor midpoint. */
+  hub?: { x: number; y: number };
 }
 
 export interface SchemeLayout {
@@ -1409,10 +1437,16 @@ export function buildSchemeLayout(
     }
     return [...out];
   };
+  /* The heading a container is read by. A board key (`group::pipeline::<id>`) is
+     an identifier, never a name, so a container with no record of its own
+     reports an EMPTY label and the heading names the kind in the operator's
+     language instead (#1668). 120 characters because the band heading wraps to
+     two lines: a pipeline goal is a sentence, and cutting it at 60 made several
+     headings in one band interchangeable. */
   const groupLabel = (spec: SchemeGroupSpec): string => {
-    if (spec.pipeline) return cleanTitle(spec.pipeline.task, 60);
-    if (spec.flow) return cleanTitle(byAll.get(spec.flow.implementerPath)?.title ?? spec.flow.project, 60);
-    return spec.key;
+    if (spec.pipeline) return cleanTitle(spec.pipeline.task, 120);
+    if (spec.flow) return cleanTitle(byAll.get(spec.flow.implementerPath)?.title ?? spec.flow.project, 120);
+    return "";
   };
   /* Every planned stage's placeholder is a member of its pipeline halo, so the
      colored region grows to enclose the future stages that sit beside the live

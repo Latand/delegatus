@@ -22,7 +22,7 @@ import type { MessageKey } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { Activity } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
-import type { RuntimePendingReconfigure, RuntimeSettingsCapability, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
+import type { RuntimePendingReconfigure, RuntimeSettingsCapability, RuntimeVoiceTranscriptSegment, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 import {
   appendRuntimeLiveTurnDelta,
@@ -107,7 +107,7 @@ export type ReceiptStatus =
   | "failed"
   | "uncertain";
 
-export type OperationKind = "send" | "steer" | "interrupt" | "answer" | "kill" | "spawn" | "reconfigure" | "compact";
+export type OperationKind = "send" | "steer" | "inject" | "interrupt" | "answer" | "kill" | "spawn" | "reconfigure" | "compact" | "native-queue";
 
 /** Client connection state (Fable §2). `resynced` is a transient note, not a state. */
 export type ConnectionState = "live" | "reconnecting" | "degraded" | "offline";
@@ -223,6 +223,8 @@ export interface RuntimeReceipt {
       how long a parked message has been waiting. Absent on receipts written
       before the field existed — readers fall back to `at`. */
   admittedAt?: string;
+  /** Durable settlement guidance for choosing the retry identity. */
+  resend?: "not-needed" | "safe" | "verify-first";
   revision: number;
 }
 
@@ -261,7 +263,19 @@ export interface RuntimeSession {
   workflowId: string | null;
   cwd: string | null;
   artifactPath: string | null;
-  capabilities: { steer: boolean; structuredAttention: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
+  capabilities: {
+    steer: boolean;
+    structuredAttention: boolean;
+    /** #1629: the host advertised a working native Codex queue. Observed from
+        the running executable, never inferred from the engine name. */
+    nativeQueue?: boolean;
+    /** #1560: the host advertised native `thread/inject_items`. Observed from
+        the running executable's negotiated protocol, never inferred from the
+        engine name, and absent means the composer offers no injection at all. */
+    inject?: boolean;
+    imageInput?: RuntimeImageCapability;
+    runtimeSettings?: RuntimeSettingsCapability;
+  };
   activeTurnId: string | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   /** Unresolved drift notice, if any. */
@@ -270,7 +284,48 @@ export interface RuntimeSession {
       as a streaming bubble until the transcript materializes the item. */
   liveTurn?: RuntimeLiveTurn | null;
   voiceDeliveries?: RuntimeVoiceDelivery[];
+  voiceDeliverySnapshotRevision?: number;
   acknowledgedVoiceDeliveryIds?: string[];
+  /** The canonical realtime transcript, newest last and bounded (#1629). */
+  voiceTranscript?: RuntimeVoiceTranscriptSegment[];
+  /** Bumped by every `thread/queue/changed` native told the host about (#1629).
+      Not the queue itself: the queue is read from the runtime, and this is the
+      signal that says the last read is stale. */
+  nativeQueueRevision?: number;
+}
+
+/**
+ * How much canonical transcript one session carries in the browser.
+ *
+ * The panel shows a bounded tail anyway, and this store is replicated to every
+ * mounted card, so an hour-long call must not grow it without limit. Matches the
+ * client's own line bound.
+ */
+const MAX_VOICE_TRANSCRIPT_SEGMENTS = 80;
+
+/**
+ * Fold one canonical segment into the tail (#1629).
+ *
+ * Segments are addressed by their canonical id and carry the WHOLE text each
+ * time, so a repeat replaces in place: a re-sent frame, a `done` that completes
+ * a streamed segment, and a replayed event after a reconnect all converge on one
+ * row instead of stacking three copies of the same sentence.
+ */
+export function foldVoiceTranscriptSegment(
+  current: readonly RuntimeVoiceTranscriptSegment[] | undefined,
+  segment: RuntimeVoiceTranscriptSegment,
+): RuntimeVoiceTranscriptSegment[] {
+  const tail = current ? [...current] : [];
+  const index = tail.findIndex((candidate) => candidate.segmentId === segment.segmentId);
+  if (index >= 0) {
+    /* A final segment is settled: a late non-final frame for it is a replay of
+       something already complete and must not reopen it. */
+    if (tail[index]!.final && !segment.final) return tail;
+    tail[index] = segment;
+    return tail;
+  }
+  tail.push(segment);
+  return tail.slice(-MAX_VOICE_TRANSCRIPT_SEGMENTS);
 }
 
 /**
@@ -562,6 +617,8 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
             turnId,
             p.item,
             phase,
+            // Ordering evidence for the tail fence; LiveTurnRows does not
+            // display this transport timing as tool duration.
             env.occurredAt ?? env.recordedAt ?? null,
           ),
           voiceDeliveries: phase === "completed"
@@ -574,6 +631,43 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
             : s.voiceDeliveries,
         };
       });
+      break;
+    }
+    case "native-queue-changed": {
+      /* #1629: native told the host its queue changed. The browser holds no
+         copy of it — the entries and the native snapshot are read from
+         `/api/runtime/queue` — so what crosses here is only the fact that a
+         read is now out of date. A counter, so a hook can refresh on the change
+         instead of polling for it. */
+      const p = env.payload as { conversationId?: string };
+      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+        ...s,
+        nativeQueueRevision: (s.nativeQueueRevision ?? 0) + 1,
+      }));
+      break;
+    }
+    case "voice-transcript": {
+      const p = env.payload as {
+        conversationId?: string;
+        realtimeSessionId?: string;
+        segmentId?: string;
+        role?: string;
+        text?: string;
+        final?: boolean;
+      };
+      const role = p.role === "user" || p.role === "assistant" ? p.role : null;
+      if (!p.segmentId || !role || typeof p.text !== "string") break;
+      const segment: RuntimeVoiceTranscriptSegment = {
+        segmentId: p.segmentId,
+        realtimeSessionId: String(p.realtimeSessionId ?? ""),
+        role,
+        text: p.text,
+        final: p.final === true,
+      };
+      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+        ...s,
+        voiceTranscript: foldVoiceTranscriptSegment(s.voiceTranscript, segment),
+      }));
       break;
     }
     case "voice-chunk": {
@@ -793,6 +887,7 @@ export const RECEIPT_REASON_KEYS: Record<string, MessageKey> = {
   "turn-active": "receipt.human.turnActive",
   "busy-turn": "receipt.human.turnActive",
   "no-active-turn": "receipt.human.noTurn",
+  "delivery-discarded": "receipt.human.discarded",
   /* #862 compact refusals. `stale-generation` is the same class of fact as a
      stale delivery key: the operator was pointing at a generation that is no
      longer the live one. */

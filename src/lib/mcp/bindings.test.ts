@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/co
 import type { Pipeline } from "@/lib/pipelines/types";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -22,7 +24,10 @@ import { queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 
-import { defaultMcpSpawnRoleParams, viewerMcpBindings } from "./bindings";
+import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings } from "./bindings";
+import type { SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
+import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
+import { SEAT_TICK_PROMPT_LIMIT } from "@/lib/monitor/seatTickSettings";
 import {
   createMcpToolService,
   MemoryMcpReceiptStore,
@@ -155,13 +160,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -171,7 +176,7 @@ test("MCP message delivery always presents authenticated service provenance with
   const send = viewerMcpBindings(undefined, {
     post: async (_pathname, _body, headers) => {
       requests.push({ headers });
-      return { outcome: "delivered" };
+      return { operationId: "op_service_provenance", outcome: "delivered" };
     },
   }).send_message;
   const previous = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
@@ -190,6 +195,120 @@ test("MCP message delivery always presents authenticated service provenance with
   }
 });
 
+test("conversation deliverability is read from the durable host record through the resume publication window", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-deliverability-"));
+  sandboxes.push(sandbox);
+  const transcriptPath = "/fixtures/conversations/deliverability.jsonl";
+  const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"));
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: "/fixtures/project", project: "fixture-project" }),
+    turn: { state: "terminal", source: "assistant", terminalAt: "2026-08-29T09:00:00.000Z" },
+    observedAt: "2026-08-30T09:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(transcriptPath)!;
+  const generation = conversation.generations.at(-1)!;
+  const key = { engine: "codex" as const, sessionId: generation.id };
+  const baseEntry = {
+    key,
+    artifactPath: transcriptPath,
+    cwd: generation.launchProfile.cwd,
+    accountId: generation.accountId,
+    launchProfile: generation.launchProfile,
+    host: null,
+    claimEpoch: 3,
+    claimOwner: null,
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    registrySnapshot: () => registry.readOnlySnapshot(),
+  } as never) as unknown as {
+    conversation_deliverability(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  };
+  let queryNumber = 0;
+  const query = () => bindings.conversation_deliverability({
+    clientRequestId: `deliverability-${queryNumber += 1}`,
+    conversationId: conversation.id,
+  });
+
+  registry.upsert({
+    ...baseEntry,
+    status: "idle",
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:released",
+      process: null,
+      eventCursor: 9,
+      protocolVersion: "v2",
+      writerClaimEpoch: 3,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimOwner: "structured-host:stale-owner",
+    pendingAction: null,
+  });
+  await expect(query()).resolves.toMatchObject({
+    conversationId: conversation.id,
+    deliverable: false,
+    condition: "reclaimed",
+    resumeRequired: true,
+    processRecorded: false,
+  });
+
+  registry.upsert({
+    ...baseEntry,
+    status: "starting",
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:publishing",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "v2",
+      writerClaimEpoch: 4,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 4,
+    pendingAction: "resume",
+  });
+  await expect(query()).resolves.toMatchObject({
+    conversationId: conversation.id,
+    deliverable: false,
+    condition: "synchronizing",
+    resumeRequired: false,
+    processRecorded: false,
+  });
+
+  registry.upsert({
+    ...baseEntry,
+    status: "idle",
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:published",
+      process: { pid: 4100, startIdentity: "fixture-process" },
+      eventCursor: 1,
+      protocolVersion: "v2",
+      writerClaimEpoch: 5,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 5,
+    claimOwner: "structured-host:fixture",
+    pendingAction: null,
+  });
+  await expect(query()).resolves.toMatchObject({
+    conversationId: conversation.id,
+    deliverable: true,
+    condition: "deliverable",
+    resumeRequired: false,
+    processRecorded: true,
+  });
+});
+
 test("spawn_agent derives required role params from the prompt and preserves supplied params", async () => {
   const bodies: Record<string, unknown>[] = [];
   const spawn = viewerMcpBindings(undefined, {
@@ -199,7 +318,8 @@ test("spawn_agent derives required role params from the prompt and preserves sup
         conversationId: `conversation_${bodies.length}`,
         path: `/repo/session-${bodies.length}.jsonl`,
         launchId: `launch_${bodies.length}`,
-        state: "queued",
+        state: "starting",
+        initialMessage: "pending",
       };
     },
   }).spawn_agent;
@@ -283,7 +403,8 @@ test("spawn_agent coerces and clamps bounded role params before the control requ
         conversationId: `conversation_${bodies.length}`,
         path: `/repo/session-${bodies.length}.jsonl`,
         launchId: `launch_${bodies.length}`,
-        state: "queued",
+        state: "starting",
+        initialMessage: "pending",
       };
     },
   }), new MemoryMcpReceiptStore());
@@ -433,7 +554,7 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   ]);
   expect(requests[0]?.body.clientAttemptId).toBe("spawn-http-control");
   expect(requests[0]?.body.mcpServers).toEqual(["viewer", "agent-browser"]);
-  expect(requests[1]?.body.clientMessageId).toBe("send-http-control");
+  expect(requests[1]?.body.clientMessageId).toBe(sendDownstreamKey("send-http-control"));
   expect(requests[1]?.body.text).toBe(exactMessage);
   expect(requests[1]?.headers?.[VIEWER_SPAWN_CAPABILITY_HEADER]).toBe("c".repeat(43));
   expect(requests[2]?.body.idempotencyKey).toBe("deploy-http-control");
@@ -507,6 +628,127 @@ test("get_conversation presents current direct Codex tools and redacts recovered
   expect(JSON.stringify(result)).not.toContain("issue626_fixture_token");
 });
 
+test("conversation_messages resolves id, path, and selectedContext through one pinned normalized reader", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-conversation-messages-"));
+  sandboxes.push(sandbox);
+  const transcriptPath = path.join(sandbox, "session.jsonl");
+  fs.writeFileSync(transcriptPath, [
+    { type: "response_item", timestamp: "2026-08-30T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "question" }] } },
+    { type: "event_msg", timestamp: "2026-08-30T10:01:00.000Z", payload: { type: "agent_message", message: "answer" } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const selectedContext = {
+    selectedConversation: () => ({
+      resolve: (conversationId: string) => conversationId === "conversation_fixture"
+        ? { conversationId, engine: "codex" as const, path: transcriptPath, project: "fixture" }
+        : null,
+      readTail: () => { throw new Error("conversation_messages must not use the raw tail reader"); },
+    }),
+    pathAllowed: (candidate: string) => candidate === transcriptPath,
+  };
+  const pinnedTranscript = (candidate: string) => {
+    if (candidate !== transcriptPath) return undefined;
+    const descriptor = fs.openSync(candidate, "r");
+    return {
+      descriptor,
+      stat: fs.fstatSync(descriptor),
+      rootName: "codex-sessions",
+      root: sandbox,
+      sameIdentity: () => true,
+    };
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    selectedContext,
+    pinnedTranscript,
+  } as never);
+
+  const byId = await bindings.conversation_messages({
+    clientRequestId: "messages-by-id",
+    conversationId: "conversation_fixture",
+    roles: ["user", "assistant"],
+  });
+  expect(byId).toMatchObject({
+    conversationId: "conversation_fixture",
+    transcriptPath,
+    engine: "codex",
+    lastRecordAt: "2026-08-30T10:01:00.000Z",
+    records: [{ role: "assistant", text: "answer" }, { role: "user", text: "question" }],
+    hasMore: false,
+    cursor: null,
+  });
+
+  const byPath = await bindings.conversation_messages({
+    clientRequestId: "messages-by-path",
+    transcriptPath,
+  });
+  expect(byPath).toMatchObject({ conversationId: null, transcriptPath, engine: "codex" });
+
+  const bySelection = await bindings.conversation_messages({
+    clientRequestId: "messages-by-selection",
+    selectedContext: {
+      version: 1,
+      state: "selected",
+      conversationId: "conversation_fixture",
+      capturedAt: "2026-08-30T10:02:00.000Z",
+    },
+  });
+  expect(bySelection).toMatchObject({
+    conversationId: "conversation_fixture",
+    selectedContext: { state: "selected", conversationId: "conversation_fixture", project: "fixture" },
+  });
+});
+
+test("conversation_messages refuses unsupported roots and stale cursors with typed codes", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-conversation-message-refusals-"));
+  sandboxes.push(sandbox);
+  const transcriptPath = path.join(sandbox, "session.jsonl");
+  fs.writeFileSync(transcriptPath, [
+    { type: "user", timestamp: "2026-08-30T10:00:00.000Z", message: { content: "older" } },
+    { type: "assistant", timestamp: "2026-08-30T10:01:00.000Z", message: { content: [{ type: "text", text: "newer" }] } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  let rootName = "claude-projects";
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    pinnedTranscript: (candidate: string) => {
+      if (candidate !== transcriptPath) return undefined;
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName, root: sandbox, sameIdentity: () => true };
+    },
+  } as never);
+
+  const first = await bindings.conversation_messages({
+    clientRequestId: "messages-first",
+    transcriptPath,
+    limit: 1,
+  });
+  expect(typeof first.cursor).toBe("string");
+  const invalidSince = await bindings.conversation_messages({
+    clientRequestId: "messages-invalid-since",
+    transcriptPath,
+    since: "yesterday",
+  }).then(() => null, (error: unknown) => error as Error & { details?: { code?: string } });
+  expect(invalidSince?.details?.code).toBe("conversation_messages_since_invalid");
+  fs.writeFileSync(transcriptPath, "");
+  const stale = await bindings.conversation_messages({
+    clientRequestId: "messages-stale",
+    transcriptPath,
+    limit: 1,
+    cursor: first.cursor,
+  }).then(() => null, (error: unknown) => error as Error & { details?: { code?: string } });
+  expect(stale?.details?.code).toBe("conversation_messages_cursor_stale");
+
+  rootName = "openclaw-sessions";
+  const unsupported = await bindings.conversation_messages({
+    clientRequestId: "messages-openclaw",
+    transcriptPath,
+  }).then(() => null, (error: unknown) => error as Error & { details?: { code?: string } });
+  expect(unsupported?.details?.code).toBe("conversation_messages_engine_unsupported");
+
+  const outside = await bindings.conversation_messages({
+    clientRequestId: "messages-outside",
+    transcriptPath: path.join(sandbox, "outside.jsonl"),
+  }).then(() => null, (error: unknown) => error as Error & { details?: { code?: string } });
+  expect(outside?.details?.code).toBe("conversation_messages_transcript_unavailable");
+});
+
 test("link_task_to_pipeline binds the latest operational attempt after historical adoption", async () => {
   const operationalPath = "/pipeline/operational.jsonl";
   const operationalConversationId = "conversation_operational";
@@ -567,6 +809,59 @@ test("link_task_to_pipeline binds the latest operational attempt after historica
     path: operationalPath,
     state: "handoff",
   })]);
+});
+
+/* #1720 — the two repair tools are named alike and write different things. This
+   one records ONE assignment row on the task; the pipeline's own task list is
+   what later stage launches read, and it is left alone here, so a pipeline
+   repaired only this way keeps admitting its stages onto a card of its own.
+   The mandate warns about exactly this, and the warning stays true only while
+   the behaviour is pinned. */
+test("link_task_to_pipeline records an assignment and leaves the pipeline's own task list untouched", async () => {
+  const pipeline = {
+    id: "pipeline-mcp-binding-scope",
+    taskIds: [],
+    srcPath: "/pipeline/creator.jsonl",
+    srcConversationId: "conversation_creator",
+    runs: [{ stageId: "build", attempts: [{
+      n: 1,
+      state: "running",
+      historical: false,
+      agentPath: "/pipeline/build.jsonl",
+      conversationId: "conversation_build",
+    }] }],
+  } as unknown as Pipeline;
+  let tasks: BoardTask[] = [{
+    id: "task-mcp-binding-scope",
+    project: "live-log-viewer-next",
+    status: "inbox",
+    text: "Keep one outcome on one card",
+    placement: "unplaced",
+    assignments: [],
+    createdAt: "2026-09-16T10:30:00.000Z",
+    updatedAt: "2026-09-16T10:30:00.000Z",
+  }];
+  const bindings = viewerMcpBindings({
+    getPipelines: () => ({ pipelines: [pipeline] }),
+    mutateTasks: (mutator) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    isoNow: () => "2026-09-16T10:31:00.000Z",
+  });
+
+  await bindings.link_task_to_pipeline({
+    taskId: tasks[0]!.id,
+    pipelineId: pipeline.id,
+    clientRequestId: "mcp-link-binding-scope",
+  });
+
+  expect(tasks[0]!.assignments).toEqual([expect.objectContaining({
+    conversationId: "conversation_build",
+    state: "handoff",
+  })]);
+  expect(pipeline.taskIds).toEqual([]);
 });
 
 test("link_task_to_pipeline follows the cursor retry after a fail-edge loop-back", async () => {
@@ -1642,6 +1937,30 @@ test("conversation_migration delegates to the revision-fenced migration command 
   expect((result.receipt as { operationId: string }).operationId).toBe(migrationOperationId);
 });
 
+test("conversation_migration passes a withdrawal's operation id and a cancel's revision through, and a refusal carries its words, code and revision (#1705)", async () => {
+  const requests: unknown[] = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    applyConversationMigration: async (request: { action: string }) => {
+      requests.push(request);
+      return request.action === "withdraw"
+        ? { status: 409, body: { error: "the queue has already claimed this switch; cancel it with the migration's revision", code: "SWITCH_CLAIMED", expectedRevision: 3 } }
+        : { status: 200, body: { conversation: { id: "conversation_1705", migration: { phase: "rolled-back", revision: 3 } } } };
+    },
+  } as never);
+
+  const refusal = await bindings.conversation_migration({ clientRequestId: "withdraw-1705", conversationId: "conversation_1705", action: "withdraw", operationId: "reconfigure-to-b" })
+    .then(() => null, (error: unknown) => error as { name?: string; message?: string; details?: unknown } | null);
+  expect(refusal?.name).toBe("McpToolRefusal");
+  expect(refusal?.message).toContain("the queue has already claimed this switch");
+  expect(refusal?.details).toMatchObject({ status: 409, code: "SWITCH_CLAIMED", expectedRevision: 3 });
+  const cancelled = await bindings.conversation_migration({ clientRequestId: "cancel-1705", conversationId: "conversation_1705", action: "cancel", expectedRevision: 3 });
+  expect(requests).toEqual([
+    { conversationId: "conversation_1705", action: "withdraw", expectedRevision: undefined, path: "", operationId: "reconfigure-to-b" },
+    { conversationId: "conversation_1705", action: "cancel", expectedRevision: 3, path: "" },
+  ]);
+  expect(cancelled).toMatchObject({ conversation: { migration: { phase: "rolled-back" } } });
+});
+
 test("a refused pipeline close exposes its host report through MCP, not only prose (#670)", async () => {
   const close = {
     stopped: [{ stageId: "plan", attempt: 1, conversationId: "conversation_plan", agentPath: null, paneId: null }],
@@ -1691,6 +2010,33 @@ test("a refused pipeline close exposes its host report through MCP, not only pro
   expect(paused).toMatchObject({ ok: true, pipelineId: "pipeline_1" });
   expect((paused as { details?: unknown }).details).toBeUndefined();
   expect(pauseActor).toEqual({ kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" });
+});
+
+test("a graph edit through MCP carries the calling conversation and answers with its journal entry (graph slice 1)", async () => {
+  const actors: Array<[string | undefined, unknown]> = [];
+  const graphEdit = { seq: 1, at: "2026-09-16T00:00:00.000Z", actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" }, action: "add-stage", stageId: "three", pipelineState: "running", effect: "applied", appliesFromAttempt: 1, summary: "added stage three at position 3, after two" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, request: { action?: string }, _ports: unknown, actor: unknown) => {
+      actors.push([request.action, actor]);
+      return request.action === "add-stage" ? { pipeline: { id: "pipeline_1", state: "running" }, graphEdit } : { pipeline: { id: "pipeline_1", state: "running" } };
+    },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, {
+    claim: async () => ({ kind: "fresh" as const }),
+    complete: async () => {},
+  } as never);
+
+  const added = await service.callTool("pipeline_action", { clientRequestId: "graph-add", pipelineId: "pipeline_1", action: "add-stage", stage: { id: "three", kind: "run", prompt: "Three", next: null } });
+  expect(added).toMatchObject({ ok: true, pipelineId: "pipeline_1", graphEdit });
+  for (const action of ["reorder-stage", "set-edge", "override-stage", "remove-stage"]) {
+    await service.callTool("pipeline_action", { clientRequestId: `graph-${action}`, pipelineId: "pipeline_1", action, stageId: "three" });
+  }
+  await service.callTool("pipeline_action", { clientRequestId: "graph-dismiss", pipelineId: "pipeline_1", action: "dismiss" });
+  const agent = { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" };
+  expect(actors).toEqual([
+    ["add-stage", agent], ["reorder-stage", agent], ["set-edge", agent], ["override-stage", agent], ["remove-stage", agent], ["dismiss", undefined],
+  ]);
 });
 
 test("agent_activity reports the liveness snapshot and journals the stalls it finds (#645)", async () => {
@@ -2124,7 +2470,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
   expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, haiku");
 });
 
@@ -2252,6 +2598,10 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   });
   expect(set).toMatchObject({
     changed: true,
+    /* The stored note in full and its length ride the reply (#1450), so a seat
+       can check what persisted against what it sent. */
+    monitorPrompt: "before the items, check whether last night's digest actually sent",
+    monitorPromptLength: "before the items, check whether last night's digest actually sent".length,
     effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
   });
 
@@ -2268,6 +2618,14 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
     .toMatchObject({ changed: false, effective: { monitorPrompt: "the digest is fixed; watch the review rounds instead" } });
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-clear", monitorPrompt: null });
+  expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-len" }))
+    .toMatchObject({ monitorPrompt: null, monitorPromptLength: 0 });
+
+  /* Over the limit the write is refused out loud, with nothing stored (#1450). */
+  const longNote = "n".repeat(SEAT_TICK_PROMPT_LIMIT + 1);
+  await expect(bindings.seat_tick_settings({ clientRequestId: "tick-prompt-long", monitorPrompt: longNote }))
+    .rejects.toThrow(`monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 1} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
   expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3" }))
     .toMatchObject({ changed: false, effective: { monitorPrompt: null } });
@@ -2407,6 +2765,7 @@ test("an ambiguous send's operation id and resend guidance survive the control r
     expect(refusal).toBeInstanceOf(Error);
     expect((refusal as Error).message).toContain("delivery was started and never settled");
     expect((refusal as { details?: Record<string, unknown> }).details).toEqual({
+      status: 409,
       operationId,
       resend: "verify-first",
       actuation: "started",
@@ -2414,4 +2773,684 @@ test("an ambiguous send's operation id and resend guidance survive the control r
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+/* ── ORIGINAL-KEY RECOVERY (#1490) ─────────────────────────────────────── */
+
+import { McpDispatchNotExecutedError, McpDispatchUncertainError, McpDispatchVerdictError, McpToolRefusal, type McpDispatchTracker, type McpRequestBinding } from "./server";
+import { productionDomainDependencies, productionViewerControlDependencies, sendDownstreamKey, viewerMcpRecoverableTools } from "./bindings";
+import { SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
+import { projectForCwd } from "@/lib/scanner/describe";
+
+const originalControlUrl = process.env.LLV_VIEWER_CONTROL_URL;
+const originalDeployTarget = process.env.LLV_VIEWER_DEPLOY_TARGET;
+afterEach(() => {
+  if (originalControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+  else process.env.LLV_VIEWER_CONTROL_URL = originalControlUrl;
+  if (originalDeployTarget === undefined) delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  else process.env.LLV_VIEWER_DEPLOY_TARGET = originalDeployTarget;
+});
+
+async function classify(run: () => Promise<unknown>): Promise<{ kind: "answer" | "uncertain" | "verdict" | "refusal" | "not-executed" | "error"; value: unknown }> {
+  try {
+    return { kind: "answer", value: await run() };
+  } catch (error) {
+    if (error instanceof McpDispatchUncertainError) return { kind: "uncertain", value: error.message };
+    if (error instanceof McpDispatchNotExecutedError) return { kind: "not-executed", value: error.message };
+    if (error instanceof McpDispatchVerdictError) return { kind: "verdict", value: { message: error.message, details: error.details } };
+    if (error instanceof McpToolRefusal) return { kind: "refusal", value: { message: error.message, details: error.details } };
+    return { kind: "error", value: (error as Error).message };
+  }
+}
+
+test("the single dispatch classifies every transport outcome by what it can prove, and sends exactly once", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-dispatch-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  let requests = 0;
+  let answer: () => Response | Promise<Response> = () => Response.json({ ok: true });
+  const viewer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => {
+      requests += 1;
+      return answer();
+    },
+  });
+  process.env.LLV_VIEWER_CONTROL_URL = viewer.url.origin;
+  const dispatch = productionViewerControlDependencies().dispatch!;
+  /* The tracker the service hands down: the transport marks it the moment the
+     request may be on the wire, and never before. */
+  let tracker: McpDispatchTracker = { attempted: false };
+  const send = () => {
+    tracker = { attempted: false };
+    return dispatch("/api/tmux", { text: "x" }, {}, { deadlineAt: Date.now() + 2_000, dispatch: tracker });
+  };
+  /* The deliberately unanswered request, released before the server stops so
+     the teardown never waits on a handler that would otherwise hang forever. */
+  const unanswered: { release: ((response: Response) => void) | null } = { release: null };
+  try {
+    expect(await classify(send)).toEqual({ kind: "answer", value: { ok: true } });
+    expect(requests).toBe(1);
+    expect(tracker.attempted).toBe(true);
+
+    answer = () => new Response(null, { status: 503 });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    answer = () => new Response("bad gateway", { status: 502 });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    answer = () => new Response("not json", { status: 200, headers: { "content-type": "application/json" } });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    answer = () => new Response("null", { status: 200, headers: { "content-type": "application/json" } });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    answer = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"ok":'));
+        setTimeout(() => controller.error(new Error("cut")), 5);
+      },
+    }), { headers: { "content-type": "application/json" } });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    answer = () => new Promise<Response>((resolve) => { unanswered.release = resolve; });
+    expect(await classify(() => dispatch("/api/tmux", { text: "x" }, {}, { deadlineAt: Date.now() + 600 }))).toMatchObject({ kind: "uncertain", value: expect.stringContaining("deadline") });
+    expect(requests).toBe(7);
+
+    /* The server's own verdicts, tagged as such and carrying their status. */
+    answer = () => Response.json({ error: "empty message" }, { status: 400 });
+    expect(await classify(send)).toEqual({ kind: "verdict", value: { message: "empty message", details: { status: 400 } } });
+    answer = () => Response.json({ error: "delivery was started and never settled", operationId: "op_admitted", resend: "verify-first", actuation: "started" }, { status: 409 });
+    expect(await classify(send)).toEqual({
+      kind: "verdict",
+      value: { message: "delivery was started and never settled", details: { status: 409, operationId: "op_admitted", resend: "verify-first", actuation: "started" } },
+    });
+    answer = () => Response.json({ error: "spawn was refused", code: "ROLE_DENIED", launchId: "launch_refused", conversationId: "conversation_refused" }, { status: 403 });
+    expect(await classify(send)).toMatchObject({ kind: "verdict", value: { details: { status: 403, launchId: "launch_refused", conversationId: "conversation_refused", code: "ROLE_DENIED" } } });
+    answer = () => Response.json({ error: "host is starting", code: "HOST_STARTING" }, { status: 503 });
+    expect(await classify(send)).toMatchObject({ kind: "verdict", value: { details: { status: 503, code: "HOST_STARTING" } } });
+    answer = () => new Response("<html>not found</html>", { status: 404 });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    /* A 409 whose body was lost may have named an admitted operation. */
+    answer = () => new Response("", { status: 409 });
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    expect(requests).toBe(13);
+    // Exercise every error status, including nonstandard proxy 4xx/5xx,
+    // for both mutation endpoints. An unreadable body proves no refusal.
+    for (const pathname of ["/api/tmux", "/api/spawn"]) {
+      for (let status = 300; status <= 599; status += 1) {
+        answer = () => new Response("<html>response lost</html>", { status });
+        const before = requests;
+        expect(await classify(() => dispatch(pathname, {}, {}, { deadlineAt: Date.now() + 2_000 }))).toMatchObject({ kind: "uncertain" });
+        expect(requests).toBe(before + 1);
+      }
+    }
+
+    // A 307 must not automatically repeat the POST at its Location.
+    answer = () => new Response(null, { status: 307, headers: { location: "/redirected" } });
+    const beforeRedirect = requests;
+    expect(await classify(send)).toMatchObject({ kind: "uncertain" });
+    expect(requests).toBe(beforeRedirect + 1);
+    expect(tracker.attempted).toBe(true);
+  } finally {
+    unanswered.release?.(Response.json({ ok: true }));
+    await viewer.stop(true);
+  }
+  /* A refused connection never carried the request: proven not executed. */
+  expect(await classify(send)).toMatchObject({ kind: "not-executed", value: expect.stringContaining("connection was refused") });
+  expect(tracker.attempted).toBe(true);
+});
+
+test("send and spawn bindings dispatch through the single-attempt seam with the persisted downstream key", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-dispatch-seam-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const dispatched: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const posted: string[] = [];
+  const bindings = viewerMcpBindings(undefined, {
+    post: async (pathname) => { posted.push(pathname); return {}; },
+    dispatch: async (pathname, body) => {
+      dispatched.push({ pathname, body });
+      return pathname === "/api/spawn"
+        ? { conversationId: "conversation_new", path: null, launchId: "launch_new", state: "starting", initialMessage: "pending" }
+        : { operationId: "op_new", outcome: "queued" };
+    },
+  }, { registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }) } as never);
+  const binding = (downstreamKey: string): McpRequestBinding => ({
+    version: 1,
+    toolName: "send_message",
+    clientRequestId: "seam-1",
+    caller: { kind: "worker", conversationId: "conversation_caller", project: null },
+    target: { project: null, identity: "conversation_target" },
+    downstreamKey,
+    owner: { pid: process.pid, startIdentity: null },
+    claimedAt: new Date().toISOString(),
+  });
+  await bindings.send_message({ clientRequestId: "seam-1", conversationId: "conversation_target", text: "hello", recoveryOnly: false }, { binding: binding("persisted-send-key") });
+  await bindings.spawn_agent({ clientRequestId: "seam-1", cwd: sandbox, "prompt": "go", title: "Seam launch", recoveryOnly: false }, {
+    binding: { ...binding("persisted_spawn_key"), toolName: "spawn_agent", target: { project: projectForCwd(sandbox), identity: sandbox } },
+  });
+  /* A persisted binding that does not name the canonical target of these
+     arguments is not dispatched under: refused before the request is built. */
+  const drifted = { ...binding("persisted_spawn_key"), toolName: "spawn_agent" as const, target: { project: "proj-forged", identity: sandbox } };
+  expect(bindings.spawn_agent({ clientRequestId: "seam-2", cwd: sandbox, "prompt": "go", title: "Seam launch" }, { binding: drifted }))
+    .rejects.toMatchObject({ details: { code: "binding_mismatch", status: 400 } });
+  await expect(bindings.spawn_agent({ clientRequestId: "seam-2", cwd: sandbox, "prompt": "go", title: "Seam launch" }, { binding: drifted })).rejects.toThrow("canonical target");
+  expect(dispatched.filter((call) => call.pathname === "/api/spawn")).toHaveLength(1);
+  const longKey = "k".repeat(300);
+  await bindings.send_message({ clientRequestId: longKey, conversationId: "conversation_target", text: "hello" });
+  expect(posted).toEqual([]);
+  expect(dispatched.map((request) => request.pathname)).toEqual(["/api/tmux", "/api/spawn", "/api/tmux"]);
+  expect(dispatched[0]?.body.clientMessageId).toBe("persisted-send-key");
+  expect(dispatched[1]?.body.clientAttemptId).toBe("persisted_spawn_key");
+  expect("recoveryOnly" in dispatched[1]!.body).toBe(false);
+  /* Without a binding the key is derived, bounded to what the route keeps. */
+  expect(dispatched[2]?.body.clientMessageId).toBe(sendDownstreamKey(longKey));
+  expect(sendDownstreamKey(longKey).length).toBeLessThanOrEqual(128);
+  expect(sendDownstreamKey(longKey)).toBe(sendDownstreamKey(longKey));
+  expect(sendDownstreamKey(longKey)).not.toBe(sendDownstreamKey(`${longKey}x`));
+  expect(sendDownstreamKey("short-key")).not.toBe("short-key");
+  expect(sendDownstreamKey(sendDownstreamKey(longKey))).not.toBe(sendDownstreamKey(longKey));
+});
+
+test("bind resolves caller and target server-side, never from the arguments", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-bind-"));
+  sandboxes.push(sandbox);
+  const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const transcriptPath = path.join(sandbox, "recipient.jsonl");
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "bind-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: sandbox }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-05T08:00:00.000Z",
+  }]);
+  const recipient = Object.values(registry.snapshot().conversations)[0]!;
+  /* Two calling conversations launched from two directories: the project a
+     caller is bound to is the canonical one of the conversation the server
+     authenticated, read from the registry, never a separately resolved guess. */
+  const callerCwdA = path.join(sandbox, "caller-a");
+  const callerCwdB = path.join(sandbox, "caller-b");
+  const callerFor = (cwd: string, name: string) => {
+    const callerPath = path.join(cwd, `${name}.jsonl`);
+    registry.reconcileConversations([{
+      engine: "codex",
+      path: callerPath,
+      accountId: "bind-fixture-account",
+      launchProfile: emptyLaunchProfile({ cwd }),
+      turn: { state: "idle", source: "assistant", terminalAt: null },
+      observedAt: "2026-09-05T08:00:00.000Z",
+    }]);
+    return registry.conversationForPath(callerPath)!;
+  };
+  const callerA = callerFor(callerCwdA, "caller-a");
+  const callerB = callerFor(callerCwdB, "caller-b");
+  const projectA = projectForCwd(callerCwdA);
+  const projectB = projectForCwd(callerCwdB);
+  expect(typeof projectA).toBe("string");
+  expect(projectA).not.toBe(projectB);
+  let authority: { kind: "worker"; conversationId: string; role: string | null } = { kind: "worker", conversationId: callerA.id, role: "builder" };
+  /* The REAL production dependency set, with only the registry projection and
+     the caller-authority seam replaced — so a resolver the production set does
+     not wire cannot pass here. */
+  const tools = viewerMcpRecoverableTools({
+    ...productionDomainDependencies,
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => authority,
+  });
+  const forged = { callerConversationId: "conversation_forged", callerProject: "proj-forged", caller: { kind: "root" }, origin: { kind: "operator" } };
+  const send = await tools.send_message!.bind({ clientRequestId: "bind-request-1", transcriptPath, text: "hi", ...forged });
+  expect(send).toMatchObject({
+    caller: { kind: "worker", conversationId: callerA.id, project: projectA },
+    target: { identity: recipient.id },
+    downstreamKey: sendDownstreamKey("bind-request-1"),
+  });
+  expect(await tools.send_message!.bind({ clientRequestId: "unindexed", transcriptPath: path.join(sandbox, "late.jsonl"), text: "hi" }))
+    .toMatchObject({ target: { identity: path.join(sandbox, "late.jsonl") } });
+  const spawn = await tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", ...forged });
+  expect(spawn).toMatchObject({ caller: { kind: "worker", conversationId: callerA.id, project: projectA }, target: { identity: sandbox }, downstreamKey: expect.stringMatching(/^mcp_spawn_[0-9a-f]{64}$/) });
+  expect(typeof spawn.target.project).toBe("string");
+  /* The target project is the launch directory's and nothing the arguments
+     say: a supplied `project` may only repeat it. A contradiction — another
+     project, a value that is not a project key — is refused before any
+     claim, because the route would record it as the conversation's owner. */
+  const canonical = spawn.target.project!;
+  expect(await tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: canonical }))
+    .toMatchObject({ target: { project: canonical, identity: sandbox } });
+  for (const project of ["proj-forged", projectB, "not a project key!"]) {
+    expect(() => tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project }))
+      .toThrow("contradicts the canonical project");
+  }
+  try {
+    tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: "proj-forged" });
+  } catch (error) {
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect((error as McpToolRefusal).details).toMatchObject({ code: "invalid_request", status: 400, canonicalProject: canonical });
+  }
+  expect(await tools.spawn_agent!.bind({ clientRequestId: "x".repeat(200), cwd: sandbox, "prompt": "go", title: "Bind launch" }))
+    .toMatchObject({ downstreamKey: expect.stringMatching(/^mcp_spawn_[0-9a-f]{64}$/) });
+  /* Another authenticated conversation binds to ITS project: a replay from a
+     caller whose project differs is what the service then refuses. */
+  authority = { kind: "worker", conversationId: callerB.id, role: "builder" };
+  expect(await tools.send_message!.bind({ clientRequestId: "bind-request-1", transcriptPath, text: "hi" }))
+    .toMatchObject({ caller: { kind: "worker", conversationId: callerB.id, project: projectB } });
+
+  /* A faulting authority, or a registry that cannot answer for the caller's
+     project, reads as unidentified, which fails closed. */
+  const faulting = viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => { throw new Error("registry unreadable"); },
+  } as never);
+  expect(await faulting.send_message!.bind({ clientRequestId: "bind-2", conversationId: recipient.id, text: "hi" }))
+    .toMatchObject({ caller: { kind: "unidentified", conversationId: null, project: null } });
+  const projectless = viewerMcpRecoverableTools({
+    registrySnapshot: () => { throw new Error("registry unreadable"); },
+    attentionAuthority: () => authority,
+  } as never);
+  expect(await projectless.spawn_agent!.bind({ clientRequestId: "bind-2", cwd: sandbox, "prompt": "go", title: "Bind launch" }))
+    .toMatchObject({ caller: { kind: "unidentified", conversationId: null, project: null } });
+  expect(() => tools.send_message!.bind({ clientRequestId: "bind-3", text: "hi" })).toThrow("conversationId or transcriptPath is required");
+  expect(() => tools.spawn_agent!.bind({ clientRequestId: "bind-3", "prompt": "go" })).toThrow("cwd is required");
+});
+
+test("send recovery maps the durable delivery record to the closed outcome set", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-recover-send-"));
+  sandboxes.push(sandbox);
+  const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const transcriptPath = path.join(sandbox, "recipient.jsonl");
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "recover-fixture-account",
+    launchProfile: emptyLaunchProfile({ cwd: sandbox }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-05T08:00:00.000Z",
+  }]);
+  const recipient = Object.values(registry.snapshot().conversations)[0]!;
+  const generationId = recipient.generations.at(-1)!.id;
+  const tools = viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller", role: null }),
+    sendSettlementPorts: () => ({ registry, client: null }),
+  } as never);
+  const binding = (key: string, legacy = false): [McpRequestBinding, { legacy: boolean }] => [{
+    version: 1,
+    toolName: "send_message",
+    clientRequestId: key,
+    caller: { kind: "worker", conversationId: "conversation_caller", project: null },
+    target: { project: null, identity: recipient.id },
+    downstreamKey: key,
+    owner: { pid: process.pid, startIdentity: null },
+    claimedAt: new Date().toISOString(),
+  }, { legacy }];
+  const recover = tools.send_message!.recover;
+
+  expect(await recover(...binding("absent"))).toMatchObject({ outcome: "unknown", evidence: "none", ids: {} });
+  /* Legacy: a send has no durable sender identity, so ownership is never established. */
+  const reservation = registry.holdDelivery(recipient.id, "hold", "legacy-key", "text", [], null, { operationId: "op_legacy", kind: "send", policy: "queue" });
+  const legacy = await recover(...binding("legacy-key", true));
+  expect(legacy).toMatchObject({ outcome: "unknown", evidence: "legacy-receipt-unbound", ownership: "unknown", ids: {} });
+  expect(JSON.stringify(legacy)).not.toContain("op_legacy");
+
+  const held = registry.holdDelivery(recipient.id, "hold", "accepted-key", "text", [], null, { operationId: "op_accepted", kind: "send", policy: "queue" });
+  expect(await recover(...binding("accepted-key"))).toMatchObject({ outcome: "accepted", evidence: "delivery-record", ids: { operationId: "op_accepted", conversationId: recipient.id, deliveryId: held.id } });
+  registry.beginDeliveryAttempt(held.id, generationId);
+  expect(await recover(...binding("accepted-key"))).toMatchObject({ outcome: "in-flight", ids: { operationId: "op_accepted" }, facts: { state: "in-flight" } });
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  expect(await recover(...binding("accepted-key"))).toMatchObject({ outcome: "settled", ids: { operationId: "op_accepted" }, facts: { state: "delivered", resend: "not-needed", duplicateRisk: false } });
+  registry.recordDeliveryOutcome(reservation.id, "failed", SEND_UNVERIFIED_REASON, "unverified");
+  expect(await recover(...binding("legacy-key"))).toMatchObject({ outcome: "settled", reason: SEND_UNVERIFIED_REASON, facts: { state: "failed", resend: "verify-first", duplicateRisk: true } });
+
+  const [payloadBinding] = binding("accepted-key");
+  expect(await recover(payloadBinding, { legacy: false, args: { text: "another caller payload" } }))
+    .toMatchObject({ outcome: "unknown", ids: {}, ownership: "unknown" });
+
+  /* A target bound to a path the registry never resolved matches no record:
+     one or many operations under the key, none is disclosed. */
+  const [byPath, pathOptions] = binding("accepted-key");
+  const unresolved = await recover({ ...byPath, target: { project: null, identity: "/nowhere/recipient.jsonl" } }, pathOptions);
+  expect(unresolved).toMatchObject({ outcome: "unknown", evidence: "none", ids: {} });
+  expect(JSON.stringify(unresolved)).not.toContain("op_accepted");
+  /* Recovery reads leave the delivery record exactly as it was. */
+  const before = JSON.stringify(registry.readOnlySnapshot());
+  await recover(...binding("accepted-key"));
+  await recover(...binding("legacy-key"));
+  expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+
+  /* Unreadable state keeps uncertainty; a bound target with no identity is unknown. */
+  const broken = viewerMcpRecoverableTools({
+    registrySnapshot: () => { throw new Error("registry unreadable"); },
+    sendSettlementPorts: () => ({ registry: { readOnlySnapshot: () => { throw new Error("registry unreadable"); } } as never, client: null }),
+  } as never);
+  expect(await broken.send_message!.recover(...binding("accepted-key"))).toMatchObject({ outcome: "unknown", evidence: "delivery-record", reason: expect.stringContaining("registry unreadable"), ids: {} });
+  const [unbound, options] = binding("accepted-key");
+  expect(await recover({ ...unbound, target: { project: null, identity: null } }, options)).toMatchObject({ outcome: "unknown", ids: {} });
+});
+
+test("spawn recovery maps the launch receipt to the closed outcome set and establishes legacy ownership only from the parent edge", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-recover-spawn-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const tools = viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller", role: null }),
+  } as never);
+  const recover = tools.spawn_agent!.recover;
+  const binding = (key: string, legacy = false, caller = "conversation_caller"): [McpRequestBinding, { legacy: boolean }] => [{
+    version: 1,
+    toolName: "spawn_agent",
+    clientRequestId: key,
+    caller: { kind: "worker", conversationId: caller, project: null },
+    target: { project: null, identity: sandbox },
+    downstreamKey: key,
+    owner: { pid: process.pid, startIdentity: null },
+    claimedAt: new Date().toISOString(),
+  }, { legacy }];
+
+  expect(await recover(...binding("absent_attempt"))).toMatchObject({ outcome: "unknown", evidence: "none", ids: {} });
+  expect(await recover(...binding("absent_attempt", true))).toMatchObject({ outcome: "unknown", ownership: "unknown" });
+
+  const parent = registry.beginSpawn("codex", sandbox, { cwd: sandbox, title: "Parent conversation" });
+  const begun = registry.beginSpawnRequest({
+    engine: "codex",
+    cwd: sandbox,
+    clientAttemptId: "child_attempt_1",
+    launchProfile: { cwd: sandbox, title: "Child launch" },
+    parentConversationId: parent.conversationId,
+    transport: "structured",
+  });
+  if (begun.kind !== "created") throw new Error("fixture receipt was not created");
+  const ids = { launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId };
+  expect(await recover(...binding("child_attempt_1", false, parent.conversationId))).toMatchObject({ outcome: "accepted", evidence: "spawn-receipt", ids, facts: { state: "starting" } });
+
+  expect(await recover(...binding("child_attempt_1"))).toMatchObject({ outcome: "unknown", ids: {}, ownership: "unknown" });
+  const [ownedBinding] = binding("child_attempt_1", false, parent.conversationId);
+  expect(await recover({ ...ownedBinding, target: { project: null, identity: path.join(sandbox, "elsewhere") } }, { legacy: false }))
+    .toMatchObject({ outcome: "unknown", ids: {}, ownership: "unknown" });
+
+  /* Legacy ownership: only the durable parent edge establishes it. */
+  const owned = await recover(...binding("child_attempt_1", true, parent.conversationId));
+  expect(owned).toMatchObject({ outcome: "accepted", ownership: "established", ids });
+  const notOwned = await recover(...binding("child_attempt_1", true, "conversation_someone_else"));
+  expect(notOwned).toMatchObject({ outcome: "unknown", evidence: "legacy-receipt-unbound", ownership: "unknown", ids: {} });
+  expect(JSON.stringify(notOwned)).not.toContain(ids.launchId);
+
+  registry.failStructuredSpawn(ids.launchId, "structured spawn transport failed: fixture");
+  expect(await recover(...binding("child_attempt_1", false, parent.conversationId))).toMatchObject({ outcome: "settled", ids, facts: { state: "failed", launched: false }, reason: expect.stringContaining("fixture") });
+
+  const broken = viewerMcpRecoverableTools({ registrySnapshot: () => { throw new Error("registry unreadable"); } } as never);
+  expect(await broken.spawn_agent!.recover(...binding("child_attempt_1"))).toMatchObject({ outcome: "unknown", evidence: "spawn-receipt", reason: expect.stringContaining("registry unreadable") });
+});
+
+test("spawn recovery requires an exact durable admission fence and keeps a bare refusal unknown", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-spawn-admission-fence-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const args = {
+    clientRequestId: "spawn-admission-fence-1",
+    cwd: sandbox,
+    ["prompt"]: "launch the deployer",
+    title: "Admission fence fixture",
+    role: "deployer",
+    roleParams: { sha: "a".repeat(40), pr: "26" },
+  };
+  const downstreamKey = `mcp_spawn_${crypto.createHash("sha256").update(args.clientRequestId).digest("hex")}`;
+  const body = spawnDispatchBody(args, downstreamKey);
+  const binding = {
+    version: 1,
+    toolName: "spawn_agent",
+    clientRequestId: args.clientRequestId,
+    caller: { kind: "worker", conversationId: "conversation_caller", project: null },
+    target: { project: null, identity: sandbox },
+    downstreamKey,
+    owner: { pid: process.pid, startIdentity: null },
+    claimedAt: new Date().toISOString(),
+  } as never;
+  let fence: SpawnAdmissionFence | null = null;
+  let probes = 0;
+  const recoverable = viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    readSpawnAdmissionFence: () => fence,
+    validateSpawnAdmission: async (actual: Record<string, unknown>) => {
+      probes += 1;
+      expect(actual).toEqual(body);
+      fence = {
+        version: 1,
+        clientAttemptId: downstreamKey,
+        requestDigest: spawnAdmissionBodyDigest(actual),
+        status: 400,
+        error: "deployer requires confirm: deploy",
+        rejectedAt: "2026-09-08T12:00:00.000Z",
+      };
+      return { admissible: false, fenced: true };
+    },
+  } as never);
+
+  const first = await recoverable.spawn_agent!.recover(binding, { legacy: false, args });
+  expect(first).toMatchObject({
+    outcome: "not-executed",
+    evidence: "spawn-admission-fence",
+    reason: "deployer requires confirm: deploy",
+    facts: { status: 400 },
+  });
+  expect(probes).toBe(1);
+  expect(registry.readOnlySnapshot().receipts).toEqual({});
+
+  const replay = await recoverable.spawn_agent!.recover(binding, { legacy: false, args });
+  expect(replay).toMatchObject({ outcome: "not-executed", evidence: "spawn-admission-fence" });
+  expect(probes).toBe(1);
+
+  const bareRefusal = viewerMcpRecoverableTools({
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    readSpawnAdmissionFence: () => null,
+    validateSpawnAdmission: async () => ({ admissible: false, fenced: false }),
+  } as never);
+  expect(await bareRefusal.spawn_agent!.recover(binding, { legacy: false, args })).toMatchObject({
+    outcome: "unknown",
+    evidence: "none",
+    reason: expect.stringContaining("atomic downstream fence"),
+  });
+});
+
+test("spawn binding derives predecessor lineage from the active same-project seat", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-spawn-seat-lineage-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const predecessor = "conversation_predecessor";
+  const successor = "conversation_successor";
+  const finalSuccessor = "conversation_final_successor";
+  const first = beginOrchestratorSeatIntent({
+    project: "proj-a",
+    mandate: "old mandate",
+    clientRequestId: "seat-lineage-old",
+    mode: "existing",
+    conversationId: predecessor,
+  });
+  expect(first.kind).toBe("begun");
+  expect(completeOrchestratorSeatIntent({
+    project: "proj-a",
+    clientRequestId: "seat-lineage-old",
+    conversationId: predecessor,
+    path: "/repo/predecessor.jsonl",
+  }).kind).toBe("activated");
+  const second = beginOrchestratorSeatIntent({
+    project: "proj-a",
+    mandate: "new mandate",
+    clientRequestId: "seat-lineage-new",
+    mode: "existing",
+    conversationId: successor,
+  });
+  expect(second.kind).toBe("begun");
+  expect(completeOrchestratorSeatIntent({
+    project: "proj-a",
+    clientRequestId: "seat-lineage-new",
+    conversationId: successor,
+    path: "/repo/successor.jsonl",
+  }).kind).toBe("activated");
+  const third = beginOrchestratorSeatIntent({
+    project: "proj-a",
+    mandate: "final mandate",
+    clientRequestId: "seat-lineage-final",
+    mode: "existing",
+    conversationId: finalSuccessor,
+  });
+  expect(third.kind).toBe("begun");
+  expect(completeOrchestratorSeatIntent({
+    project: "proj-a",
+    clientRequestId: "seat-lineage-final",
+    conversationId: finalSuccessor,
+    path: "/repo/final.jsonl",
+  }).kind).toBe("activated");
+  const otherProjectSeat = beginOrchestratorSeatIntent({
+    project: "proj-b",
+    mandate: "other project mandate",
+    clientRequestId: "seat-lineage-other-project",
+    mode: "existing",
+    conversationId: "conversation_other_project",
+  });
+  expect(otherProjectSeat.kind).toBe("begun");
+  expect(completeOrchestratorSeatIntent({
+    project: "proj-b",
+    clientRequestId: "seat-lineage-other-project",
+    conversationId: "conversation_other_project",
+    path: "/other-project/current.jsonl",
+  }).kind).toBe("activated");
+
+  const base = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" }).readOnlySnapshot();
+  const snapshot = {
+    ...base,
+    conversations: {
+      [finalSuccessor]: {
+        id: finalSuccessor,
+        engine: "codex",
+        generations: [],
+        continuityPaths: [],
+        abandonedContinuityPaths: [],
+        providerForkPaths: [],
+        projectOwnership: { project: "proj-a", source: "operator", setAt: "2026-09-08T12:00:00.000Z", operationId: "seat-lineage" },
+        migration: null,
+        migrationOptOut: null,
+        supersededBy: null,
+        agentRole: null,
+        delegationDepth: null,
+        turn: { state: "idle", source: "unknown", terminalAt: null, observedAt: null },
+        createdAt: "2026-09-08T12:00:00.000Z",
+        updatedAt: "2026-09-08T12:00:00.000Z",
+      },
+    },
+  } as never;
+  const recoverable = viewerMcpRecoverableTools({
+    registrySnapshot: () => snapshot,
+    attentionAuthority: () => ({ kind: "worker", conversationId: finalSuccessor, role: null }),
+  } as never);
+  const binding = recoverable.spawn_agent!.bind({
+    clientRequestId: "seat-lineage-bind",
+    cwd: "/repo",
+    ["prompt"]: "inspect",
+    title: "Seat lineage",
+  });
+  expect(binding).toMatchObject({
+    caller: {
+      kind: "worker",
+      conversationId: finalSuccessor,
+      project: "proj-a",
+      predecessors: [successor, predecessor],
+    },
+  });
+});
+
+
+test("incomplete and contradictory mutation answers remain unknown when no durable evidence exists, including SQLite restart", async () => {
+  const { SqliteMcpReceiptStore } = await import("./server");
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-incomplete-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = sandbox;
+  const databasePath = path.join(sandbox, "receipts.sqlite");
+  let response: Record<string, unknown> = {};
+  let dispatches = 0;
+  let reads = 0;
+  const bindings = viewerMcpBindings(undefined, {
+    post: async () => { throw new Error("automatic POST fallback is forbidden"); },
+    dispatch: async () => { dispatches += 1; return response; },
+  }, { registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }) } as never);
+  const caller = { kind: "worker" as const, conversationId: "conversation_caller", project: null };
+  const recovery = {
+    bind: (args: Record<string, unknown>) => ({ caller, target: { identity: String(args.conversationId ?? args.cwd), project: projectForCwd(sandbox) }, downstreamKey: String(args.clientRequestId) }),
+    recover: async () => { reads += 1; return { outcome: "unknown" as const, evidence: "none", reason: null, ids: {} }; },
+  };
+  let store = new SqliteMcpReceiptStore(databasePath);
+  const service = () => createMcpToolService(bindings, store, undefined, { recovery: { send_message: recovery, spawn_agent: recovery } });
+  try {
+    for (const tool of ["send_message", "spawn_agent"] as const) {
+      const valid = tool === "send_message"
+        ? { operationId: "op_answer", outcome: "delivered" }
+        : { launchId: "launch_answer", conversationId: "conversation_answer", state: "settled", initialMessage: "delivered" };
+      const incomplete = Object.keys(valid).map((key) => Object.fromEntries(Object.entries(valid).filter(([field]) => field !== key)));
+      const contradictory = tool === "send_message"
+        ? [{ ...valid, receipt: { operationId: "op_other", status: "delivered" } },
+          { ...valid, receipt: { operationId: "op_answer", status: "queued" } },
+          { ...valid, outcome: "queued", receipt: { operationId: "op_answer", status: "delivered" } },
+          { ...valid, outcome: "unknown" }, { ...valid, operationId: 123 }]
+        : [{ ...valid, state: "starting" }, { ...valid, state: " starting " }, { ...valid, launched: false },
+          { ...valid, retrySafe: true }, { ...valid, path: {} }, { ...valid, conversationId: 123 }];
+      for (const [index, value] of [{}, { ok: true }, ...incomplete, ...contradictory, { ...valid, ok: false }].entries()) {
+        response = value;
+        const clientRequestId = `${tool}-incomplete-${index}`;
+        const args = tool === "send_message"
+          ? { clientRequestId, conversationId: "conversation_target", text: "hello" }
+          : { clientRequestId, cwd: sandbox, prompt: "go", title: "Incomplete response" };
+        const before = dispatches;
+        const beforeReads = reads;
+        const unknown = { ok: false, code: "outcome_unknown", retryable: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } };
+        expect(await service().callTool(tool, args)).toMatchObject(unknown);
+        expect(reads).toBeGreaterThan(beforeReads);
+        store.close();
+        store = new SqliteMcpReceiptStore(databasePath);
+        expect(await service().callTool(tool, { ...args, recoveryOnly: true })).toMatchObject(unknown);
+        expect(await service().callTool(tool, args)).toMatchObject(unknown);
+        expect(dispatches).toBe(before + 1);
+      }
+    }
+  } finally {
+    store.close();
+  }
+});
+
+
+test("task placement bindings require atomic guards and classify field refusals as non-retryable", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-position-"));
+  sandboxes.push(sandbox);
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_SOCKET: path.join(sandbox, "runtime.sock") };
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+    const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
+  }
+  // Child imports happen only after every root has been isolated. The parent
+  // file already imports bindings for its existing dependency-injected tests.
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import { viewerMcpBindings } from "./src/lib/mcp/bindings";
+    import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
+    import { TASKS_FILE } from "./src/lib/tasks/store";
+    if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
+    const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
+    const created = await service.callTool("create_task", { clientRequestId: "binding-position-create", project: "fixture-project", text: "task" });
+    if (!created.ok) throw new Error(created.error);
+    const before = fs.readFileSync(TASKS_FILE, "utf8");
+    const missing = await service.callTool("update_task", { clientRequestId: "binding-missing-guard", taskId: created.taskId, pos: { x: 0, y: 0 } });
+    const invalid = [];
+    for (const [index, pos] of [null, {}, { x: 1 }, { x: Infinity, y: 1 }, { x: 0, y: NaN }].entries()) {
+      invalid.push(await service.callTool("create_task", { clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos }));
+    }
+    console.log(JSON.stringify({ missing, invalid, unchanged: fs.readFileSync(TASKS_FILE, "utf8") === before }));
+  `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  const error = await new Response(child.stderr).text();
+  expect([await child.exited, error]).toEqual([0, ""]);
+  const result = JSON.parse(output);
+  expect(result.missing).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false, details: { field: "expectedProject" } });
+  for (const invalid of result.invalid) {
+    expect(invalid).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false });
+    expect(invalid.details.field.startsWith("pos")).toBe(true);
+  }
+  expect(result.unchanged).toBe(true);
 });

@@ -1,10 +1,10 @@
 "use client";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
-import { useLogTail } from "@/hooks/useLogTail";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { useToolActivityCues } from "@/hooks/useToolActivityCues";
 import { accountIdFromPath } from "@/lib/accounts/badge";
@@ -22,11 +22,13 @@ import {
   adoptCanonicalAssistantClaims,
   publishCanonicalAssistantClaims,
   useCanonicalAssistantClaims,
+  useReasoningFeed,
   visibleRuntimeLiveTurnItems,
 } from "./conversation/liveTurnHandoff";
 import { orderedConversationTail } from "./conversation/tailOrder";
 import {
   publishTranscriptEchoes,
+  retireLaunchOutboxOnAdoption,
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
@@ -35,16 +37,19 @@ import {
   type OutboxOwner,
 } from "./conversation/outbox";
 import { createFeedSession, type FeedSession, type FeedSnapshot } from "./feed/parse";
+import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem } from "./feed/FeedItem";
 import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed/messageProvenance";
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
+import { ResponseDuration } from "./feed/ResponseDuration";
 import { SuggestedReplies } from "./feed/SuggestedReplies";
 import { BoundedLru } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
-import { speakableAnswer } from "./feed/speakableAnswer";
+import { createSpeakableAnswerResolver } from "./feed/speakableAnswer";
 import { isSubagent } from "./projectModel";
 import { TaskHeader } from "./TaskHeader";
 import { TurnStatusBar } from "./TurnStatusBar";
+import { logFeedDependencies } from "./logFeedDependencies";
 
 /** Items rendered initially and added per «show earlier» step. */
 const RENDER_STEP = 1500;
@@ -53,6 +58,13 @@ const RENDER_STEP = 1500;
     the full history in steps. */
 const COMPACT_INITIAL = 300;
 const COMPACT_STEP = 500;
+/** The first commit of a transcript paints only its last rows (#1432): a
+    project switch mounts several panes at once and a phone switch remounts
+    one, and mounting the whole initial window in that commit is what stood
+    between the gesture and the first frame. The window grows to its initial
+    count right after that frame; the magnet keeps the tail in view and a
+    released reader keeps its anchor, so nothing the operator sees moves. */
+const FIRST_PAINT_ROWS = 60;
 /** Live-tail window while the magnet holds the bottom. Touch devices run on
     a far smaller tab memory budget (iOS kills the renderer past it), so the
     window shrinks there; «show earlier» still walks the full history. */
@@ -65,10 +77,14 @@ const FOCUS_CAP = typeof window !== "undefined" && window.matchMedia("(pointer: 
 
 const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
 
-/** How long after a programmatic glue a not-at-bottom scroll event is treated
-    as layout settling (content-visibility estimates, pane resizes) and glued
-    again. User releases are real scrolls that arrive outside this window. */
+/** How long after a programmatic glue an untagged not-at-bottom scroll event
+    is treated as layout settling (content-visibility estimates, pane resizes)
+    and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
+
+type ScrollCause =
+  | { kind: "programmatic" }
+  | { kind: "user"; fromBottom: number; direction: -1 | 1 | null };
 
 /* Scroll state per stable conversation, surviving pane remounts and native
    generation changes during account migration. */
@@ -111,6 +127,69 @@ function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
   return feedRows(scroller).find((row) => row.dataset.feedKey === key) ?? null;
 }
 
+interface PrependViewportProps {
+  children: ReactNode;
+  scroller: RefObject<HTMLDivElement | null>;
+  identity: string;
+  prependGen: number;
+  visibleCount: number;
+  following: RefObject<boolean>;
+}
+
+/* The before-mutation lifecycle reads the current viewport, including gestures
+   made while history was in flight. Layout-effect cleanups can run after DOM
+   mutations and therefore cannot supply this snapshot. */
+class PrependViewport extends Component<PrependViewportProps> {
+  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ViewportAnchor & { toolSource?: string }) | null {
+    const { scroller, identity, prependGen, visibleCount, following } = this.props;
+    if (identity !== previous.identity || following.current
+      || (prependGen === previous.prependGen && visibleCount <= previous.visibleCount)) return null;
+    const el = scroller.current;
+    const anchor = el ? viewportAnchor(el, identity) : null;
+    if (!el || !anchor) return null;
+    const toolSource = rowForAnchor(el, anchor.key)?.dataset.feedToolSources?.split(" ")[0];
+    return { ...anchor, toolSource };
+  }
+
+  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ViewportAnchor & { toolSource?: string }) | null) {
+    const el = this.props.scroller.current;
+    if (!el || !anchor || this.props.following.current) return;
+    // A boundary tool run can absorb older calls and acquire a new group key.
+    // Source positions disambiguate repeated provider tool ids in that run.
+    const row = rowForAnchor(el, anchor.key) ?? (anchor.toolSource
+      ? feedRows(el).find((candidate) => candidate.dataset.feedToolSources?.split(" ").includes(anchor.toolSource!))
+      : null);
+    if (!row) return;
+    // Measure the residual after native anchoring, avoiding double compensation.
+    const bounds = el.getBoundingClientRect();
+    const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
+    // Compact panes can sit inside the scaled project canvas. DOM rectangles
+    // use viewport pixels while scrollTop uses untransformed layout pixels.
+    const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
+    if (delta && scale > 0) el.scrollTop += delta / scale;
+  }
+
+  render() { return this.props.children; }
+}
+
+function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
+  if (deltaY < 0) return element.scrollTop > 0;
+  if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight;
+  return false;
+}
+
+function pointerHitsVerticalScrollbar(element: HTMLElement, clientX: number): boolean {
+  if (element.scrollHeight <= element.clientHeight) return false;
+  const bounds = element.getBoundingClientRect();
+  const contentLeft = bounds.left + element.clientLeft;
+  const contentRight = contentLeft + element.clientWidth;
+  return clientX < contentLeft || clientX >= contentRight;
+}
+
+function distanceFromBottom(element: HTMLElement): number {
+  return Math.max(0, element.scrollHeight - element.clientHeight - element.scrollTop);
+}
+
 /** Wall-clock read hoisted out of the component so the React Compiler's purity
     check does not see a bare `Date.now()` in a render-scope closure. */
 function nowMs(): number {
@@ -138,6 +217,15 @@ interface Props {
 }
 
 export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry }: Props) {
+  /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
+     live-tail pill and the turn status bar below it are both gone — following
+     is the feed's default and needs no pill, and elapsed time lives in the
+     bar's meta line while Stop is the composer's send slot. Together they were
+     the ~40 px of bottom chrome the old budget never counted, and two of the
+     three rows the operator photographed stacked above the keyboard. The
+     «back to live» control is NOT part of that: it only exists once the
+     operator has scrolled away, and without it a phone cannot get back. */
+  const phone = useIsMobile();
   const { locale, t } = useLocale();
   const memoryKey = file ? conversationIdentity(file) : null;
   /* The conversation's own outbox (issue #561): submitted drafts render as
@@ -174,6 +262,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       && paneLaunchOwner.conversationId === launchOwner.conversationId
       && paneLaunchOwner.generation === launchOwner.generation,
   );
+  /* A materialized `file.launch` is the server's live-adoption signal. Retire
+     the starting-window bubble at that hand-off even when an image-only launch
+     has no text echo and its delivery receipt still reads queued/delivering. */
+  useEffect(() => {
+    if (!memoryKey || !file?.launch || !launchOwnsThisPane || !launchOwner) return;
+    retireLaunchOutboxOnAdoption(memoryKey, {
+      id: file.launch.launchId,
+      adoptedAt: nowMs(),
+      owner: launchOwner,
+    });
+  }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane]);
   /* Live streaming text: `delta` events from the structured host render the
      in-flight assistant reply immediately, ahead of the transcript flush. The
      host is resolved by conversation identity FIRST (round-1 P1#3): during
@@ -216,22 +315,38 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const tailPath = tailFile?.path ?? null;
   /* Released reader must never lose lines above the viewport: the tail cap
      applies only while the magnet holds the bottom in view anyway. */
-  const tail = useLogTail(tailFile, paused, magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0);
+  const tail = logFeedDependencies().useLogTail(
+    tailFile,
+    paused,
+    magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0,
+  );
   const scroller = useRef<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
-  const anchorRef = useRef<{ top: number; height: number } | null>(null);
+  const olderRequestRef = useRef<object | null>(null);
+  const historyOwnerRef = useRef<object>({});
   const initialCount = compact ? COMPACT_INITIAL : RENDER_STEP;
   const revealStep = compact ? COMPACT_STEP : RENDER_STEP;
-  const [visibleCount, setVisibleCount] = useState(initialCount);
+  const firstPaintCount = Math.min(FIRST_PAINT_ROWS, initialCount);
+  const [visibleCount, setVisibleCount] = useState(firstPaintCount);
   const [newCount, setNewCount] = useState(0);
   const [pulse, setPulse] = useState(false);
   const [endedQuestion, setEndedQuestion] = useState<string | null>(null);
   const hadQuestionRef = useRef(false);
+  /* Synchronous per-transcript follow authority: an upward input closes this
+     latch before a tail render can run with stale `magnet` state. While this
+     transcript stays selected, only an operator bottom return or an explicit
+     follow control writes it true again. */
   const magnetRef = useRef(magnet);
   const lastLenRef = useRef(0);
   const lastPrependRef = useRef(0);
   const pulseTimer = useRef<number | null>(null);
   const glueAtRef = useRef(0);
+  const scrollCauseRef = useRef<ScrollCause | null>(null);
+  /* One scrollbar press can drive many scroll events. Its moving baseline
+     lives through the gesture; a stamped programmatic cause still wins. */
+  const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
+  const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const filePathRef = useRef(tailPath);
@@ -258,14 +373,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
 
+  const markProgrammaticScroll = () => {
+    if (scrollCauseRef.current?.kind !== "user") {
+      scrollCauseRef.current = { kind: "programmatic" };
+    }
+    glueAtRef.current = nowMs();
+  };
+
   /* Programmatic glue: the scroll event it triggers must never read as the
      user releasing the magnet, so the moment is stamped and the handler
      treats near-in-time off-bottom positions as layout still settling. */
   const glue = () => {
     const el = scroller.current;
-    if (!el) return;
-    glueAtRef.current = Date.now();
+    if (!el || !magnetRef.current) return;
+    markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
+    const pendingUser = scrollCauseRef.current;
+    if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
 
   /* A released pane can mount before its full content has measurable height.
@@ -284,14 +408,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const row = rowForAnchor(el, anchor.key);
       if (row) {
         const currentOffset = row.getBoundingClientRect().top - el.getBoundingClientRect().top;
-        glueAtRef.current = Date.now();
+        markProgrammaticScroll();
         el.scrollTop += currentOffset - anchor.offset;
         pending.applied = true;
         return true;
       }
     }
     const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-    glueAtRef.current = Date.now();
+    markProgrammaticScroll();
     el.scrollTop = Math.max(0, maxScroll - pending.fromBottom);
     if (maxScroll < pending.fromBottom) return false;
     pending.applied = true;
@@ -299,8 +423,25 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return true;
   };
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => setVisibleCount(initialCount), [tailPath, initialCount]);
+  /* First frame: the last FIRST_PAINT_ROWS. Next frame: the full initial
+     window, with the scroll anchored exactly as a «show earlier» reveal is. */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVisibleCount(firstPaintCount);
+    if (firstPaintCount >= initialCount) return;
+    /* Two frames: the first commit paints, the second grows the window. A
+       host without animation frames (a bare test document) grows on a
+       macrotask instead. */
+    const raf = typeof requestAnimationFrame === "function";
+    const schedule = (fn: () => void) => (raf ? requestAnimationFrame(fn) : (setTimeout(fn, 0) as unknown as number));
+    const cancel = (handle: number) => (raf ? cancelAnimationFrame(handle) : clearTimeout(handle));
+    let handle = schedule(() => {
+      handle = schedule(() => {
+        setVisibleCount((count) => Math.max(count, initialCount));
+      });
+    });
+    return () => cancel(handle);
+  }, [tailPath, initialCount, firstPaintCount]);
   /* Same instance, new transcript: pick up that transcript's remembered state. */
   useEffect(() => {
     if (!memoryKey) return;
@@ -331,6 +472,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     [],
   );
   useEffect(() => {
+    function releaseScrollbarPointer(): void { scrollbarPointerRef.current = null; }
+    window.addEventListener("pointerup", releaseScrollbarPointer, true);
+    window.addEventListener("pointercancel", releaseScrollbarPointer, true);
+    window.addEventListener("blur", releaseScrollbarPointer);
+    return () => {
+      window.removeEventListener("pointerup", releaseScrollbarPointer, true);
+      window.removeEventListener("pointercancel", releaseScrollbarPointer, true);
+      window.removeEventListener("blur", releaseScrollbarPointer);
+    };
+  }, []);
+  useEffect(() => {
     hadQuestionRef.current = false;
     queueMicrotask(() => setEndedQuestion(null));
   }, [file?.path]);
@@ -355,16 +507,30 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      which changes every /api/files poll); anything else reuses it. Feeding
      inside the memo is safe: feed() is idempotent for an unchanged window. */
   const lf = lineFilter.toLowerCase();
+  /* The session outlives this mount (#1432): a conversation that was on screen
+     earlier comes back with its parse intact — taken from the pool here, given
+     back when the key changes or the feed unmounts — so a switch paints the
+     previous rows without re-parsing the retained window. The key is exactly
+     the parse configuration above; a session is owned by one mount at a time. */
+  const sessionKey = file && tailPath ? [tailPath, file.engine, file.fmt, showSvc ? "1" : "0", lf, locale].join("\u0000") : null;
   const session: FeedSession | null = useMemo(
-    () => (file ? createFeedSession({ engine: file.engine, fmt: file.fmt, showSvc, lineFilter: lf }) : null),
+    () => (file && sessionKey
+      ? takeFeedSession(sessionKey) ?? createFeedSession({ engine: file.engine, fmt: file.fmt, showSvc, lineFilter: lf })
+      : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tailPath, file?.engine, file?.fmt, showSvc, lf, locale],
+    [sessionKey],
   );
-  const feed = useMemo(
+  useEffect(() => {
+    if (!sessionKey || !session) return;
+    claimFeedSession(sessionKey, session);
+    return () => releaseFeedSession(sessionKey, session);
+  }, [sessionKey, session]);
+  const canonicalFeed = useMemo(
     () => (file && session ? session.feed(tail.lines, tail.linesStart, file.activity === "live") : EMPTY_FEED),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [session, file?.activity, tail.lines, tail.linesStart],
   );
+  const feed = useReasoningFeed(canonicalFeed, runtimeLiveTurn, `${memoryKey}\0${tailPath}`);
   /* Tool activity earns its cue from the parse itself: every newly appended
      call ticks once, keyed on the engine's call id — even one that settled
      inside a single tail tick — while re-parses, remounts and paged-in history
@@ -386,6 +552,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
+  const answerFor = useMemo(() => createSpeakableAnswerResolver(feed.items), [feed.items, memoryKey, tailPath]);
 
   /* Lazy raw-record provenance: a tool card resolves its source line(s) from
      the retained window, client-side, with no server round-trip. A line that
@@ -409,15 +576,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     pendingRestoreRef.current = null;
   }, [tailPath]);
 
-  /* Older history grows the content above the viewport; keep what the user
-     was reading in place by compensating the scroll offset. */
   useLayoutEffect(() => {
-    const el = scroller.current;
-    const anchor = anchorRef.current;
-    if (!el || !anchor) return;
-    anchorRef.current = null;
-    el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
-  }, [tail.prependGen, visibleCount]);
+    historyOwnerRef.current = {};
+    olderRequestRef.current = null;
+    return () => {
+      historyOwnerRef.current = {};
+      olderRequestRef.current = null;
+    };
+  }, [tailPath, memoryKey]);
 
   /* Glued: keep the bottom in view. Keyed by item-list identity, not length —
      at the tail cap every poll trims above and appends below with the count
@@ -469,10 +635,20 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   }, []);
 
   const revealOlder = () => {
-    const el = scroller.current;
-    if (el) anchorRef.current = { top: el.scrollTop, height: el.scrollHeight };
-    if (hiddenLocal) setVisibleCount((value) => value + revealStep);
-    else if (tail.hasMore) void tail.loadOlder().then(() => setVisibleCount((value) => value + revealStep));
+    if (hiddenLocal) {
+      setVisibleCount((value) => value + revealStep);
+    } else if (tail.hasMore && !olderRequestRef.current) {
+      const owner = historyOwnerRef.current;
+      const request = {};
+      olderRequestRef.current = request;
+      void tail.loadOlder().then((added) => {
+        if (historyOwnerRef.current === owner && added > 0) {
+          setVisibleCount((value) => value + revealStep);
+        }
+      }).finally(() => {
+        if (olderRequestRef.current === request) olderRequestRef.current = null;
+      });
+    }
   };
   const canRevealOlder = hiddenLocal > 0 || tail.hasMore;
 
@@ -485,8 +661,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         : { icon: Sparkle, label: t("feed.working") };
 
   const jumpToTail = () => {
-    glue();
     setMagnet(true, true);
+    glue();
   };
 
   const transcriptGeneration = tailPath;
@@ -552,20 +728,22 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      a fresh refresh) seeds the same launch-owned bubble the composer path seeds.
      Keyed by the launch id under the stable conversation identity, so it is
      idempotent with the composer's own seed (no duplicate), survives a refresh,
-     folds through transcript adoption, and retires on its transcript echo. */
-  useEffect(() => {
+     folds through transcript adoption, and retires on its transcript echo or
+     the live transcript's adoption. */
+  useLayoutEffect(() => {
     if (!memoryKey || !launch?.launchId || !launchOwnsThisPane) return;
     const promptText = launch.prompt ?? "";
     const promptImages = launch.promptImages ?? 0;
-    if (!promptText.trim() && !promptImages) return;
+    if (!promptText.trim() && !promptImages && !launch.promptEcho) return;
     seedLaunchOutbox(memoryKey, {
       id: launch.launchId,
       text: promptText,
       images: promptImages,
       at: launch.promptAt ?? Date.now(),
-      /* The canonical echo identity (issue #615): the bubble displays the raw
-         draft but retires on the delivered (possibly scaffolded) transcript
-         echo. Reconciled onto a composer-seeded bubble under the same id. */
+      /* The canonical echo identity (issue #615/#616): the bubble displays the
+         raw draft and retires on the delivered scaffolded transcript echo. An
+         adopted live fact can carry this identity after its display fields have
+         retired, reconciling the 202 seed before the browser paints. */
       ...(launch.promptEcho ? { echoText: launch.promptEcho } : {}),
       owner: launchOwner!,
       state: launchOutboxState(launch.initialMessage),
@@ -662,6 +840,22 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      collide at any pane width. (A right-anchored pill also sat over the tool
      rows' status column on the phone.) */
   const pillPos = "left-1/2 -translate-x-1/2";
+  const markUserScroll = (direction: number | null): void => {
+    const el = scroller.current;
+    if (!el) return;
+    scrollCauseRef.current = {
+      kind: "user",
+      fromBottom: distanceFromBottom(el),
+      direction: direction === null || direction === 0 ? null : direction < 0 ? -1 : 1,
+    };
+    if (direction !== null && direction < 0 && magnetRef.current) setMagnet(false);
+  };
+  const forwardPillVerticalDelta = (row: HTMLElement | null, deltaY: number): void => {
+    const el = scroller.current;
+    if (!el || !deltaY || (row && canScrollVertically(row, deltaY))) return;
+    markUserScroll(deltaY);
+    el.scrollTop += deltaY;
+  };
 
   return (
     <RawLineProvider value={getRawLine}>
@@ -672,7 +866,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     <div className="relative flex min-h-0 flex-1 flex-col">
       {file && feed.items.length ? (
         magnet ? (
-          file.activity === "live" ? (
+          file.activity === "live" && !phone ? (
             <div
               data-live-tail-pill
               className={`pointer-events-none absolute bottom-2 ${pillPos} z-10 inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-bold text-white shadow-1 transition-transform duration-200 ${
@@ -694,9 +888,37 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       ) : null}
       {/* #1202: with the latest turn off-screen the drafts follow the operator
           to the bottom of the pane — above the «back to live» chip, so the two
-          bottom controls never share a row. */}
+          bottom controls never share a row. Empty wrapper space targets the
+          feed; vertical pill gestures are forwarded because this overlay and
+          the feed scroller are siblings. */}
       {file && !magnet ? (
-        <div className="absolute inset-x-2 bottom-11 z-10 flex justify-center">
+        <div
+          className="pointer-events-none absolute inset-x-2 bottom-11 z-10 flex justify-center"
+          onWheel={(event) => {
+            const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
+            let scale = 1;
+            if (event.deltaMode === 1) scale = 16;
+            else if (event.deltaMode === 2) scale = scroller.current?.clientHeight ?? 1;
+            forwardPillVerticalDelta(row, event.deltaY * scale);
+          }}
+          onTouchStart={(event) => {
+            const touch = event.touches[0];
+            pillTouchRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+          }}
+          onTouchMove={(event) => {
+            const touch = event.touches[0];
+            const previous = pillTouchRef.current;
+            if (!touch || !previous) return;
+            const deltaX = previous.x - touch.clientX;
+            const deltaY = previous.y - touch.clientY;
+            pillTouchRef.current = { x: touch.clientX, y: touch.clientY };
+            if (Math.abs(deltaY) <= Math.abs(deltaX)) return;
+            const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
+            forwardPillVerticalDelta(row, deltaY);
+          }}
+          onTouchEnd={() => { pillTouchRef.current = null; }}
+          onTouchCancel={() => { pillTouchRef.current = null; }}
+        >
           <SuggestedReplies
             file={file}
             revision={suggestionsRevision}
@@ -715,31 +937,89 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         data-tail-lines-start={tail.linesStart}
         data-tail-line-count={tail.lines.length}
         className={compact ? "min-h-0 flex-1 overflow-y-auto py-3" : "min-h-0 flex-1 overflow-y-auto py-6"}
+        onWheelCapture={(event) => {
+          if (event.deltaY) markUserScroll(event.deltaY);
+        }}
+        onPointerDownCapture={(event) => {
+          if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
+            scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
+            scrollCauseRef.current = null;
+          }
+        }}
+        onTouchStartCapture={(event) => {
+          const touch = event.touches[0];
+          feedTouchRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+          markUserScroll(null);
+        }}
+        onTouchMoveCapture={(event) => {
+          const touch = event.touches[0];
+          const previous = feedTouchRef.current;
+          if (!touch || !previous) return;
+          const deltaX = previous.x - touch.clientX;
+          const deltaY = previous.y - touch.clientY;
+          feedTouchRef.current = { x: touch.clientX, y: touch.clientY };
+          if (Math.abs(deltaY) > Math.abs(deltaX)) markUserScroll(deltaY);
+        }}
+        onTouchEndCapture={() => { feedTouchRef.current = null; }}
+        onTouchCancelCapture={() => { feedTouchRef.current = null; }}
+        onKeyDownCapture={(event) => {
+          if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
+          else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
+          else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
+        }}
         onScroll={(event) => {
           const el = event.currentTarget;
-          const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
-          const settling = Date.now() - glueAtRef.current < GLUE_SETTLE_MS;
-          if (!settling) pendingRestoreRef.current = null;
-          if (atBottom && !magnetRef.current) setMagnet(true, true);
-          else if (!atBottom && magnetRef.current) {
+          const fromBottom = distanceFromBottom(el);
+          const atBottom = fromBottom <= 50;
+          const pendingCause = scrollCauseRef.current;
+          const scrollbarPointer = scrollbarPointerRef.current;
+          const cause: ScrollCause | null = scrollbarPointer && pendingCause?.kind !== "programmatic"
+            ? { kind: "user", fromBottom: scrollbarPointer.fromBottom, direction: null }
+            : pendingCause;
+          const userDelta = cause?.kind === "user" ? fromBottom - cause.fromBottom : 0;
+          const userInitiated = cause?.kind === "user"
+            && userDelta !== 0
+            && (cause.direction === null || Math.sign(userDelta) === -cause.direction);
+          const userReleasedMagnet = userInitiated && userDelta > 0;
+          const userReturnedToBottom = atBottom && userInitiated && userDelta < 0;
+          /* A concurrent glue can emit its own scroll at the bottom before the
+             wheel's upward scroll. Keep a zero-movement user tag for that next
+             event; an opposite movement proves the tag did not cause it. A
+             scrollbar press keeps its separate moving baseline until release. */
+          if (scrollbarPointer) scrollbarPointer.fromBottom = fromBottom;
+          if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) scrollCauseRef.current = null;
+          const settling = nowMs() - glueAtRef.current < GLUE_SETTLE_MS;
+          if (!settling || userInitiated) pendingRestoreRef.current = null;
+          if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
+          else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
                (content-visibility estimates, pane resizes during a scheme
-               reshuffle) — hold the magnet and glue again. Real user releases
-               arrive outside the settle window. */
-            if (settling) glue();
+               reshuffle) — hold the magnet and glue again. A preceding input
+               event identifies an operator release inside the same window. */
+            if (settling && !userInitiated) glue();
             else setMagnet(false);
           }
-          if (memoryKey && file && !settling) {
+          if (memoryKey && file && (!settling || userInitiated)) {
             rememberScroll(memoryKey, {
               magnet: magnetRef.current,
-              fromBottom: Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop),
+              fromBottom,
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
           if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
         }}
       >
-      <div ref={content} className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}>
+      <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
+        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}>
+      <div
+        ref={content}
+        /* Whether this feed has settled, readable off the page: a surface that
+           proves an arrival structurally (#1695) waits for rows, or for the
+           empty state an empty transcript settles on. A read that failed is
+           neither: it says `error`, and nothing arrives on it. */
+        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty"}
+        className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}
+      >
         {!file ? (
           <div className="mt-[20vh] text-center text-muted">{t("feed.pickLog")}</div>
         ) : (
@@ -777,8 +1057,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             ) : null}
             {compact ? null : <TaskHeader file={file} />}
             {feed.items.length ? (
-              visibleItems.map(({ anchorKey, key, item }, visibleIndex) => {
-                const answer = speakableAnswer(feed.items, visibleStartIndex + visibleIndex);
+              visibleItems.map(({ anchorKey, key, item, responseDurationMs }, visibleIndex) => {
+                const answer = answerFor(visibleStartIndex + visibleIndex);
                 const speakText = answer?.firstIndex === visibleStartIndex + visibleIndex ? answer.text : undefined;
                 return (
                   /* Session-stable keys: a row keeps its DOM node while the
@@ -788,10 +1068,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={key}
                     data-feed-key={anchorKey ?? undefined}
                     data-feed-kind={item.kind}
+                    data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
+                      : item.kind === "tool" ? String(item.srcCall) : undefined}
                     data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
                     className={compact ? "feed-cv" : undefined}
                   >
                     <FeedItem item={item} speakText={speakText} />
+                    {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                   </div>
                 );
               })
@@ -799,7 +1082,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <div className="mt-[14vh] text-center text-muted">
                 {tail.loading
                   ? t("common.loadingCap")
-                  : tail.size === 0
+                  : tail.error
+                    ? t("feed.readFailed", { error: tail.error })
+                    : tail.size === 0
                     ? t("feed.noOutput")
                     : feed.hiddenServiceCount
                       ? t("feed.onlyService", { count: feed.hiddenServiceCount })
@@ -885,12 +1170,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           </>
         )}
         </div>
+      </PrependViewport>
       </div>
     </div>
-    {/* Bottom working-status slot (issue #268): live «працює · 4:32» ticking
-        from the initiating prompt, or the frozen «Працював N» total after the
-        turn ends. Pinned below the scroller in every pane variant. */}
-    {file ? (
+    {/* Bottom working-status slot: live elapsed from the transcript receipt.
+        Completed totals stay beside their response rows in the scroller. Not on
+        the phone (mobile v2 §3.4): the bar's meta line carries the state phrase
+        and its clock, and a second one under the feed is the row the operator
+        asked us to remove. */}
+    {file && !phone ? (
       <TurnStatusBar file={file} workingLabel={working.label} workingIcon={working.icon} compact={compact} />
     ) : null}
     </div>

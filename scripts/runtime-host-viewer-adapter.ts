@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { processIdentityStatus } from "../src/lib/processIdentity";
 
 import type {
   ViewerHealthEvidence,
@@ -36,7 +37,7 @@ import {
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
-import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
+import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
 import { bootstrapViewerRelease } from "../src/runtime-host/deploymentBootstrap";
 import {
   parseRuntimeHostRehearsalReport,
@@ -44,18 +45,27 @@ import {
 } from "../src/runtime-host/hostRehearsal";
 import { McpHealthProbeAdmissions } from "../src/runtime-host/mcpHealthProbeAdmission";
 import type { McpHealthProbeAdmissionConsumer } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
+import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
 import { probeControlUrl, probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
 import { McpRuntimeReleaseStore } from "../src/runtime-host/mcpRuntimeRelease";
 import {
   clearRuntimeHostHandoffIntent,
   readRuntimeHostHandoffIntent,
   readRuntimeHostRelease,
+  readRuntimeHostRollbackTarget,
   runtimeHostHandoffIntentFile,
   runtimeHostReleaseFile,
+  runtimeHostRollbackTargetFile,
   writeRuntimeHostHandoffIntent,
   writeRuntimeHostRelease,
+  writeRuntimeHostRollbackTarget,
 } from "../src/runtime-host/hostRelease";
-import { completeRuntimeHostHandoff, stageRuntimeHostSuccessorContainer } from "../src/runtime-host/hostSuccessor";
+import {
+  completeRuntimeHostHandoff,
+  runtimeHostSuccessorName,
+  stageRuntimeHostSuccessorContainer,
+} from "../src/runtime-host/hostSuccessor";
+import { probeRuntimeHostSuccessor } from "../src/runtime-host/runtimeHostStartup";
 import {
   awaitHotStateActivation,
   awaitIncumbentHotStateRelease,
@@ -136,9 +146,10 @@ function reportAdapterPhase(action: string, phase: string): void {
   writeDurableJson(adapterPhaseFile, { action, phase, updatedAt: new Date().toISOString() });
 }
 
-async function commandResult(argv: string[], options: { cwd?: string } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
+async function commandResult(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   const child = Bun.spawn(["/usr/bin/setpriv", "--pdeathsig", "KILL", "--", ...argv], {
     cwd: options.cwd,
+    ...(options.timeoutMs ? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const } : {}),
     stdout: "pipe",
     stderr: "pipe",
     env: withoutWakatimeCredential(process.env),
@@ -147,7 +158,7 @@ async function commandResult(argv: string[], options: { cwd?: string } = {}): Pr
   return { code, stdout: stdout.trim(), stderr: stderr.trim() };
 }
 
-async function command(argv: string[], options: { cwd?: string } = {}): Promise<string> {
+async function command(argv: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<string> {
   const { code, stdout, stderr } = await commandResult(argv, options);
   if (code !== 0) throw new Error((stderr || `${argv[0]} failed`).slice(0, 1000));
   return stdout;
@@ -165,7 +176,7 @@ async function resolveRevision(requested: string): Promise<string> {
 }
 
 function composeConfigFile(container: string): string {
-  return path.join(deploymentDir, "compose", viewerComposeSnapshotName(container));
+  return viewerComposeSnapshotPath(stateDir, container);
 }
 
 function writeComposeConfig(container: string, config: string): void {
@@ -304,7 +315,7 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
 }
 
 async function containerExists(container: string): Promise<boolean> {
-  try { await command(["docker", "container", "inspect", container]); return true; }
+  try { await command(["docker", "container", "inspect", container], { timeoutMs: PROBE_TIMEOUT_MS }); return true; }
   catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("No such container") || message.includes("No such object")) return false;
@@ -366,6 +377,18 @@ async function retainOnly(releases: ViewerReleaseIdentity[]): Promise<void> {
 
 function serviceToken(candidate: ViewerReleaseIdentity): string | null {
   return viewerAuthenticationTokenFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
+}
+
+/** The same credential where the release may predate Compose snapshots: a
+    release published by an older adapter has none to read, and the probe then
+    resolves whatever the machine's own state offers, as any client does. */
+function optionalServiceToken(release: ViewerReleaseIdentity): string | null {
+  try {
+    return serviceToken(release);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 const PROBE_TIMEOUT_MS = 5_000;
@@ -449,7 +472,7 @@ function referencedAssets(html: string): string[] {
 
 async function containerState(container: string): Promise<ViewerCandidateContainerState> {
   if (!await containerExists(container)) return "missing";
-  return await command(["docker", "inspect", "--format", "{{.State.Status}}", container]) === "running" ? "running" : "exited";
+  return await command(["docker", "inspect", "--format", "{{.State.Status}}", container], { timeoutMs: PROBE_TIMEOUT_MS }) === "running" ? "running" : "exited";
 }
 
 async function probeRoutes(
@@ -472,11 +495,6 @@ async function probeRoutes(
   const registryBackendMatches = observedRegistryBackendMode === expectedRegistryBackendMode;
   const releaseReady = expectedAssetsEndpoint === undefined
     || viewerDeploymentReleaseReady(capability.status, capability.text);
-  if (expectedAssetsEndpoint !== undefined) {
-    reportPhase?.(promotedViewerReadinessPhase(
-      viewerDeploymentStructuredHostStartup(capability.status, capability.text),
-    ));
-  }
   const html = authenticated?.status === 200 ? authenticated.text : root.text;
   const paths = referencedAssets(html);
   const assets = await Promise.all(paths.map(async (asset) => ({ path: asset, status: (await fetchStatus(`${endpoint}${asset}`)).status })));
@@ -513,6 +531,12 @@ async function probeRoutes(
     && registryBackendMatches
     && releaseReady
     && expectedAssetsMatch;
+  if (expectedAssetsEndpoint !== undefined) {
+    const detail = viewerHealthFailureDetail({ observations, assets, deploymentCapable,
+      registryBackendMatches, expectedRegistryBackendMode, observedRegistryBackendMode,
+      releaseReady, expectedAssetsMatch });
+    reportPhase?.(`${promotedViewerReadinessPhase(viewerDeploymentStructuredHostStartup(capability.status, capability.text))}${detail ? `; ${detail}` : ""}`);
+  }
   return {
     checkedAt: new Date().toISOString(), endpoint, processReady, rootStatus: root.status,
     authenticatedStatus: authenticated?.status ?? null, unauthorizedStatus: unauthorized?.status ?? null,
@@ -542,7 +566,10 @@ async function verifyViewer(
     endpoint,
     inspect: () => containerState(candidate.container),
     probe: () => probeRoutes(candidate, endpoint, expectedAssetsEndpoint, reportPhase),
-    ...(expectedAssetsEndpoint ? { maxAttempts: 90 } : {}),
+    ...(expectedAssetsEndpoint ? {
+      timeoutMs: null,
+      reportPending: reportPhase,
+    } : {}),
   });
   if (evidence.ok) return evidence;
   const containerLog = await candidateContainerLog(candidate.container);
@@ -553,6 +580,7 @@ export function mcpProbeEnvironment(
   endpoint: string,
   deployTarget: string,
   env: NodeJS.ProcessEnv = process.env,
+  token: string | null = null,
 ): Record<string, string> {
   /* An empty endpoint would leave the probe's control reads on the binding's
      fixed-port fallback, which addresses the deployed Viewer rather than the
@@ -569,6 +597,11 @@ export function mcpProbeEnvironment(
     // Candidate health must exercise the candidate's web/runtime client. The
     // stable listener still serves the previous generation before promotion.
     LLV_VIEWER_CONTROL_URL: controlUrl,
+    /* The probed Viewer authenticates every connection when a token is
+       configured (#1496), and the release state still names the incumbent, so
+       the probe carries the credential of the endpoint it was pinned to rather
+       than resolving one for a Viewer it is not grading (#1511). */
+    ...(token ? { [VIEWER_CONTROL_TOKEN_ENV]: token } : {}),
   };
 }
 
@@ -626,7 +659,7 @@ async function verify(
     ? targetFile
     : path.join(stateDir, `mcp-candidate-probe-${candidate.mcpRuntime.releaseId}.json`);
   if (!promoted) writeReleaseTarget(probeTarget, candidate);
-  const probeEnvironment = mcpProbeEnvironment(endpoint, probeTarget);
+  const probeEnvironment = mcpProbeEnvironment(endpoint, probeTarget, process.env, serviceToken(candidate));
   const mcpRuntime = await probeMcpRuntime({
     command: process.execPath,
     args: [path.join(mcpRuntimeRoot, "bin", "mcp-server.mjs")],
@@ -925,6 +958,20 @@ async function checkpointHotStateFence(
   request: HotStateAuthority,
   revision: string,
 ): Promise<HotStateAuthority> {
+  if (request.activationOwner) {
+    const started = Date.now();
+    for (;;) {
+      const current = readHotStateAuthority(stateDir);
+      if (!current || current.mode !== "fencing" || current.epoch !== request.epoch
+        || current.releaseRevision !== revision) throw new Error("hot-state fence changed while awaiting Viewer quiescence");
+      if (current.checkpoint) return current;
+      // Only positive death permits the adapter to checkpoint for the Viewer.
+      // A live or unreadable identity keeps its startup/release barrier.
+      if (processIdentityStatus(request.activationOwner) === "dead") break;
+      if (Date.now() - started >= 30_000) throw new Error("Viewer did not acknowledge hot-state quiescence within 30000 ms");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
   const previousExplicitRevision = process.env[HOT_STATE_RELEASE_REVISION_ENV];
   process.env[HOT_STATE_RELEASE_REVISION_ENV] = revision;
   try {
@@ -1083,7 +1130,7 @@ async function reconcileMcpRuntime(
   try {
     mcpRuntimeStore.installStableLauncher(deploymentPackageRoot);
     const publication = switchTarget({ ...previous, mcpRuntime: runtime }, "activate");
-    const probeEnvironment = mcpProbeEnvironment(stableEndpoint, targetFile);
+    const probeEnvironment = mcpProbeEnvironment(stableEndpoint, targetFile, process.env, optionalServiceToken(previous));
     const health = await probeMcpRuntime({
       command: process.execPath,
       args: [path.join(mcpRuntimeRoot, "bin", "mcp-server.mjs")],
@@ -1244,11 +1291,19 @@ async function main(): Promise<unknown> {
     reportAdapterPhase(action, promotedViewerReadinessPhase(null));
     const candidate = release(input.candidate);
     const healthProbe = await delegatedHealthProbeAdmission(healthProbeCapability);
-    return verify(candidate, stableEndpoint, {
-      expectedAssetsEndpoint: candidate.endpoint,
-      reportPhase: (phase) => reportAdapterPhase(action, phase),
-      ...(healthProbe ?? {}),
-    });
+    while (true) {
+      // Each MCP attempt consumes its admission. Retrying readiness needs a
+      // fresh child admission after the host delegation was authenticated.
+      const admissions = healthProbe ? new McpHealthProbeAdmissions() : null;
+      const health = await verify(candidate, stableEndpoint, {
+        expectedAssetsEndpoint: candidate.endpoint,
+        reportPhase: (phase) => reportAdapterPhase(action, phase),
+        ...(admissions ? { healthProbeCapability: admissions.issue(), healthProbeAdmissions: admissions } : {}),
+      });
+      if (health.ok || !health.processReady) return health;
+      reportAdapterPhase(action, health.detail ?? "waiting for promoted MCP readiness");
+      await Bun.sleep(1_000);
+    }
   }
   if (action === "rollback") {
     const previous = release(input.previous);
@@ -1274,11 +1329,21 @@ async function main(): Promise<unknown> {
     await stageRuntimeHostSuccessor(candidate, (phase) => reportAdapterPhase(action, phase));
     return {};
   }
+  if (action === "verify-host-successor") {
+    const candidate = release(input.candidate);
+    return probeRuntimeHostSuccessor(runtimeSocket, {
+      image: candidate.image,
+      revision: candidate.revision,
+      container: runtimeHostSuccessorName(candidate.revision, candidate.image),
+    });
+  }
   if (action === "complete-host-handoff") {
     const generation = runtimeHostGeneration(input.generation);
     await completeRuntimeHostHandoff(generation, {
       docker: (argv) => command(["docker", ...argv]),
       readHandoffIntent: () => readRuntimeHostHandoffIntent(runtimeHostHandoffIntentFile()),
+      readRollbackTarget: () => readRuntimeHostRollbackTarget(runtimeHostRollbackTargetFile()),
+      writeRollbackTarget: (target) => writeRuntimeHostRollbackTarget(target, runtimeHostRollbackTargetFile()),
       clearHandoffIntent: () => clearRuntimeHostHandoffIntent(runtimeHostHandoffIntentFile()),
     });
     return {};

@@ -5,14 +5,18 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { accountManager } from "@/lib/accounts/manager";
+import {
+  ProjectAccountRefusedError,
+  resolveProjectSpawnAccount,
+} from "@/lib/accounts/manager";
+import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { modelFromBody, validateLaunchModel } from "@/lib/agent/models";
-import { agentRegistry, type AgentRegistry, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type SpawnBeginResult, type SpawnReceipt } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { spawnResponseForReceipt, type SpawnResponse as AgentSpawnResponse } from "@/lib/agent/spawnResponse";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
@@ -22,6 +26,7 @@ import { ensureTaskPipelineForAssignment } from "@/lib/pipelines/engine";
 import { attachmentPath } from "@/lib/tasks/attachments";
 import { applyAssignmentPatches, pinnedAccountId, type AssignmentPatch, type TaskCommandResult } from "@/lib/tasks/commands";
 import { isoNow } from "@/lib/tasks/helpers";
+import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask, TaskAssignment } from "@/lib/tasks/types";
 import { isGenericSessionTitle } from "@/lib/title";
@@ -55,7 +60,10 @@ interface TaskSpawnDependencies {
   registry(): AgentRegistry;
   loadTasks: typeof loadTasks;
   mutateTasks: typeof mutateTasks;
-  resolveSpawnAccount(engine: AgentEngine, accountId: string | null): AccountContext;
+  /** #1279: the project the work belongs to is part of the question, because
+      this route names no account of its own — it resolves one. The account id
+      is the one this task already ran on, a PREFERENCE and not a pin. */
+  resolveSpawnAccount(engine: AgentEngine, preferredAccountId: string | null, project: string | null): AccountContext;
   spawnAgentWithPrompt: typeof spawnAgentWithPrompt;
   resolveSpawnedTranscriptPath: typeof resolveSpawnedTranscriptPath;
   ensureTaskPipelineForAssignment?: typeof ensureTaskPipelineForAssignment;
@@ -66,7 +74,7 @@ const productionDependencies: TaskSpawnDependencies = {
   registry: agentRegistry,
   loadTasks,
   mutateTasks,
-  resolveSpawnAccount: (engine, accountId) => accountManager.resolveSpawn(engine, accountId),
+  resolveSpawnAccount: (engine, preferredAccountId, project) => resolveProjectSpawnAccount(engine, project, preferredAccountId),
   spawnAgentWithPrompt,
   resolveSpawnedTranscriptPath,
   ensureTaskPipelineForAssignment,
@@ -227,6 +235,7 @@ async function postTaskSpawn(
 
   const reasoning = reasoningFromBody(engine, retryOf
     ? {
+        model: retryOf.launchProfile.model,
         ...(retryOf.launchProfile.effort != null ? { effort: retryOf.launchProfile.effort } : {}),
         ...(retryOf.launchProfile.fast != null ? { fast: retryOf.launchProfile.fast } : {}),
       }
@@ -245,12 +254,36 @@ async function postTaskSpawn(
   const cwdResult = cwdFromBody(retryOf ? retryOf.cwd : body.cwd);
   if (!cwdResult.cwd) return NextResponse.json({ error: cwdResult.error ?? "invalid working directory" }, { status: cwdResult.status ?? 400 });
 
+  const project = projectInfoFromCwd(cwdResult.cwd)?.project ?? task.project;
   const previous = retryOf?.accountId ?? pinnedAccountId(task.assignments, engine);
   let account: AccountContext;
   try {
-    account = dependencies.resolveSpawnAccount(engine, previous);
+    /* #1279: nothing in this request names an account — the board's spawn and
+       retry buttons send none — so the account is one the Viewer picks, and a
+       pick is exactly what a project's pool binds. Resolved through the
+       project seam: an unbound project takes the branch it always took (the
+       engine's active account, or the one this task already ran on), a bound
+       project draws from its allowed set only, an allowed set with no capacity
+       is REPORTED rather than widened, and a binding record this process
+       cannot read refuses instead of guessing.
+
+       `previous` travels as a PREFERENCE. It is the account this task's first
+       launch happened to resolve, which retries keep for continuity; nobody
+       named it. Sent as a pin it would make a project that has since been
+       bound elsewhere REFUSE its own task launch while its pool sat idle —
+       the automatic path declining to draw from the pool it was given. As a
+       preference it orders the allowed candidates and loses to the fence. */
+    account = dependencies.resolveSpawnAccount(engine, previous, project);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    /* A refusal on the merits of the project's pool, or a record that needs the
+       operator: the request was well formed and the state it addresses is what
+       is wrong, which is a conflict rather than a bad request. */
+    const fenced = error instanceof ProjectAccountRefusedError
+      || error instanceof AccountProjectBindingsUnreadableError;
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: fenced ? 409 : 400 },
+    );
   }
   const shape = {
     engine,
@@ -273,7 +306,6 @@ async function postTaskSpawn(
     claudeConfigDir: engine === "claude" ? account.home : null,
     claudeProjectsDir: engine === "claude" ? account.transcriptRoot : null,
   });
-  const project = projectInfoFromCwd(cwdResult.cwd)?.project ?? task.project;
   if (directOperatorActivityAuthority(req).ok) {
     try {
       dependencies.recordOperatorActivity?.({
@@ -294,18 +326,28 @@ async function postTaskSpawn(
       title: taskTitle && !isGenericSessionTitle(taskTitle) ? taskTitle : `Task ${task.id}`,
     }),
   };
-  const begun = registry.beginSpawnRequest({
-    engine,
-    cwd: cwdResult.cwd,
-    transport: "tmux",
-    accountId: account.accountId,
-    accountPin,
-    origin: { kind: "operator" },
-    ownStartingActuation: true,
-    launchProfile: spec.launchProfile,
-    clientAttemptId,
-    requestDigest: taskRequestDigest(task, shape),
-  });
+  /* The target task travels with the reservation (#1586): the registry commits
+     this launch's membership in that task at the receipt, so no fallback task
+     is minted and a missing target aborts the launch before any actuation. */
+  let begun: SpawnBeginResult;
+  try {
+    begun = registry.beginSpawnRequest({
+      engine,
+      cwd: cwdResult.cwd,
+      transport: "tmux",
+      accountId: account.accountId,
+      accountPin,
+      origin: { kind: "operator" },
+      ownStartingActuation: true,
+      launchProfile: spec.launchProfile,
+      clientAttemptId,
+      requestDigest: taskRequestDigest(task, shape),
+      taskIds: [task.id],
+    });
+  } catch (error) {
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
   if (begun.kind === "conflict") {
     return NextResponse.json({ error: "task spawn attempt conflicts with its original request" }, { status: 409 });
   }
@@ -476,5 +518,8 @@ async function postTaskSpawn(
 
 export const POST = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<TaskSpawnResponse | ApiError>> => await postTaskSpawn(req, ctx),
-  { withDependencies: postTaskSpawn },
+  /* `productionDependencies` rides along so a test can keep the real account
+     resolution — the one #1279's rule lives in — while substituting the task
+     store and the pane it must never reach. */
+  { withDependencies: postTaskSpawn, productionDependencies },
 );

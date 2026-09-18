@@ -1,17 +1,19 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
-import { CodexAppServerHost, redactCodexHostDiagnostic } from "./codexAppServerHost";
+import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
 import { encodeCodexStructuredUserText } from "./codexStructuredUserText";
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { HostState, RuntimeEvent } from "./engineHost";
@@ -19,8 +21,18 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
-import type { RuntimeVoiceDelivery } from "./voiceDelivery";
-import { DEFAULT_VOICE_PERSONA, VOICE_PERSONA_FILE, legacyVoicePersonaBootstrapItemId, voicePersona } from "./voicePersona";
+import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
+import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
+import type { NativeQueueRecord } from "./nativeQueueContracts";
+import {
+  COORDINATOR_VOICE_PERSONA,
+  VOICE_PERSONA_FILE,
+  voiceSessionPersona,
+} from "./voicePersona";
+
+function deliveryDedup(operationId: string): string {
+  return createHash("sha256").update(operationId).digest("hex");
+}
 
 class MemoryEventStore implements RuntimeEventStore {
   private readonly events = new Map<string, RuntimeEvent[]>();
@@ -117,8 +129,21 @@ class FakeAppServer extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   autoResolveServerRequests = true;
   autoCompleteUserMessage = true;
+  /** Persist the recipient-side user record while withholding the app-server
+      confirmation, reproducing a successful delivery whose confirmation is
+      lost during a host respawn. */
+  persistUserMessages = false;
   readTurns: unknown[] | null = null;
   readError: string | null = null;
+  turnsError: string | null = null;
+  userAgent = "codex_desktop_app/0.144.1 (Linux)";
+  paginatedHistory = false;
+  /* Rejects only hydrated reads (includeTurns), the way codex 0.151+ paginated
+     threads do; metadata-only reads and thread/turns/list keep answering. */
+  hydratedReadError: string | null = null;
+  /* Rejects full-history thread/resume the way paginated threads do; a resume
+     with excludeTurns succeeds and omits thread.turns. */
+  paginatedResume = false;
   mcpServers: Record<string, unknown> = {
     playwright: { command: "npx", enabled: true },
     "telegram-readonly": { command: "uv", enabled: true },
@@ -195,7 +220,10 @@ class FakeAppServer extends EventEmitter {
     if (typeof message.id !== "number") return;
     const method = message.method;
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
-    if (method === "initialize") return this.respond(message.id, { userAgent: "codex_desktop_app/0.144.1 (Linux)" });
+    if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
+    if (method === "thread/queue/list") return this.paginatedHistory
+      ? this.respond(message.id, { data: [], nextCursor: null })
+      : this.respondError(message.id, "method not found");
     if (method === "account/read") return this.respond(message.id, { account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
     if (method === "model/list") {
       if (this.modelListFailuresRemaining > 0) {
@@ -211,6 +239,10 @@ class FakeAppServer extends EventEmitter {
     });
     if (method === "thread/start" || method === "thread/resume") {
       const id = method === "thread/resume" ? this.resumedThreadId : this.threadId;
+      const excludeTurns = Boolean((message.params as { excludeTurns?: boolean } | undefined)?.excludeTurns);
+      if (method === "thread/resume" && this.paginatedResume && !excludeTurns) {
+        return this.respondError(message.id, "list_turns is not supported yet");
+      }
       if (method === "thread/resume" && this.resumeRequest) {
         for (const request of Array.isArray(this.resumeRequest) ? this.resumeRequest : [this.resumeRequest]) {
           if (request.id) this.request(request.id, request.method, request.params);
@@ -221,19 +253,52 @@ class FakeAppServer extends EventEmitter {
         thread: {
           id,
           ...(!this.omitThreadPath ? { path: this.threadPath ?? `/sessions/${id}.jsonl` } : {}),
-          turns: this.turns,
+          ...(excludeTurns ? {} : { turns: this.turns }),
           ...(this.resumeStatus ? { status: this.resumeStatus } : {}),
         },
       });
     }
     if (method === "thread/read") {
       if (this.readError) return this.respondError(message.id, this.readError);
+      const hydrated = Boolean((message.params as { includeTurns?: boolean } | undefined)?.includeTurns);
+      if (hydrated && this.hydratedReadError) return this.respondError(message.id, this.hydratedReadError);
       return this.respond(message.id, {
         thread: {
           id: this.threadId,
           ...(!this.omitThreadReadPath ? { path: this.threadPath ?? `/sessions/${this.threadId}.jsonl` } : {}),
-          turns: this.readTurns ?? this.turns,
+          ...(hydrated ? { turns: this.readTurns ?? this.turns } : {}),
         },
+      });
+    }
+    if (method === "thread/turns/list") {
+      if (this.turnsError) return this.respondError(message.id, this.turnsError);
+      if (this.readError) return this.respondError(message.id, this.readError);
+      const turns = [...(this.readTurns ?? this.turns)];
+      if ((message.params as { sortDirection?: string } | undefined)?.sortDirection === "desc") turns.reverse();
+      if (this.paginatedHistory) {
+        const params = message.params as { cursor?: string; limit: number; itemsView: string };
+        const offset = Number(params.cursor ?? 0);
+        return this.respond(message.id, {
+          data: turns.slice(offset, offset + params.limit).map(value => {
+            const turn = value as { items: unknown[] };
+            return { ...turn, items: params.itemsView === "full" ? turn.items : [], itemsView: params.itemsView };
+          }),
+          nextCursor: offset + params.limit < turns.length ? String(offset + params.limit) : null,
+        });
+      }
+      return this.respond(message.id, {
+        data: turns,
+        nextCursor: null,
+        backwardsCursor: null,
+      });
+    }
+    if (method === "thread/items/list" && this.paginatedHistory) {
+      const params = message.params as { turnId: string; cursor?: string; limit: number };
+      const turn = (this.readTurns ?? this.turns).find(value => (value as { id: string }).id === params.turnId) as {items: unknown[]};
+      const offset = Number(params.cursor ?? 0);
+      return this.respond(message.id, {
+        data: turn.items.slice(offset, offset + params.limit).map(item => ({turnId: params.turnId, item})),
+        nextCursor: offset + params.limit < turn.items.length ? String(offset + params.limit) : null,
       });
     }
     if (method === "turn/start") {
@@ -243,12 +308,14 @@ class FakeAppServer extends EventEmitter {
       }
       this.respond(message.id, { turn: { id: turnId } });
       this.notify("turn/started", { threadId: this.threadId, turn: { id: turnId } });
+      this.persistUserMessage(message);
       this.completeUserMessage(message, turnId);
       return;
     }
     if (method === "turn/steer") {
       const turnId = (message.params as { expectedTurnId: string }).expectedTurnId;
       this.respond(message.id, { turnId });
+      this.persistUserMessage(message);
       this.completeUserMessage(message, turnId);
       return;
     }
@@ -356,6 +423,22 @@ class FakeAppServer extends EventEmitter {
       item: { type: "userMessage", clientId: params.clientUserMessageId, content: params.input },
     });
   }
+
+  private persistUserMessage(message: Record<string, unknown>): void {
+    if (!this.persistUserMessages || !this.threadPath) return;
+    const input = (message.params as { input?: unknown } | undefined)?.input;
+    if (!Array.isArray(input)) return;
+    const text = input.flatMap((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+      const value = part as Record<string, unknown>;
+      return value.type === "text" && typeof value.text === "string" ? [value.text] : [];
+    }).join("");
+    fs.appendFileSync(this.threadPath, `${JSON.stringify({
+      timestamp: "2026-09-01T10:00:00.000Z",
+      type: "event_msg",
+      payload: { type: "user_message", message: text },
+    })}\n`);
+  }
 }
 
 function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?: SpawnOptionsWithoutStdio }) {
@@ -366,6 +449,14 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     }
     return server as unknown as ChildProcessWithoutNullStreams;
   };
+}
+
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (await predicate()) return;
+    await Bun.sleep(10);
+  }
+  throw new Error(message);
 }
 
 const ownedFakeProcess = {
@@ -497,13 +588,12 @@ describe("CodexAppServerHost", () => {
     });
 
     const started = await host.startRealtimeWebRtc("v=0\r\noffer");
+    const persona = voiceSessionPersona("modality");
     expect(started).toMatchObject({
       sdp: "v=0\r\nanswer",
       realtimeSessionId: "realtime-1",
-      personaBootstrap: { insertion: "accepted" },
+      persona: { variant: "modality", personaId: persona.personaId },
     });
-    expect(started.personaBootstrap.receiptId).toMatch(/^voice_persona_[a-f0-9]{46}$/);
-    expect(started.personaBootstrap.itemId).toMatch(/^msg_voice_persona_[a-f0-9]{46}$/);
     // SDP requires a terminal CRLF; a missing one is healed, never trimmed —
     // OpenAI rejects an unterminated offer with "unmarshal SDP: EOF".
     /* The live model is named explicitly (#664): letting the backend choose
@@ -518,22 +608,19 @@ describe("CodexAppServerHost", () => {
       clientManagedHandoffs: true,
       codexResponsesAsItems: true,
       includeStartupContext: true,
+      /* THE SPOKEN MODEL'S INSTRUCTIONS (#1629). Omitting this is what left the
+         operator's orchestrator speaking as Codex's stock realtime assistant,
+         with no role and no idea what the thread behind it can reach. */
+      "prompt": persona.prompt,
+      realtimeStartInstructions: persona.startInstructions,
+      realtimeEndInstructions: persona.endInstructions,
+      flushTranscriptTailOnSessionEnd: true,
     });
 
-    /* The thread owns the persona while a current V3 call may also receive a
-       bounded unresolved conversation tail through its creation payload. */
-    const injected = server.requests.find((request) => request.method === "thread/inject_items");
-    expect((injected?.params as { threadId?: string })?.threadId).toBe("voice-thread");
-    /* Shape and ordering only. Which text arrives is pinned by the override
-       test below, where the expected string cannot also be the default. */
-    expect((injected?.params as { items?: unknown[] })?.items).toEqual([{
-      type: "message",
-      id: started.personaBootstrap.itemId,
-      role: "developer",
-      content: [{ type: "input_text", text: voicePersona() }],
-    }]);
-    expect(server.requests.findIndex((request) => request.method === "thread/inject_items"))
-      .toBeLessThan(server.requests.findIndex((request) => request.method === "thread/realtime/start"));
+    /* AND NOTHING IS WRITTEN TO THE THREAD. The persona used to be a
+       `thread/inject_items` developer row, which reached the backing model
+       permanently and the spoken model never. */
+    expect(server.requests.filter((request) => request.method === "thread/inject_items")).toEqual([]);
 
     await host.appendRealtimeSpeech("Worker inspected package.json");
     expect(server.requests.find((request) => request.method === "thread/realtime/appendSpeech")?.params).toEqual({
@@ -547,8 +634,58 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
-  test("reuses one canonical persona row and stable receipt after duplicate start and host restart", async () => {
-    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-"));
+  test("the canonical realtime transcript leaves the host as runtime events", async () => {
+    /* #1629. Until now the app-server's own `thread/realtime/*` transcript went
+       nowhere: the panel could show only what one WebRTC data channel delivered,
+       so a call whose channel dropped showed nothing of what the backend had
+       actually committed. These are the notifications an installed app-server
+       sends, driven through the real process boundary. */
+    const server = new FakeAppServer("voice-thread");
+    const store = new MemoryEventStore();
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: store,
+      spawnProcess: fakeSpawn(server),
+    });
+    await host.startRealtimeWebRtc("v=0\r\noffer");
+
+    server.notify("thread/realtime/transcript/delta", { threadId: "voice-thread", role: "user", delta: "look at " });
+    server.notify("thread/realtime/transcript/delta", { threadId: "voice-thread", role: "user", delta: "that card" });
+    server.notify("thread/realtime/transcript/done", { threadId: "voice-thread", role: "user", text: "look at that card" });
+    server.notify("thread/realtime/item/started", {
+      threadId: "voice-thread",
+      item: { id: "seg-9", realtimeSessionId: "realtime-1", type: "transcriptSegment", role: "assistant", text: "" },
+    });
+    server.notify("thread/realtime/item/completed", {
+      threadId: "voice-thread",
+      item: { id: "seg-9", realtimeSessionId: "realtime-1", type: "transcriptSegment", role: "assistant", text: "Reading it now." },
+    });
+    /* A notification for another thread must never enter this host's ledger. */
+    server.notify("thread/realtime/transcript/done", { threadId: "other-thread", role: "user", text: "not ours" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const published = store.load("voice-thread")
+      .filter((event): event is Extract<RuntimeEvent, { kind: "voice-transcript" }> => event.kind === "voice-transcript")
+      .map(({ seq: _seq, ...event }) => event);
+    expect(published).toEqual([
+      { kind: "voice-transcript", realtimeSessionId: "realtime-1", segmentId: published[0]!.segmentId, role: "user", text: "look at ", final: false },
+      { kind: "voice-transcript", realtimeSessionId: "realtime-1", segmentId: published[0]!.segmentId, role: "user", text: "look at that card", final: false },
+      { kind: "voice-transcript", realtimeSessionId: "realtime-1", segmentId: published[0]!.segmentId, role: "user", text: "look at that card", final: true },
+      /* The empty `item/started` publishes nothing (#1658): a segment with no
+         words must not take a line ahead of the words it is for. */
+      { kind: "voice-transcript", realtimeSessionId: "realtime-1", segmentId: "seg-9", role: "assistant", text: "Reading it now.", final: true },
+    ]);
+    /* One id for the whole spoken segment, so the browser updates one line. */
+    expect(new Set(published.map((event) => event.segmentId)).size).toBe(2);
+    await host.release();
+  });
+
+  test("an override edit reaches the next call, and no call writes to the thread", async () => {
+    /* The persona is a session parameter now, so it is resolved per call rather
+       than once per thread: an operator edit applies to the next call instead of
+       waiting for a new thread, and repeated calls — including across a host
+       restart — leave the canonical transcript exactly as they found it. */
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-session-persona-"));
     const transcriptPath = path.join(isolated, "voice-thread.jsonl");
     fs.writeFileSync(transcriptPath, "");
     const configDirectory = path.join(isolated, "config");
@@ -565,6 +702,9 @@ describe("CodexAppServerHost", () => {
       "v=0\r\no=- 202 2 IN IP4 127.0.0.1\r\na=ice-ufrag:second\r\na=ice-pwd:second-password\r\na=fingerprint:sha-256 33:44\r\n",
       "v=0\r\no=- 303 2 IN IP4 127.0.0.1\r\na=ice-ufrag:third\r\na=ice-pwd:third-password\r\na=fingerprint:sha-256 55:66\r\n",
     ] as const;
+    const sentPrompt = (server: FakeAppServer, occurrence: number): unknown =>
+      (server.requests.filter((request) => request.method === "thread/realtime/start")[occurrence]
+        ?.params as { prompt?: unknown })?.prompt;
     try {
       const firstServer = new FakeAppServer("voice-thread");
       firstServer.threadPath = transcriptPath;
@@ -573,14 +713,16 @@ describe("CodexAppServerHost", () => {
         eventStore: new MemoryEventStore(),
         spawnProcess: fakeSpawn(firstServer),
       });
-      const first = await firstHost.startRealtimeWebRtc(offers[0]);
-      expect(first.personaBootstrap.insertion).toBe("accepted");
+      const first = await firstHost.startRealtimeWebRtc(offers[0], "coordinator");
+      expect(sentPrompt(firstServer, 0)).toBe("First resolved call persona.");
       await firstHost.stopRealtime();
 
-      fs.writeFileSync(overridePath, "Changed after the call was resolved.\n");
-      const duplicate = await firstHost.startRealtimeWebRtc(offers[1]);
-      expect(duplicate.personaBootstrap).toEqual(first.personaBootstrap);
-      expect(firstServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(1);
+      fs.writeFileSync(overridePath, "Changed after the first call.\n");
+      const second = await firstHost.startRealtimeWebRtc(offers[1], "coordinator");
+      expect(sentPrompt(firstServer, 1)).toBe("Changed after the first call.");
+      /* A different persona is a different identity, which is what makes the
+         reported one evidence rather than decoration. */
+      expect(second.persona.personaId).not.toBe(first.persona.personaId);
       await firstHost.stopRealtime();
       await firstHost.release();
       firstHost = null;
@@ -593,15 +735,14 @@ describe("CodexAppServerHost", () => {
         eventStore: new MemoryEventStore(),
         spawnProcess: fakeSpawn(resumedServer),
       });
-      const recovered = await resumedHost.startRealtimeWebRtc(offers[2]);
-      expect(recovered.personaBootstrap).toEqual(first.personaBootstrap);
-      expect(resumedServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
+      await resumedHost.startRealtimeWebRtc(offers[2], "coordinator");
+      expect(sentPrompt(resumedServer, 0)).toBe("Changed again after host restart.");
 
-      const canonical = fs.readFileSync(transcriptPath, "utf8").trim().split("\n")
-        .map((line) => JSON.parse(line) as { payload: { id?: string; content?: Array<{ text?: string }> } })
-        .filter((line) => line.payload.id === first.personaBootstrap.itemId);
-      expect(canonical).toHaveLength(1);
-      expect(canonical[0]?.payload.content?.[0]?.text).toBe("First resolved call persona.");
+      /* Three calls, two hosts, nothing appended. */
+      for (const server of [firstServer, resumedServer]) {
+        expect(server.requests.filter((request) => request.method === "thread/inject_items")).toEqual([]);
+      }
+      expect(fs.readFileSync(transcriptPath, "utf8")).toBe("");
     } finally {
       if (firstHost) await firstHost.release();
       if (resumedHost) await resumedHost.release();
@@ -611,46 +752,54 @@ describe("CodexAppServerHost", () => {
     }
   });
 
-  test("recognizes one persisted legacy persona row across repeated host restarts", async () => {
-    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-voice-bootstrap-"));
-    const transcriptPath = path.join(isolated, "legacy-voice-thread.jsonl");
-    const threadId = "legacy-voice-thread";
-    const legacyItemId = legacyVoicePersonaBootstrapItemId(threadId);
-    fs.writeFileSync(transcriptPath, `${JSON.stringify({
+  test("a thread already carrying a coordinator persona row still gets the modality correction", async () => {
+    /* #1615, the half that cannot be undone. A thread demoted by a call taken
+       before the persona moved out of the thread keeps that developer item
+       forever — the transcript is append-only. What the correction can no longer
+       do is append a rebuttal beside it; it now rides on the session's own
+       start instructions, which are the most recent developer instruction the
+       backing model receives and are withdrawn when the call ends. */
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-demoted-thread-"));
+    const threadId = "demoted-voice-thread";
+    const transcriptPath = path.join(isolated, "demoted.jsonl");
+    const priorRow = `${JSON.stringify({
       type: "response_item",
       payload: {
         type: "message",
-        id: legacyItemId,
+        id: `msg_voice_persona_${"a".repeat(46)}`,
         role: "developer",
-        content: [{ type: "input_text", text: "Persisted legacy persona." }],
+        content: [{ type: "input_text", text: COORDINATOR_VOICE_PERSONA }],
       },
-    })}\n`);
+    })}\n`;
+    fs.writeFileSync(transcriptPath, priorRow);
 
-    for (const suffix of ["first", "second"]) {
-      const server = new FakeAppServer(threadId);
-      server.threadPath = transcriptPath;
-      const host = await CodexAppServerHost.adopt(threadId, {
-        cwd: "/repo",
-        eventStore: new MemoryEventStore(),
-        spawnProcess: fakeSpawn(server),
-      });
-      try {
-        const started = await host.startRealtimeWebRtc(`v=0\r\na=ice-ufrag:${suffix}\r\n`);
-        expect(started.personaBootstrap.insertion).toBe("accepted");
-        expect(started.personaBootstrap.itemId.length).toBeLessThanOrEqual(64);
-        expect(server.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-        await host.stopRealtime();
-      } finally {
-        await host.release();
-      }
+    const server = new FakeAppServer(threadId);
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    try {
+      const started = await host.startRealtimeWebRtc("v=0\r\na=ice-ufrag:correct\r\n", "modality");
+      expect(started.persona.variant).toBe("modality");
+
+      const start = server.requests.find((request) => request.method === "thread/realtime/start")
+        ?.params as { prompt?: string; realtimeStartInstructions?: string; realtimeEndInstructions?: string };
+      /* The correction. A second copy of the demotion would be the defect. */
+      expect(start.realtimeStartInstructions).toMatch(/it was not written for you/i);
+      expect(start.realtimeStartInstructions).not.toBe(COORDINATOR_VOICE_PERSONA);
+      expect(start.prompt).not.toBe(COORDINATOR_VOICE_PERSONA);
+      expect(start.realtimeEndInstructions).toMatch(/realtime voice has ended/i);
+
+      /* And the history the demotion lives in is left exactly as it was. */
+      expect(server.requests.filter((request) => request.method === "thread/inject_items")).toEqual([]);
+      expect(fs.readFileSync(transcriptPath, "utf8")).toBe(priorRow);
+      await host.stopRealtime();
+    } finally {
+      await host.release();
+      fs.rmSync(isolated, { recursive: true, force: true });
     }
-
-    const personaRows = fs.readFileSync(transcriptPath, "utf8").trim().split("\n")
-      .map((line) => JSON.parse(line) as { payload?: { id?: string; role?: string } })
-      .filter((line) => line.payload?.role === "developer" && line.payload.id?.startsWith("msg_voice_persona_"));
-    expect(personaRows).toHaveLength(1);
-    expect(personaRows[0]?.payload?.id).toBe(legacyItemId);
-    fs.rmSync(isolated, { recursive: true, force: true });
   });
 
   test("seeds a resumed realtime call with the interrupted duplex tail in canonical order", async () => {
@@ -714,6 +863,7 @@ describe("CodexAppServerHost", () => {
       });
     expect(diagnostics).toEqual([["[realtime context] selected", {
       providerStartupContext: true,
+      personaVariant: "modality",
       durableTail: [
         { role: "assistant", source: "durable-delta", bytes: 26 },
         { role: "user", source: "durable-item", bytes: Buffer.byteLength(followUpText, "utf8") },
@@ -899,6 +1049,30 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test("hydrated growing response sets reach the receiver in full before durable acknowledgment", async () => {
+    const eventStore = new MemoryEventStore();
+    const server = new FakeAppServer("voice-hydrated-thread");
+    const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+    try {
+      const responseA = { responseId: "response-a", text: "First canonical response. " };
+      const responseB = { responseId: "response-b", text: "Second canonical response." };
+      const recovered = normalizeVoiceDeliveries([{ turnId: "turn-hydrated", responses: [responseA], ready: false }]);
+      const pending = normalizeVoiceDeliveries([{ turnId: "turn-hydrated", responses: [{ ...responseA, text: "" }, { ...responseB, text: "" }], ready: true }]);
+      const unresolved = projectVoiceDeliveryBodies(pending, recovered, new Set());
+      expect(unresolved.complete).toBe(false);
+      for (const delivery of unresolved.deliveries) await host.deliverRealtimeWorkerResponse(delivery);
+      expect(server.acceptedRealtimeSpeech).toEqual([]);
+      expect(eventStore.load("voice-hydrated-thread").filter(event => event.kind === "realtime-delivery-acknowledged")).toHaveLength(0);
+
+      const current = [{ ...pending[0]!, responses: [{ ...responseA, text: "" }, responseB] }];
+      const complete = projectVoiceDeliveryBodies(current, recovered, new Set());
+      expect(complete.complete).toBe(true);
+      await expect(host.deliverRealtimeWorkerResponse(complete.deliveries[0]!)).resolves.toEqual({ deliveryId: current[0]!.deliveryId, acknowledged: true });
+      expect(server.acceptedRealtimeSpeech.join("")).toBe(responseA.text + responseB.text);
+      expect(eventStore.load("voice-hydrated-thread").at(-1)).toMatchObject({ kind: "realtime-delivery-acknowledged", deliveryId: current[0]!.deliveryId });
+    } finally { await host.release(); }
+  });
+
   test("delivers a large multi-item response exactly once and deduplicates after host recovery", async () => {
     const eventStore = new MemoryEventStore();
     const firstServer = new FakeAppServer("voice-delivery-thread");
@@ -986,7 +1160,7 @@ describe("CodexAppServerHost", () => {
     await replacementHost.release();
   });
 
-  test("the operator's override is the text that reaches the call's thread", async () => {
+  test("the operator's override is the text that reaches the call's spoken model", async () => {
     /* The call path has to resolve the persona the way production does, not
        just inject some persona. With no override file on disk the resolver and
        the built-in default are the same string, so a call that injected the
@@ -1001,7 +1175,7 @@ describe("CodexAppServerHost", () => {
     /* Written with surrounding whitespace, because the resolver trims and the
        injected item must carry the trimmed text. */
     fs.writeFileSync(overridePath, `  ${override}\n`);
-    expect(override).not.toBe(DEFAULT_VOICE_PERSONA);
+    expect(override).not.toBe(COORDINATOR_VOICE_PERSONA);
 
     const previousConfigHome = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = configDirectory;
@@ -1012,17 +1186,13 @@ describe("CodexAppServerHost", () => {
         eventStore: new MemoryEventStore(),
         spawnProcess: fakeSpawn(server),
       });
-      await host.startRealtimeWebRtc("v=0\r\noffer");
+      /* The override file is the coordinator variant's, so this is a coordinator
+         call — see `spokenVoicePersona`, where the modality variant deliberately
+         keeps the built-in text. */
+      await host.startRealtimeWebRtc("v=0\r\noffer", "coordinator");
 
-      const injected = server.requests.find((request) => request.method === "thread/inject_items");
-      const item = (injected?.params as {
-        items?: Array<{ type?: string; role?: string; content?: Array<{ type?: string; text?: string }> }>;
-      })?.items?.[0];
-      expect(item).toMatchObject({
-        type: "message",
-        role: "developer",
-        content: [{ type: "input_text", text: override }],
-      });
+      const start = server.requests.find((request) => request.method === "thread/realtime/start");
+      expect((start?.params as { prompt?: string })?.prompt).toBe(override);
       await host.release();
     } finally {
       if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -1076,16 +1246,22 @@ describe("CodexAppServerHost", () => {
     await host.startRealtimeWebRtc("v=0\r\noffer");
     const realtimeStart = server.requests.find((request) => request.method === "thread/realtime/start");
     const params = realtimeStart?.params as Record<string, unknown>;
-    /* App-server contract (codex 0.145.0): thread/realtime/start names the
-       thread and nothing else — no MCP table, config, or tool list rides the
-       call, so the session can only inherit the thread's servers above. */
+    /* App-server contract (codex-cli 0.154.0, bundled app-server 0.153.4):
+       thread/realtime/start carries the session's own instructions and nothing
+       about tools — no MCP table, config, or tool list rides the call, so the
+       backing model can only inherit the thread's servers above, and the spoken
+       model holds no tool of its own at all. */
     expect(params.threadId).toBe("voice-mcp-thread");
     expect(Object.keys(params).sort()).toEqual([
       "clientManagedHandoffs",
       "codexResponsesAsItems",
+      "flushTranscriptTailOnSessionEnd",
       "includeStartupContext",
       "model",
       "outputModality",
+      "prompt",
+      "realtimeEndInstructions",
+      "realtimeStartInstructions",
       "threadId",
       "transport",
       "version",
@@ -1170,7 +1346,7 @@ describe("CodexAppServerHost", () => {
     expect(server.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "localImage", path: `/runtime-images/${first.sha256}` },
-        { type: "text", text: `<!-- llv:structured-user sha256=${firstContent.contentDigest} -->\ninspect` },
+        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, null, null, deliveryDedup("image-start")) },
       ],
       clientUserMessageId: "image-start",
     });
@@ -1184,7 +1360,7 @@ describe("CodexAppServerHost", () => {
       expectedTurnId: "turn-1",
       input: [
         { type: "localImage", path: `/runtime-images/${second.sha256}` },
-        { type: "text", text: `<!-- llv:structured-user sha256=${secondContent.contentDigest} -->\n` },
+        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, null, null, deliveryDedup("image-steer")) },
       ],
       clientUserMessageId: "image-steer",
     });
@@ -1333,7 +1509,7 @@ describe("CodexAppServerHost", () => {
     expect(steer.params).toMatchObject({
       expectedTurnId: "turn-1",
       clientUserMessageId: "delivery-two",
-      input: [{ type: "text", text: "<!-- llv:structured-user -->\nsteer" }],
+      input: [{ type: "text", text: encodeCodexStructuredUserText("steer", undefined, null, null, deliveryDedup("delivery-two")) }],
     });
 
     server.request("approval-1", "item/commandExecution/requestApproval", { command: "touch allowed" });
@@ -1400,14 +1576,13 @@ describe("CodexAppServerHost", () => {
     expect(overrideServer.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({ effort: "ultra" });
     await overrideHost.release();
 
-    // A tier outside the codex vocabulary falls back to the host default
-    // instead of failing the turn over a settings blemish.
+    // Invalid explicit selections fail before the native write.
     const invalidServer = new FakeAppServer("per-turn-invalid");
     const invalidHost = await CodexAppServerHost.start({
       cwd: "/repo", effort: "medium", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(invalidServer),
     });
-    await invalidHost.send({ id: "with-blemish", text: "stay safe", runtime: { effort: "warp9" } });
-    expect(invalidServer.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({ effort: "medium" });
+    await expect(invalidHost.send({ id: "with-blemish", text: "stay safe", runtime: { effort: "warp9" } })).rejects.toThrow("effort is invalid");
+    expect(invalidServer.requests.some((request) => request.method === "turn/start")).toBeFalse();
     await invalidHost.release();
   });
 
@@ -1606,6 +1781,42 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test("delivery confirmation survives a paginated thread that refuses hydration (#1332)", async () => {
+    const threadId = "paginated-confirmation-thread";
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paginated-confirm-"));
+    const rollout = path.join(directory, `${threadId}.jsonl`);
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        turn_id: "persisted-turn",
+        item: { type: "UserMessage", id: "item-1", client_id: "operation-paginated-confirm", content: [{ type: "text", text: "hello" }] },
+      },
+    })}\n${JSON.stringify({
+      timestamp: "t2",
+      type: "event_msg",
+      payload: { type: "turn_completed", turn_id: "persisted-turn" },
+    })}\n`);
+    const server = new FakeAppServer(threadId, threadId);
+    server.threadPath = rollout;
+    server.hydratedReadError = "list_turns is not supported yet";
+    const host = await CodexAppServerHost.adopt(threadId, {
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-paginated-confirm", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "persisted-turn",
+    });
+    expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
+    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    expect((await host.health()).status).not.toBe("dead");
+    await host.release();
+  });
+
   test("an oversized frame that is not the awaited replay envelope still fails closed", async () => {
     const server = new FakeAppServer("oversized-notification-thread");
     const host = await CodexAppServerHost.start({
@@ -1704,6 +1915,54 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test("a Codex re-host reconstructs the full Viewer stdio MCP connector", async () => {
+    const server = new FakeAppServer("viewer-rehost-thread");
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    server.mcpServers = {
+      viewer: {
+        command: "bun",
+        args: ["bin/mcp-server.mjs"],
+        env: { LLV_STATE_DIR: "fixture-state" },
+        enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+      unrelated: { command: "unrelated-mcp", enabled: true },
+    };
+    const host = await CodexAppServerHost.adopt("viewer-rehost-thread", {
+      cwd: "/repo",
+      mcpServers: ["viewer"],
+      env: {
+        NODE_ENV: "test",
+        LLV_STATE_DIR: "fixture-state",
+        LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+        LLV_VIEWER_PORT: "8898",
+      },
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server, captured),
+    });
+
+    expect(captured.options?.env).toMatchObject({
+      LLV_STATE_DIR: "fixture-state",
+      LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+      LLV_VIEWER_PORT: "8898",
+    });
+    expect(server.requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+      config: {
+        mcp_servers: {
+          viewer: {
+            command: "bun",
+            args: ["bin/mcp-server.mjs"],
+            env: { LLV_STATE_DIR: "fixture-state" },
+            enabled: true,
+            default_tools_approval_mode: "approve",
+          },
+          unrelated: { enabled: false },
+        },
+      },
+    });
+    await host.release();
+  });
+
   test("rejects a resume response for a different durable thread", async () => {
     const server = new FakeAppServer("server-default", "different-thread");
     const eventStore = new MemoryEventStore();
@@ -1768,6 +2027,204 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test("delivery success with a lost confirmation and repeated respawns writes one recipient user record (#1366)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    fs.writeFileSync(transcriptPath, "");
+    const entry = { id: "operation-recipient-dedup", text: "apply the approved change" };
+    const servers: FakeAppServer[] = [];
+    let confirmationTimeouts = 0;
+    const deliver = async (start: boolean): Promise<void> => {
+      const server = new FakeAppServer("delivery-thread", "delivery-thread");
+      server.threadPath = transcriptPath;
+      server.persistUserMessages = true;
+      server.autoCompleteUserMessage = false;
+      servers.push(server);
+      const options = {
+        cwd: "/repo",
+        eventStore: new MemoryEventStore(),
+        spawnProcess: fakeSpawn(server),
+        deliveryConfirmationTimeoutMs: 5,
+        shutdownGraceMs: 1,
+      };
+      const host = start
+        ? await CodexAppServerHost.start(options)
+        : await CodexAppServerHost.adopt("delivery-thread", options);
+      try {
+        await host.send(entry);
+      } catch (error) {
+        expect(String(error)).toContain("delivery confirmation timed out");
+        confirmationTimeouts += 1;
+      } finally {
+        await host.release();
+      }
+    };
+
+    try {
+      await deliver(true);
+      for (let retry = 0; retry < 3; retry += 1) await deliver(false);
+      const userRecords = fs.readFileSync(transcriptPath, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { payload?: { type?: string } })
+        .filter((record) => record.payload?.type === "user_message");
+      expect(userRecords).toHaveLength(1);
+      expect(confirmationTimeouts).toBe(1);
+      expect(servers.flatMap((server) => server.requests)
+        .filter((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toHaveLength(1);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable recipient transcript cannot authorize a redelivery (#1366)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-unreadable-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    fs.symlinkSync(path.basename(transcriptPath), transcriptPath);
+    const server = new FakeAppServer("delivery-thread");
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    try {
+      await expect(host.send({ id: "operation-unreadable-dedup", text: "deliver once" }))
+        .rejects.toThrow("recipient transcript is unavailable for delivery deduplication");
+      expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toBeFalse();
+    } finally {
+      await host.release();
+      fs.unlinkSync(transcriptPath);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed recipient dedup record cannot authorize a redelivery (#1366)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-malformed-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const operationId = "operation-malformed-dedup";
+    fs.writeFileSync(
+      transcriptPath,
+      `{"payload":{"type":"user_message","message":"<!-- llv:structured-user dedup=${deliveryDedup(operationId)} -->\\n`,
+    );
+    const server = new FakeAppServer("delivery-thread");
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    try {
+      await expect(host.send({ id: operationId, text: "deliver once" }))
+        .rejects.toThrow("recipient transcript is unavailable for delivery deduplication");
+      expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toBeFalse();
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("recipient dedup finds a delivered operation before the bounded turn tail (#1366)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recipient-dedup-prefix-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const operationId = "operation-before-rollout-tail";
+    const text = "already delivered before a large transcript tail";
+    const delivered = JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: {
+        type: "user_message",
+        message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+      },
+    });
+    const filler = JSON.stringify({
+      timestamp: "t2",
+      type: "event_msg",
+      payload: { type: "agent_message", message: "x".repeat(16 * 1024 * 1024 + 1024) },
+    });
+    fs.writeFileSync(transcriptPath, `${delivered}\n${filler}\n`);
+    const server = new FakeAppServer("delivery-thread", "delivery-thread");
+    server.threadPath = transcriptPath;
+    server.hydratedReadError = "list_turns is not supported yet";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.send({ id: operationId, text })).toEqual({
+        outcome: "turn-started",
+        turnId: operationId,
+      });
+      expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toBeFalse();
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each([false, true])("a bounded tail starting inside a marker-bearing record preserves send dedup (already delivered: %s)", async (alreadyDelivered) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tail-boundary-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const operationId = "operation-tail-boundary";
+    const text = "retain exact recipient ownership";
+    const delivered = JSON.stringify({ type: "event_msg", payload: {
+      type: "user_message",
+      message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+    } });
+    // The 16 MiB tail starts inside this complete, valid tool record. Its
+    // quoted marker is ordinary tool output, not a corrupt recipient message.
+    const tool = JSON.stringify({ type: "response_item", payload: {
+      type: "function_call_output", output: "x".repeat(2 * 1024 * 1024) + " llv:structured-user quoted source",
+    } });
+    const filler = JSON.stringify({ type: "event_msg", payload: {
+      type: "agent_message", message: "x".repeat(15 * 1024 * 1024),
+    } });
+    fs.writeFileSync(transcriptPath, `${alreadyDelivered ? delivered + "\n" : ""}${tool}\n${filler}\n`);
+    const server = new FakeAppServer("delivery-thread", "delivery-thread");
+    server.threadPath = transcriptPath;
+    server.hydratedReadError = "list_turns is not supported yet";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(await host.send({ id: operationId, text })).toEqual({
+        outcome: "turn-started", turnId: alreadyDelivered ? operationId : "turn-1",
+      });
+      expect(server.requests.filter((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toHaveLength(alreadyDelivered ? 0 : 1);
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed marker-bearing record crossing the tail boundary still refuses delivery", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tail-corrupt-"));
+    const transcriptPath = path.join(directory, "delivery-thread.jsonl");
+    const corrupt = "x".repeat(2 * 1024 * 1024) + " llv:structured-user malformed record";
+    const filler = JSON.stringify({ type: "event_msg", payload: {
+      type: "agent_message", message: "x".repeat(15 * 1024 * 1024),
+    } });
+    fs.writeFileSync(transcriptPath, `${corrupt}\n${filler}\n`);
+    const server = new FakeAppServer("delivery-thread", "delivery-thread");
+    server.threadPath = transcriptPath;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      await expect(host.send({ id: "operation-corrupt-tail", text: "deliver once" }))
+        .rejects.toThrow("recipient transcript is unavailable for delivery deduplication");
+      expect(server.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer"))
+        .toBeFalse();
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("keeps a send pending until the matching user item is persisted", async () => {
     const server = new FakeAppServer("confirm-after-rpc");
     server.autoCompleteUserMessage = false;
@@ -1818,9 +2275,14 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
-  test("starts the first delivery when Codex reports an unmaterialized thread", async () => {
+  test.each(["0.144.1", "0.154.0"])("starts the first delivery when Codex %s reports an unmaterialized thread", async (version) => {
     const server = new FakeAppServer("fresh-delivery-thread");
+    server.userAgent = `codex_desktop_app/${version} (Linux)`;
     server.readError = "thread fresh-delivery-thread is not materialized yet; includeTurns is unavailable before first user message";
+    if (version === "0.154.0") {
+      server.turnsError = server.readError.replace("includeTurns", "thread/turns/list");
+      server.readError = null;
+    }
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       eventStore: new MemoryEventStore(),
@@ -1830,6 +2292,316 @@ describe("CodexAppServerHost", () => {
     expect(await host.send({ id: "operation-first", text: "hello" })).toEqual({
       outcome: "turn-started",
       turnId: "turn-1",
+    });
+    await host.release();
+  });
+
+  test("confirms native queue delivery and materialization across 316 turns within existing bounds", async () => {
+    const server = new FakeAppServer("long-native-thread");
+    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.paginatedHistory = true;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      expect(host.nativeQueue).toBeDefined();
+      const entry: NativeQueueRecord = {
+        entryId: "long-history-send", conversationId: "conversation_fixture",
+        binding: {threadId: "long-native-thread", accountId: "fixture"},
+        clientUserMessageId: "long-history-send", nativeSubmissionId: "native-submission",
+        revision: 1, versions: [{revision: 1, operationId: "long-history-send", text: "Continue the authorized review", images: [], contentDigest: "fixture-digest"}],
+        profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null,
+        dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
+      };
+      entry.versions[0].input = await host.nativeQueue!.prepare(entry, entry.versions[0]);
+      const user = {type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId, content: entry.versions[0].input};
+      // Match the observed 316-turn, roughly 2,500-item / 12 MB projection.
+      // The target is recent; reading unrelated history must fit the original
+      // 128-response / 16 MiB bounds without creating any new model turn.
+      server.readTurns = Array.from({length: 316}, (_, index) => ({
+        id: `history-${index}`, status: "completed", items: [
+          ...Array.from({length: 7}, (_, tool) => ({type: "commandExecution", id: `tool-${index}-${tool}`, aggregatedOutput: "x".repeat(5500)})),
+          ...(index === 315 ? [user] : [{type: "agentMessage", id: `answer-${index}`, text: "Earlier answer"}]),
+        ],
+      }));
+      expect(await host.nativeQueue!.evidence(entry)).toMatchObject({clientUserMessageId: entry.clientUserMessageId, turnId: "history-315", itemId: user.id});
+      expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: user.id})]);
+      expect(await host.sessionMaterializationEvidence(entry.clientUserMessageId)).toEqual({state: "materialized"});
+      const mismatched = structuredClone(entry);
+      mismatched.versions[0].input = [{type: "text", text: "Different payload"}];
+      expect(await host.nativeQueue!.evidence(mismatched)).toBeNull();
+      const foreign = {...entry, binding: {...entry.binding, threadId: "foreign-thread"}};
+      expect(await host.nativeQueue!.evidence(foreign)).toBeNull();
+      (server.readTurns[315] as {items: unknown[]}).items.pop();
+      expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+      expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
+      expect((await host.send({id: "fresh-long-history-message", text: "A fresh authorized message"})).outcome).toBe("turn-started");
+    } finally { await host.release(); }
+  }, 15000);
+
+  test("native-history transport refusals never authorize a first delivery", async () => {
+    const server = new FakeAppServer("refused-first-thread");
+    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    server.readError = "permission denied";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    });
+    try {
+      await expect(host.send({ id: "refused-first", text: "hello" }))
+        .rejects.toThrow("Codex canonical history is unavailable: transport");
+      expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
+    } finally { await host.release(); }
+  });
+
+  test("journal first-dispatch evidence avoids a cold history scan while retaining collision checks", async () => {
+    const server = new FakeAppServer("journal-first-thread");
+    server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+    const host = await CodexAppServerHost.start({cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server)});
+    server.readError = "history transport is unavailable";
+    try {
+      await expect(host.send({id: "wrong-binding", text: "hello"}, {operationId: "different", writerClaim: "owner:1", firstDispatch: true}))
+        .rejects.toThrow("Codex canonical history is unavailable");
+      expect(server.requests.some(request => request.method === "turn/start")).toBeFalse();
+      const input = {id: "fresh-authorized", text: "hello"};
+      const proof = {operationId: input.id, writerClaim: "owner:1", firstDispatch: true as const};
+      expect((await host.send(input, proof)).outcome).toBe("turn-started");
+      expect((await host.send(input, proof)).outcome).toBe("turn-started");
+      await expect(host.send({...input, text: "changed"}, proof)).rejects.toThrow("different payload");
+      expect(server.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+    } finally { await host.release(); }
+  });
+
+  test("a successful hydrated read with no turns defers to the rollout on disk (#1332)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-empty-hydration-"));
+    const rollout = path.join(directory, "empty-hydration-thread.jsonl");
+    const server = new FakeAppServer("empty-hydration-thread");
+    server.threadPath = rollout;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-empty-hydration", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    await expect(host.sessionMaterializationEvidence("operation-empty-hydration")).resolves.toEqual({
+      state: "absent",
+      reason: "Codex app-server did not read back the confirmed first message",
+    });
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        turn_id: "turn-1",
+        item: { type: "UserMessage", id: "item-1", client_id: "operation-empty-hydration", content: [{ type: "text", text: "hello" }] },
+      },
+    })}\n`);
+    await expect(host.sessionMaterializationEvidence("operation-empty-hydration")).resolves.toEqual({
+      state: "materialized",
+    });
+    await host.release();
+  });
+
+  test("rolloutTurnsFromDisk parses once per file change and refreshes on append", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-cache-"));
+    const rollout = path.join(directory, "cached-thread.jsonl");
+    const record = (turn: string, clientId: string) => `${JSON.stringify({
+      timestamp: "t",
+      type: "event_msg",
+      payload: { type: "item_completed", turn_id: turn, item: { type: "UserMessage", id: clientId, client_id: clientId, content: [] } },
+    })}\n`;
+    fs.writeFileSync(rollout, record("turn-1", "first"));
+    const initial = rolloutTurnsFromDisk(rollout);
+    expect(initial.length).toBe(1);
+    /* A caller mutating its returned page must not poison later reads. */
+    initial.pop();
+    expect(rolloutTurnsFromDisk(rollout).length).toBe(1);
+    fs.appendFileSync(rollout, record("turn-2", "second"));
+    const refreshed = rolloutTurnsFromDisk(rollout);
+    expect(refreshed.length).toBe(2);
+    expect((refreshed[1] as { id?: string }).id).toBe("turn-2");
+  });
+
+  test("a rollout on disk outranks the engine's not-materialized answer (#1332)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-disk-outranks-"));
+    const rollout = path.join(directory, "disk-outranks-thread.jsonl");
+    const server = new FakeAppServer("disk-outranks-thread");
+    server.threadPath = rollout;
+    server.readError = "thread disk-outranks-thread is not materialized yet; includeTurns is unavailable before first user message";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-disk-outranks", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    await expect(host.sessionMaterializationEvidence("operation-disk-outranks")).resolves.toEqual({
+      state: "absent",
+      reason: "Codex app-server has not materialized the confirmed first message yet",
+    });
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        turn_id: "turn-1",
+        item: { type: "UserMessage", id: "item-1", client_id: "operation-disk-outranks", content: [{ type: "text", text: "hello" }] },
+      },
+    })}\n`);
+    await expect(host.sessionMaterializationEvidence("operation-disk-outranks")).resolves.toEqual({
+      state: "materialized",
+    });
+    await host.release();
+  });
+
+  test("fails materialization only after the confirmed first turn ends without a session", async () => {
+    const server = new FakeAppServer("failed-materialization-thread");
+    server.readError = "thread failed-materialization-thread is not materialized yet; includeTurns is unavailable before first user message";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-materialization", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    await expect(host.sessionMaterializationEvidence("operation-materialization")).resolves.toEqual({
+      state: "absent",
+      reason: "Codex app-server has not materialized the confirmed first message yet",
+    });
+
+    server.notify("turn/completed", {
+      threadId: "failed-materialization-thread",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await expect(host.sessionMaterializationEvidence("operation-materialization")).resolves.toEqual({
+      state: "failed",
+      reason: "Codex app-server completed the confirmed first turn without materializing its session",
+    });
+    await host.release();
+  });
+
+  test("classifies a terminal thread/read rejection as failed materialization evidence", async () => {
+    const server = new FakeAppServer("rejected-materialization-thread");
+    server.readError = "thread rejected-materialization-thread not found";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    await expect(host.sessionMaterializationEvidence("operation-rejected")).resolves.toMatchObject({
+      state: "failed",
+      reason: expect.stringContaining("thread rejected-materialization-thread not found"),
+    });
+    await host.release();
+  });
+
+  test("keeps a transient thread/read rejection inconclusive", async () => {
+    const server = new FakeAppServer("transient-materialization-thread");
+    server.readError = "service temporarily unavailable";
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    await expect(host.sessionMaterializationEvidence("operation-transient")).resolves.toMatchObject({
+      state: "unavailable",
+      reason: expect.stringContaining("service temporarily unavailable"),
+    });
+    await host.release();
+  });
+
+  test("confirms the persisted first message from thread/read materialization evidence", async () => {
+    const server = new FakeAppServer("materialized-thread");
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-materialized", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    server.readTurns = [{
+      id: "turn-1",
+      status: "inProgress",
+      items: [{ type: "userMessage", clientId: "operation-materialized", content: [{ type: "text", text: "hello" }] }],
+    }];
+    await expect(host.sessionMaterializationEvidence("operation-materialized")).resolves.toEqual({
+      state: "materialized",
+    });
+    await host.release();
+  });
+
+  test("a paginated thread that refuses hydration still proves materialization from the rollout on disk (#1332)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paginated-evidence-"));
+    const rollout = path.join(directory, "paginated-evidence-thread.jsonl");
+    const server = new FakeAppServer("paginated-evidence-thread");
+    server.threadPath = rollout;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-paginated", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    server.hydratedReadError = "list_turns is not supported yet";
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        turn_id: "turn-1",
+        item: { type: "UserMessage", id: "item-1", client_id: "operation-paginated", content: [{ type: "text", text: "hello" }] },
+      },
+    })}\n`);
+    await expect(host.sessionMaterializationEvidence("operation-paginated")).resolves.toEqual({
+      state: "materialized",
+    });
+    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    const fallbackRead = server.requests.findLast((request) => request.method === "thread/read");
+    expect((fallbackRead?.params as { includeTurns?: boolean }).includeTurns).toBeUndefined();
+    await host.release();
+  });
+
+  test("the disk fallback still reports an absent first message (#1332)", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paginated-absent-"));
+    const rollout = path.join(directory, "paginated-absent-thread.jsonl");
+    const server = new FakeAppServer("paginated-absent-thread");
+    server.threadPath = rollout;
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo",
+      eventStore: new MemoryEventStore(),
+      spawnProcess: fakeSpawn(server),
+    });
+
+    expect(await host.send({ id: "operation-paginated-absent", text: "hello" })).toEqual({
+      outcome: "turn-started",
+      turnId: "turn-1",
+    });
+    server.hydratedReadError = "list_turns is not supported yet";
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: { type: "item_completed", turn_id: "turn-1", item: { type: "AgentMessage", id: "item-2", text: "working" } },
+    })}\n`);
+    await expect(host.sessionMaterializationEvidence("operation-paginated-absent")).resolves.toEqual({
+      state: "absent",
+      reason: "Codex app-server did not read back the confirmed first message",
     });
     await host.release();
   });
@@ -1886,6 +2658,52 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
+  test("adopts a paginated thread that refuses full-history resume (#1332)", async () => {
+    const eventStore = new MemoryEventStore();
+    eventStore.append("paginated-resume-thread", { kind: "turn-started", turnId: "crashed-turn", seq: 1 });
+    const persistedItem = { type: "agentMessage", id: "response-item", text: "persisted response" };
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paginated-resume-"));
+    const rollout = path.join(directory, "paginated-resume-thread.jsonl");
+    fs.writeFileSync(rollout, `${JSON.stringify({
+      timestamp: "t1",
+      type: "event_msg",
+      payload: { type: "item_completed", turn_id: "crashed-turn", item: persistedItem },
+    })}\n${JSON.stringify({
+      timestamp: "t2",
+      type: "event_msg",
+      payload: { type: "turn_completed", turn_id: "crashed-turn" },
+    })}\n`);
+    const server = new FakeAppServer("paginated-resume-thread", "paginated-resume-thread", false, [], { type: "idle" });
+    server.threadPath = rollout;
+    server.paginatedResume = true;
+    const host = await CodexAppServerHost.adopt("paginated-resume-thread", {
+      cwd: "/repo",
+      eventStore,
+      initialEventCursor: 1,
+      spawnProcess: fakeSpawn(server),
+    });
+    const replay = host.attach(1)[Symbol.asyncIterator]();
+    expect((await replay.next()).value).toEqual({
+      kind: "item",
+      turnId: "crashed-turn",
+      item: persistedItem,
+      phase: "completed",
+      seq: 2,
+    });
+    expect((await replay.next()).value).toEqual({
+      kind: "turn-ended",
+      turnId: "crashed-turn",
+      status: "completed",
+      seq: 3,
+    });
+    const resumes = server.requests.filter((request) => request.method === "thread/resume");
+    expect(resumes.length).toBe(2);
+    expect((resumes[1]!.params as { excludeTurns?: boolean }).excludeTurns).toBeTrue();
+    expect(server.requests.some((request) => request.method === "thread/turns/list")).toBeFalse();
+    expect(await host.health()).toMatchObject({ status: "idle", activeTurnRef: null });
+    await host.release();
+  });
+
   test("restores the resumed active turn after a dead ledger", async () => {
     const eventStore = new MemoryEventStore();
     eventStore.append("active-after-crash", { kind: "turn-started", turnId: "stale-turn", seq: 1 });
@@ -1921,7 +2739,7 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
-  test("resolves ledger attention during adoption and preserves resumed active flags", async () => {
+  test("retains unowned ledger attention during adoption and preserves resumed active flags", async () => {
     const eventStore = new MemoryEventStore();
     eventStore.append("crashed-attention", {
       kind: "attention",
@@ -1947,9 +2765,10 @@ describe("CodexAppServerHost", () => {
     const replay = host.attach(1)[Symbol.asyncIterator]();
     expect((await replay.next()).value).toEqual({ kind: "turn-started", turnId: "approval-turn", seq: 2 });
     expect((await replay.next()).value).toEqual({
-      kind: "attention-resolved",
+      kind: "attention",
       id: "item/commandExecution/requestApproval:approval-crash",
-      resolution: "host-restarted",
+      method: "item/commandExecution/requestApproval",
+      attention: { command: "date", unowned: true },
       seq: 3,
     });
     expect((await replay.next()).value).toEqual({
@@ -1959,9 +2778,9 @@ describe("CodexAppServerHost", () => {
       seq: 4,
     });
     expect(await host.health()).toMatchObject({
-      status: "active",
+      status: "attention",
       activeTurnRef: "approval-turn",
-      pendingAttention: [],
+      pendingAttention: ["item/commandExecution/requestApproval:approval-crash"],
       activeFlags: ["waitingForApproval"],
     });
     await host.release();
@@ -2494,7 +3313,7 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
-  test("reuses a buffered approval already present in the durable crash prefix", async () => {
+  test("keeps restored and newly issued same-RPC-id requests in distinct generations", async () => {
     const threadId = "buffered-attention-overlap";
     const attentionId = "item/commandExecution/requestApproval:buffered-approval";
     const attention = { command: "date" };
@@ -2519,15 +3338,11 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server),
     });
 
-    expect(eventStore.load(threadId).filter((event) => event.kind === "attention")).toEqual([{
-      kind: "attention",
-      id: attentionId,
-      method: "item/commandExecution/requestApproval",
-      attention,
-      seq: 1,
-    }]);
-    expect(await host.health()).toMatchObject({ status: "attention", pendingAttention: [attentionId] });
-    await host.answer(attentionId, { decision: "accept" });
+    const newId = `${attentionId}:generation-2`;
+    expect((await host.health()).pendingAttention).toEqual([attentionId, newId]);
+    await expect(host.answer(attentionId, { decision: "accept" })).rejects.toThrow("previous host generation");
+    await host.answer(newId, { decision: "accept" });
+    expect((await host.health()).pendingAttention).toEqual([attentionId]);
     await host.release();
   });
 
@@ -3460,7 +4275,7 @@ describe("CodexAppServerHost", () => {
     )).rejects.toThrow("structured hosts are disabled");
   });
 
-  test("boot adoption resumes every flagged Codex registry row", async () => {
+  test("boot re-host resumes Codex and reconstructs its Viewer MCP connector (#1346)", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-adoption-"));
     const registryPath = path.join(directory, "agent-registry.json");
     const registry = new AgentRegistry(registryPath);
@@ -3502,7 +4317,17 @@ describe("CodexAppServerHost", () => {
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
     expect(adopted).toHaveLength(1);
-    expect(server.requests.some((request) => request.method === "thread/resume")).toBeTrue();
+    expect(server.requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+      config: {
+        mcp_servers: {
+          viewer: {
+            command: "bun",
+            args: [expect.stringContaining("bin/mcp-server.mjs")],
+            enabled: true,
+          },
+        },
+      },
+    });
     expect(registry.snapshot().entries["codex:adopted-thread"]?.structuredHost).toMatchObject({
       eventCursor: 13,
       writerClaimEpoch: 4,
@@ -3549,6 +4374,226 @@ describe("CodexAppServerHost", () => {
     });
     await releasedRows[0]!.host.release();
   });
+
+  test("a severed seat re-hosts in a distinct process with a discoverable working Viewer MCP", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-successor-process-"));
+    const home = path.join(directory, "home");
+    const configHome = path.join(directory, "config");
+    const stateDirectory = path.join(directory, "state");
+    const tempDirectory = path.join(directory, "tmp");
+    const targetPath = path.join(stateDirectory, "viewer-release.json");
+    const transcriptPath = path.join(directory, "seat-successor.jsonl");
+    const registryPath = path.join(directory, "agent-registry.json");
+    const eventsPath = path.join(directory, "events");
+    const mcpProofPath = path.join(directory, "viewer-mcp-proof.json");
+    const incumbentReadyPath = path.join(directory, "incumbent-ready.json");
+    const successorReadyPath = path.join(directory, "successor-ready.json");
+    for (const pathname of [home, configHome, stateDirectory, tempDirectory]) {
+      fs.mkdirSync(pathname, { recursive: true, mode: 0o700 });
+    }
+    fs.writeFileSync(transcriptPath, "");
+    const deployment = {
+      deploymentId: "deployment_seat_successor",
+      phase: "succeeded",
+      revision: "e".repeat(40),
+    };
+    let controlRequests = 0;
+    const control = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        controlRequests += 1;
+        const url = new URL(request.url);
+        expect(url.pathname).toBe("/api/runtime/deployments");
+        expect(url.searchParams.get("limit")).toBe("25");
+        return Response.json({ count: 1, deployments: [deployment] });
+      },
+    });
+    if (control.port === 8898) {
+      control.stop(true);
+      throw new Error("the seat-successor fixture selected the production port");
+    }
+    fs.writeFileSync(targetPath, JSON.stringify({
+      revision: "e".repeat(40),
+      image: "viewer:fixture",
+      container: "viewer-fixture",
+      endpoint: control.url.origin,
+    }));
+    const environment: NodeJS.ProcessEnv = {
+      NODE_ENV: "test",
+      PATH: process.env.PATH,
+      HOME: home,
+      XDG_CONFIG_HOME: configHome,
+      XDG_CACHE_HOME: path.join(directory, "cache"),
+      XDG_DATA_HOME: path.join(directory, "data"),
+      XDG_STATE_HOME: path.join(directory, "xdg-state"),
+      TMPDIR: tempDirectory,
+      LLV_STATE_DIR: stateDirectory,
+      LLV_VIEWER_DEPLOY_TARGET: targetPath,
+      LLV_VIEWER_PORT: String(control.port),
+    };
+    const hostFixture = path.join(import.meta.dir, "fixtures", "seatSuccessorHost.ts");
+    type FixtureIdentity = { pid: number; startIdentity: string };
+    type FixtureReady = {
+      mode: "incumbent" | "successor";
+      sessionId: string;
+      viewer: FixtureIdentity;
+      engine: FixtureIdentity;
+      eventCursor: number;
+      activeTurnRef: string | null;
+      proof?: {
+        enginePid: number;
+        toolNames?: string[];
+        structuredContent?: unknown;
+        error?: string;
+      };
+    };
+    type FixtureFailure = { mode?: "incumbent" | "successor"; error: string };
+    type FixtureHostProcess = ChildProcessWithoutNullStreams & { pid: number };
+    const launchHost = (mode: "incumbent" | "successor", readyPath: string): FixtureHostProcess => {
+      const child = spawn(process.execPath,
+        [hostFixture, mode, registryPath, eventsPath, transcriptPath, mcpProofPath, readyPath], {
+          cwd: process.cwd(),
+          env: environment,
+          detached: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      if (!child.pid) {
+        child.kill("SIGKILL");
+        throw new Error("fixture host process has no pid");
+      }
+      return child as FixtureHostProcess;
+    };
+    const diagnostics = new Map<number, string>();
+    const observeDiagnostics = (child: FixtureHostProcess) => {
+      diagnostics.set(child.pid, "");
+      child.stdout.resume();
+      child.stderr.on("data", (chunk) => {
+        diagnostics.set(child.pid, `${diagnostics.get(child.pid) ?? ""}${String(chunk)}`.slice(-4_000));
+      });
+    };
+    const readReady = async (filename: string, child: FixtureHostProcess): Promise<FixtureReady> => {
+      await waitForCondition(
+        () => fs.existsSync(filename) || child.exitCode !== null || child.signalCode !== null,
+        `fixture host ${child.pid} produced no ready evidence: ${diagnostics.get(child.pid) ?? ""}`,
+      );
+      if (!fs.existsSync(filename)) {
+        throw new Error(`fixture host ${child.pid} exited before readiness: ${diagnostics.get(child.pid) ?? ""}`);
+      }
+      const result = JSON.parse(fs.readFileSync(filename, "utf8")) as FixtureReady | FixtureFailure;
+      if ("error" in result) throw new Error(`fixture host ${child.pid} failed: ${result.error}`);
+      return result;
+    };
+    const waitForChildExit = async (child: FixtureHostProcess, timeoutMs: number): Promise<boolean> => {
+      if (child.exitCode !== null || child.signalCode !== null) return true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          new Promise<true>((resolve) => child.once("exit", () => resolve(true))),
+          new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const killExactEngine = async (identity: FixtureIdentity): Promise<void> => {
+      if (procBackend.processIdentity(identity.pid) === identity.startIdentity) {
+        try { process.kill(identity.pid, "SIGKILL"); } catch { /* fixture engine already exited */ }
+      }
+      await waitForCondition(
+        () => procBackend.processIdentity(identity.pid) !== identity.startIdentity,
+        `fixture engine ${identity.pid} survived termination`,
+      );
+    };
+    const stopHost = async (
+      child: FixtureHostProcess | null,
+      engine: FixtureIdentity | null,
+    ): Promise<void> => {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        if (!await waitForChildExit(child, 1_000)) {
+          child.kill("SIGKILL");
+          await waitForChildExit(child, 1_000);
+        }
+      }
+      if (engine) await killExactEngine(engine);
+    };
+    let incumbent: FixtureHostProcess | null = null;
+    let successor: FixtureHostProcess | null = null;
+    let incumbentEngine: FixtureIdentity | null = null;
+    let successorEngine: FixtureIdentity | null = null;
+    try {
+      incumbent = launchHost("incumbent", incumbentReadyPath);
+      observeDiagnostics(incumbent);
+      const incumbentReady = await readReady(incumbentReadyPath, incumbent);
+      incumbentEngine = incumbentReady.engine;
+      expect(incumbentReady.mode).toBe("incumbent");
+      expect(incumbentReady.viewer.pid).toBe(incumbent.pid);
+      expect(incumbentReady.viewer.pid).not.toBe(process.pid);
+      expect(incumbentReady.engine.pid).not.toBe(incumbentReady.viewer.pid);
+      expect(incumbentReady.activeTurnRef).toBe("turn-1");
+
+      incumbent.kill("SIGKILL");
+      await waitForChildExit(incumbent, 1_000);
+      await killExactEngine(incumbentReady.engine);
+      const strandedRegistry = new AgentRegistry(registryPath).snapshot();
+      expect(strandedRegistry.entries[`codex:${incumbentReady.sessionId}`]).toMatchObject({
+        status: "live",
+        claimOwner: expect.any(String),
+        structuredHost: {
+          process: { pid: incumbentReady.engine.pid },
+          activeTurnRef: "turn-1",
+        },
+      });
+
+      successor = launchHost("successor", successorReadyPath);
+      observeDiagnostics(successor);
+      const successorReady = await readReady(successorReadyPath, successor);
+      successorEngine = successorReady.engine;
+      expect(successorReady.mode).toBe("successor");
+      expect(successorReady.sessionId).toBe(incumbentReady.sessionId);
+      expect(successorReady.viewer.pid).toBe(successor.pid);
+      expect(successorReady.viewer.pid).not.toBe(incumbentReady.viewer.pid);
+      expect(successorReady.engine.pid).not.toBe(incumbentReady.engine.pid);
+      expect(successorReady.engine.pid).not.toBe(successorReady.viewer.pid);
+      expect(successorReady.proof).not.toHaveProperty("error");
+      expect(successorReady.proof?.enginePid).toBe(successorReady.engine.pid);
+      expect(successorReady.proof?.toolNames).toContain("deployment_status");
+      expect(successorReady.proof?.structuredContent).toMatchObject({
+        ok: true,
+        toolName: "deployment_status",
+        count: 1,
+        deployments: [deployment],
+      });
+      expect(controlRequests).toBe(1);
+      const events = new FileRuntimeEventStore(eventsPath).load(successorReady.sessionId);
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: "item",
+        phase: "completed",
+        item: expect.objectContaining({
+          type: "mcpToolCall",
+          server: "viewer",
+          tool: "deployment_status",
+          status: "completed",
+        }),
+      }));
+      expect(events).toContainEqual(expect.objectContaining({ kind: "turn-ended", status: "completed" }));
+      expect(new AgentRegistry(registryPath).snapshot().entries[`codex:${successorReady.sessionId}`])
+        .toMatchObject({
+          status: "idle",
+          claimOwner: expect.any(String),
+          structuredHost: {
+            process: { pid: successorReady.engine.pid },
+            activeTurnRef: null,
+          },
+        });
+    } finally {
+      await stopHost(successor, successorEngine);
+      await stopHost(incumbent, incumbentEngine);
+      control.stop(true);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("boot adoption starts only Codex rows admitted by its candidate filter", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-filtered-structured-adoption-"));
@@ -3959,247 +5004,6 @@ describe("CodexAppServerHost", () => {
   });
 });
 
-test("a refused persona insertion returns a bounded rejected receipt before realtime starts", async () => {
-  const server = new FakeAppServer("voice-thread");
-  server.injectItemsError = "Invalid request: unknown field `role`";
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-
-  const rejected = await host.startRealtimeWebRtc("v=0\r\noffer");
-  expect(rejected).toMatchObject({
-    sdp: null,
-    realtimeSessionId: null,
-    personaBootstrap: {
-      insertion: "rejected",
-      diagnostic: "Codex app-server request failed: Invalid request: unknown field `role`",
-    },
-  });
-  expect(rejected.personaBootstrap.receiptId).toMatch(/^voice_persona_[a-f0-9]{46}$/);
-  expect(rejected.personaBootstrap.diagnostic?.length).toBeLessThanOrEqual(500);
-  expect(server.requests.find((request) => request.method === "thread/realtime/start")).toBeUndefined();
-  expect(host.currentRealtimeSessionId()).toBeNull();
-  await host.release();
-});
-
-test("replacement hosts reject an unverifiable canonical transcript without reinserting", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-scan-fault-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  const linkedPath = path.join(isolated, "linked-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  fs.symlinkSync(transcriptPath, linkedPath);
-  const warnings = spyOn(console, "warn").mockImplementation(() => {});
-  const firstServer = new FakeAppServer("voice-thread");
-  firstServer.threadPath = linkedPath;
-  const firstHost = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(firstServer),
-  });
-  let replacementHost: CodexAppServerHost | null = null;
-  try {
-    const first = await firstHost.startRealtimeWebRtc("v=0\r\no=- 404 2 IN IP4 127.0.0.1\r\n");
-    expect(first).toMatchObject({
-      sdp: null,
-      personaBootstrap: { insertion: "rejected", diagnostic: expect.stringContaining("ELOOP") },
-    });
-    await firstHost.release();
-
-    const replacementServer = new FakeAppServer("voice-thread");
-    replacementServer.threadPath = linkedPath;
-    replacementHost = await CodexAppServerHost.adopt("voice-thread", {
-      cwd: "/repo",
-      eventStore: new MemoryEventStore(),
-      spawnProcess: fakeSpawn(replacementServer),
-    });
-    const replacement = await replacementHost.startRealtimeWebRtc("v=0\r\no=- 405 2 IN IP4 127.0.0.1\r\n");
-    expect(replacement.personaBootstrap).toEqual(first.personaBootstrap);
-    expect(firstServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-    expect(replacementServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-    expect(fs.readFileSync(transcriptPath, "utf8")).toBe("");
-    expect(warnings).toHaveBeenCalledWith(
-      "[voice persona bootstrap] canonical scan unavailable; refusing insertion",
-      expect.objectContaining({ code: "ELOOP", diagnostic: expect.stringContaining("ELOOP") }),
-    );
-    expect(warnings).toHaveBeenCalledTimes(2);
-  } finally {
-    warnings.mockRestore();
-    await replacementHost?.release();
-    await firstHost.release();
-    fs.rmSync(isolated, { recursive: true, force: true });
-  }
-});
-
-test("an unrecoverable transcript path rejects before persona insertion", async () => {
-  const server = new FakeAppServer("voice-thread");
-  server.omitThreadPath = true;
-  server.omitThreadReadPath = true;
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-  try {
-    const first = await host.startRealtimeWebRtc("v=0\r\no=- 406 2 IN IP4 127.0.0.1\r\n");
-    const repeated = await host.startRealtimeWebRtc("v=0\r\no=- 407 2 IN IP4 127.0.0.1\r\n");
-    expect(repeated.personaBootstrap).toEqual(first.personaBootstrap);
-    expect(first).toMatchObject({
-      sdp: null,
-      personaBootstrap: {
-        insertion: "rejected",
-        diagnostic: "canonical transcript path is unavailable",
-      },
-    });
-    expect(server.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-    expect(server.requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(0);
-  } finally {
-    await host.release();
-  }
-});
-
-test("replacement hosts recover an omitted canonical path and persist one persona row", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-path-recovery-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  const firstServer = new FakeAppServer("voice-thread");
-  firstServer.omitThreadPath = true;
-  firstServer.threadPath = transcriptPath;
-  const firstHost = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(firstServer),
-  });
-  let replacementHost: CodexAppServerHost | null = null;
-  try {
-    const first = await firstHost.startRealtimeWebRtc("v=0\r\no=- 408 2 IN IP4 127.0.0.1\r\n");
-    await firstHost.release();
-
-    const replacementServer = new FakeAppServer("voice-thread");
-    replacementServer.omitThreadPath = true;
-    replacementServer.threadPath = transcriptPath;
-    replacementHost = await CodexAppServerHost.adopt("voice-thread", {
-      cwd: "/repo",
-      eventStore: new MemoryEventStore(),
-      spawnProcess: fakeSpawn(replacementServer),
-    });
-    const recovered = await replacementHost.startRealtimeWebRtc("v=0\r\no=- 409 2 IN IP4 127.0.0.1\r\n");
-    expect(recovered.personaBootstrap).toEqual(first.personaBootstrap);
-    expect(firstServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(1);
-    expect(replacementServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-    expect(fs.readFileSync(transcriptPath, "utf8").split(recovered.personaBootstrap.itemId)).toHaveLength(2);
-  } finally {
-    await replacementHost?.release();
-    await firstHost.release();
-    fs.rmSync(isolated, { recursive: true, force: true });
-  }
-});
-
-test("a persisted persona row recovers an ambiguous insertion failure", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-ambiguous-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  const server = new FakeAppServer("voice-thread");
-  server.threadPath = transcriptPath;
-  server.holdInjectItems = true;
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-  try {
-    const pending = host.startRealtimeWebRtc("v=0\r\no=- 909 2 IN IP4 127.0.0.1\r\n");
-    void pending.catch(() => undefined);
-    for (let attempt = 0; attempt < 100 && server.heldInjectItemIds.length < 1; attempt += 1) {
-      await Bun.sleep(1);
-    }
-    const request = server.requests.find((candidate) => candidate.method === "thread/inject_items");
-    const item = (request?.params as { items?: unknown[] } | undefined)?.items?.[0];
-    if (!item) throw new Error("persona insertion item missing");
-    fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: "response_item", payload: item })}\n`);
-    server.completeNextInject("thread/inject_items response was lost");
-
-    expect(await pending).toMatchObject({
-      sdp: "v=0\r\nanswer",
-      personaBootstrap: { insertion: "accepted" },
-    });
-    expect(server.requests.filter((candidate) => candidate.method === "thread/realtime/start")).toHaveLength(1);
-  } finally {
-    await host.release();
-    fs.rmSync(isolated, { recursive: true, force: true });
-  }
-});
-
-test("an uncertain persona insertion timeout fences the writer and recovers on a replacement host", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-timeout-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  const firstServer = new FakeAppServer("voice-thread", "voice-thread", true);
-  firstServer.threadPath = transcriptPath;
-  firstServer.injectItemsDelayMs = 25;
-  const firstHost = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(firstServer),
-    realtimePersonaTimeoutMs: 10,
-    shutdownGraceMs: 50,
-  });
-  let replacementHost: CodexAppServerHost | null = null;
-  try {
-    await expect(firstHost.startRealtimeWebRtc("v=0\r\no=- 910 2 IN IP4 127.0.0.1\r\n"))
-      .rejects.toThrow("thread/inject_items timed out; outcome is uncertain");
-    await Bun.sleep(40);
-    expect((await firstHost.health()).status).toBe("dead");
-
-    const replacementServer = new FakeAppServer("voice-thread");
-    replacementServer.threadPath = transcriptPath;
-    replacementHost = await CodexAppServerHost.adopt("voice-thread", {
-      cwd: "/repo",
-      eventStore: new MemoryEventStore(),
-      spawnProcess: fakeSpawn(replacementServer),
-    });
-    const recovered = await replacementHost.startRealtimeWebRtc("v=0\r\no=- 911 2 IN IP4 127.0.0.1\r\n");
-    expect(recovered.personaBootstrap.insertion).toBe("accepted");
-    expect(replacementServer.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(0);
-    expect(fs.readFileSync(transcriptPath, "utf8").split(recovered.personaBootstrap.itemId)).toHaveLength(2);
-  } finally {
-    await replacementHost?.release();
-    await firstHost.release();
-    fs.rmSync(isolated, { recursive: true, force: true });
-  }
-});
-
-test("persona bootstrap completes before the single fenced realtime-start deadline begins", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-realtime-start-deadline-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  const server = new FakeAppServer("voice-thread");
-  server.threadPath = transcriptPath;
-  server.injectItemsDelayMs = 20;
-  server.realtimeStartDelayMs = 20;
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-    realtimePersonaTimeoutMs: 50,
-    realtimeStartTimeoutMs: 30,
-  });
-  try {
-    expect(await host.startRealtimeWebRtc("v=0\r\no=- 912 2 IN IP4 127.0.0.1\r\n")).toMatchObject({
-      sdp: "v=0\r\nanswer",
-      realtimeSessionId: "realtime-1",
-      personaBootstrap: { insertion: "accepted" },
-    });
-    expect(server.requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(1);
-  } finally {
-    await Bun.sleep(25);
-    if (host.currentRealtimeSessionId()) await host.stopRealtime();
-    await host.release();
-    fs.rmSync(isolated, { recursive: true, force: true });
-  }
-});
-
 test("the realtime notification deadline poisons a writer after the start RPC succeeds", async () => {
   const server = new FakeAppServer("voice-thread");
   server.suppressRealtimeStartNotifications = true;
@@ -4216,127 +5020,6 @@ test("the realtime notification deadline poisons a writer after the start RPC su
     expect(server.requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(1);
   } finally {
     await host.release();
-  }
-});
-
-test("a successor start joins the cancelled call's in-flight persona insertion", async () => {
-  const server = new FakeAppServer("voice-thread");
-  server.holdInjectItems = true;
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-  try {
-    const cancelled = host.startRealtimeWebRtc("v=0\r\no=- 1001 2 IN IP4 127.0.0.1\r\n");
-    void cancelled.catch(() => undefined);
-    for (let attempt = 0; attempt < 100 && server.heldInjectItemIds.length < 1; attempt += 1) {
-      await Bun.sleep(1);
-    }
-    expect(server.heldInjectItemIds).toHaveLength(1);
-    await host.stopRealtime();
-
-    const successor = host.startRealtimeWebRtc("v=0\r\no=- 1002 2 IN IP4 127.0.0.1\r\n");
-    void successor.catch(() => undefined);
-    await Bun.sleep(10);
-    expect(server.heldInjectItemIds).toHaveLength(1);
-    expect(server.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(1);
-    server.completeNextInject();
-
-    await expect(cancelled).rejects.toThrow("stopped during startup");
-    expect(await successor).toMatchObject({
-      sdp: "v=0\r\nanswer",
-      personaBootstrap: { insertion: "accepted" },
-    });
-    expect(server.requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(1);
-  } finally {
-    await host.release();
-  }
-});
-
-test("a cancelled persona insertion failure cannot reject the successor start", async () => {
-  const server = new FakeAppServer("voice-thread");
-  server.holdInjectItems = true;
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-  try {
-    const cancelled = host.startRealtimeWebRtc("v=0\r\no=- 707 2 IN IP4 127.0.0.1\r\n");
-    void cancelled.catch(() => undefined);
-    for (let attempt = 0; attempt < 100 && server.heldInjectItemIds.length < 1; attempt += 1) {
-      await Bun.sleep(1);
-    }
-    expect(server.heldInjectItemIds).toHaveLength(1);
-    await host.stopRealtime();
-
-    const successor = host.startRealtimeWebRtc("v=0\r\no=- 808 2 IN IP4 127.0.0.1\r\n");
-    void successor.catch(() => undefined);
-    await Bun.sleep(10);
-    expect(server.heldInjectItemIds).toHaveLength(1);
-    server.completeNextInject("cancelled call insertion failed");
-    await expect(cancelled).rejects.toThrow("stopped during startup");
-    for (let attempt = 0; attempt < 100 && server.heldInjectItemIds.length < 1; attempt += 1) {
-      await Bun.sleep(1);
-    }
-    expect(server.requests.filter((request) => request.method === "thread/inject_items")).toHaveLength(2);
-    server.completeNextInject();
-
-    expect(await successor).toMatchObject({
-      sdp: "v=0\r\nanswer",
-      personaBootstrap: { insertion: "accepted" },
-    });
-    expect(server.requests.filter((request) => request.method === "thread/realtime/start")).toHaveLength(1);
-  } finally {
-    await host.release();
-  }
-});
-
-test("a rejected persona insertion retries the same resolved payload and stable receipt", async () => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-voice-bootstrap-retry-"));
-  const transcriptPath = path.join(isolated, "voice-thread.jsonl");
-  fs.writeFileSync(transcriptPath, "");
-  const configDirectory = path.join(isolated, "config");
-  const overridePath = path.join(configDirectory, "agent-log-viewer", ...VOICE_PERSONA_FILE.split("/"));
-  fs.mkdirSync(path.dirname(overridePath), { recursive: true });
-  fs.writeFileSync(overridePath, "Resolved before the rejected insertion.\n");
-  const previousConfigHome = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = configDirectory;
-
-  const server = new FakeAppServer("voice-thread");
-  server.threadPath = transcriptPath;
-  server.injectItemsError = "temporary insertion refusal";
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo",
-    eventStore: new MemoryEventStore(),
-    spawnProcess: fakeSpawn(server),
-  });
-  try {
-    const rejected = await host.startRealtimeWebRtc(
-      "v=0\r\no=- 505 2 IN IP4 127.0.0.1\r\na=ice-ufrag:rejected\r\n",
-    );
-    expect(rejected.personaBootstrap.insertion).toBe("rejected");
-
-    fs.writeFileSync(overridePath, "A later edit must not change this call.\n");
-    server.injectItemsError = null;
-    const accepted = await host.startRealtimeWebRtc(
-      "v=0\r\no=- 606 2 IN IP4 127.0.0.1\r\na=ice-ufrag:retry\r\n",
-    );
-    expect(accepted.personaBootstrap.receiptId).toBe(rejected.personaBootstrap.receiptId);
-    expect(accepted.personaBootstrap.itemId).toBe(rejected.personaBootstrap.itemId);
-    expect(accepted.personaBootstrap.insertion).toBe("accepted");
-
-    const attempts = server.requests.filter((request) => request.method === "thread/inject_items");
-    expect(attempts).toHaveLength(2);
-    expect((attempts[1]?.params as { items: Array<{ content: Array<{ text: string }> }> }).items[0]?.content[0]?.text)
-      .toBe("Resolved before the rejected insertion.");
-    expect(fs.readFileSync(transcriptPath, "utf8").split(accepted.personaBootstrap.itemId)).toHaveLength(2);
-  } finally {
-    await host.release();
-    if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = previousConfigHome;
-    fs.rmSync(isolated, { recursive: true, force: true });
   }
 });
 
@@ -4366,4 +5049,69 @@ test("a host with no live call releases without a stray hangup", async () => {
   });
   await host.release();
   expect(server.requests.some((request) => request.method === "thread/realtime/stop")).toBe(false);
+});
+
+
+test.each([false, true, undefined, null, "false"])("native question flag %j retains answer IDs and only false permits steer", async (flag) => {
+  const server = new FakeAppServer("async-question-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "active-question-turn", text: "start" });
+  server.request("question-one", "item/tool/requestUserInput", { threadId: "async-question-thread", turnId: "turn-1", isBlocking: flag, questions: [{ id: "q", question: "Continue?" }] });
+  expect((await host.health()).status).toBe(flag === false ? "active" : "attention");
+  expect((await host.health()).pendingAttention).toEqual(["item/tool/requestUserInput:question-one"]);
+  if (flag === false) {
+    expect(await host.send({ id: "matching-steer", text: "keep going", expectedTurnId: "turn-1" })).toMatchObject({ outcome: "steered" });
+    server.request("approval-one", "item/commandExecution/requestApproval", { isBlocking: false, command: "date" });
+    expect((await host.health()).status).toBe("attention");
+    await host.answer("item/tool/requestUserInput:question-one", { answers: { q: { answers: ["yes"] } } });
+    expect((await host.health()).pendingAttention).toEqual(["item/commandExecution/requestApproval:approval-one"]);
+  }
+  await host.release();
+});
+
+test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
+  const server = new FakeAppServer("unicode-wire");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "unicode-original", text: "Привіт 🌍" });
+  const encoded = encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
+  const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
+  const split = bytes.indexOf(Buffer.from("П")) + 1;
+  server.stdout.write(bytes.subarray(0, split)); server.stdout.write(bytes.subarray(split));
+  expect(await host.send({ id: "unicode-original", text: "Привіт 🌍" })).toMatchObject({ turnId: "turn-1" });
+  await expect(host.send({ id: "unicode-original", text: "wrong payload" })).rejects.toThrow("different payload");
+  await host.release();
+});
+
+test("malformed nonblocking requests stay blocking; auth recovery remains bounded and unverified", async () => {
+  const server = new FakeAppServer("diagnostic-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "diagnostic-turn", text: "start" });
+  server.request("malformed-question", "item/tool/requestUserInput", { threadId: "diagnostic-thread", turnId: "turn-1", isBlocking: false, questions: [{ question: "Missing identity" }] });
+  expect((await host.health()).status).toBe("attention");
+  server.notify("modelProvider/authRecoveryCompleted", {});
+  expect((await host.health()).diagnostics?.authRecovery).toBe("unknown");
+  server.notify("modelProvider/authRecoveryStarted", { threadId: "diagnostic-thread", turnId: "turn-1", provider: "fixture", message: "retrying" });
+  expect((await host.health()).diagnostics?.authRecovery).toBe("started");
+  server.notify("modelProvider/authRecoveryCompleted", { threadId: "diagnostic-thread", turnId: "turn-1", provider: "fixture", message: "complete" });
+  expect((await host.health()).diagnostics).toMatchObject({ executable: "codex", authRecovery: "completed-unverified" });
+  expect((await host.health()).pendingAttention).toEqual(["item/tool/requestUserInput:malformed-question"]);
+  expect(server.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+  await host.release();
+});
+
+
+test("a replayed native question retains its pending answer and rejects a duplicate answer", async () => {
+  const server = new FakeAppServer("question-replay-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  server.autoResolveServerRequests = false;
+  const params = { threadId: "question-replay-thread", turnId: "turn-1", isBlocking: false, questions: [{ id: "q", question: "Choose" }] };
+  server.request("question-replay", "item/tool/requestUserInput", params);
+  const answer = host.answer("item/tool/requestUserInput:question-replay", { answers: { q: { answers: ["yes"] } } });
+  server.request("question-replay", "item/tool/requestUserInput", params);
+  await expect(host.answer("item/tool/requestUserInput:question-replay", {})).rejects.toThrow("already awaiting confirmation");
+  server.notify("serverRequest/resolved", { threadId: "question-replay-thread", requestId: "question-replay" });
+  await answer;
+  expect(server.requests.filter(request => request.id === "question-replay")).toHaveLength(1);
+  expect((await host.health()).pendingAttention).toEqual([]);
+  await host.release();
 });

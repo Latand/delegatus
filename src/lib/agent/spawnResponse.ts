@@ -1,4 +1,5 @@
-import type { SpawnReceipt } from "@/lib/agent/registry";
+import type { AccountOverrideNotice } from "@/lib/accounts/accountOverrides";
+import { identityMaterializationFence, type SpawnReceipt } from "@/lib/agent/registry";
 import type { SpawnAdmissionError, SpawnRejection, SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 
 /** HTTP shape of a typed terminal admission rejection (#393). The receipt is
@@ -24,7 +25,7 @@ export function spawnRejectionResponse(error: SpawnAdmissionError): SpawnRejecti
 export interface SpawnResponse {
   ok: true;
   target: string | null;
-  /** Transcript path the fresh session will write, when knowable. */
+  /** Published transcript path. Structured sessions stay null until finalization. */
   path: string | null;
   /** Effective Claude permission mode for pane-less launches. */
   effectivePermissionMode?: string;
@@ -43,6 +44,12 @@ export interface SpawnResponse {
       durable ids, without waiting for the transcript scan (issue #919). Every
       live builder emits it; absence (legacy fixtures) reads as not structured. */
   transport?: "structured" | "tmux";
+  /** Present only when this launch NAMED an account outside the project's pool
+      (#1279's launch seam). The binding does not veto an explicit choice, so
+      the record is what makes the crossing visible — and a record the journal
+      would not take answers `recorded: false` with its reason, which has to
+      reach whoever made the choice rather than stop at a server log. */
+  accountOverride?: AccountOverrideNotice;
   error?: string;
 }
 
@@ -77,10 +84,11 @@ export function spawnResponseForReceipt(
   const launched = (receipt.verifiedHost !== null || (options.structured === true && receipt.state === "completed"))
     && receipt.state !== "failed"
     && receipt.state !== "conflicted";
+  const publishedPath = identityMaterializationFence().allowsReceipt(receipt, { structured }) ? path : null;
   return {
     ok: true,
     target: receipt.pane?.paneId ?? receipt.target ?? null,
-    path,
+    path: publishedPath,
     ...(structured && receipt.engine === "claude"
       ? { effectivePermissionMode: receipt.launchProfile.permissionMode ?? "default" }
       : {}),

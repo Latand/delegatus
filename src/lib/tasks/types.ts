@@ -1,6 +1,45 @@
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
-export type AssignmentState = "delivered" | "failed" | "spawning" | "handoff";
+/** Board membership of a task's band. Absent on a row is `shown`; the value is
+    written explicitly so a restore is durable and readable in the state file. */
+export type TaskBoardVisibility = "shown" | "hidden";
+
+/** A task's colour label (#1695). The name is what the board says; the hue is
+    presentation. Absent is "none", which is also how a label is cleared. */
+export const TASK_COLORS = ["coral", "amber", "lime", "teal", "sky", "violet", "pink", "slate"] as const;
+export type TaskColor = (typeof TASK_COLORS)[number];
+
+/** A whole task group taken off the kanban board (#1695), with who took it
+    and when. Nothing about the task, its conversations or its pipelines
+    changes: the board leaves the group out until something newer than `at`
+    needs the operator (`groupHide.ts`). */
+export interface TaskGroupHidden {
+  at: string;
+  by: "operator" | "agent";
+  /** Every identifier of the task's live admissions when it was hidden
+      (`admissionSnapshot`). A conversation whose identifiers are all absent
+      from it joined after the hide. */
+  admitted?: string[];
+}
+
+/** `linked` records membership only (#1586): the conversation belongs to the
+    task, nothing was delivered or handed off. */
+export type AssignmentState = "delivered" | "failed" | "spawning" | "handoff" | "linked";
+
+/** Why a task exists when no operator created it (#1586). The key is the
+    durable admission identity — a conversation id, a client launch key, or a
+    pipeline/flow id — so a replayed admission converges on this task. */
+export interface TaskOrigin {
+  kind: "conversation" | "launch" | "pipeline" | "flow";
+  key: string;
+  /** `pending` until an agent's first-action refinement or an operator edit
+      gives the placeholder a real title. */
+  refinement: "pending" | "titled";
+  /** Conversation whose one-shot refinement titled the task, and the text it
+      supplied, so a replay of the same refinement is recognised. */
+  refinedBy?: string;
+  refinedText?: string;
+}
 
 export interface TaskAssignment {
   /** Durable Viewer launch identity used to replay attribution safely. */
@@ -90,6 +129,22 @@ export interface BoardTask {
   assignments: TaskAssignment[];
   /** User prompt that produced an auto-captured inbox card. */
   source?: TaskSource;
+  /** Admission origin of a placeholder task (#1586); absent on operator-created tasks. */
+  origin?: TaskOrigin;
+  /** Whether an EMPTY band may be drawn for this task. Absent means shown — the
+      default for every task the operator or an agent creates. `hidden` is only
+      ever written by an explicit «Remove from board», by the task panel's
+      preference control, or once by the legacy-task migration, and it is a
+      preference rather than a claim about membership: a task whose band
+      resolves a conversation, a mirror, a container or a draft is drawn
+      whatever this says (`boardVisibility`). The task itself is never deleted
+      or archived and never leaves the task list. */
+  board?: TaskBoardVisibility;
+  /** Colour label; absent means none. */
+  color?: TaskColor;
+  /** Set while the task's group is hidden from the kanban board. Unlike
+      `board`, it holds whatever the group contains. */
+  groupHidden?: TaskGroupHidden;
   createdAt: string;
   updatedAt: string; // bumped by every PATCH
 }

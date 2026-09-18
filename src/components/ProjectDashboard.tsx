@@ -1,7 +1,7 @@
 "use client";
 
-import { Bot, Layers, List, ListTodo, Menu, MessageSquarePlus, MoreHorizontal, Network, Plus, Redo2, Search, Undo2 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Redo2, Search, Undo2, UserRound } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useBoardActionHistory } from "@/hooks/useBoardActionHistory";
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -11,10 +11,12 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
+import { ProjectAccounts } from "@/components/ProjectAccounts";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { boardConversationKeys } from "@/lib/tasks/boardVisibility";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
@@ -23,9 +25,14 @@ import type { Workflow } from "@/lib/workflows/types";
 import { BoardHistoryControls } from "./BoardHistoryControls";
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { TaskStrip } from "./BranchPane";
+import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
+import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
-import { clearDraftStorage, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
+import { DesktopConversations } from "./DesktopConversations";
+import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
 import { OrchestratorPanelToggle } from "./orchestrator/OrchestratorPanelToggle";
+import { useOrchestratorSeat } from "./orchestrator/useOrchestratorSeat";
+import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
 import { directReviewFlows, isDirectReviewFlow } from "./flows/directReviewGroups";
@@ -34,7 +41,7 @@ import { claimedReviewerDescendantPaths, foldClaimedReviewers, isActiveFlow, res
 import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { buildSchemeLayout } from "./scheme/layout";
-import { buildSubagentTrays } from "./scheme/subagentTray";
+import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
 import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
 import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
@@ -45,15 +52,27 @@ import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, partitionTaskStacks, persistExpandedTasks } from "./scheme/taskStacks";
 import { TaskReadinessStrip } from "./TaskReadinessStrip";
 import { WorkerStacks } from "./WorkerStacks";
-import { MobileBottomShelf } from "./MobileBottomShelf";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { TaskPanel } from "./tasks/TaskPanel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
+import { MobileBoard, MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
+import type { MobileBoardRowRef } from "./mobile/mobileBoardModel";
+import { MobileRowActionsSheet, useMobileBoardRowActions } from "./mobile/MobileRowActions";
 import { MobileFocusView } from "./mobile/MobileFocusView";
-import { MobileOrchestratorRow } from "./mobile/MobileOrchestratorRow";
-import { canHandoff, HandoffHandle } from "./HandoffHandle";
-import { SchemeBoard } from "./scheme/SchemeBoard";
+import { MobileHostSheet } from "./mobile/MobileHostSheet";
+import { MobileSeatCard } from "./mobile/MobileSeatCard";
+import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
+import { showReceipt } from "./mobile/MobileReceipt";
+import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
+import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
+import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
+import { sameScreen, topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
+import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
+import { Badge } from "@/components/ui/Badge";
+import { KanbanBoard } from "./kanban/KanbanBoard";
+import { KanbanSeat } from "./kanban/KanbanSeat";
+import { useKanbanSeat } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
 import { Switchboard } from "./Switchboard";
@@ -61,7 +80,9 @@ import {
   buildArchiveBranchGroups,
   buildBranchGroups,
   collapsedTrees,
+  draftWorkingDirectory,
   isChildConversation,
+  OVERVIEW,
   projectDraftWorkingDirectory,
   projectKey,
   type ProjectView,
@@ -85,6 +106,11 @@ const HIGHLIGHT_MS = 1800;
     minutes wide, so both the millisecond and the seconds clock tick here. */
 const BOARD_CLOCK_MS = 30_000;
 const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "queued", "uncertain"]);
+/* Stable empties for the layout inputs: a fresh `[]` per render re-lays-out
+   the board (#1432). */
+const EMPTY_MANUAL: FileEntry[] = [];
+const EMPTY_DRAFTS: string[] = [];
+const EMPTY_TASKS: BoardTask[] = [];
 
 interface Props {
   files: FileEntry[];
@@ -130,20 +156,23 @@ interface Props {
   catalogConversationCount: number;
   onArchive: (project: string) => void;
   onUnarchive: (project: string) => void;
-  /** Mobile shell: the rail hides behind a drawer, this opens it. */
-  onMenu?: () => void;
+  /** The phone shell's host (mobile v2 lane 1): the queue count for the bar's
+      badge, the arrival for the banner slot, the search palette and the sheets
+      the Viewer owns. Absent on the desktop. */
+  mobileShell?: MobileShellHost | null;
   /** Opens the global message search (issue #1054) — the same affordance the
       overview header carries, so the search is one target away from anywhere. */
   onOpenSearch?: () => void;
-  /** Mobile shell: the attention badge lives in the header row instead of the
-      fixed corner, so it never covers the header's own controls. */
-  attention?: React.ReactNode;
   /** Desktop shell: the per-project orchestrator dock's toggle (PRD #976
       decision 6). The dock itself is pushed into the Viewer layout beside the
       board, so the header only owns the switch; absent (phone, or no shell
       wiring) the button does not render. */
   orchestratorPanelOpen?: boolean;
   onToggleOrchestratorPanel?: () => void;
+  /** Desktop shell: whether the kanban board, which seats the orchestrator
+      above its own columns (#1695 K3), is the face on screen. The Viewer keeps
+      its side dock closed while it is, so the seat has one composer. */
+  onKanbanFace?: (active: boolean) => void;
   /** Dashboard-local navigation and focus (switchboard/quiet-list opens,
       drafts, pipeline and task jumps) supersede any unresolved deep-link
       intent held above; the Viewer cancels its pending hash here. */
@@ -219,91 +248,59 @@ function gotoProject(project: string) {
   location.hash = "#p=" + encodeURIComponent(project);
 }
 
+/** A desktop view: the Board (the kanban, #1695) or Conversations (the list). The phone keeps its own views. */
+type DesktopView = "kanban" | "list";
+
+/**
+ * The desktop view switch: Board and Conversations (#1614, #1695).
+ *
+ * `floating` draws it as its own chip over a leaf that has no chrome of its own
+ * (Conversations, the empty project); on the Board it is `inline`, in flow in
+ * the kanban's own bar, so nothing floats over the board's corner.
+ */
 function ProjectViewTabs({
   value,
   onChange,
   floating = false,
+  inline = false,
+  modes = ["kanban", "list"],
 }: {
-  value: ProjectView;
-  onChange: (next: ProjectView) => void;
+  value: DesktopView;
+  onChange: (next: DesktopView) => void;
   floating?: boolean;
+  /** Drawn in a toolbar row of its own (the kanban board's bar): the chip, in flow. */
+  inline?: boolean;
+  /** The views this project can show on the desktop: the Board, and Conversations when there are any. */
+  modes?: readonly DesktopView[];
 }) {
   const { t } = useLocale();
+  const labelOf = (mode: DesktopView) => t(mode === "kanban" ? "kanban.viewTab" : "dash.viewList");
+  const iconOf = (mode: DesktopView) => mode === "kanban"
+    ? <Columns3 className="h-3 w-3" aria-hidden />
+    : <List className="h-3 w-3" aria-hidden />;
   return (
     <div
+      data-project-view-tabs
       className={`z-30 inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-1 ${
-        floating ? "absolute left-3 top-3" : "mx-3 mt-3 self-start"
+        floating ? "absolute left-3 top-3" : inline ? "" : "mx-3 mt-3 self-start"
       }`}
     >
-      {(["scheme", "list"] as const).map((mode) => (
+      {modes.map((mode) => (
         <button
           key={mode}
           type="button"
           aria-pressed={value === mode}
+          data-view-tab={mode}
           onClick={() => onChange(mode)}
-          aria-label={t(mode === "scheme" ? "dash.viewScheme" : "dash.viewList")}
+          aria-label={labelOf(mode)}
           className={`inline-flex items-center justify-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
             value === mode ? "bg-accent/10 text-accent" : "text-muted hover:text-primary"
           }`}
         >
-          {mode === "scheme" ? <Network className="h-3 w-3" aria-hidden /> : <List className="h-3 w-3" aria-hidden />}
-          {t(mode === "scheme" ? "dash.viewScheme" : "dash.viewList")}
+          {iconOf(mode)}
+          {labelOf(mode)}
         </button>
       ))}
-    </div>
-  );
-}
-
-/** A tap-triggered popover anchored to its trigger button — the phone toolbar
-    folds its secondary and create actions into these so the row never overflows
-    (finding 1). Closes on outside-tap or Escape. */
-function HeaderMenu({
-  triggerLabel,
-  icon,
-  children,
-}: {
-  triggerLabel: string;
-  icon: React.ReactNode;
-  children: (close: () => void) => React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-  return (
-    <div ref={rootRef} className="relative shrink-0">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={triggerLabel}
-        title={triggerLabel}
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-11 w-11 items-center justify-center rounded-[8px] border border-border bg-card text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      >
-        {icon}
-      </button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 top-[calc(100%+6px)] z-50 flex w-[210px] max-w-[calc(100vw-1.5rem)] flex-col gap-0.5 rounded-[12px] border border-border bg-card p-1.5 shadow-2"
-        >
-          {children(() => setOpen(false))}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -372,27 +369,6 @@ function EmptyProjectLeaf({
   );
 }
 
-/** One 44px-tall row inside a HeaderMenu popover. Passing `checked` turns the
-    row into a radio option (the folded scheme/list switch, issue #613) so the
-    face currently shown is announced instead of merely tinted. */
-function HeaderMenuItem({ icon, label, onSelect, disabled = false, checked }: { icon: React.ReactNode; label: string; onSelect: () => void; disabled?: boolean; checked?: boolean }) {
-  return (
-    <button
-      type="button"
-      role={checked === undefined ? "menuitem" : "menuitemradio"}
-      aria-checked={checked}
-      onClick={onSelect}
-      disabled={disabled}
-      className={`flex min-h-11 w-full items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] font-semibold hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 ${
-        checked ? "bg-accent/10 text-accent" : "text-primary"
-      }`}
-    >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-accent">{icon}</span>
-      {label}
-    </button>
-  );
-}
-
 function ProjectDashboardView({
   files,
   flows: rawFlows,
@@ -416,10 +392,10 @@ function ProjectDashboardView({
   catalogConversationCount,
   onArchive,
   onUnarchive,
-  onMenu,
+  mobileShell = null,
   onOpenSearch,
-  attention,
   orchestratorPanelOpen = false,
+  onKanbanFace,
   onToggleOrchestratorPanel,
   onUserNavigate,
   onOpenCatalogFile,
@@ -427,6 +403,49 @@ function ProjectDashboardView({
 }: Props) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
+  /* The phone's navigation (mobile v2 lane 1): which screen is on top and which
+     sheet is open. The host sheet — the handoff, the docked background tasks
+     and the hidden strips — opens from the board menu's «Host details» row and
+     is one of those sheets. Inert on the desktop. */
+  const mobileNav = useMobileNavStore();
+  const mobileNavState = useMobileNav();
+  /* The runtime word for the menu's «Host details» row (README §4.1): a badge
+     only while the plane is not connected. One projection, so a bus frame
+     never re-renders the board. */
+  const mobileRuntime = useRuntimeSelector((state) => (state.enabled ? state.connection : "live"), "live");
+  /* The phone board's seat (mobile v2 lane 2): the seat conversation is the
+     card above the sections, never a row inside them, so the list has to know
+     which transcript holds it.
+     ONE read per phone, and only while the board is the leaf. The seat card
+     renders from this same answer (`seat={seatRead}` below) instead of polling
+     the route a second time for it, and a focused conversation — where the
+     board is not mounted and the strip's own row is doing the reading — starts
+     nothing here. The hook's answers are cached per project and cwd, so
+     coming back to the board paints the last one and revalidates behind it.
+     Null on the desktop, which has no board list to keep the seat out of. */
+  const projectDraftCwd = useMemo(() => draftWorkingDirectory(files, project), [files, project]);
+  const boardIsMobileLeaf = isMobile && topScreen(mobileNavState).kind !== "chat";
+  const cachedSeatRead = useOrchestratorSeat(boardIsMobileLeaf ? project : null, projectDraftCwd || undefined);
+  // A failed revalidation retains a known incumbent, but cannot affirm vacancy.
+  // Give the card, its sheet, and the footer the same safe reading.
+  const seatRead = cachedSeatRead.failed
+    && !(cachedSeatRead.status?.exists && cachedSeatRead.status.seat?.conversationId)
+    ? { ...cachedSeatRead, status: null }
+    : cachedSeatRead;
+  const seatId = seatRead.status?.seat?.conversationId ?? null;
+  // The card and footer share the sheet's existing status read. Keep its slower
+  // poll sheet-gated, and retain the resolved identity when the sheet closes.
+  const seatIncumbentRead = useOrchestratorIncumbent(isMobile ? project : null,
+    boardIsMobileLeaf && Boolean(seatRead.status?.exists && seatId)
+      && (mobileNavState.sheet === "seat" || mobileNavState.sheet === "rotate"));
+  const seatIncumbent = seatIncumbentRead.incumbent?.project === project
+    && seatIncumbentRead.incumbent.conversationId === seatId ? seatIncumbentRead.incumbent : null;
+  const seatFile = resolveSeatFile({ files, conversationId: seatId,
+    seatPath: seatRead.status?.seat?.path ?? null, currentPath: seatIncumbent?.transcriptPath ?? null });
+  const seatPath = seatFile?.path ?? seatRead.status?.seat?.path ?? null;
+  const seatState = deriveOrchestratorPanelState({ status: seatRead.status, statusFailed: seatRead.failed,
+    submitting: false, submitFailure: null, file: seatFile, surface: null });
+  const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
   const projectName = projectDisplayName(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
@@ -509,28 +528,12 @@ function ProjectDashboardView({
   };
   const [drafts, setDrafts] = useState<string[]>([]);
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
-  /* The phone focus view reports its currently-focused conversation here so the
-     footer shelf can dock that pane's handoff control on its single row (issue
-     #177 item 5). */
-  const [mobileActiveFile, setMobileActiveFile] = useState<FileEntry | null>(null);
-  /* Chat-first (issue #419 reopened): on the phone the handoff/hidden/readiness
-     shelf reserves ZERO bottom rows — a compact header trigger opens it as an
-     overlay sheet instead, so the focused chat keeps its viewport budget. */
-  const [shelfOpen, setShelfOpen] = useState(false);
-  /* Desktop `+ Task`: bump drops the inline sticky composer in a free slot on
-     the board (pinned near the button). */
-  const [newTaskNonce, setNewTaskNonce] = useState(0);
-  /* Mobile `+ Task`: bump opens the TaskSheet's create view. */
-  const [taskSheetNonce, setTaskSheetNonce] = useState(0);
-  /* Place-on-map: the unplaced task whose next board click pins it. */
-  const [placeTask, setPlaceTask] = useState<BoardTask | null>(null);
+  /* The phone's task sheet, opened from the board menu: «New task» in its
+     create view, «Tasks» as the list (mobile v2 lane 1). */
+  const [mobileTaskSheet, setMobileTaskSheet] = useState<TaskSheetView | null>(null);
   /* Template-first pipeline entry (#196, #388): `+ Пайплайн` opens repository
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
-  /* The canvas builder (#136): the draft pipeline whose group panel auto-opens
-     right after `+ Пайплайн` drops it, so the operator lands in the builder with
-     no hunting for its chip. */
-  const [builderPipelineId, setBuilderPipelineId] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   /* Jump targets the scheme would otherwise skip (a stalled root builds no
      automatic group; a stalled branch hides inside a mini stack) materialize
@@ -549,6 +552,11 @@ function ProjectDashboardView({
      preference — the operator's saved view returns with one tap on the
      Схема/Список control, which is what clears this. */
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
+  /* A view the kanban board opened for one look (#1695): the scheme for a
+     surface the kanban does not draw yet, the list for conversations beyond
+     the board. Session-only and desktop-only, so a card's link never rewrites
+     the saved view another device, or the phone, reads. Choosing a tab ends it. */
+  const [transientView, setTransientView] = useState<ProjectView | null>(null);
   /* Wall clock for the worker auto-collapse idle window (issue #112). Starts at
      0 so the server render and first client render agree (no hydration skew);
      the first tick lands the real time, and reviewer verdicts collapse without
@@ -559,7 +567,9 @@ function ProjectDashboardView({
   const activeDeliverySignature = useRuntimeSelector(
     (state) => {
       const active = new Set(Object.values(state.store.operations)
-        .filter((receipt) => (receipt.kind === "send" || receipt.kind === "steer")
+        /* #1560: an injection being admitted keeps its card marked active
+           between board polls, exactly as a send does. */
+        .filter((receipt) => (receipt.kind === "send" || receipt.kind === "steer" || receipt.kind === "inject")
           && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status))
         .map((receipt) => receipt.conversationId));
       for (const session of Object.values(state.store.sessions)) {
@@ -622,9 +632,15 @@ function ProjectDashboardView({
         else setDraftCwd(id, initialDraftCwd);
       }
     }
+    /* Identity-preserving (#1432): this effect re-runs on every same-project
+       open (`openNonce`), and a fresh array or set for unchanged content
+       re-laid-out the whole board through the drafts input. */
     /* eslint-disable-next-line react-hooks/set-state-in-effect */
-    setDrafts(restored);
-    setPendingRestoredHandoffs(new Set(unresolved.map(({ id }) => id)));
+    setDrafts((prev) => (prev.length === restored.length && prev.every((id, index) => id === restored[index]) ? prev : restored));
+    setPendingRestoredHandoffs((prev) => {
+      const next = new Set(unresolved.map(({ id }) => id));
+      return prev.size === next.size && [...next].every((id) => prev.has(id)) ? prev : next;
+    });
     const resolveSourceCwd = (id: string, sourcePath: string, attempt = 0) => {
       void fetch("/api/spawn?project=" + encodeURIComponent(project) + "&src=" + encodeURIComponent(sourcePath))
         .then(async (response) => {
@@ -866,6 +882,7 @@ function ProjectDashboardView({
     () => buildBranchGroups(sceneFiles, project, { expandedConversationPaths: expandedConversations, keepExpandedPaths, now: nowSeconds }),
     [sceneFiles, project, expandedConversations, keepExpandedPaths, nowSeconds],
   );
+  const engineProjectionRef = useRef<{ signature: string; projection: ReturnType<typeof buildSubagentTrays> } | null>(null);
   const engineProjection = useMemo(() => {
     const hiddenPaths = new Set(prefs.hidden);
     const placedPaths = new Set<string>(prefs.manual);
@@ -883,7 +900,7 @@ function ProjectDashboardView({
     /* Existing surfaces keep authority: a claimed pipeline artifact, a folded
        worker, or launch history is never re-owned by the tray projection. */
     const claimedPaths = new Set<string>([...compactPipelinePaths, ...collapsedPaths, ...launchHistoryPaths]);
-    return buildSubagentTrays({
+    const next = buildSubagentTrays({
       entries: files,
       foldedEngineChildIds: new Set(board.prefs.foldedEngineChildIds ?? []),
       expandedTrayParentIds: new Set(board.prefs.expandedEngineTrayParentIds ?? []),
@@ -893,6 +910,13 @@ function ProjectDashboardView({
       hostEligibleParentIds,
       now: nowSeconds,
     });
+    /* Value-stable (#1432): the projection reaches every card through the
+       tray API, so an equal projection keeps its earlier identity. */
+    const signature = subagentTraySignature(next);
+    const previous = engineProjectionRef.current;
+    if (previous && previous.signature === signature) return previous.projection;
+    engineProjectionRef.current = { signature, projection: next };
+    return next;
   }, [baseGroups, prefs.hidden, prefs.manual, board.prefs.foldedEngineChildIds, board.prefs.expandedEngineTrayParentIds, filesByPath, project, files, compactPipelinePaths, collapsedPaths, launchHistoryPaths, pinnedPaths, nowSeconds]);
   const groups = useMemo(
     () => (engineProjection.promotedPaths.size || engineProjection.foldedPaths.size
@@ -1017,9 +1041,56 @@ function ProjectDashboardView({
   );
   const treeGroups = groups.filter((group) => !group.orphanTask).length;
 
+  /* The conversation a back gesture just dismissed.
+
+     Every deliberate focus also writes the Viewer's own typed history entry
+     (#866), so a conversation opened on the phone owns TWO entries: that focus
+     entry and the screen pushed over it. ‹ pops the screen and lands on the
+     focus entry, and landing on it REPLAYS the focus — which, taken as a fresh
+     open, pushed the operator straight back into the conversation they had
+     just left, with no way out of it. A pop is the operator leaving: the
+     replay of the entry that same open wrote is not a new gesture. Every other
+     transition — a sheet, a switch, a push, a tap on a row — clears this, so
+     deliberately re-opening that same conversation still works. */
+  const dismissedChatRef = useRef<string | null>(null);
+  useEffect(() => {
+    let previous = topScreen(mobileNav.getState());
+    /* Store subscription, not an effect on the rendered state: it runs inside
+       the traversal itself, before the replayed focus reaches this component. */
+    return mobileNav.subscribe(() => {
+      const state = mobileNav.getState();
+      const top = topScreen(state);
+      if (state.motion !== "pop") dismissedChatRef.current = null;
+      else if (previous.kind === "chat" && !sameScreen(previous, top)) dismissedChatRef.current = previous.id;
+      previous = top;
+    });
+  }, [mobileNav]);
+
+  /* On the phone a conversation is a SCREEN (mobile v2 §3.3): every deliberate
+     focus — a board row, an attention jump, a deep link, a spawned draft —
+     pushes it over the board, which stays where it was underneath, so ‹ and the
+     platform back land on the list the operator came from. A repeat focus of
+     the conversation already on top is not a second entry, and neither is the
+     replay of a conversation the operator has just backed out of. */
+  const showMobileConversation = (key: string) => {
+    const top = topScreen(mobileNav.getState());
+    if (top.kind === "chat" && top.id === key) return;
+    /* The pop's own replay, and only it: the entry is CONSUMED here, so the
+       one focus the traversal replays is swallowed and a later deliberate open
+       of that same conversation — an arrival banner, an attention jump — still
+       lands. */
+    if (dismissedChatRef.current === key) {
+      dismissedChatRef.current = null;
+      return;
+    }
+    mobileNav.push({ kind: "chat", id: key });
+  };
+
   /* The highlight drives the scheme: the camera glides to the node and rings it. */
   const flashNode = (path: string) => {
     onUserNavigate?.();
+    /* A task card is a board object, not a conversation screen. */
+    if (isMobile && !path.startsWith("task::")) showMobileConversation(path);
     setHighlight(path);
     /* A focused task card stays full-size while it is the focus target. */
     setFocusedTaskId(path.startsWith("task::") ? path.slice("task::".length) : null);
@@ -1040,6 +1111,7 @@ function ProjectDashboardView({
     /* Another project is another board with its own saved view: the landing
        that forced this one's conversation surface does not travel with it. */
     setOpenedConversation(null);
+    setTransientView(null);
   }, [project]);
 
   /* An attention jump rides the same channel as switchboard opens: the ref is
@@ -1123,6 +1195,14 @@ function ProjectDashboardView({
     openTaskOnBoard(task.id);
   };
 
+  /* A pipeline link (an MCP call card's chip, #1695): the desktop Board reveals and focuses the card that holds
+     the pipeline, through the same anchor a focus handoff uses. The phone has no card to reveal. */
+  const revealPipeline = (id: string) => {
+    if (isMobile) return;
+    onUserNavigate?.();
+    flashNode(`group::pipeline::${id}`);
+  };
+
   useEffect(() => {
     const navigate = (rawEvent: Event) => {
       const detail = (rawEvent as CustomEvent<{ kind?: string; id?: string }>).detail;
@@ -1141,8 +1221,7 @@ function ProjectDashboardView({
         gotoProject(pipeline.project);
         return;
       }
-      onUserNavigate?.();
-      setBuilderPipelineId(id);
+      revealPipeline(id);
     };
     window.addEventListener("llv:mcp-navigate", navigate);
     return () => window.removeEventListener("llv:mcp-navigate", navigate);
@@ -1153,28 +1232,15 @@ function ProjectDashboardView({
     if (!pending || !pipelines.some((pipeline) => pipeline.id === pending && pipeline.project === project)) return;
     sessionStorage.removeItem("llvPipelineFocus");
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- cross-project MCP link reveal */
-    setBuilderPipelineId(pending);
+    revealPipeline(pending);
   }, [pipelines, project]);
 
-  /* Desktop `+ Task`: drop the inline sticky composer in a free slot near the
-     button (the board resolves the world anchor + findFreeSlot). Voice, images
-     and a deadline all live in that on-board composer. */
-  const addTask = () => {
+  /* The phone's task sheet: «New task» opens the create view, «Tasks» the list. */
+  const openMobileTasks = (view: TaskSheetView) => {
     onUserNavigate?.();
-    setNewTaskNonce((n) => n + 1);
+    mobileNav.closeSheet();
+    setMobileTaskSheet(view);
   };
-  /* Mobile `+ Task`: open the full-screen sheet's create view. */
-  const addTaskMobile = () => {
-    onUserNavigate?.();
-    setTaskSheetNonce((n) => n + 1);
-  };
-  /* `place on map`: close the panel focus into board placement mode; the next
-     canvas click pins the card exactly where clicked (identity unchanged). */
-  const placeOnMap = (task: BoardTask) => {
-    board.setTaskPanelOpen(false);
-    setPlaceTask(task);
-  };
-
   const persistDrafts = (next: string[]) => {
     setDrafts(next);
     sessionStorage.setItem(draftsKey(project), JSON.stringify(next));
@@ -1185,7 +1251,27 @@ function ProjectDashboardView({
      standing on a conversation a search opened. */
   const chooseEmptyView = (next: ProjectView) => {
     setOpenedConversation(null);
+    setTransientView(null);
     board.setViewMode(next);
+  };
+  /* The desktop's two views (#1695): the Board, which is the kanban, and Conversations. Board writes the
+     board view mode with the kanban face, so a build from before the kanban became the only desktop board
+     still opens it; Conversations keeps the list preference it always had. */
+  const chooseDesktopView = (next: DesktopView) => {
+    if (next === "list") {
+      chooseEmptyView("list");
+      return;
+    }
+    setOpenedConversation(null);
+    setTransientView(null);
+    board.setDesktopBoard("kanban", "scheme");
+  };
+
+  /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
+     which would otherwise keep the Board it opened in front of the list the operator just asked for. */
+  const openConversationsForOneLook = () => {
+    setOpenedConversation(null);
+    setTransientView("list");
   };
 
   /* randomUUID needs a secure context; LAN http access gets the fallback. */
@@ -1203,6 +1289,24 @@ function ProjectDashboardView({
     pendingFocusRef.current = "draft::" + id;
   };
 
+  /* Band-local «+ Agent» (#1586): the draft carries its band so the band layout
+     seats it after the band's last member, and the launch request carries the
+     task id so the spawn route commits the membership before the agent starts. */
+  const draftBands = useMemo(
+    () => new Map(drafts.flatMap((id) => { const band = draftBand(id); return band ? [[id, band] as const] : []; })),
+    [drafts],
+  );
+  const addBandAgentDraft = (band: { id: string; task: BoardTask | null; title: string }) => {
+    if (!loaded) return;
+    onUserNavigate?.();
+    const id = newDraftId();
+    if (band.task) setDraftText(id, band.task.text);
+    setDraftBand(id, band.id);
+    setDraftCwd(id, initialDraftCwd);
+    persistDrafts([...drafts, id]);
+    pendingFocusRef.current = "draft::" + id;
+  };
+
   /* `+ Пайплайн` (#136, #196, #388): the picker admits a repository before it
      creates a DRAFT. Its world-space PipelineGroup opens with the full role
      chain and shared editor before the first run. */
@@ -1213,8 +1317,10 @@ function ProjectDashboardView({
 
   /* The handoff handle under a pane: a draft that continues this conversation
      hangs right below it, inheriting the transcript and its directory. A
-     repeat click refocuses the existing draft instead of stacking duplicates. */
-  const addHandoffDraft = (file: FileEntry) => {
+     repeat click refocuses the existing draft instead of stacking duplicates.
+     On the kanban board the draft sits on the card that holds the conversation
+     (`bandId`), the way a card's own «+ Agent» draft does. */
+  const addHandoffDraft = (file: FileEntry, bandId: string | null = null) => {
     onUserNavigate?.();
     const existing = drafts.find((id) => (file.conversationId
       && draftParentConversationId(id) === file.conversationId)
@@ -1225,6 +1331,7 @@ function ProjectDashboardView({
     }
     const id = newDraftId();
     setDraftSrc(id, file.path, file.conversationId);
+    if (bandId) setDraftBand(id, bandId);
     const handoffCwd = projectDraftWorkingDirectory(files, project, projectCatalogEntries, file.path, projectCwdFallbacks, initialDraftCwd);
     setDraftCwd(id, handoffCwd);
     persistDrafts([...drafts, id]);
@@ -1235,18 +1342,6 @@ function ProjectDashboardView({
     if (isWorkflowDraftId(id)) clearWorkflowDraftStorage(id);
     else clearDraftStorage(id);
     persistDrafts(drafts.filter((item) => item !== id));
-  };
-
-  /* «Send» on a task card, new-agent flavor: a fresh draft pane lands on the
-     scheme seeded with the task text as its first prompt — the user picks the
-     engine and directory and launches it. Nothing runs until they do. */
-  const openTaskDraft = (task: BoardTask) => {
-    onUserNavigate?.();
-    const id = newDraftId();
-    setDraftText(id, task.text);
-    setDraftCwd(id, initialDraftCwd);
-    persistDrafts([...drafts, id]);
-    pendingFocusRef.current = "draft::" + id;
   };
 
   /* Retry affordance for a failed pathless launch receipt: a fresh draft pane
@@ -1279,16 +1374,10 @@ function ProjectDashboardView({
 
   /* The raw close, shared by an explicit user close and a history redo. */
   const applyClose = (path: string) => {
-    /* Closing a chat also puts out its host; fire-and-forget, since the node
-       disappears either way and a host that survived a failed request just
-       stays for the next close. Branch nodes are filtered server-side — they
-       share the root's host. */
-    void fetch("/api/tmux", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "kill", path }),
-    }).catch(() => {});
-    /* One durable close, independent of the node's current render class: the
+    /* Card dismissal owns presentation only. Runtime termination stays on the
+       conversation's explicit process control: a child can share its root's
+       host, and a hidden root can still be running intentionally. One durable
+       close, independent of the node's current render class: the
        server reducer tombstones the path and strips manual/expanded membership,
        so a node closed while momentarily outside `autoPaths` no longer loses its
        tombstone and reappears (#60). The matching ephemeral jump target, if any,
@@ -1441,6 +1530,11 @@ function ProjectDashboardView({
     }
     pendingFocusRef.current = file.path;
   };
+  /* The kanban board's Hidden tray restores a closed conversation where an
+     explicit open would place it, without opening or focusing anything. */
+  const restoreClosedConversation = (file: FileEntry) => {
+    board.restore(file.path, isChildConversation(file) ? "expanded" : autoPaths.has(file.path) ? "auto" : "manual");
+  };
   /* Open a folded tray member read-only (#142 §1.4): reveal it as an ephemeral
      node for inspection without touching durable board membership — folding
      stays intact, so the P4 look never un-docks the child. */
@@ -1459,16 +1553,64 @@ function ProjectDashboardView({
     pendingFocusRef.current = path;
     setEphemeral((prev) => (prev.includes(path) ? prev : [...prev, path]));
   };
+  /* The tray API reaches every card through NodesLayer's props, so its
+     identity must move only when the PROJECTION moves (#1432). `board` is
+     rebuilt on every render (its setters delegate to the shared store) and
+     `openTrayMember` closes over the latest files, so both are read through a
+     ref the handlers dereference at call time. */
+  const trayHandlersRef = useRef({ board, openTrayMember });
+  trayHandlersRef.current = { board, openTrayMember };
   const trayApi = useMemo<SubagentTrayApi>(() => ({
     trays: engineProjection.traysByParent,
     foldedChildPaths: engineProjection.foldedPaths,
-    onToggleExpanded: (parentId, expanded) => board.setEngineTrayExpanded(parentId, expanded),
-    onOpenMember: openTrayMember,
-    onUnfold: (id, path) => board.setEngineChildFold(id, path, false),
-    onFoldChild: (id, path) => board.setEngineChildFold(id, path, true),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [engineProjection, board]);
+    onToggleExpanded: (parentId, expanded) => trayHandlersRef.current.board.setEngineTrayExpanded(parentId, expanded),
+    onOpenMember: (path) => trayHandlersRef.current.openTrayMember(path),
+    onUnfold: (id, path) => trayHandlersRef.current.board.setEngineChildFold(id, path, false),
+    onFoldChild: (id, path) => trayHandlersRef.current.board.setEngineChildFold(id, path, true),
+  }), [engineProjection]);
   const openFullCatalogFile = onOpenCatalogFile ?? openSwitchboardFile;
+  /* A board row is the phone's OPEN gesture (#1244): it stamps the card seen —
+     a finished lane holds its outcome until the operator has read it — places
+     the row's node the way every switchboard open does, so the conversation
+     screen has something to show, and pushes that screen.
+     It is the BOARD's own open, not the catalog resolver's: a row on this list
+     is a file the scan already carries, never a beyond-cap pin, and the
+     resolver's landing resets the shell to the board (`nav.home()`, which
+     predates the conversation screen) — so routing a row through it collapsed
+     the screen this gesture had just pushed and re-pushed it from an effect,
+     mounting the conversation twice with a frame of board between them. */
+  const openBoardRow = (file: FileEntry) => {
+    /* A tap on a row is a new gesture whatever came before it, including a
+       back out of this very conversation. */
+    dismissedChatRef.current = null;
+    openSwitchboardFile(file);
+    showMobileConversation(file.path);
+  };
+
+  /* A stage row on the pipeline screen is the same open gesture as a board row,
+     with one difference that decides where ‹ goes (README §3.3, §4.7: «‹ from a
+     stage conversation returns to the pipeline»).
+
+     `openBoardRow` records the focus entry FIRST and pushes the screen second,
+     so the gesture leaves two history entries: the focus record, which carries
+     no shell stamp and therefore reads to the shell as the board, and the
+     conversation screen above it. From the board that is invisible — the entry
+     underneath IS the board. From a pipeline it is not: ‹ landed on the focus
+     entry, read depth 1, and dropped the operator on the board with the
+     pipeline gone.
+
+     So this gesture pushes the screen first and then re-types the entry it is
+     standing on instead of adding one: `restore` can only ever replaceState,
+     and `openBoardRow`'s own record then coalesces onto the same target
+     (`decideFocusAction`). One gesture, one entry, and the entry underneath is
+     still the pipeline's. */
+  const openPipelineStageConversation = (file: FileEntry) => {
+    if (isMobile) {
+      showMobileConversation(file.path);
+      recordFocusNavigation(file, projectKey(file), { restore: true });
+    }
+    openBoardRow(file);
+  };
 
   /* Expand a terminal direct review group back onto the board (#289 + #325):
      record the durable disclosure override as EXPANDED (so the deck
@@ -1533,17 +1675,21 @@ function ProjectDashboardView({
     statusBits.push(t("dash.quietTrees", { count: cards.length }));
   }
 
-  const visibleGroups = groups
+  /* Memoised (#1432): these arrays are SchemeBoard's layout inputs. Rebuilt
+     inline they took a fresh identity on every dashboard render — a highlight,
+     a clock tick — and every one of those re-laid-out the whole board and
+     re-rendered every card. */
+  const visibleGroups = useMemo(() => groups
     .map((group) => ({ ...group, columns: group.columns.filter((column) => !hiddenSet.has(column.file.path)) }))
-    .filter((group) => group.columns.length);
+    .filter((group) => group.columns.length), [groups, hiddenSet]);
   /* Parentless background processes dock as colored strips at the top of the
      canvas instead of hanging as lone stub nodes in the middle of it. */
-  const dockedTasks = visibleGroups.filter((group) => group.orphanTask).map((group) => group.columns[0]!.file);
-  const schemeGroups = visibleGroups.filter((group) => !group.orphanTask);
+  const dockedTasks = useMemo(() => visibleGroups.filter((group) => group.orphanTask).map((group) => group.columns[0]!.file), [visibleGroups]);
+  const schemeGroups = useMemo(() => visibleGroups.filter((group) => !group.orphanTask), [visibleGroups]);
   /* Active pipelines keep the scheme available before the first transcript;
      SchemeBoard anchors their world-space PipelineGroups beside linked tasks. */
   const activePipelines = useMemo(() => pipelinesForProject(pipelines, project, files), [pipelines, project, files]);
-  const visibleDrafts = drafts.filter((id) => !pendingRestoredHandoffs.has(id));
+  const visibleDrafts = useMemo(() => drafts.filter((id) => !pendingRestoredHandoffs.has(id)), [drafts, pendingRestoredHandoffs]);
   const hasNodes =
     schemeGroups.length > 0 || schemeManual.length > 0 || visibleDrafts.length > 0 || projectTasks.length > 0 || activePipelines.length > 0;
   /* Scheme-visible project files, freshest first. They gate live activity for
@@ -1582,15 +1728,23 @@ function ProjectDashboardView({
      exists only for an implementer placed as a board node — the same layout the
      scheme draws. Derive availability from that layout's nodes, so a scanned but
      unplaced (hidden/tombstoned) implementer disables the action (#93 finding). */
-  const pipelineLayout = buildSchemeLayout(hasNodes ? schemeGroups : archiveGroups, hasNodes ? schemeManual : [], files, compactLayoutFlows, hasNodes ? visibleDrafts : [], pipelines, [], new Set(), isolatedCompactHistoryPaths, [], new Set(), { now: nowSeconds });
+  const layoutGroups = hasNodes ? schemeGroups : archiveGroups;
+  const layoutManual = hasNodes ? schemeManual : EMPTY_MANUAL;
+  const layoutDrafts = hasNodes ? visibleDrafts : EMPTY_DRAFTS;
+  const layoutTasks = useMemo(() => (hasNodes ? boardTasks : EMPTY_TASKS).filter(isPlacedTask), [hasNodes, boardTasks]);
+  const pipelineLayout = useMemo(
+    () => buildSchemeLayout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, new Set(), { now: nowSeconds }),
+    [layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, nowSeconds],
+  );
   /* Worker rows the scheme still draws in a retained form — an active flow's
      reviewer round deck keeps its finished rounds as deck tabs. Those are
      re-admitted here so a folded reviewer is never listed twice (its deck AND a
-     worker stack). Derived inline (like pipelineLayout above) so the React
-     Compiler owns the caching — a manual useMemo over the non-memoized
-     pipelineLayout can't be preserved. */
-  const deckReviewerPaths = new Set<string>();
-  for (const deck of pipelineLayout.decks) for (const round of deck.rounds) if (round.file) deckReviewerPaths.add(round.file.path);
+     worker stack). */
+  const deckReviewerPaths = useMemo(() => {
+    const paths = new Set<string>();
+    for (const deck of pipelineLayout.decks) for (const round of deck.rounds) if (round.file) paths.add(round.file.path);
+    return paths;
+  }, [pipelineLayout]);
   /* The board's placed conversation windows, in layout order — the fallback the
      non-scheme publisher below reports as visible when the history list has no
      rows of its own (#771 requirement a). Carried as a newline-joined signature
@@ -1603,10 +1757,10 @@ function ProjectDashboardView({
      exclude set: a closed worker is a tombstone — it must not resurface as a
      stack member (its manual/expanded pin was dropped on close, so it would
      otherwise re-qualify as a plain collapse candidate). */
-  const workerStacks = groupWorkerStacks(collapsibleWorkers, deckFlows, new Set([...deckReviewerPaths, ...hiddenSet, ...launchHistoryPaths, ...compactPipelinePaths]), {
+  const workerStacks = useMemo(() => groupWorkerStacks(collapsibleWorkers, deckFlows, new Set([...deckReviewerPaths, ...hiddenSet, ...launchHistoryPaths, ...compactPipelinePaths]), {
     pipelineIdOf,
     originOf: spawnerRootOf,
-  });
+  }), [collapsibleWorkers, deckFlows, deckReviewerPaths, hiddenSet, launchHistoryPaths, compactPipelinePaths, pipelineIdOf, spawnerRootOf]);
   const listAvailable = catalogKnown || historyRows.length > 0;
   /* A landing from the resolver outranks the saved preference for as long as it
      stands (see `openedConversation`). It cannot conjure a surface that has
@@ -1614,13 +1768,136 @@ function ProjectDashboardView({
      the list exactly as before, and the landing's own node is what makes the
      scheme available in the first place. */
   const landedOnConversation = openedConversation !== null && schemeAvailable;
-  const projectView = landedOnConversation ? "scheme" : resolveProjectView({
+  /* Conversations for one look (a card's link to more conversations): the desktop has no other face to visit. */
+  const transientFace = !isMobile && transientView === "list" && listAvailable ? "list" : null;
+  /* The desktop Board is a view even before the project has a card (#1695 K9a): chosen over Conversations,
+     it draws its empty columns with + Task and + Agent, so a project whose catalog is known and whose board is
+     empty still reaches creation. The phone keeps its own resolution. */
+  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && board.prefs.viewMode === "scheme";
+  const projectView = landedOnConversation ? "scheme" : transientFace ?? (desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView: board.prefs.viewMode,
     hasNodes,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
-  });
+  }));
   const viewToggle = schemeAvailable && listAvailable;
+
+  /* The phone's board (mobile v2 lane 2, README §4.1): the switchboard's triage
+     grouping as a list, mounted where the focus view used to be whenever no
+     conversation is on top of the navigation stack. The model is pure, so the
+     bar's badge and the rows below it are counted once, in one place. */
+  const mobileTop = topScreen(mobileNavState);
+  const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
+  const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
+  /* A lane whose close is on its way is gone from the board already (#1671);
+     the Viewer's badge reads the same closes. */
+  const closingPipelines = useClosingPipelines();
+  const mobileBoardProps = {
+    files,
+    pipelines: activePipelines,
+    project,
+    seatPath,
+    hidden: hiddenSet,
+    crowned: crownedPaths,
+    closing: closingPipelines,
+    now: nowSeconds,
+  };
+  const mobileBoardModel = isMobile ? mobileBoardOf(mobileBoardProps) : null;
+  /* The pipeline the stack names, when the scan still carries it (lane 7). */
+  const mobilePipelineOnScreen = mobileTop.kind === "pipeline"
+    ? activePipelines.find((pipeline) => pipeline.id === mobileTop.id) ?? null
+    : null;
+  /* One opener for every door into a pipeline: the board's queue row, the
+     pipelines list, and the Needs-you sheet the bar's badge opens. */
+  const openMobilePipeline = (pipeline: Pipeline) => {
+    mobileNav.closeSheet();
+    mobileNav.push({ kind: "pipeline", id: pipeline.id });
+  };
+  /* What a board row reveals under a left swipe and lists on a long-press
+     (#1671). Closing a card is the board's own close, the one ⋯ › Close card
+     sends. A close the server refuses is shed by the outbox and the row comes
+     back on its own; the paths closed from here are held until the board
+     settles, so that return also gets a receipt. */
+  const swipeClosesRef = useRef(new Map<string, string>());
+  /* Reopen from the board lifts the tombstone where the card stood and leaves
+     the operator on the board. The switchboard's open is the phone's OPEN
+     gesture — it pushes the conversation screen — so it is not used here; the
+     placement it would have chosen is remembered at the close instead. Both
+     halves read the latest render at the moment they run, as the undo keys
+     do, because a receipt outlives the render that drew the tray. */
+  const swipePlacementsRef = useRef(new Map<string, "auto" | "manual" | "expanded">());
+  const swipeCardRef = useRef<{ close: (path: string) => void; reopen: (path: string) => void } | null>(null);
+  swipeCardRef.current = {
+    close: (path) => {
+      swipePlacementsRef.current.set(
+        path,
+        prefs.expanded.includes(path) ? "expanded" : prefs.manual.includes(path) ? "manual" : autoPaths.has(path) ? "auto" : "manual",
+      );
+      closeNode(path);
+    },
+    reopen: (path) => {
+      board.restore(path, swipePlacementsRef.current.get(path) ?? "manual");
+      swipePlacementsRef.current.delete(path);
+    },
+  };
+  const mobileRowActions = useMobileBoardRowActions({
+    closeCard: (path, title) => {
+      swipeClosesRef.current.set(path, title);
+      swipeCardRef.current?.close(path);
+    },
+    reopenCard: (path) => {
+      swipeClosesRef.current.delete(path);
+      swipeCardRef.current?.reopen(path);
+    },
+  });
+  useEffect(() => {
+    if (board.sync !== "current" || swipeClosesRef.current.size === 0) return;
+    for (const [path, title] of swipeClosesRef.current) {
+      swipeClosesRef.current.delete(path);
+      if (!hiddenSet.has(path)) showReceipt(t("mobile2.board.closeNotSaved", { title }));
+    }
+  }, [board.sync, hiddenSet, t]);
+  const [rowActionsFor, setRowActionsFor] = useState<MobileBoardRowRef | null>(null);
+  /* The phone's board is the leaf when the scheme is this project's view and no
+     conversation sits on top of the stack; the footer and the presence slice
+     both hang off that one answer. */
+  const mobileBoardLeaf = isMobile && projectView === "scheme" && schemeAvailable && mobileConversationKey === null;
+  /* What the open project's board carries, by path and by conversation id.
+     «Remove from board» is judged against this, so the task panel offers it
+     only where the flag takes effect (#1614). */
+  const boardMemberKeys = useMemo(() => boardConversationKeys(files), [files]);
+  /* The desktop leaf that is the board itself — the one leaf that owns chrome in
+     the top-left corner, so it is handed the view switch instead of having one
+     floated over it (#1614). */
+  const desktopBoardLeaf = projectView === "scheme" && (schemeAvailable || desktopEmptyBoard);
+  /* The desktop board is the kanban (#1695), whatever face an earlier build stored: a conversation opened
+     from anywhere opens as a reader in its card. */
+  const kanbanLeaf = !isMobile && desktopBoardLeaf;
+  const kanbanSeat = useKanbanSeat(project);
+  /* While the board is still loading, its face is taken to be the Board it almost always is, so the orchestrator
+     dock does not mount a panel for one commit that the Board's seat then takes over. */
+  const kanbanFaceReported = !isMobile && (kanbanLeaf || !boardReady);
+  useLayoutEffect(() => {
+    onKanbanFace?.(kanbanFaceReported);
+  }, [kanbanFaceReported, onKanbanFace]);
+  useLayoutEffect(() => () => onKanbanFace?.(true), [onKanbanFace]);
+  const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "list"] : ["kanban"];
+  /* Which conversations the phone board is showing, in the order it shows them,
+     as a signature so the presence effect below compares BY VALUE — a fresh
+     array every render would re-report the same view on every poll. Null
+     whenever the board is not the leaf. */
+  const mobileBoardSignature = mobileBoardModel && mobileBoardLeaf
+    ? [
+      ...mobileBoardModel.needsYou.flatMap((item) => (item.kind === "conversation" ? [item.path] : [])),
+      ...mobileBoardModel.working.map((row) => row.path),
+      ...mobileBoardModel.recent.map((row) => row.path),
+    ].join("\n")
+    : null;
+  /* The bar's badge is NOT composed here. The Viewer scopes the phone's queue
+     to the project behind the badge and counts this project's pipelines
+     waiting on a decision in it (README §4.1, §4.6), from the same pure answer
+     `buildMobileBoard` gives the Needs-you section below — so the badge, the
+     sheet it opens and these rows are one list, counted once. */
 
   /* Presence context: which project is open and how its durable board is
      syncing. Reported here so every leaf's slice merges under it. */
@@ -1676,78 +1953,211 @@ function ProjectDashboardView({
      rendered as board windows still has visible conversations, and reporting an
      empty list there told observers nothing was on screen. */
   useEffect(() => {
-    if (projectView === "scheme" && schemeAvailable) return;
-    const rows = listAvailable ? historyRows.map((row) => row.path) : [];
-    const order = rows.length > 0 ? rows : boardWindowSignature ? boardWindowSignature.split("\n") : [];
+    const mobileBoardRows = mobileBoardSignature === null ? null : mobileBoardSignature ? mobileBoardSignature.split("\n") : [];
+    if (projectView === "scheme" && schemeAvailable && mobileBoardRows === null) return;
+    /* The phone board (mobile v2 lane 2) is the mobile leaf with no
+       conversation focused: it reports the rows it renders, in the order it
+       renders them, and no focused path — nothing is open over it. */
+    const rows = mobileBoardRows ?? (listAvailable ? historyRows.map((row) => row.path) : []);
+    const order = mobileBoardRows ?? (rows.length > 0 ? rows : boardWindowSignature ? boardWindowSignature.split("\n") : []);
     const visiblePaths = order.slice(0, MAX_VISIBLE_PATHS);
-    /* A quiet history list is "list" on either platform; a truly empty project
-       on the phone is the mobile-focus empty state. */
-    const mode = listAvailable ? "list" : isMobile ? "mobile-focus" : "list";
+    /* A quiet history list is "list" on either platform; the phone's own leaves
+       — the board and a truly empty project — are the mobile-focus mode. */
+    const mode = mobileBoardRows !== null ? "mobile-focus" : listAvailable ? "list" : isMobile ? "mobile-focus" : "list";
     viewBus.reportSlice({ mode, focusedPath: null, selectedPaths: selectionInOrder(order, board.selection, { includeUnordered: true }), visiblePaths, camera: null });
-  }, [projectView, schemeAvailable, listAvailable, historyRows, isMobile, boardWindowSignature, board.selection]);
+  }, [projectView, schemeAvailable, listAvailable, historyRows, isMobile, boardWindowSignature, board.selection, mobileBoardSignature]);
 
-  /* Shelf totals for the phone header trigger (issue #419 reopened). The full
-     strips live in the overlay the trigger opens; here we only need the count
-     and whether the focused conversation can be handed off, so the trigger can
-     decide to appear and badge itself without building the strips twice. */
-  const shelfHiddenTotal =
-    workerStacks.reduce((sum, stack) => sum + stack.items.length, 0) + launchHistory.length + projectTasks.length + (!hasArchiveNodes ? residual.length : 0);
-  const shelfHandoffFile = isMobile && projectView === "scheme" && mobileActiveFile && canHandoff(mobileActiveFile) ? mobileActiveFile : null;
-  const shelfHasContent = isMobile && boardReady && (shelfHiddenTotal > 0 || Boolean(shelfHandoffFile));
+  const pipelinesAlert = pipelinesError ? (
+    <div className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-[11.5px] text-warning" role="alert">
+      {t("dash.pipelinesUnavailable")}
+    </div>
+  ) : null;
+  /* Parentless background processes dock as colored strips at the top of the
+     desktop canvas; on the phone they are host detail and live in the host
+     sheet as their own rows (mobile v2 lane 2), never as always-on rows under
+     the bar. */
+  const dockedTaskStrips = dockedTasks.map((task) => (
+    <div
+      key={task.path}
+      className={`border-l-4 ${task.activity === "live" ? "border-l-success bg-success-soft" : "border-l-muted"}`}
+    >
+      <TaskStrip file={task} />
+    </div>
+  ));
+
+  /* The board menu (README §3.1, §4.1): every former header control as a
+     labelled 44 px row, create actions first, the danger-free Archive last. No
+     row asks for confirmation; Archive answers with a receipt carrying Restore. */
+  const openTasks = projectTasks.filter((task) => task.status !== "done").length;
+  const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
+  const mobileMenuEntries = (): MobileMenuEntry[] => {
+    const entries: MobileMenuEntry[] = [
+      { kind: "row", key: "new-agent", icon: <MessageSquarePlus className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newAgent"), disabled: !loaded, onSelect: () => { mobileNav.closeSheet(); addDraft(); } },
+      { kind: "row", key: "new-task", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newTask"), onSelect: () => openMobileTasks("new") },
+      { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
+      { kind: "divider", key: "d1" },
+      { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTasks ? t("mobile2.menu.tasksOpen", { count: openTasks }) : undefined, onSelect: () => openMobileTasks("list") },
+    ];
+    if (viewToggle) {
+      /* The board's two faces (issue #613) stay one tap away here, as radio
+         rows: the picture's «All conversations» is the catalog list, and the
+         board face is the way back from it. */
+      entries.push(
+        { kind: "row", key: "view-board", icon: <Network className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.board"), checked: projectView === "scheme", onSelect: () => { mobileNav.closeSheet(); chooseEmptyView("scheme"); } },
+        { kind: "row", key: "view-catalog", icon: <LayoutGrid className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.catalog"), trailing: inlineCatalog.catalog.known ? t("mobile.catalog.count", { count: inlineCatalog.catalog.total }) : undefined, checked: projectView === "list", onSelect: () => { mobileNav.closeSheet(); chooseEmptyView("list"); } },
+      );
+    }
+    entries.push(
+      { kind: "row", key: "accounts", icon: <UserRound className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.accounts"), go: "accounts", onSelect: () => mobileNav.push({ kind: "accounts" }) },
+      {
+        kind: "row",
+        key: "host",
+        icon: <Info className="h-[18px] w-[18px]" aria-hidden />,
+        label: t("mobile2.menu.host"),
+        opens: "host",
+        trailing: (
+          <>
+            {mobileRuntime !== "live" ? <Badge tone={mobileRuntime === "offline" ? "danger" : "warning"} data-connection={mobileRuntime}>{t(`runtime.${mobileRuntime}`)}</Badge> : null}
+            {t("mobile2.menu.hostTasks", { count: dockedTasks.length })}
+          </>
+        ),
+        onSelect: () => mobileNav.openSheet("host"),
+      },
+      { kind: "divider", key: "d2" },
+    );
+    if (history.canUndo || history.canRedo) {
+      /* Board history stays here until the receipts of later lanes carry the
+         inverse of a close on the phone (issue #184, #1054 review). */
+      if (history.canUndo) entries.push({ kind: "row", key: "undo", icon: <Undo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.undo"), onSelect: () => { mobileNav.closeSheet(); onUndo(); } });
+      if (history.canRedo) entries.push({ kind: "row", key: "redo", icon: <Redo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.redo"), onSelect: () => { mobileNav.closeSheet(); onRedo(); } });
+      entries.push({ kind: "divider", key: "d3" });
+    }
+    entries.push(
+      {
+        kind: "custom",
+        key: "sound",
+        node: (
+          <div className="flex min-h-11 items-center gap-2 px-4">
+            <span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("mobile2.menu.sound")}</span>
+            <SoundToggle />
+          </div>
+        ),
+      },
+      /* «Keep screen awake» (issue #712) reads the Viewer-level controller that
+         outlives this sheet; it renders nothing without one. */
+      { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
+    );
+    if (archived) {
+      entries.push({ kind: "divider", key: "d4" }, {
+        kind: "row",
+        key: "unarchive",
+        icon: <ArchiveRestore className="h-[18px] w-[18px]" aria-hidden />,
+        label: t("mobile2.menu.unarchive"),
+        onSelect: () => {
+          mobileNav.closeSheet();
+          onUnarchive(project);
+          showReceipt(t("mobile2.menu.unarchived"));
+        },
+      });
+    } else if (archiveAllowed) {
+      entries.push({ kind: "divider", key: "d4" }, {
+        kind: "row",
+        key: "archive",
+        icon: <Archive className="h-[18px] w-[18px]" aria-hidden />,
+        label: t("mobile2.menu.archive"),
+        onSelect: () => {
+          /* Acts on the tap (README Q4); the receipt's Restore is the safety
+             net, and the board goes to the overview as the desktop button does. */
+          mobileNav.closeSheet();
+          onArchive(project);
+          showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => onUnarchive(project) });
+          window.location.hash = "#p=" + encodeURIComponent(OVERVIEW);
+        },
+      });
+    }
+    return entries;
+  };
+  /* The folded worker / quiet / readiness strips. The desktop renders them
+     inline under the board; the phone reaches them inside the host sheet, and
+     every action there is terminal, so on the phone each callback closes the
+     sheet first (unmounting the modal restores focus and unlocks the body).
+     Lane 10 retires the strips; the host sheet's own rows outlive them. */
+  const hiddenStrips = () => {
+    const closeSheetThen = <A extends unknown[]>(fn: (...args: A) => void) =>
+      isMobile ? (...args: A) => { mobileNav.closeSheet(); fn(...args); } : fn;
+    return (
+      <>
+        <TaskReadinessStrip
+          tasks={projectTasks}
+          files={files}
+          pipelines={pipelines}
+          flows={deckFlows}
+          conversationAliases={conversationAliases}
+          repository={projectCatalogEntries.find((entry) => entry.project === project)?.repository ?? null}
+          onOpenTask={closeSheetThen(openTask)}
+          onOpenFile={closeSheetThen(openSwitchboardFile)}
+        />
+        <LaunchHistory items={launchHistory} onRetry={closeSheetThen(retryLaunch)} />
+        <WorkerStacks
+          stacks={workerStacks}
+          files={files}
+          flows={deckFlows}
+          pipelines={pipelines}
+          onSelect={closeSheetThen(openSwitchboardFile)}
+          onExpandGroup={closeSheetThen(expandReviewGroup)}
+        />
+        {!hasArchiveNodes && residual.length ? (
+          <ResidualStrip items={residual} activeRootPaths={quietActiveRoots} onSelect={closeSheetThen(openSwitchboardFile)} />
+        ) : null}
+      </>
+    );
+  };
+
+  const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
+    if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
+    /* A board row's long-press (#1671): the same actions its swipe reveals. */
+    if (name === "row") {
+      return rowActionsFor ? (
+        <MobileRowActionsSheet
+          title={t("mobile2.board.rowActions", { title: rowActionsFor.kind === "conversation" ? rowActionsFor.row.title : rowActionsFor.row.task })}
+          actions={mobileRowActions(rowActionsFor)}
+          onClose={close}
+        />
+      ) : null;
+    }
+    /* Host details (mobile v2 lane 2): the background processes with their PIDs
+       and a Kill that acts on the tap, the runtime connection, and the quiet
+       conversations — the one place any of it appears on the phone. */
+    if (name === "host") {
+      return (
+        <MobileHostSheet
+          projectName={projectName}
+          runtime={mobileRuntime}
+          tasks={dockedTasks}
+          hiddenCount={hasArchiveNodes ? 0 : residual.length}
+          onOpenCatalog={() => { mobileNav.closeSheet(); chooseEmptyView("list"); }}
+          onClose={close}
+        >
+          {boardReady ? hiddenStrips() : null}
+        </MobileHostSheet>
+      );
+    }
+    return mobileShell?.renderSheet(name, close) ?? null;
+  };
 
   return (
     <FavoritesProvider value={favoritesApi}>
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {/* The phone header fits 390px BY CONSTRUCTION (issue #613, where it
-          measured 422px and hung «More actions» off the screen). Its budget: at
-          most FIVE fixed 44px targets (projects, search, shelf, create, more)
-          plus the bounded attention pill — ~326px with the gaps and padding —
-          and the project name as the ONE elastic cell, which truncates into
-          whatever is left. 390px is the narrowest viewport this layout supports
-          — a fully populated row leaves the name ~73px there, ~43px at 360px, a
-          sliver at 320px, and at 280px the fixed targets alone overflow the row
-          by ~29px. That collapse below 390px is a documented limit, not a
-          defect: a narrower phone would need a further fold into the «⋯» menu.
-          Any control added later either fits the budget as a 44px target or
-          folds into that menu, the way the scheme/list switch did — and the way
-          «Keep screen awake» does (issue #712).
-          Global search (issue #1054) is the fifth target, and it kept the count
-          at five by folding the one it displaced: undo joined the redo already
-          in the «⋯» menu. It rode the row as a SIXTH target for one round and
-          the measured cost was exact — the project name fell to 25px, an
-          unreadable stub, which is why the count is a budget and not a habit.
-          issue613Evidence.browser.test.tsx now measures that name width. */}
-      <div
-        data-testid={isMobile ? "mobile-project-header" : undefined}
-        className={
-          isMobile
-            ? "flex min-h-[52px] min-w-0 shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1.5"
-            : "flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4"
-        }
-      >
-        {onMenu ? (
-          <button
-            type="button"
-            className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-              isMobile ? "h-11 w-11" : "-ml-1.5 h-7 w-7"
-            }`}
-            aria-label={t("dash.openProjects")}
-            onClick={onMenu}
-          >
-            <Menu className={isMobile ? "h-5 w-5" : "h-4 w-4"} aria-hidden />
-          </button>
-        ) : null}
-        {/* The project name takes priority on the phone (issue #419 finding 2):
-            short names like «atlas» never compress to «a…», and it is capped at
-            45vw so a very long one truncates. It is also the ONLY cell that
-            gives width back when the row runs out (issue #613 — as `shrink-0` it
-            held its 45vw and pushed «More actions» off a 390px screen instead).
-            Desktop keeps its natural width. */}
-        <h1 className={`truncate text-[13.5px] font-bold ${isMobile ? "min-w-0 max-w-[45vw]" : ""}`} title={projectName}>{projectName}</h1>
-        {/* Desktop only. On the phone the whole history island — undo and redo
-            together — rides the «⋯» menu, which is how search bought its 44px
-            slot without breaking the budget above (issue #1054 review). */}
-        {!isMobile ? (
+      {isMobile ? null : (
+        /* The desktop header row. The phone renders the shell's bar instead
+           (mobile v2 lane 1): one 52 px bar with the project name as the title
+           cell and at most three 44 px targets, everything else behind ⋯. */
+        <div className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">
+          <h1 className="truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
+          {/* The project account surface is one compact switch per relevant engine
+              (#1331). Pool/carrier detail opens on demand, and quiet projects still
+              spend no header slot. */}
+          <ProjectAccounts project={project} />
           <BoardHistoryControls
             canUndo={history.canUndo}
             canRedo={history.canRedo}
@@ -1756,144 +2166,6 @@ function ProjectDashboardView({
             onUndo={onUndo}
             onRedo={onRedo}
           />
-        ) : null}
-        {isMobile ? (
-          <>
-            {/* Toolbar folds to a single row (findings 1, 7): all create actions
-                collapse into one `+` menu and the secondary project actions into
-                a `⋯` menu — every control is a 44px hit target. The scheme/list
-                switch used to sit here as a 94px segmented pair; at 390px it is
-                one tap inside the `⋯` menu instead (issue #613). */}
-            {/* Empty filler: absorbs whatever slack the row has so the control
-                cluster stays right-aligned while the project name keeps its
-                natural width (issue #419 finding 2). It collapses to nothing
-                first, before the name starts truncating. */}
-            <span aria-hidden className="min-w-0 flex-1" />
-            {/* Global message search (issue #1054). It spends one of the
-                header's 44px slots rather than folding into «⋯», because the
-                requirement it serves is speed — the operator types and gets
-                their own message back. */}
-            {onOpenSearch ? (
-              <button
-                type="button"
-                data-testid="dash-search"
-                aria-label={t("search.openMobile")}
-                onClick={onOpenSearch}
-                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <Search className="h-5 w-5" aria-hidden />
-              </button>
-            ) : null}
-            {/* The attention queue badge is an ACTION (it opens the queue), not
-                decoration, so it holds its own bounded pill width — riding the
-                elastic filler squeezed it to zero px at 390px, which hid it
-                (issue #613). */}
-            {attention ? <span className="flex shrink-0 items-center">{attention}</span> : null}
-            {/* Handoff/hidden/readiness access as a compact header trigger (issue
-                #419 reopened) — the focused chat below reserves no bottom row for
-                it; a tap opens the overlay sheet. */}
-            {shelfHasContent ? (
-              <button
-                type="button"
-                data-testid="mobile-shelf-trigger"
-                aria-haspopup="dialog"
-                aria-expanded={shelfOpen}
-                aria-label={t("dash.hiddenShelf")}
-                onClick={() => setShelfOpen(true)}
-                className="relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <Layers className="h-4 w-4" aria-hidden />
-                {shelfHiddenTotal > 0 ? (
-                  <span className="absolute -right-0.5 -top-0.5 rounded-full bg-accent/10 px-1 text-[10px] font-bold tabular-nums text-accent">{shelfHiddenTotal}</span>
-                ) : null}
-              </button>
-            ) : null}
-            <HeaderMenu triggerLabel={t("dash.createMenu")} icon={<Plus className="h-5 w-5" aria-hidden />}>
-              {(close) => (
-                <>
-                  <HeaderMenuItem icon={<MessageSquarePlus className="h-4 w-4" aria-hidden />} label={t("dash.agent")} disabled={!loaded} onSelect={() => { close(); addDraft(); }} />
-                  <HeaderMenuItem icon={<ListTodo className="h-4 w-4" aria-hidden />} label={t("dash.task")} onSelect={() => { close(); addTaskMobile(); }} />
-                  <HeaderMenuItem icon={<span className="text-[15px] font-bold leading-none">≡</span>} label={t("dash.pipeline")} onSelect={() => { close(); setTemplatePickerOpen(true); }} />
-                </>
-              )}
-            </HeaderMenu>
-            <HeaderMenu triggerLabel={t("dash.moreMenu")} icon={<MoreHorizontal className="h-5 w-5" aria-hidden />}>
-              {(close) => (
-                <>
-                  {/* The scheme/list switch (issue #613). Inline it cost 94px of
-                      a 390px row and pushed this very trigger off screen; here
-                      both faces stay one tap away and the current one is
-                      announced as the checked radio option. */}
-                  {viewToggle ? (
-                    <>
-                      <div role="group" aria-label={t("dash.viewMenuGroup")} className="flex flex-col gap-0.5">
-                        <HeaderMenuItem
-                          icon={<Network className="h-4 w-4" aria-hidden />}
-                          label={t("dash.viewSchemeMenu")}
-                          checked={projectView === "scheme"}
-                          onSelect={() => { close(); chooseEmptyView("scheme"); }}
-                        />
-                        <HeaderMenuItem
-                          icon={<List className="h-4 w-4" aria-hidden />}
-                          label={t("dash.viewListMenu")}
-                          checked={projectView === "list"}
-                          onSelect={() => { close(); chooseEmptyView("list"); }}
-                        />
-                      </div>
-                      <span aria-hidden className="my-0.5 h-px shrink-0 bg-border" />
-                    </>
-                  ) : null}
-                  {/* Board history lives here on the phone, both directions
-                      together. Undo held a 44px slot in the row until the global
-                      search button needed one (issue #1054 review): the row's
-                      budget is five targets, and the rule the header comment
-                      states is that a later control either fits it or folds into
-                      this menu. Undo folded — it is the corrective half of a
-                      gesture the operator just made, one tap away here beside
-                      the redo that already lived in this menu, while search is
-                      the surface the operator reaches for cold. Each item shows
-                      only while that direction is possible. */}
-                  {history.canUndo || history.canRedo ? (
-                    <>
-                      <div role="group" aria-label={t("board.historyGroup")} className="flex flex-col gap-0.5">
-                        {history.canUndo ? (
-                          <HeaderMenuItem icon={<Undo2 className="h-4 w-4" aria-hidden />} label={t("board.undo")} onSelect={() => { close(); onUndo(); }} />
-                        ) : null}
-                        {history.canRedo ? (
-                          <HeaderMenuItem icon={<Redo2 className="h-4 w-4" aria-hidden />} label={t("board.redo")} onSelect={() => { close(); onRedo(); }} />
-                        ) : null}
-                      </div>
-                      <span aria-hidden className="my-0.5 h-px shrink-0 bg-border" />
-                    </>
-                  ) : null}
-                  <div className="flex min-h-11 items-center gap-2 px-1.5"><span className="text-[13px] font-semibold text-primary">{t("dash.soundMenu")}</span><SoundToggle /></div>
-                  {/* Device-local comfort settings sit together here. «Keep
-                      screen awake» (issue #712) folds into this menu for the
-                      same reason the scheme/list switch did: the 390px header
-                      row has no width for a sixth 44px target, and the focused
-                      conversation below must not lose height to a setting the
-                      operator touches once. Renders nothing without the
-                      Viewer-level provider that owns the sentinel. */}
-                  <KeepAwakeMenuRow />
-                  <div className="flex min-h-11 items-center px-1.5">
-                    {archived ? (
-                      <button
-                        type="button"
-                        className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-border bg-canvas px-3 text-[13px] font-semibold text-muted hover:border-accent/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                        onClick={() => onUnarchive(project)}
-                      >
-                        <ArchiveRestore className="h-4 w-4" aria-hidden /> {t("dash.unarchive")}
-                      </button>
-                    ) : (
-                      <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} />
-                    )}
-                  </div>
-                  <div className="flex min-h-11 items-center px-1.5"><DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} /></div>
-                </>
-              )}
-            </HeaderMenu>
-          </>
-        ) : (
           <>
             {/* Issue #696: the header borrows the affirmative idle line only
                 when the catalog is actually known. Under a failing fetch it
@@ -1935,7 +2207,10 @@ function ProjectDashboardView({
                 in the right-aligned control cluster, because the panel it opens
                 is the leftmost thing on screen (PRD #976 decision 6). */}
             {onToggleOrchestratorPanel ? (
-              <OrchestratorPanelToggle open={orchestratorPanelOpen} onToggle={onToggleOrchestratorPanel} />
+              <OrchestratorPanelToggle
+                open={kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen}
+                onToggle={kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel}
+              />
             ) : null}
             <button
               type="button"
@@ -1953,17 +2228,11 @@ function ProjectDashboardView({
                 </span>
               ) : null}
             </button>
-            <button
-              type="button"
-              onClick={() => setTemplatePickerOpen(true)}
-              aria-label={t("dash.newPipeline")}
-              className="flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-2.5 py-1 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <span className="text-[13px] leading-none text-accent">+</span> {t("dash.pipeline")}
-            </button>
+            {/* No «+ Pipeline» on the desktop (#1695): pipelines are created by agents through MCP, and their
+                drafts and stages are shown and edited on the Board's cards and Stages sheet. */}
           </>
-        )}
-      </div>
+        </div>
+      )}
 
       {templatePickerOpen ? (
         <PipelineTemplatePicker
@@ -1972,140 +2241,242 @@ function ProjectDashboardView({
           onCreate={addPipelineDraft}
           onCreated={(pipeline) => {
             setTemplatePickerOpen(false);
-            setBuilderPipelineId(pipeline.id);
+            revealPipeline(pipeline.id);
           }}
         />
       ) : null}
 
-      {pipelinesError ? (
-        <div className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-[11.5px] text-warning" role="alert">
-          {t("dash.pipelinesUnavailable")}
-        </div>
-      ) : null}
+      {isMobile ? null : pipelinesAlert}
 
-      {boardReady && dockedTasks.length ? (
-        <div className="shrink-0 border-b border-border bg-sunken">
-          {dockedTasks.map((task) => (
-            <div
-              key={task.path}
-              className={`border-l-4 ${task.activity === "live" ? "border-l-success bg-success-soft" : "border-l-muted"}`}
-            >
-              <TaskStrip file={task} />
-            </div>
-          ))}
-        </div>
+      {!isMobile && boardReady && dockedTasks.length ? (
+        <div className="shrink-0 border-b border-border bg-sunken">{dockedTaskStrips}</div>
       ) : null}
 
       {isMobile ? (
-        <>
-          {/* The phone shell is two nav rows at most: header + the focus-view
-              strip (finding 7). The scheme/list switch is not one of them — it
-              is one tap inside the header's «⋯» menu (issue #613). */}
-          {!boardReady ? (
-            catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
-          ) : projectView === "scheme" && schemeAvailable ? (
-            <MobileFocusView
-              project={project}
-              projectName={projectName}
-              groups={hasNodes ? schemeGroups : archiveGroups}
-              manual={hasNodes ? schemeManual : []}
+        /* The phone (mobile v2 lanes 1–2): the shell's bar, banner slot and
+           receipt around the leaf, and the leaf is the BOARD until a
+           conversation is on top of the navigation stack. The strip inside the
+           focus view stays until lane 3 folds it into the bar's title cell. */
+        mobileTop.kind === "accounts" ? (
+          <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+        ) : mobileTop.kind === "pipelines" || mobileTop.kind === "pipeline" ? (
+          /* The pipelines list and one pipeline (mobile v2 lane 7, §4.7). Both
+             are screens on the same stack as the board, so ‹ leaves the way the
+             operator came in and a stage conversation pushed from a pipeline
+             returns to it. A pipeline the stack still names but the scan no
+             longer carries — archived from another surface while this screen
+             was open — falls back to the list rather than to nothing. */
+          mobilePipelineOnScreen ? (
+            <MobilePipelineScreen
+              pipeline={mobilePipelineOnScreen}
               files={files}
               flows={flows}
-              reviewGroups={directReviewGroups}
-              pipelines={pipelines}
-              surfacePipelines={activePipelines}
-              workerStacks={workerStacks}
-              tasks={hasNodes ? boardTasks : []}
-              sheetTasks={projectTasks}
-              drafts={hasNodes ? visibleDrafts : []}
-              favorites={favoriteIdSet}
-              isolatedManualPaths={isolatedCompactHistoryPaths}
-              loaded={loaded}
-              focus={highlight}
-              onSelect={openSwitchboardFile}
-              onClose={closeNode}
-              onDraftClose={removeDraft}
-              onDraftSpawned={draftSpawned}
-              onConversationOpened={markPathSeen}
-              onActiveChange={setMobileActiveFile}
-              taskSheetNonce={taskSheetNonce}
-              trayApi={trayApi}
+              tasks={projectTasks}
+              now={nowSeconds}
+              host={mobileShell}
+              renderSheet={renderMobileSheet}
+              onOpenConversation={openPipelineStageConversation}
+              onOpenTask={(task) => openMobileTasks({ taskId: task.id })}
             />
           ) : (
-            /* The phone has THREE leaves and the pin belongs in all of them
-               (PRD #976 decision 5). The focus view carries it inside its own
-               strip; the catalog list and the empty project get the same row,
-               from the same seat projection, in the same kind of slot — its own
-               strip above the leaf, outside whatever the leaf scrolls. So the
-               catalog's ordering, its search box, and a project with nothing in
-               it yet all keep the orchestrator first and reachable, and an
-               operator who lives in Список is not the one operator who cannot
-               create one. Exactly one row exists at a time: this branch and the
-               focus view above it are alternatives. */
-            <>
-              <div className="flex shrink-0 items-stretch border-b border-border bg-card" data-testid="mobile-orchestrator-slot">
-                <MobileOrchestratorRow
+            <MobilePipelinesScreen
+              pipelines={activePipelines}
+              now={nowSeconds}
+              host={mobileShell}
+              renderSheet={renderMobileSheet}
+              onOpenPipeline={openMobilePipeline}
+            />
+          )
+        ) : (
+          <MobileShell
+            screen="board"
+            /* A conversation pushed over the board gets the bar's ‹ (§3.3);
+               lane 3 makes that screen its own, with the title cell and the
+               meta line. */
+            back={mobileConversationKey !== null}
+            title={<MobileBarTitle>{projectName}</MobileBarTitle>}
+            titleLabel={t("mobile2.bar.switchProject")}
+            titleOpens={mobileShell ? "projects" : undefined}
+            host={mobileShell}
+            onOpenSearch={onOpenSearch}
+            searchTestId="dash-search"
+            renderSheet={renderMobileSheet}
+            /* The board's footer (README §4.1): one tap into the orchestrator's
+               conversation, where the operator writes. Over a vacancy the same
+               slot is the invitation's other half — it opens the create draft,
+               which is the seat card's own sheet, so both halves of a board
+               with no orchestrator lead to the one place that makes one. */
+            dock={mobileBoardLeaf && boardReady
+              ? seatState.kind === "live" && seatFile
+                ? <MobileBoardDock onTell={() => openBoardRow(seatFile)} />
+                : <MobileBoardDock create={seatState.kind === "draft"} unresolved={seatState.kind !== "draft"}
+                    onTell={() => mobileNav.openSheet(seatState.kind === "draft" ? "rotate" : "seat")} />
+              : undefined}
+          >
+            {pipelinesAlert}
+              {!boardReady ? (
+                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
+              ) : mobileBoardLeaf ? (
+                <MobileBoard
+                  {...mobileBoardProps}
+                  catalog={{
+                    data: inlineCatalog.catalog,
+                    expanded: inlineCatalog.view.expanded,
+                    paging: inlineCatalog.view.paging,
+                    position: inlineCatalog.view.position,
+                    onToggle: inlineCatalog.toggle,
+                    onReach: inlineCatalog.reach,
+                  }}
+                  rowActions={mobileRowActions}
+                  onRowActions={(ref) => {
+                    setRowActionsFor(ref);
+                    mobileNav.openSheet("row");
+                  }}
+                  onOpenCatalogConversation={openFullCatalogFile}
+                  seat={(
+                    /* The card takes the board's full width (README §4.1): it
+                       is the first CARD of the list, not the chip the strip's
+                       38 vw used to cap. */
+                    <div className="flex items-stretch px-3" data-testid="mobile-orchestrator-slot">
+                      <MobileSeatCard
+                        project={project}
+                        projectName={projectName}
+                        files={files}
+                        /* One seat read for the phone: the board needs it to
+                           keep the seat out of the list, and the card renders
+                           from the same answer instead of polling for it a
+                           second time. */
+                        seat={seatRead}
+                        incumbentRead={seatIncumbentRead}
+                        /* The board's own clock, so the card's badge ticks with
+                           the rows beside it rather than on a second one. */
+                        now={nowSeconds}
+                        onOpenConversation={openBoardRow}
+                      />
+                    </div>
+                  )}
+                  onOpenConversation={openBoardRow}
+                  onOpenPipeline={openMobilePipeline}
+                  onOpenPipelines={() => mobileNav.push({ kind: "pipelines" })}
+                />
+              ) : projectView === "scheme" && schemeAvailable ? (
+                <MobileFocusView
                   project={project}
                   projectName={projectName}
+                  groups={layoutGroups}
+                  manual={layoutManual}
                   files={files}
-                  onOpenConversation={openFullCatalogFile}
+                  flows={flows}
+                  reviewGroups={directReviewGroups}
+                  pipelines={pipelines}
+                  surfacePipelines={activePipelines}
+                  tasks={hasNodes ? boardTasks : EMPTY_TASKS}
+                  sheetTasks={projectTasks}
+                  drafts={layoutDrafts}
+                  favorites={favoriteIdSet}
+                  isolatedManualPaths={isolatedCompactHistoryPaths}
+                  loaded={loaded}
+                  /* The SCREEN is the truth on the phone (mobile v2 §3.3):
+                     the conversation on top of the stack is the one this
+                     screen is, and it outranks the board's own highlight —
+                     which still names the previously focused card for the
+                     frame in which the new screen mounts, and painted that
+                     other conversation's pane before replacing it. */
+                  focus={mobileConversationKey ?? highlight}
+                  onSelect={openSwitchboardFile}
+                  onClose={closeNode}
+                  onDraftClose={removeDraft}
+                  onDraftSpawned={draftSpawned}
+                  onConversationOpened={markPathSeen}
+                  /* «Hand off» is a row in the conversation's ⋯ (§4.2): the
+                     board owns the draft, the screen only asks for it. The
+                     host sheet's handoff handle — the last of the retired
+                     shelf's contents — went with lane 10. */
+                  onHandoff={addHandoffDraft}
+                  trayApi={trayApi}
                 />
-                <span aria-hidden className="min-w-0 flex-1" />
-              </div>
-              {listAvailable ? (
-                <ConversationList project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
               ) : (
-                <EmptyProjectLeaf projectName={projectName} />
+                /* The phone has THREE leaves and the pin belongs in all of them
+                   (PRD #976 decision 5). The focus view carries it inside its own
+                   strip; the catalog list and the empty project get the same row,
+                   from the same seat projection, in the same kind of slot — its own
+                   strip above the leaf, outside whatever the leaf scrolls. So the
+                   catalog's ordering, its search box, and a project with nothing in
+                   it yet all keep the orchestrator first and reachable, and an
+                   operator who lives in Список is not the one operator who cannot
+                   create one. Exactly one row exists at a time: this branch and the
+                   focus view above it are alternatives. */
+                <>
+                  <div className="flex shrink-0 items-stretch border-b border-border px-3 py-1.5" data-testid="mobile-orchestrator-slot">
+                    <MobileSeatCard
+                      project={project}
+                      projectName={projectName}
+                      files={files}
+                      now={nowSeconds}
+                      onOpenConversation={openFullCatalogFile}
+                    />
+                  </div>
+                  {listAvailable ? (
+                    <ConversationList project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
+                  ) : (
+                    <EmptyProjectLeaf projectName={projectName} />
+                  )}
+                </>
               )}
-            </>
-          )}
-        </>
+          </MobileShell>
+        )
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {boardReady && viewToggle ? (
-              <ProjectViewTabs value={projectView} onChange={chooseEmptyView} floating />
+            {/* The board carries the switch inside its own tool palette (see
+                ProjectViewTabs); every other desktop leaf has no chrome in that
+                corner, so there it floats. */}
+            {boardReady && listAvailable && !desktopBoardLeaf ? (
+              <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} floating />
             ) : null}
             {!boardReady ? (
               catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <SchemeSkeleton />
-            ) : projectView === "scheme" && schemeAvailable ? (
-              <SchemeBoard
+            ) : kanbanLeaf ? (
+              <KanbanBoard
+                layout={pipelineLayout}
                 project={project}
-                groups={hasNodes ? schemeGroups : archiveGroups}
-                manual={hasNodes ? schemeManual : []}
+                groups={layoutGroups}
+                manual={layoutManual}
                 files={files}
                 flows={flows}
                 reviewGroups={directReviewGroups}
                 pipelines={pipelines}
                 surfacePipelines={activePipelines}
                 now={nowSeconds}
-                tasks={hasNodes ? boardTasks : []}
+                tasks={hasNodes ? boardTasks : EMPTY_TASKS}
                 allTasks={projectTasks}
-                workerStacks={workerStacks}
-                drafts={hasNodes ? visibleDrafts : []}
+                drafts={layoutDrafts}
                 favorites={favoriteIdSet}
                 isolatedManualPaths={isolatedCompactHistoryPaths}
+                draftBands={draftBands}
+                loaded={loaded}
+                catalogFailures={catalogFailures}
+                selection={board.selection}
                 focus={highlight}
-                attentionPaths={attentionPaths}
-                trayApi={trayApi}
-                onSelect={openSwitchboardFile}
-                onClose={closeNode}
+                onConversationOpened={markPathSeen}
+                projectCwd={projectCwd}
+                closedPaths={board.prefs.hidden}
+                onRestoreConversation={restoreClosedConversation}
+                seat={(boardId, seatRead) => (
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
+                )}
+                onOpenConversations={openConversationsForOneLook}
+                onNewAgent={addDraft}
+                onAddAgent={addBandAgentDraft}
                 onDraftClose={removeDraft}
                 onDraftSpawned={draftSpawned}
                 onHandoff={addHandoffDraft}
                 onSpawnRetry={retryLaunch}
-                onTaskDraft={openTaskDraft}
-                onOpenTask={openTask}
-                onConversationOpened={markPathSeen}
-                placeTaskId={placeTask?.id ?? null}
-                onTaskPlaced={() => setPlaceTask(null)}
-                newTaskNonce={newTaskNonce}
-                onTaskCollapse={(task) => setTaskExpanded(task.id, false)}
-                builderPipelineId={builderPipelineId}
-                onBuilderOpened={() => setBuilderPipelineId(null)}
+                onCloseConversation={(file) => closeNode(file.path)}
+                viewSwitch={<ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} inline />}
               />
             ) : listAvailable ? (
-              <ConversationList project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
+              <DesktopConversations project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
             ) : (
               <EmptyProjectLeaf
                 projectName={projectName}
@@ -2114,47 +2485,16 @@ function ProjectDashboardView({
                 agentDisabled={!loaded}
               />
             )}
-            {/* The create button floats in the bottom-left corner of the board —
-                away from the fixed attention pill in the top-right, above the
-                residual strip. On the phone the header keeps this button. */}
-            <div data-chip-keepout className="pointer-events-none absolute bottom-4 left-4 z-30 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={addDraft}
-                disabled={!loaded}
-                aria-label={t("dash.newConvo")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("dash.agent")}
-              </button>
-              <button
-                type="button"
-                onClick={addTask}
-                aria-label={t("dash.newTask")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("dash.task")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTemplatePickerOpen(true)}
-                disabled={!loaded}
-                aria-label={t("pipelineBuilder.createDraftAria")}
-                className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-[8px] border border-border bg-card px-3 py-1.5 text-[11.5px] font-bold text-primary shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
-              >
-                <span className="text-[13px] leading-none text-accent">+</span> {t("board.pipeline")}
-              </button>
-            </div>
           </div>
           {taskPanelOpen ? (
             <TaskPanel
               tasks={tasks}
               project={project}
+              boardMembers={boardMemberKeys}
               favorites={favoriteRows}
               onOpenFavorite={openSwitchboardFile}
               onToggleFavorite={(id) => board.setFavorite(id, false)}
               onOpenTask={openTask}
-              onPlaceOnMap={placeOnMap}
               onClose={toggleTaskPanel}
             />
           ) : null}
@@ -2168,6 +2508,10 @@ function ProjectDashboardView({
           lines to REAL flows itself. */}
       {!isMobile && boardReady ? <Switchboard files={files} flows={deckFlows} project={project} loaded={loaded} catalogFailures={catalogFailures} onOpenFile={openSwitchboardFile} onOpenCatalogFile={openFullCatalogFile} /> : null}
 
+      {isMobile && mobileTaskSheet ? (
+        <TaskSheet project={project} projectName={projectName} tasks={projectTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
+      ) : null}
+
       {/* Worker-class cards that have auto-collapsed fold into one stack per
       origin — flow / pipeline / spawner (issue #112, #136) — instead of
       vanishing to the switchboard. The quiet `residual` strip is derived from `sceneFiles`,
@@ -2178,60 +2522,10 @@ function ProjectDashboardView({
           quiet strip share one footer row (issue #177 item 5): the handoff docks
           beside a single disclosure that folds both strips. Desktop renders the
           two strips directly, side by side. */}
-      {boardReady && (() => {
-        /* Readiness strip totals cover EVERY project task (issue #290) — not
-           just the canvas-folded subset — so the shelf badge stays truthful. */
-        const workerTotal = workerStacks.reduce((sum, stack) => sum + stack.items.length, 0) + launchHistory.length + projectTasks.length;
-        const quietTotal = !hasArchiveNodes ? residual.length : 0;
-        /* Every shelf action is TERMINAL — it navigates to a board card, another
-           project, or a fresh draft that lives BEHIND the overlay. On the phone
-           the shelf is a modal (issue #419): leaving it open after a terminal
-           action would strand the target under the sheet with the body scroll
-           still locked. So on mobile each terminal callback first closes the
-           shelf (unmounting the modal restores focus and unlocks the body via
-           its own lifecycle), then runs. Desktop renders the strips inline with
-           no modal, so the callbacks pass through untouched. Internal disclosure
-           toggles live inside the strips' own state and are never wrapped. */
-        const closeShelfThen = <A extends unknown[]>(fn: (...args: A) => void) =>
-          isMobile ? (...args: A) => { setShelfOpen(false); fn(...args); } : fn;
-        const strips = (
-          <>
-            <TaskReadinessStrip
-              tasks={projectTasks}
-              files={files}
-              pipelines={pipelines}
-              flows={deckFlows}
-              conversationAliases={conversationAliases}
-              repository={projectCatalogEntries.find((entry) => entry.project === project)?.repository ?? null}
-              onOpenTask={closeShelfThen(openTask)}
-              onPlaceOnMap={isMobile ? undefined : placeOnMap}
-              onOpenFile={closeShelfThen(openSwitchboardFile)}
-            />
-            <LaunchHistory items={launchHistory} onRetry={closeShelfThen(retryLaunch)} />
-            <WorkerStacks
-              stacks={workerStacks}
-              files={files}
-              flows={deckFlows}
-              pipelines={pipelines}
-              onSelect={closeShelfThen(openSwitchboardFile)}
-              onExpandGroup={closeShelfThen(expandReviewGroup)}
-            />
-            {!hasArchiveNodes && residual.length ? (
-              <ResidualStrip items={residual} activeRootPaths={quietActiveRoots} onSelect={closeShelfThen(openSwitchboardFile)} />
-            ) : null}
-          </>
-        );
-        if (!isMobile) return strips;
-        /* Chat-first (issue #419 reopened): the phone shelf reserves no bottom
-           row — it opens as an overlay sheet from the header trigger, folding the
-           handoff plus both hidden strips behind one compact disclosure. */
-        const leading = shelfHandoffFile ? <HandoffHandle file={shelfHandoffFile} onHandoff={() => { setShelfOpen(false); addHandoffDraft(shelfHandoffFile); }} inline /> : null;
-        return (
-          <MobileBottomShelf open={shelfOpen} onClose={() => setShelfOpen(false)} total={workerTotal + quietTotal} leading={leading}>
-            {strips}
-          </MobileBottomShelf>
-        );
-      })()}
+      {/* The desktop renders the hidden strips inline under the board; the
+          phone reaches the same strips inside the host sheet (mobile v2 lane 2),
+          which is the one place host detail lives. */}
+      {!isMobile && boardReady ? hiddenStrips() : null}
 
       <TaskToastHost />
     </div>

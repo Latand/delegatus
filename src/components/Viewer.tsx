@@ -25,6 +25,8 @@ import { advanceAttentionCycle, attentionExpiries, attentionId, buildAttentionQu
 import { AttentionHost } from "./attention/AttentionHost";
 import { AttentionIsland, AttentionQueueRow } from "./attention/AttentionIsland";
 import { AttentionToast } from "./attention/AttentionToast";
+import { buildMobileAttentionQueue } from "./attention/attentionQueue";
+import { MobileAttentionSheet } from "./attention/MobileAttentionSheet";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
@@ -34,6 +36,11 @@ import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
+import { needsDecisionPipelineRows } from "./mobile/mobileBoardModel";
+import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
+import { getMobileNav } from "./mobile/mobileNav";
+import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
+import type { MobileShellHost } from "./mobile/MobileShell";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
@@ -109,7 +116,7 @@ const STALE_FOCUS_REPLAY_MS = 8_000;
 const UNKNOWN_FRAGMENT_NOTICE_MS = 6_000;
 
 export function Viewer() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   /* There is no operator credential to claim: same-origin IS the operator (see
      `operatorAuthority`), and no key, secret, cookie or paste exists anywhere in
      this app. This only erases what earlier rounds left on disk — a stored bearer,
@@ -125,7 +132,7 @@ export function Viewer() {
   const [project, setProject] = useState<string>(OVERVIEW);
   const [pendingHash, setPendingHash] = useState<ConversationHash | null>(null);
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  const { files: allFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, loaded, scopeCertified, catalogFailures } = useFiles(null, filesRequestPin(pendingHash, catalogPin?.path ?? null));
   /* Crown/create curation (server-durable): the optimistic client seam plus
      the overlay entries for projects created before the next catalog poll. */
   const { crownedProjects, toggleCrown, createProject, createdCatalog } = useProjectCuration(serverCrownedProjects, polledProjectCatalog);
@@ -183,7 +190,10 @@ export function Viewer() {
   /* This tab's optimistic flow closes apply before anything renders: the X
      on a flow strip clears the reviewer side of the scheme instantly. */
   const flows = useEffectiveFlows(polledFlows);
-  useAgentChimes(files, requestScope);
+  /* A stand-in served for a scope still loading (#1432) is not scanned for
+     chimes: it is the last certified payload under a new label, and scanning
+     it would let the pinned answer's hydrated rows ring instead of seeding. */
+  useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
   const catalogConversationCounts = useMemo(
@@ -191,7 +201,6 @@ export function Viewer() {
     [projectCatalog],
   );
   const isMobile = useIsMobile();
-  const [drawerOpen, setDrawerOpen] = useState(false);
   /* The per-project orchestrator dock (PRD #976 slice A). Its open state is the
      operator's and belongs to the PROJECT (#1149), exactly as the dock's width
      does (#1011): the server render and the first client render agree on
@@ -202,6 +211,11 @@ export function Viewer() {
      render, so the dock the operator closed in one project stays closed there
      and nowhere else, with no frame of the previous project's answer. */
   const [orchestratorOpenProject, setOrchestratorOpenProject] = useState(OVERVIEW);
+  /* The kanban face seats the orchestrator above its own columns (#1695 K3);
+     the dock stays closed under it so one conversation has one composer. The
+     desktop board is the kanban, so the dock waits until the dashboard says a
+     project shows something else: the panel mounts once, where it is shown. */
+  const [kanbanFace, setKanbanFace] = useState(true);
   if (orchestratorOpenProject !== project) {
     setOrchestratorOpenProject(project);
     setOrchestratorOpen(dockOpenFor(project));
@@ -222,6 +236,12 @@ export function Viewer() {
   /* The jump channel into the board: nonce so repeated jumps to the same node
      re-flash (D9); consumed by ProjectDashboard's pendingFocusRef path. */
   const [focusRequest, setFocusRequest] = useState<{ path: string; nonce: number; catalog: boolean } | null>(null);
+  /* Monotonic across the whole session, never derived from the previous
+     request: a project switch clears the request to null, and a nonce read
+     back from `null` restarted at 1 — the value the board's edge gate had
+     already consumed for the last focus in the previous project — so the
+     first cross-project open after any focus moved nothing (#1432). */
+  const focusNonceRef = useRef(0);
   /* Placement without navigation — see `placePath` below. Its own state and its
      own nonce, so a place and a focus can never consume each other's edge. */
   const [placeRequest, setPlaceRequest] = useState<{ path: string; nonce: number } | null>(null);
@@ -367,7 +387,8 @@ export function Viewer() {
     dispatchCatalogPin({ kind: "release" });
     setFocusRequest(null);
     localStorage.setItem(PROJECT_KEY, nextProject);
-    setDrawerOpen(false);
+    /* The phone shell lands on the board with no sheet open (mobile v2 §3.3). */
+    getMobileNav().home();
   }, []);
 
   const selectProject = useCallback((nextProject: string) => {
@@ -395,21 +416,13 @@ export function Viewer() {
     viewBus.reportSlice(OVERVIEW_SLICE);
   }, [project]);
 
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDrawerOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [drawerOpen]);
-
-  // A tapped account badge (issue #229) opens the accounts surface. On mobile
-  // the limits footer lives inside the project drawer, so the drawer must open
-  // first; its per-engine block then claims the retained request on mount.
+  /* A tapped account badge (issue #229) opens the accounts surface. On the
+     phone the limits blocks live on the shell's Accounts & limits screen
+     (mobile v2 lane 1), so the request pushes that screen first; its
+     per-engine block then claims the retained request on mount. */
   useEffect(() => {
     if (!isMobile) return;
-    return onAccountPanelRequest(() => setDrawerOpen(true));
+    return onAccountPanelRequest(() => getMobileNav().push({ kind: "accounts" }));
   }, [isMobile]);
 
   /* A file open (overview card, deep link) becomes a column of its project.
@@ -438,9 +451,10 @@ export function Viewer() {
     dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
     setProject(key);
     localStorage.setItem(PROJECT_KEY, key);
-    setDrawerOpen(false);
+    getMobileNav().home();
     setOpenNonce((value) => value + 1);
-    setFocusRequest((previous) => ({ path: file.path, nonce: (previous?.nonce ?? 0) + 1, catalog: true }));
+    focusNonceRef.current += 1;
+    setFocusRequest({ path: file.path, nonce: focusNonceRef.current, catalog: true });
     /* A hydrated open is the RESOLVER arriving (deep link, hashchange,
        popstate replay): it re-types the entry the tab is standing on and never
        pushes, so initial restoration adds no duplicate and a replay cannot
@@ -500,18 +514,22 @@ export function Viewer() {
      and from its own pinned request) must FAIL VISIBLY: sitting silently on the
      default view read as "the page just reloads and nothing opens". Same
      bounded deadline the Back/Forward replay uses; the countdown starts only
-     once a certified payload exists, and a resolution clearing `pendingHash`
-     cancels it. The popstate path arms its own identity-checked timer — for a
-     replayed entry both reach the same notice. */
+     once a payload certified for the pinned request scope exists, and a
+     resolution clearing `pendingHash` cancels it. The last-known stand-in
+     another scope lends while the pinned fetch is in flight (#1432) carries
+     `loaded` and says nothing about the target, so it must not start the
+     clock: a pinned fetch slower than the deadline would otherwise be reported
+     stale before it could answer. The popstate path arms its own
+     identity-checked timer — for a replayed entry both reach the same notice. */
   useEffect(() => {
-    if (!pendingHash || !loaded) return;
+    if (!pendingHash || !loaded || !scopeCertified) return;
     const timer = window.setTimeout(() => {
       setPendingHash(null);
       dispatchCatalogPin({ kind: "release" });
       setStaleFocusNotice(true);
     }, STALE_FOCUS_REPLAY_MS);
     return () => window.clearTimeout(timer);
-  }, [pendingHash, loaded]);
+  }, [pendingHash, loaded, scopeCertified]);
 
   const releaseCatalogFile = useCallback((path: string) => {
     dispatchCatalogPin({ kind: "release", path });
@@ -521,12 +539,13 @@ export function Viewer() {
 
   useEffect(() => {
     if (!catalogPin?.hydrated || pendingHash) return;
-    /* A scope transition (the pin just moved to a new request URL) serves the
-       EMPTY placeholder until its own fetch lands. That placeholder is not
-       evidence the transcript disappeared — releasing the hydrated pin on it
-       dropped every freshly resolved beyond-cap deep link right after it
-       opened. Only a certified payload may retire the pin. */
-    if (!loaded) return;
+    /* A scope transition (the pin just moved to a new request URL) is served
+       by the previous scope's rows until its own fetch lands (#1432). That
+       stand-in is not evidence the transcript disappeared — releasing the
+       hydrated pin on it dropped every freshly resolved beyond-cap deep link
+       right after it opened. Only a payload certified for THIS scope may
+       retire the pin. */
+    if (!loaded || !scopeCertified) return;
     const currentPath = catalogPin.conversationId
       ? files.find((file) => file.conversationId === catalogPin.conversationId)?.path
       : undefined;
@@ -536,7 +555,7 @@ export function Viewer() {
       pending: false,
       currentPath,
     });
-  }, [catalogPin, pendingHash, allFiles, files, loaded]);
+  }, [catalogPin, pendingHash, allFiles, files, loaded, scopeCertified]);
 
   /* The one queue every counter shows: badge, popover and the tab title all
      read the same list, stalled tail included (D10). The clock advances at the
@@ -611,13 +630,62 @@ export function Viewer() {
        unresolved deep-link intent; a stale pin must never re-steal focus when
        its target shows up in a later poll. */
     setPendingHash(null);
+    /* On the phone a focus is a board landing: the shell drops whatever screen
+       or sheet was open over it (mobile v2 §3.3). */
+    getMobileNav().home();
     /* Every route through here is a deliberate focus (attention jump, crown
        favorite, N-cycle, an accepted handoff's `openPath`): record it. A path
        with no scanned entry still navigates, it just leaves no history. */
     const file = filesRef.current.find((entry) => entry.path === path);
     if (file) recordFocusNavigation(file, projectKey(file));
-    setFocusRequest((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1, catalog: false }));
+    focusNonceRef.current += 1;
+    setFocusRequest({ path, nonce: focusNonceRef.current, catalog: false });
   }, []);
+
+  /* In-app conversation links (#1432 addendum): «Open conversation» chips on
+     MCP call cards, «Open it on the board» in the orchestrator panel, the
+     lineage chip on a card, a report row — every one is an `#c=` / `#f=`
+     anchor. Left to the browser, the click became a hash navigation and the
+     resolver's pinned round trip, which blanked and rebuilt the board. A
+     target the tab already knows is opened here instead, in the same tick as
+     the click, through the SAME hand-off an accepted `request_attention`
+     handoff and an attention jump use: switch the project only when the
+     target lives elsewhere, then `requestFocus` — the card materializes on
+     the board it is already showing, the camera glides, the ring lands, and
+     the typed history entry is PUSHED (the URL still carries the link for
+     reload and share). No hash navigation, no pinned refetch, no remount of
+     the dashboard or the orchestrator panel. A target the current payload
+     cannot name — beyond the capped feed, or not scanned yet — falls through
+     to the browser, and the cold resolver path handles it exactly as before. */
+  const openLinkedFile = useCallback((file: FileEntry) => {
+    const key = projectKey(file);
+    if (key !== project) applyProject(key);
+    requestFocus(file.path);
+  }, [project, applyProject, requestFocus]);
+  const linkResolveRef = useRef({ allFiles, conversationAliases, launchRoutes });
+  useEffect(() => {
+    linkResolveRef.current = { allFiles, conversationAliases, launchRoutes };
+  }, [allFiles, conversationAliases, launchRoutes]);
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = event.target as Element | null;
+      const anchor = target && typeof target.closest === "function" ? target.closest("a[href]") : null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!/^#(?:c|f)=./.test(href)) return;
+      const windowTarget = anchor.getAttribute("target");
+      if (windowTarget && windowTarget !== "_self") return;
+      const intent = parseConversationHash(href);
+      const known = linkResolveRef.current;
+      const hit = resolveConversationTarget(known.allFiles, intent, known.conversationAliases, known.launchRoutes);
+      if (!hit) return;
+      event.preventDefault();
+      openLinkedFile(hit);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [openLinkedFile]);
 
   /* Reveal a card without going to it. `requestFocus` above both materializes
      the node and arms the board's glide; a focus handoff wants only the first,
@@ -694,6 +762,31 @@ export function Viewer() {
     () => (project === OVERVIEW ? [] : queue.filter((item) => item.project === project)),
     [queue, project],
   );
+
+  /* The phone's ONE queue (mobile v2 §4.1, §4.6): the bar's badge counts it,
+     the sheet the badge opens lists it, and that sheet's «Next ›» walks it.
+     It is SCOPED to the project behind the badge — the board under the bar
+     shows one project, so counting every project's rows made the badge promise
+     items that screen could not reach. The all-projects screen has no project
+     behind the badge, so there the list stays the whole queue.
+
+     Pipelines waiting on a decision are queue items like any other (§4.6), and
+     they come from the same pure answer the board's Needs-you section renders
+     (`needsDecisionPipelineRows`), so the count, the sheet and the rows under
+     it cannot disagree. */
+  const shellQueue = project === OVERVIEW ? queue : projectQueue;
+  /* A lane closed from the board is gone from its queue from the tap until its
+     close is answered (#1671), so the badge stops counting it on the same tap
+     that took the row away. */
+  const closingPipelines = useClosingPipelines();
+  const shellPipelineRows = useMemo(
+    () => (project === OVERVIEW || !isMobile ? [] : needsDecisionPipelineRows(pipelines, project, clock, closingPipelines)),
+    [pipelines, project, clock, isMobile, closingPipelines],
+  );
+  /* Joined into the ONE list the badge counts, the sheet lists and its
+     «Next ›» walks (lane 8, `attentionQueue.ts`). */
+  const shellEntries = useMemo(() => buildMobileAttentionQueue(shellQueue, shellPipelineRows), [shellQueue, shellPipelineRows]);
+  const shellQueueCount = shellEntries.length;
 
   useEffect(() => {
     /* N and F are desktop keys (D4/D6): the phone layout renders without the
@@ -800,7 +893,6 @@ export function Viewer() {
     <div ref={queueRef} className="pointer-events-auto relative">
       <AttentionIsland
         count={queue.length}
-        mobile={isMobile}
         queueOpen={queueOpen}
         filterActive={attentionFilter}
         onToggleQueue={() => setQueueOpen((value) => !value)}
@@ -858,28 +950,86 @@ export function Viewer() {
     </div>
   );
 
+  /* The phone shell's host (mobile v2 lane 1): the queue count for the bar's
+     badge, the arrival for the banner slot (below the runtime states, which
+     outrank it, and dropped on the board, where the queue is the first section
+     and the badge carries the count), the search palette, and the two sheets
+     the Viewer owns — the project switcher the title cell opens (it replaced
+     the drawer and the hamburger) and the Needs-you queue the badge opens over
+     whichever screen is showing. Memoized because ProjectDashboard is memo'd
+     and a fresh object per render would re-render it on every poll. */
+  const mobileShell = useMemo<MobileShellHost | null>(() => {
+    if (!isMobile) return null;
+    return {
+      attentionCount: shellQueueCount,
+      arrival: toastFile ? (
+        <AttentionToast
+          file={toastFile}
+          mobile
+          onOpen={() => {
+            openFile(toastFile);
+            setToastPath(null);
+          }}
+          onDismiss={() => setToastPath(null)}
+        />
+      ) : null,
+      renderSheet: (name, close) => {
+        if (name === "projects") {
+          return (
+            <MobileProjectSheet
+              files={files}
+              projectCatalog={projectCatalog}
+              projectDisplayNames={projectDisplayNames}
+              pipelines={pipelines}
+              workflows={workflows}
+              archivedProjects={archivedProjects}
+              crownedProjects={crownedProjects}
+              selected={project}
+              now={clock}
+              loaded={loaded}
+              catalogFailures={catalogFailures}
+              onSelect={selectProject}
+              onCreateProject={createProject}
+              onClose={close}
+            />
+          );
+        }
+        if (name === "attention") {
+          /* The Needs-you sheet (lane 8): the one list above, its rows opening
+             through the same hand-off a popover click performs (`jumpToItem`
+             moves the shared cycle pointer too, so «Next ›» here and N on a
+             desktop continue one sequence). A pipeline row opens the pipeline
+             screen (lane 7) on the same stack the board is on, so «Next ›»
+             walks both kinds and ‹ leaves the way the operator came in. */
+          return (
+            <MobileAttentionSheet
+              entries={shellEntries}
+              now={clock}
+              onOpenConversation={jumpToItem}
+              onOpenPipeline={(row) => {
+                close();
+                getMobileNav().push({ kind: "pipeline", id: row.id });
+              }}
+              onClose={close}
+            />
+          );
+        }
+        return null;
+      },
+    };
+  }, [isMobile, shellEntries, toastFile, openFile, files, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, loaded, catalogFailures, selectProject, createProject, jumpToItem]);
+
   const shell = (
     <div className="flex h-full">
       {isMobile ? null : (
         <ProjectRail files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
       )}
-      {isMobile && drawerOpen ? (
-        <div className="fixed inset-0 z-50 flex">
-          <ProjectRail files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
-          <button
-            type="button"
-            className="min-w-0 flex-1 bg-primary/35"
-            aria-label={t("viewer.closeProjects")}
-            onClick={() => setDrawerOpen(false)}
-          />
-        </div>
-      ) : null}
       {/* PUSHED INTO the layout, never over it (PRD #976 decision 1): the dock
           is a flex sibling between the rail and the board, so the board keeps
           the rest of the row instead of being covered. Desktop only — the phone
           reaches the same orchestrator through slice C (#979) — and never on
           the Overview, which is not a project and so has no seat. */}
-      {!isMobile && orchestratorOpen && project !== OVERVIEW ? (
+      {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW ? (
         <OrchestratorDock
           project={project}
           projectName={projectDisplayName(project, projectDisplayNames[project])}
@@ -912,21 +1062,6 @@ export function Viewer() {
             ) : null}
           </div>
         )}
-        {/* Mobile (finding 3): the agent-waiting notification docks as an in-flow
-            banner above the board instead of a fixed overlay, so it reserves its
-            own space and never covers the toolbar. Its open target and 44px close
-            are both full tap-height. */}
-        {isMobile && toastFile ? (
-          <AttentionToast
-            file={toastFile}
-            mobile
-            onOpen={() => {
-              openFile(toastFile);
-              setToastPath(null);
-            }}
-            onDismiss={() => setToastPath(null)}
-          />
-        ) : null}
         {project === OVERVIEW ? (
           <OverviewBoard
             files={files}
@@ -939,9 +1074,8 @@ export function Viewer() {
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
             onSelectFile={openFile}
-            onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
             onOpenSearch={openSearch}
-            attention={isMobile ? attentionBadge : undefined}
+            mobileShell={mobileShell}
           />
         ) : (
           <ProjectDashboard
@@ -967,11 +1101,11 @@ export function Viewer() {
             catalogConversationCount={catalogConversationCounts.get(project) ?? 0}
             onArchive={archiveProject}
             onUnarchive={unarchiveProject}
-            onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
             onOpenSearch={openSearch}
-            attention={isMobile ? attentionBadge : undefined}
+            mobileShell={mobileShell}
             orchestratorPanelOpen={orchestratorOpen}
             onToggleOrchestratorPanel={isMobile ? undefined : toggleOrchestrator}
+            onKanbanFace={setKanbanFace}
             onUserNavigate={cancelPendingIntent}
             onOpenCatalogFile={openCatalogFile}
             onCloseFile={releaseCatalogFile}
@@ -1010,7 +1144,7 @@ export function Viewer() {
       {/* #691 hoist: the owner of every conversation card's composer machinery.
           Cards publish a place; the composer's lifetimes (dictation, attachment
           object URLs, outbox) live here and survive the card unmounting mid-call. */}
-      <VoiceComposerHost />
+      <VoiceComposerHost files={allFiles} />
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />

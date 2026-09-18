@@ -6,11 +6,12 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
-import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import type { AgentRegistry, AgentRegistryEntry, ProcessIdentity, RegistryFile, SpawnReceipt, StructuredHostColumns } from "@/lib/agent/registry";
+import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
+import { forEachStartupBatch } from "./startupWork";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
 import { prepareManagedClaudeSpawnHome } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
@@ -20,20 +21,22 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { procBackend } from "@/lib/proc";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
+import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { isRuntimeHostTransportFailure, type RuntimeHostClient } from "./client";
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
-import { StructuredHostAdoptionCleanupError, type EngineHost, type HostState } from "./engineHost";
+import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
 import { messageOriginRole, type MessageOrigin } from "./messageOrigin";
-import { runtimeSettingsCapability, type RuntimeOperationResult, type RuntimeSession } from "./contracts";
+import { runtimeSettingsCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
 import { bindClaudeHostPersistence, bindCodexHostPersistence } from "./registry";
-import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
+import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
@@ -51,6 +54,12 @@ export const INITIAL_MESSAGE_TIMEOUT_MS = 30_000;
 const INITIAL_MESSAGE_POLL_MS = 250;
 export const ADMISSION_RETRY_ATTEMPTS = 3;
 const ADMISSION_RETRY_BACKOFF_MS = 250;
+/**
+ * Operational ownership bound for one synchronous setup generation. It gives
+ * host start, binding, first delivery, and publication one five-minute caller
+ * lifetime, then hands cleanup to durable reconciliation. Engine evidence can
+ * establish a concrete failure earlier; this bound supplies no causal claim.
+ */
 export const STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS = 5 * 60_000;
 export const READ_ONLY_STAGE_PERMISSION_PROFILE = "llv-read-only-stage";
 const PINNED_SPAWN_HEALTH_TIMEOUT_MS = 600;
@@ -90,16 +99,36 @@ export interface StructuredHostAccessMaterialization {
   cleanup(): void;
 }
 
+export type StructuredHostAccessPolicy = boolean | {
+  /** Carried with the sandbox so pipeline callers must name both axes. The
+      repository policy is enforced by pipeline settlement. */
+  readOnly: boolean;
+  sandbox: "full" | "restricted";
+};
+
+type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+
+/** New pipeline profiles persist both axes. Profiles created before that split
+    retain their legacy readOnly-to-sandbox behavior on adoption. */
+export function structuredHostAccessPolicy(profile: DurableStructuredHostAccess): StructuredHostAccessPolicy {
+  const sandbox = explicitLaunchProfileSandbox(profile);
+  return sandbox
+    ? { readOnly: profile?.readOnly === true, sandbox }
+    : profile?.readOnly === true;
+}
+
 function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
   if (sourceEnv.GH_CONFIG_DIR) return sourceEnv.GH_CONFIG_DIR;
   const home = sourceEnv.HOME || os.homedir();
   return path.join(sourceEnv.XDG_CONFIG_HOME || path.join(home, ".config"), "gh");
 }
 
-/** A read-only stage keeps the checkout under Codex's read-only profile while
-    adding one private write root for temporary and test state. */
+/** Materialize the tool/network boundary. An explicit restricted pipeline
+    profile uses workspace-write for either repository policy; settlement owns
+    the read-only declared-output fence. A legacy boolean preserves the old
+    read-only host profile for non-pipeline callers and stored sessions. */
 export function materializeStructuredHostAccess(
-  readOnly: boolean,
+  policy: StructuredHostAccessPolicy,
   sourceEnv: NodeJS.ProcessEnv,
   capability: string | null,
   scratchParent?: string,
@@ -108,11 +137,13 @@ export function materializeStructuredHostAccess(
     ...sourceEnv,
     ...(capability ? { LLV_SPAWN_CAPABILITY: capability } : {}),
   };
-  if (!readOnly) {
+  const explicitAxes = typeof policy !== "boolean";
+  const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  if (!restricted) {
     return {
       env: baseEnv,
       codex: { sandbox: "danger-full-access" },
-      host: {},
+      host: { forwardGitHubConfig: true },
       scratchDirectory: null,
       cleanup: () => {},
     };
@@ -125,7 +156,12 @@ export function materializeStructuredHostAccess(
     fs.chmodSync(scratchDirectory, 0o700);
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
-    const permissionProfileConfig = `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write"}}`;
+    const codex = explicitAxes
+      ? { sandbox: "workspace-write" }
+      : {
+          permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write"}}`,
+        };
     const cleanup = () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
     return {
       env: {
@@ -133,10 +169,7 @@ export function materializeStructuredHostAccess(
         TMPDIR: temporaryDirectory,
         GH_CONFIG_DIR: githubConfigDirectory(sourceEnv),
       },
-      codex: {
-        permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-        permissionProfileConfig,
-      },
+      codex,
       host: {
         forwardGitHubConfig: true,
         releaseCleanup: cleanup,
@@ -179,6 +212,79 @@ export class StructuredInitialMessageTimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "StructuredInitialMessageTimeoutError";
+  }
+}
+
+export class StructuredTranscriptMaterializationError extends Error {
+  constructor(timeoutMs: number) {
+    super(`structured spawn startup reached its ${timeoutMs}ms durable setup bound without a readable transcript`);
+    this.name = "StructuredTranscriptMaterializationError";
+  }
+}
+
+function structuredTranscriptIsReadable(artifactPath: string): boolean {
+  let descriptor: number | null = null;
+  try {
+    const stat = fs.statSync(artifactPath);
+    if (!stat.isFile() || stat.size === 0) return false;
+    descriptor = fs.openSync(artifactPath, "r");
+    const maxValidationBytes = 8 * 1024 * 1024;
+    const length = Math.min(stat.size, maxValidationBytes);
+    const buffer = Buffer.allocUnsafe(length);
+    if (fs.readSync(descriptor, buffer, 0, length, 0) !== length) return false;
+    const text = buffer.toString("utf8");
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as unknown;
+        if (record && typeof record === "object" && !Array.isArray(record)) return true;
+      } catch {
+        // The writer may still be appending its first record; the next poll retries it.
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+  }
+}
+
+async function waitForStructuredSessionMaterialization(
+  host: SpawnedStructuredHost,
+  artifactPath: string,
+  clientMessageId: string,
+  options: {
+    now: () => number;
+    sleep: (ms: number) => Promise<void>;
+    timeoutMs: number;
+  },
+): Promise<void> {
+  const deadline = options.now() + options.timeoutMs;
+  let lastEvidence: SessionMaterializationEvidence | null = null;
+  for (;;) {
+    const evidence = host.sessionMaterializationEvidence
+      ? await host.sessionMaterializationEvidence(clientMessageId)
+      : { state: "materialized" as const };
+    if (evidence.state === "failed") throw new StructuredSessionMaterializationError(evidence.reason);
+    lastEvidence = evidence;
+    if (evidence.state === "materialized" && structuredTranscriptIsReadable(artifactPath)) return;
+    if (evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
+    const remaining = deadline - options.now();
+    if (remaining <= 0) {
+      if (lastEvidence.state === "absent") {
+        throw new StructuredSessionMaterializationError(
+          `${lastEvidence.reason}; startup reached its ${options.timeoutMs}ms durable setup bound`,
+        );
+      }
+      if (lastEvidence.state === "unavailable") {
+        throw new StructuredSessionMaterializationError(
+          `structured spawn startup reached its ${options.timeoutMs}ms durable setup bound while session evidence was unavailable: ${lastEvidence.reason}`,
+        );
+      }
+      throw new StructuredTranscriptMaterializationError(options.timeoutMs);
+    }
+    await options.sleep(Math.min(INITIAL_MESSAGE_POLL_MS, remaining));
   }
 }
 
@@ -324,6 +430,12 @@ export async function reconcileStructuredSpawnReplay(
     timeoutMs?: number;
     releaseHost?: (key: SessionKey) => Promise<boolean>;
     terminateHostProcess?: (expected: ProcessIdentity) => Promise<boolean>;
+    drainError?: (conversationId: string) => string | null;
+    /** One startup pass may share historical identity evidence across failed
+        receipts. Pending launches always read fresh state below. Live writer
+        claims are still merged atomically by recoverStructuredSpawnFromEvidence. */
+    failedReceiptSnapshot?: () => Promise<RuntimeSnapshot>;
+    assertActive?: () => void;
   } = {},
 ): Promise<SpawnReceipt & { initialMessage: "pending" | "queued" | "delivered" | "failed" }> {
   const current = registry.readOnlySnapshot().receipts[launchId];
@@ -337,8 +449,11 @@ export async function reconcileStructuredSpawnReplay(
   const [initialOperation, spawnOperation, runtime] = await Promise.all([
     client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(() => null),
     client.operationStatus(launchId, { currentRetryLeaf: true }).catch(() => null),
-    client.snapshot().catch(() => null),
+    (current.state === "failed" && options.failedReceiptSnapshot
+      ? options.failedReceiptSnapshot()
+      : client.snapshot()).catch(() => null),
   ]);
+  options.assertActive?.();
   let operation = initialOperation;
   let effectHistoryUnavailable = false;
   if (!operation && current.state === "path-pending" && current.artifactPath) {
@@ -380,16 +495,21 @@ export async function reconcileStructuredSpawnReplay(
   const runtimeDelivered = Boolean(operation
     && operation.receipt.conversationId === current.conversationId
     && INITIAL_MESSAGE_DELIVERED.has(operation.receipt.status));
-  const transcriptDelivered = Boolean(current.artifactPath
-    && hasUserAuthoredMessage(current.artifactPath, current.engine));
-  if (runtimeDelivered || transcriptDelivered) {
-    const session = runtime?.sessions.find((candidate) => candidate.conversationId === current.conversationId);
-    const sessionMatches = session
-      && session.sessionKey.engine === current.engine
-      && session.cwd === current.cwd
-      && typeof session.artifactPath === "string"
-      ? session
-      : null;
+  const sessionMatches = runtime?.sessions.find((candidate) =>
+    candidate.conversationId === current.conversationId
+    && candidate.sessionKey.engine === current.engine
+    && candidate.cwd === current.cwd
+    && typeof candidate.artifactPath === "string"
+    && (!current.key || sessionKeyId(candidate.sessionKey) === sessionKeyId(current.key))
+    && (!current.artifactPath || candidate.artifactPath === current.artifactPath)) ?? null;
+  const evidencePath = current.artifactPath ?? sessionMatches?.artifactPath ?? null;
+  const transcriptMaterialized = Boolean(evidencePath
+    && structuredTranscriptIsReadable(evidencePath));
+  const transcriptDelivered = Boolean(evidencePath
+    && hasUserAuthoredMessage(evidencePath, current.engine));
+  /* A runtime delivery receipt establishes host acceptance. Session identity
+     publication waits for transcript-backed persistence evidence. */
+  if (transcriptDelivered || (runtimeDelivered && transcriptMaterialized)) {
     const evidence = sessionMatches ? {
       key: sessionMatches.sessionKey,
       artifactPath: sessionMatches.artifactPath!,
@@ -433,23 +553,22 @@ export async function reconcileStructuredSpawnReplay(
   const operationStartedAt = operation ? Date.parse(operation.receipt.at) : Number.NaN;
   const stageStartedAt = Number.isFinite(operationStartedAt) ? operationStartedAt : Date.parse(current.createdAt);
   const ageMs = (options.now ?? Date.now)() - stageStartedAt;
-  /* A delivered spawn operation with no matching live runtime session has no
-     remaining cold-start work, so the established message bound terminalizes
-     its empty placeholder. Registering/hosted/recovering sessions, queued
-     spawn operations, and an unavailable runtime snapshot retain the wider
-     durable-setup bound: each can still be a healthy slow launch. */
-  const deliveredWithoutLiveSession = runtime !== null
-    && spawnOperation?.receipt.conversationId === current.conversationId
-    && spawnOperation.receipt.status === "delivered"
-    && liveRuntimeSession === null;
-  const timeoutMs = options.timeoutMs
-    ?? (deliveredWithoutLiveSession
-      ? INITIAL_MESSAGE_TIMEOUT_MS
-      : STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS);
+  /* The five-minute ceiling is the spawn caller's durable setup contract. It
+     covers host start, first-message delivery, and transcript publication as
+     one bounded operation; the 30-second delivery-status poll is not reused as
+     a session-creation verdict. */
+  const timeoutMs = options.timeoutMs ?? STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
   let terminalReason = failedOperationReason(operation, "structured initial message")
     ?? failedOperationReason(spawnOperation, "structured spawn");
   if (!terminalReason && ageMs >= timeoutMs) {
-    if (liveRuntimeSession) {
+    if (liveRuntimeSession && messageStatus === "queued") {
+      const drainError = (options.drainError ?? structuredDeliveryLastError)(current.conversationId)
+        ?? operation?.receipt.reason
+        ?? `no delivery drain error was recorded before the ${timeoutMs}ms deadline`;
+      terminalReason = `first message never drained: ${drainError}`;
+    } else if (runtimeDelivered) {
+      terminalReason = `structured spawn startup reached its ${timeoutMs}ms durable setup bound with no readable transcript after confirmed first-message delivery`;
+    } else if (liveRuntimeSession) {
       terminalReason = `structured spawn durable setup remained incomplete for ${timeoutMs}ms`;
     } else if (effectHistoryUnavailable) {
       terminalReason = `structured spawn runtime effect history remained unavailable for ${timeoutMs}ms`;
@@ -533,10 +652,9 @@ export async function reconcileStructuredSpawnReplay(
   };
 }
 
-/* Foreground setup and the reaper share one five-minute ceiling. Ordinary
-   replay keeps that ceiling while cold-start work is still possible; a
-   delivered spawn with no matching live session uses the established
-   30-second empty-placeholder bound. */
+/* Foreground setup and the reaper share one five-minute ceiling. Transcript
+   publication belongs to that complete startup contract; the shorter
+   first-message status poll has no authority over session materialization. */
 export const STALE_STRUCTURED_SPAWN_TIMEOUT_MS = STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
 export const STALE_STRUCTURED_SPAWN_ACTUATION_CAP = 50;
 
@@ -560,6 +678,7 @@ function queuedPinnedSpawnForReceipt(receipt: SpawnReceipt): NonNullable<SpawnRe
 }
 
 export interface StructuredSpawnRecoveryOptions {
+  assertActive?: () => void;
   now?: () => number;
   timeoutMs?: number;
   actuationCap?: number;
@@ -598,6 +717,17 @@ async function actuateQueuedPinnedSpawn(
   const claimedQueue = queuedPinnedSpawnForReceipt(admissionClaim.receipt);
   if (!claimedQueue) {
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "queued pinned spawn lost its durable admission payload");
+  }
+  /* This is the receipt's first execution: the queue held it before any
+     process existed. Its task membership (#1586) is a prerequisite of that
+     execution the same way it is at reservation — a receipt queued before the
+     rule, or whose task was deleted while it waited, is bound now, and a store
+     that cannot record the membership fails the launch instead of starting an
+     agent outside every task. */
+  try {
+    admitRecoveredLaunch(admissionClaim.receipt);
+  } catch (error) {
+    return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
   let account: AccountContext;
   let admission: SpawnAccountAdmission;
@@ -743,6 +873,7 @@ export async function terminalizeStaleStructuredSpawns(
   const recovered: string[] = [];
   let examined = 0;
   for (const receipt of Object.values(snapshot.receipts)) {
+    options.assertActive?.();
     if (examined >= actuationCap) break;
     if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
     const queued = queuedPinnedSpawnForReceipt(receipt);
@@ -793,7 +924,7 @@ export async function terminalizeStaleStructuredSpawns(
     if (!client) continue;
     examined += 1;
     try {
-      const reconciled = await reconcile(receipt.launchId, registry, client, { now, timeoutMs });
+      const reconciled = await reconcile(receipt.launchId, registry, client, { now, timeoutMs, assertActive: options.assertActive });
       if (reconciled.state === "failed") terminalized.push(receipt.launchId);
       else if (reconciled.state === "completed") recovered.push(receipt.launchId);
     } catch (error) {
@@ -958,8 +1089,10 @@ export interface StructuredSpawnDependencies {
     ownsOperation?: () => Promise<boolean>,
   ): Promise<() => Promise<void>>;
   deliverFirst?(input: StructuredSpawnInput, artifactPath: string): Promise<void | "held">;
-  processIdentity?(): { pid: number; startIdentity: string | null };
+  processIdentity?(): ProcessIdentity;
   durableSetupTimeoutMs?: number;
+  now?(): number;
+  sleep?(ms: number): Promise<void>;
 }
 
 /** Why a queued launch from a previous generation must not be replayed, or
@@ -1004,12 +1137,15 @@ export async function recoverPendingStructuredSpawns(
   client: RuntimeHostClient,
   options: StructuredSpawnRecoveryOptions = {},
 ): Promise<void> {
+  const assertActive = options.assertActive ?? (() => {});
+  assertActive();
   /* Boot reconciliation shares the reaper's bounded contract so placeholders
      admitted by an older process settle before startup replay considers them. */
   await terminalizeStaleStructuredSpawns(registry, client, options);
   const spawnEffects = new Map<string, Record<string, unknown>>();
   let afterEventSeq = 0;
   while (true) {
+    assertActive();
     const batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
     for (const effect of batch) {
       const operationId = typeof effect.payload.operationId === "string" ? effect.payload.operationId : null;
@@ -1021,19 +1157,57 @@ export async function recoverPendingStructuredSpawns(
     afterEventSeq = next;
   }
 
-  let registeringConversationIds: Set<string> | null = null;
-  const registeringSessions = async (): Promise<Set<string>> => {
-    if (!registeringConversationIds) {
-      const runtime = await client.snapshot().catch(() => null);
-      registeringConversationIds = new Set((runtime?.sessions ?? [])
-        .filter((session) => session.host === "registering")
-        .map((session) => session.conversationId));
-    }
-    return registeringConversationIds;
-  };
+  // Historical failures need one identity snapshot for this pass. Fetching the
+  // entire runtime once per failed receipt multiplies startup admission work
+  // by both retained histories (#1552). Each receipt still
+  // reads its current operations and crosses the registry's atomic settlement.
+  // A failed snapshot stays unknown for this pass; it is never an empty snapshot.
+  let failedReceiptRuntime: Promise<RuntimeSnapshot> | undefined;
+  const failedReceiptSnapshot = () => failedReceiptRuntime ??= client.snapshot();
+
+  let registeringConversationIds: Promise<Set<string>> | undefined;
+  const registeringSessions = (): Promise<Set<string>> => registeringConversationIds ??= (async () => {
+    const runtime = await client.snapshot().catch(() => null);
+    return new Set((runtime?.sessions ?? [])
+      .filter((session) => session.host === "registering")
+      .map((session) => session.conversationId));
+  })();
 
   const snapshot = registry.readOnlySnapshot();
+  const failedGroups = new Map<string, SpawnReceipt[]>();
   for (const receipt of Object.values(snapshot.receipts)) {
+    if (receipt.state !== "failed" || receipt.transport === "tmux") continue;
+    const id = registry.canonicalConversationId(receipt.conversationId);
+    const group = failedGroups.get(id) ?? [];
+    group.push(receipt);
+    failedGroups.set(id, group);
+  }
+  await forEachStartupBatch([...failedGroups.values()], async (receipts) => {
+    for (const receipt of receipts) {
+      assertActive();
+      await reconcileFailed(receipt);
+    }
+  }, assertActive);
+  async function reconcileFailed(receipt: SpawnReceipt): Promise<void> {
+    const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, client, { failedReceiptSnapshot, assertActive });
+    if (reconciled.state === "completed") return;
+    /* The durable launch receipt failed, but its runtime spawn operation can
+       survive as queued when the terminal transition itself timed out. The
+       placeholder session then sits registering/unknown until someone closes
+       the operation; the journal retires the placeholder on that transition. */
+    if (!(await registeringSessions()).has(receipt.conversationId)) return;
+    const operation = await client.operationStatus(receipt.launchId);
+    const status = operation?.receipt.status;
+    if (operation
+      && operation.receipt.conversationId === receipt.conversationId
+      && (status === "pending" || status === "queued" || status === "delivering")) {
+      await client.transitionOperation(receipt.launchId, "failed", {
+        reason: (receipt.error ?? "structured spawn failed before runtime acknowledgement").slice(0, 240),
+      });
+    }
+  }
+  for (const receipt of Object.values(snapshot.receipts)) {
+    assertActive();
     const effect = spawnEffects.get(receipt.launchId);
     /* Re-validate before replay (#1071): a queued launch the previous
        generation accepted is not replayed verbatim by its successor. One whose
@@ -1057,25 +1231,7 @@ export async function recoverPendingStructuredSpawns(
       registry.failStructuredSpawn(receipt.launchId, supersededReason);
       continue;
     }
-    if (receipt.state === "failed" && receipt.transport !== "tmux") {
-      const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, client);
-      if (reconciled.state === "completed") continue;
-      /* The durable launch receipt failed, but its runtime spawn operation can
-         survive as queued when the terminal transition itself timed out. The
-         placeholder session then sits registering/unknown until someone closes
-         the operation; the journal retires the placeholder on that transition. */
-      if (!(await registeringSessions()).has(receipt.conversationId)) continue;
-      const operation = await client.operationStatus(receipt.launchId);
-      const status = operation?.receipt.status;
-      if (operation
-        && operation.receipt.conversationId === receipt.conversationId
-        && (status === "pending" || status === "queued" || status === "delivering")) {
-        await client.transitionOperation(receipt.launchId, "failed", {
-          reason: (receipt.error ?? "structured spawn failed before runtime acknowledgement").slice(0, 240),
-        });
-      }
-      continue;
-    }
+    if (receipt.state === "failed" && receipt.transport !== "tmux") continue;
     if (queuedPinnedSpawnForReceipt(receipt)) continue;
     if (receipt.state === "starting" && !receipt.key && receipt.transport !== "tmux") {
       const operation = await client.operationStatus(receipt.launchId);
@@ -1095,10 +1251,7 @@ export async function recoverPendingStructuredSpawns(
       if (identity) {
         const entry = registry.readOnlySnapshot().entries[sessionKeyId(identity.key)];
         if (entry?.structuredHost) {
-          claimed = registry.claimStructuredHost(identity.key, {
-            pid: process.pid,
-            startIdentity: procBackend.processIdentity(process.pid),
-          }, { allowUnhosted: true });
+          claimed = registry.claimStructuredHost(identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
           if (!claimed?.claimOwner) {
             registry.failStructuredSpawn(receipt.launchId, reason);
             continue;
@@ -1140,10 +1293,7 @@ export async function recoverPendingStructuredSpawns(
       let recoveryClaim: AgentRegistryEntry | null = null;
       let releasedOwnedHost = false;
       if (entry?.structuredHost && !ownedByFailedOperation) {
-        recoveryClaim = registry.claimStructuredHost(receipt.key, {
-          pid: process.pid,
-          startIdentity: procBackend.processIdentity(process.pid),
-        }, { allowUnhosted: true });
+        recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
         if (!recoveryClaim?.claimOwner) {
           registry.failSpawn(
             receipt.launchId,
@@ -1156,10 +1306,7 @@ export async function recoverPendingStructuredSpawns(
         const releasedHost = await releaseStructuredDeliveryHost(receipt.key);
         releasedOwnedHost = ownedByFailedOperation && releasedHost;
         if (entry?.structuredHost && ownedByFailedOperation && !releasedHost) {
-          recoveryClaim = registry.claimStructuredHost(receipt.key, {
-            pid: process.pid,
-            startIdentity: procBackend.processIdentity(process.pid),
-          }, { allowUnhosted: true });
+          recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
           if (!recoveryClaim?.claimOwner) {
             throw new Error(`structured spawn failed host is still owned for ${receipt.launchId}`);
           }
@@ -1182,6 +1329,10 @@ export async function recoverPendingStructuredSpawns(
       continue;
     }
     if (status === "delivered") {
+      /* A prior process may have written the runtime receipt before its
+         registry settlement. Publish that staged identity only when the
+         session artifact still supplies the persistence evidence. */
+      if (!structuredTranscriptIsReadable(receipt.artifactPath)) continue;
       const hostReady = entry?.structuredHost?.process
         && entry.claimOwner
         && entry.status !== "dead"
@@ -1232,6 +1383,9 @@ export async function recoverPendingStructuredSpawns(
         settleInitialMessageReservation(registry, receipt.launchId);
       }
     }
+    /* Delivery acceptance can precede lazy Codex rollout creation. Keep the
+       receipt staged so replay exposes no identity while the host is live. */
+    if (!structuredTranscriptIsReadable(receipt.artifactPath)) continue;
     await client.transitionOperation(receipt.launchId, "delivered");
     const finalized = registry.finalizeStructuredSpawn(receipt.launchId);
     if (finalized.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${finalized.code}`);
@@ -1307,7 +1461,7 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
     && (!Number.isSafeInteger(initialEventCursor) || initialEventCursor < 0)) {
     throw new Error("structured resume event cursor is invalid");
   }
-  const access = materializeStructuredHostAccess(profile.readOnly === true, input.account.env, capability);
+  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
   const env = access.env;
   if (input.engine === "codex") {
     const options = {
@@ -1342,7 +1496,8 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
     mcpStatePath: input.account.kind === "managed"
       ? path.join(input.account.home, ".claude.json")
       : path.join(path.dirname(input.account.home), ".claude.json"),
-    readOnly: profile.readOnly === true,
+    readOnly: launchProfileEngineReadOnly(profile),
+    restricted: profile.sandbox === "restricted",
     model: profile.model ?? undefined,
     effort: profile.effort ?? undefined,
     permissionMode: effectiveClaudePermissionMode(profile),
@@ -1450,7 +1605,8 @@ export async function spawnStructuredConversation(
   const publishHost = dependencies.publishHost
     ?? ((key, host, ownsOperation) => publishStructuredDeliveryHost({ key, host }, ownsOperation));
   const deliverFirst = dependencies.deliverFirst ?? defaultDeliverFirst;
-  const processIdentity = dependencies.processIdentity ?? (() => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) }));
+  const processIdentity = dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid));
+  const now = dependencies.now ?? Date.now;
   const operationId = input.receipt.launchId;
   const resumeSessionId = structuredResumeSessionId(input);
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
@@ -1462,6 +1618,8 @@ export async function spawnStructuredConversation(
   let adoptionClaimTransferred = false;
   let adoptionClaimContended = false;
   let durableSetupTimedOut = false;
+  let durableSetupDeadline = 0;
+  let materializationPending = false;
   let durableSetupTimer: ReturnType<typeof setTimeout> | null = null;
   let durableSetupTimeout: Promise<never> | null = null;
   const clearDurableSetupTimeout = () => {
@@ -1509,10 +1667,15 @@ export async function spawnStructuredConversation(
     }
     const durableSetupTimeoutMs = dependencies.durableSetupTimeoutMs
       ?? STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
+    durableSetupDeadline = now() + durableSetupTimeoutMs;
     durableSetupTimeout = new Promise<never>((_resolve, reject) => {
       durableSetupTimer = setTimeout(() => {
         durableSetupTimedOut = true;
-        reject(new Error(`structured spawn durable host setup timed out after ${durableSetupTimeoutMs}ms`));
+        reject(materializationPending
+          ? new StructuredSessionMaterializationError(
+            `structured spawn startup reached its ${durableSetupTimeoutMs}ms durable setup bound while session materialization was pending`,
+          )
+          : new Error(`structured spawn durable host setup timed out after ${durableSetupTimeoutMs}ms`));
       }, durableSetupTimeoutMs);
       durableSetupTimer.unref?.();
     });
@@ -1554,6 +1717,9 @@ export async function spawnStructuredConversation(
       pendingAction: "spawn",
     });
     if (staged.kind === "conflict") throw new Error(`structured spawn registry conflict: ${staged.code}`);
+    const stagedPath = identityMaterializationFence().allowsReceipt(staged.receipt, { structured: true })
+      ? identity.path
+      : null;
     const claimed = adoptionClaim
       ? staged.entry
       : input.registry.claimStructuredHost(key, processIdentity(), { allowUnhosted: true });
@@ -1601,7 +1767,7 @@ export async function spawnStructuredConversation(
       return {
         ok: true,
         target: null,
-        path: identity.path,
+        path: stagedPath,
         ...(input.engine === "claude"
           ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
           : {}),
@@ -1614,6 +1780,52 @@ export async function spawnStructuredConversation(
         transport: "structured",
       };
     }
+    if (!content && !structuredTranscriptIsReadable(identity.path)) {
+      clearDurableSetupTimeout();
+      input.registry.releaseStructuredSpawnAdmissionOwner(
+        input.receipt.launchId,
+        input.receipt.admissionOwner ?? processIdentity(),
+      );
+      return {
+        ok: true,
+        target: null,
+        path: stagedPath,
+        ...(input.engine === "claude"
+          ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
+          : {}),
+        launchId: input.receipt.launchId,
+        conversationId: input.receipt.conversationId,
+        launched: true,
+        retrySafe: false,
+        initialMessage: "pending",
+        state: "path-pending",
+        transport: "structured",
+      };
+    }
+    if (content) {
+      const sleep = dependencies.sleep
+        ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+      materializationPending = true;
+      try {
+        /* The id the engine wire actually carries: the drain stamps the spawn
+           first message with the OPERATION id (`spawn_message_<launchId>`),
+           not the held delivery's `spawn_<launchId>` clientMessageId, and the
+           persisted rollout item echoes the wire id. Hunting the wrong id
+           left materialization pending forever (#1332). */
+        await withinDurableSetup(waitForStructuredSessionMaterialization(
+          host,
+          identity.path,
+          `spawn_message_${input.receipt.launchId}`,
+          {
+            now,
+            sleep,
+            timeoutMs: Math.max(0, durableSetupDeadline - now()),
+          },
+        ));
+      } finally {
+        materializationPending = false;
+      }
+    }
     await withinDurableSetup(
       withRuntimeAdmissionRetry(() => input.client.transitionOperation(operationId, "delivered")),
     );
@@ -1623,7 +1835,9 @@ export async function spawnStructuredConversation(
     return {
       ok: true,
       target: null,
-      path: identity.path,
+      path: identityMaterializationFence().allowsReceipt(settled.receipt, { structured: true })
+        ? identity.path
+        : null,
       ...(input.engine === "claude"
         ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
         : {}),
@@ -1655,11 +1869,16 @@ export async function spawnStructuredConversation(
         );
       }
     }
+    let cleanupError: unknown = null;
     try {
       await cleanupHost(host, binding);
-    } catch {
-      throw error;
+    } catch (failure) {
+      cleanupError = failure;
     }
+    const transcriptFailureMustSettle = input.receipt.purpose === "launch"
+      && (error instanceof StructuredTranscriptMaterializationError
+        || error instanceof StructuredSessionMaterializationError);
+    if (cleanupError !== null && !transcriptFailureMustSettle) throw error;
     let failedEntry: AgentRegistryEntry | null = null;
     let failedIdentity = resumeIdentity;
     if (key) {
@@ -1677,8 +1896,8 @@ export async function spawnStructuredConversation(
       && failedEntry.structuredHostOperationId !== input.receipt.launchId) {
       failedIdentity = null;
     }
-    let projectionSucceeded = true;
-    if (failedIdentity && !adoptionClaimContended) {
+    let projectionSucceeded = cleanupError === null;
+    if (failedIdentity && !adoptionClaimContended && cleanupError === null) {
       try {
         await projectDeadStructuredSpawn(
           input.client,
@@ -1697,10 +1916,18 @@ export async function spawnStructuredConversation(
     const terminalFreshLaunch = input.receipt.purpose === "launch";
     if (projectionSucceeded || terminalFreshLaunch) {
       if (key) {
-        input.registry.failStructuredSpawn(input.receipt.launchId, failureReason);
+        input.registry.failStructuredSpawn(input.receipt.launchId, failureReason, {
+          retainRegisteredHost: cleanupError !== null,
+        });
       } else {
         input.registry.failSpawn(input.receipt.launchId, failureReason);
       }
+    }
+    if (cleanupError !== null) {
+      console.error("[spawn] failed host cleanup remained unconfirmed", {
+        launchId: input.receipt.launchId,
+        error: structuredSpawnFailureReason(cleanupError),
+      });
     }
     throw error;
   }

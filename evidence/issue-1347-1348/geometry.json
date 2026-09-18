@@ -1,0 +1,424 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "rename-editor": [
+    {
+      "scheme": "light",
+      "viewportWidth": 390,
+      "scrollWidth": 390,
+      "barScrollWidth": 390,
+      "barClientWidth": 390,
+      "editor": {
+        "label": "",
+        "left": 0,
+        "right": 390,
+        "top": 0,
+        "bottom": 52,
+        "width": 390,
+        "height": 52
+      },
+      "input": {
+        "label": "Session title",
+        "left": 8,
+        "right": 286,
+        "top": 4,
+        "bottom": 48,
+        "width": 278,
+        "height": 44
+      },
+      "inputValueLength": 115,
+      "inputScrollWidth": 852,
+      "inputClientWidth": 276,
+      "fontSizePx": 16,
+      "color": "rgb(28, 28, 34)",
+      "background": "rgb(243, 243, 246)",
+      "caretColor": "rgb(90, 81, 224)",
+      "controls": [
+        {
+          "label": "Save name",
+          "left": 290,
+          "right": 334,
+          "top": 4,
+          "bottom": 48,
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Cancel",
+          "left": 338,
+          "right": 382,
+          "top": 4,
+          "bottom": 48,
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "contrast": 15.309473498862143
+    },
+    {
+      "scheme": "dark",
+      "viewportWidth": 390,
+      "scrollWidth": 390,
+      "barScrollWidth": 390,
+      "barClientWidth": 390,
+      "editor": {
+        "label": "",
+        "left": 0,
+        "right": 390,
+        "top": 0,
+        "bottom": 52,
+        "width": 390,
+        "height": 52
+      },
+      "input": {
+        "label": "Session title",
+        "left": 8,
+        "right": 286,
+        "top": 4,
+        "bottom": 48,
+        "width": 278,
+        "height": 44
+      },
+      "inputValueLength": 115,
+      "inputScrollWidth": 852,
+      "inputClientWidth": 276,
+      "fontSizePx": 16,
+      "color": "rgb(232, 232, 236)",
+      "background": "rgb(16, 16, 20)",
+      "caretColor": "rgb(143, 136, 255)",
+      "controls": [
+        {
+          "label": "Save name",
+          "left": 290,
+          "right": 334,
+          "top": 4,
+          "bottom": 48,
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Cancel",
+          "left": 338,
+          "right": 382,
+          "top": 4,
+          "bottom": 48,
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "contrast": 15.534497752306052
+    }
+  ],
+  "orchestrator-controls": {
+    "row": [
+      {
+        "scheme": "light",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "Orchestratorworking",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": null,
+        "rotateDraft": null
+      },
+      {
+        "scheme": "dark",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "Orchestratorworking",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": null,
+        "rotateDraft": null
+      }
+    ],
+    "sheet": [
+      {
+        "scheme": "light",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "OrchestratorworkingOrchestrator · atlaso",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": {
+          "rotate": {
+            "label": "Rotate",
+            "left": 16,
+            "right": 102.53125,
+            "top": 794,
+            "bottom": 838,
+            "width": 86.53125,
+            "height": 44
+          },
+          "identityText": "opus · highworkingspare·holding the seat for 0sContext76% left of 100KPredecessoropen",
+          "contextLeft": "76",
+          "predecessor": true,
+          "mandateView": true
+        },
+        "rotateDraft": null
+      },
+      {
+        "scheme": "dark",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "OrchestratorworkingOrchestrator · atlaso",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": {
+          "rotate": {
+            "label": "Rotate",
+            "left": 16,
+            "right": 102.53125,
+            "top": 794,
+            "bottom": 838,
+            "width": 86.53125,
+            "height": 44
+          },
+          "identityText": "opus · highworkingspare·holding the seat for 0sContext76% left of 100KPredecessoropen",
+          "contextLeft": "76",
+          "predecessor": true,
+          "mandateView": true
+        },
+        "rotateDraft": null
+      }
+    ],
+    "rotate": [
+      {
+        "scheme": "light",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "OrchestratorworkingReplace this project'",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": {
+          "rotate": null,
+          "identityText": "",
+          "contextLeft": null,
+          "predecessor": false,
+          "mandateView": false
+        },
+        "rotateDraft": {
+          "confirm": {
+            "label": "Rotate orchestrator",
+            "left": 81.875,
+            "right": 378,
+            "top": 790,
+            "bottom": 834,
+            "width": 296.125,
+            "height": 44
+          },
+          "cancel": {
+            "label": "Cancel",
+            "left": 12,
+            "right": 73.875,
+            "top": 790,
+            "bottom": 834,
+            "width": 61.875,
+            "height": 44
+          },
+          "mandate": {
+            "label": "You are the viewer's built-in Manager (i",
+            "left": 12,
+            "right": 378,
+            "top": 602.5,
+            "bottom": 762.5,
+            "width": 366,
+            "height": 160
+          },
+          "scrollerBottom": 779
+        }
+      },
+      {
+        "scheme": "dark",
+        "scrollWidth": 390,
+        "cardBox": {
+          "label": "OrchestratorworkingReplace this project'",
+          "left": 12,
+          "right": 378,
+          "top": 86,
+          "bottom": 142,
+          "width": 366,
+          "height": 56
+        },
+        "firstRowBottom": 232,
+        "rowOpen": {
+          "label": "Open the orchestrator's conversation — working",
+          "left": 24,
+          "right": 326,
+          "top": 92,
+          "bottom": 136,
+          "width": 302,
+          "height": 44
+        },
+        "rowControls": {
+          "label": "Orchestrator controls: rotate, model, account and mandate",
+          "left": 330,
+          "right": 374,
+          "top": 92,
+          "bottom": 136,
+          "width": 44,
+          "height": 44
+        },
+        "sheet": {
+          "rotate": null,
+          "identityText": "",
+          "contextLeft": null,
+          "predecessor": false,
+          "mandateView": false
+        },
+        "rotateDraft": {
+          "confirm": {
+            "label": "Rotate orchestrator",
+            "left": 81.875,
+            "right": 378,
+            "top": 790,
+            "bottom": 834,
+            "width": 296.125,
+            "height": 44
+          },
+          "cancel": {
+            "label": "Cancel",
+            "left": 12,
+            "right": 73.875,
+            "top": 790,
+            "bottom": 834,
+            "width": 61.875,
+            "height": 44
+          },
+          "mandate": {
+            "label": "You are the viewer's built-in Manager (i",
+            "left": 12,
+            "right": 378,
+            "top": 602.5,
+            "bottom": 762.5,
+            "width": 366,
+            "height": 160
+          },
+          "scrollerBottom": 779
+        }
+      }
+    ]
+  }
+}

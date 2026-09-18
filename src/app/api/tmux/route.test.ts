@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 
@@ -16,13 +16,8 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 const previousHome = process.env.HOME;
 const previousXdgConfig = process.env.XDG_CONFIG_HOME;
 const PATHNAME = path.join(routeCodexHome, "sessions", "rollout-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl");
-fs.mkdirSync(path.dirname(PATHNAME), { recursive: true });
-fs.writeFileSync(PATHNAME, "{}\n");
-process.env.LLV_CODEX_HOME = routeCodexHome;
-process.env.LLV_STATE_DIR = path.join(routeCodexHome, "state");
-process.env.HOME = routeCodexHome;
-process.env.XDG_CONFIG_HOME = path.join(routeCodexHome, "config");
 afterAll(() => {
+  setConversationHostDependenciesForTests(null);
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
   if (previousXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -32,8 +27,9 @@ afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(routeCodexHome, { recursive: true, force: true });
-  mock.module("@/lib/resources", () => realResources);
 });
+
+import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 
 let transcriptReads = 0;
 let lastTranscriptReadFresh: boolean | undefined;
@@ -72,6 +68,9 @@ let structuredMessageCalls = 0;
 let structuredMessageRequest: Record<string, unknown> | null = null;
 let operatorActivityRequests: Record<string, unknown>[] = [];
 let operatorActivityEnabled = true;
+/* Set by a test that needs the REAL recording boundary — the stub below cannot
+   reproduce a storage outage, which is the thing under test. */
+let operatorActivityRecorder: ((request: Record<string, unknown>) => unknown) | null = null;
 let collectedImages: Array<{ base64: string; mime: string }> = [];
 let deletedImagePaths: string[][] = [];
 let structuredMessageResult:
@@ -106,122 +105,85 @@ const snapshot = {
 
 let completedFiles: Array<Record<string, unknown>> = [{ path: PATHNAME }];
 
-mock.module("@/lib/agent/transcriptHost", () => ({
-  canonicalTranscriptTarget: (observed: typeof snapshot, pathname: string) => observed.canonicalFor(pathname)?.display ?? null,
-  deliverToTranscriptHost: async () => ({ kind: "unavailable" }),
-  readTranscriptHosts: async (fresh?: boolean, files?: unknown) => {
-    transcriptReads += 1;
-    lastTranscriptReadFresh = fresh;
-    lastTranscriptReadFiles = files;
-    return snapshot;
-  },
-}));
-mock.module("@/lib/scanner/scanCache", () => ({
-  completedFileScan: async () => {
-    completedScanReads += 1;
-    return { snapshot: { files: completedFiles } };
-  },
-}));
-mock.module("@/lib/runtime/structuredControls", () => ({
-  dispatchStructuredControl: async (request: Record<string, unknown>) => {
-    structuredControlCalls += 1;
-    structuredControlRequest = request;
-    return structuredControlResult;
-  },
-}));
-mock.module("@/lib/runtime/structuredMessageDelivery", () => ({
-  enqueueStructuredMessage: async (request: Record<string, unknown>) => {
-    structuredMessageCalls += 1;
-    structuredMessageRequest = request;
-    return structuredMessageResult;
-  },
-}));
-mock.module("@/lib/wakatime/operatorActivity", () => ({
-  recordDirectOperatorWakatimeActivity: (request: Record<string, unknown>) => {
-    if (!operatorActivityEnabled) return null;
-    operatorActivityRequests.push(request);
-    return {
-      key: "a".repeat(64),
-      engine: "codex",
-      project: "fixture",
-      atMs: Date.now(),
-    };
-  },
-}));
-mock.module("@/lib/delivery", () => ({
-  answerDialogKey: async () => ({ ok: true, target: "" }),
-  compactConversation: async () => ({ ok: true, target: "" }),
-  deliverConversationMessage: (message: unknown) => delivery(message),
-  interruptConversation: async () => {
-    interruptCalls += 1;
-    return { ok: true, target: "" };
-  },
-  killConversation: async () => {
-    killCalls += 1;
-    return killOutcome;
-  },
-  livePaneTarget: async () => null,
-  reconfigureConversation: async () => ({ ok: true, outcome: "reconfigured", target: "agents:4.0" }),
-  resumeConversation: async () => ({ ok: true, target: "" }),
-}));
-mock.module("@/lib/conversation/actions", () => ({
-  CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact", "dialog-key"],
-  applyConversationAction: async (request: Record<string, unknown>) => {
-    if (process.env.LLV_STRUCTURED_HOSTS === "1") {
+beforeAll(() => {
+  fs.mkdirSync(path.dirname(PATHNAME), { recursive: true });
+  fs.writeFileSync(PATHNAME, "{}\n");
+  process.env.LLV_CODEX_HOME = routeCodexHome;
+  process.env.LLV_STATE_DIR = path.join(routeCodexHome, "state");
+  process.env.HOME = routeCodexHome;
+  process.env.XDG_CONFIG_HOME = path.join(routeCodexHome, "config");
+  setConversationHostDependenciesForTests({
+    canonicalTranscriptTarget: (observed, pathname) => observed.canonicalFor(pathname)?.display ?? null,
+    readTranscriptHosts: async (fresh, files) => {
+      transcriptReads += 1;
+      lastTranscriptReadFresh = fresh;
+      lastTranscriptReadFiles = files;
+      return snapshot as never;
+    },
+    completedFileScan: async () => {
+      completedScanReads += 1;
+      return { snapshot: { files: completedFiles } } as never;
+    },
+    dispatchStructuredControl: async (request) => {
       structuredControlCalls += 1;
-      structuredControlRequest = request;
-      if (structuredControlResult) return structuredControlResult;
-    }
-    if (request.action === "interrupt") {
-      interruptCalls += 1;
+      structuredControlRequest = { ...request };
+      return structuredControlResult;
+    },
+    enqueueStructuredMessage: async (request) => {
+      structuredMessageCalls += 1;
+      structuredMessageRequest = { ...request };
+      return structuredMessageResult as never;
+    },
+    recordDirectOperatorWakatimeActivity: (request) => {
+      if (!operatorActivityEnabled) return null;
+      operatorActivityRequests.push({ ...request });
+      if (operatorActivityRecorder) return operatorActivityRecorder(request as Record<string, unknown>) as never;
+      return { key: "a".repeat(64), engine: "codex", project: "fixture", atMs: Date.now() };
+    },
+    deliverConversationMessage: (message: unknown) => delivery(message),
+    reconfigureConversation: async () => ({ ok: true, outcome: "reconfigured", target: "agents:4.0" }),
+    conversationActions: ["interrupt", "kill", "resume", "compact", "dialog-key"],
+    applyConversationAction: async (request) => {
+      if (process.env.LLV_STRUCTURED_HOSTS === "1") {
+        structuredControlCalls += 1;
+        structuredControlRequest = { ...request };
+        if (structuredControlResult) return structuredControlResult;
+      }
+      if (request.action === "interrupt") {
+        interruptCalls += 1;
+        return { status: 200, body: { ok: true, target: "" } };
+      }
+      if (request.action === "kill") {
+        killCalls += 1;
+        if (killOutcome.ok && !killOutcome.target) {
+          return { status: 409, body: { ok: false, outcome: "failed", error: "kill resolved no registered pane" } };
+        }
+        if (!killOutcome.ok) {
+          const { status, ...body } = killOutcome;
+          return { status, body };
+        }
+        return { status: 200, body: killOutcome };
+      }
       return { status: 200, body: { ok: true, target: "" } };
-    }
-    if (request.action === "kill") {
-      killCalls += 1;
-      if (killOutcome.ok && !killOutcome.target) {
-        return { status: 409, body: { ok: false, outcome: "failed", error: "kill resolved no registered pane" } };
-      }
-      if (!killOutcome.ok) {
-        const { status, ...body } = killOutcome;
-        return { status, body };
-      }
-      return { status: 200, body: killOutcome };
-    }
-    return { status: 200, body: { ok: true, target: "" } };
-  },
-}));
-mock.module("@/lib/resources", () => ({
-  ...realResources,
-  allowedKillTarget: (target: string) => target === "agents:9.0"
-    ? resourceTarget
-    : realResources.allowedKillTarget(target),
-  consumeKillTarget: (target: string) => {
-    if (target !== "agents:9.0") realResources.consumeKillTarget(target);
-  },
-}));
-mock.module("@/lib/tmux", () => ({
-  captureTmuxAttachReference: (value: Record<string, unknown>) => ({ ...value, tmuxServerStartIdentity: "900:one", paneStartIdentity: "100:one" }),
-  buildImagePayload: () => ({ payload: "", imagePaths: ["/viewer/inbox/img-one.png"] }),
-  collectImagePayloads: () => ({ images: collectedImages, error: null }),
-  deleteInboxImages: (paths: string[]) => { deletedImagePaths.push(paths); },
-  killPane: async () => {},
-  paneScreen: async () => "",
-  panePidOf: async () => null,
-  resolveRequestedTmuxTarget: async (pid: number | null, files?: unknown) => {
-    pidResolutionFiles = files;
-    return pid === null ? null : pidTargets.get(pid) ?? null;
-  },
-  resolveTarget: async (pid: number) => pidTargets.get(pid) ?? null,
-  knownLivePids: async () => new Set<number>(),
-  panePidMap: async () => new Map<number, string>(),
-  paneInfo: async () => null,
-  targetForKnownPid: async (pid: number) => pidTargets.get(pid) ?? null,
-  verifyTmuxHostEvidence: async () => true,
-  resolveTmuxAttach: async () => attachResolution,
-  spawnAgentWithPrompt: async () => ({ paneId: "%91", display: "agents:worker.0" }),
-  spawnCommandWindow: async () => ({ paneId: "%90", display: "agents:view.0" }),
-  tmuxEndpointDescriptor: () => endpoint,
-}));
+    },
+    allowedKillTarget: (target: string) => target === "agents:9.0"
+      ? resourceTarget as never
+      : realResources.allowedKillTarget(target),
+    consumeKillTarget: (target: string) => {
+      if (target !== "agents:9.0") realResources.consumeKillTarget(target);
+    },
+    captureTmuxAttachReference: (value: Record<string, unknown>) => ({ ...value, tmuxServerStartIdentity: "900:one", paneStartIdentity: "100:one" }) as never,
+    collectImagePayloads: () => ({ images: collectedImages, error: null }),
+    killPane: async () => {},
+    panePidOf: async () => null,
+    resolveRequestedTmuxTarget: async (pid: number | null, files?: unknown) => {
+      pidResolutionFiles = files;
+      return pid === null ? null : pidTargets.get(pid) ?? null;
+    },
+    resolveTmuxAttach: async () => attachResolution as never,
+    tmuxEndpointDescriptor: () => endpoint,
+  });
+});
 
 const { GET, POST } = await import("./route");
 
@@ -766,9 +728,55 @@ test("/api/tmux forwards account-aware structured reconfigure as one durable con
       path: PATHNAME,
       conversationId: "conversation-reconfigure",
       action: "reconfigure",
+      /* #1279: who is switching rides along, because an account named from
+         outside a project's pool is recorded against whoever chose it. A
+         same-origin request with no capability is the operator by
+         construction, the same reading every operator gate here uses. */
+      actor: { kind: "operator" },
       reconfiguration: { model: "gpt-5.6-sol", effort: "high", fast: true, accountId: "work" },
     });
   } finally {
+    structuredControlResult = null;
+    if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = previous;
+  }
+});
+
+test("/api/tmux carries an agent's own conversation as the actor of its account switch", async () => {
+  const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
+  const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
+  const previous = process.env.LLV_STRUCTURED_HOSTS;
+  structuredControlCalls = 0;
+  structuredControlRequest = null;
+  structuredControlResult = {
+    status: 202,
+    body: {
+      ok: true,
+      structured: true,
+      target: "conversation-reconfigure",
+      operationId: "reconfigure-agent",
+      receipt: { operationId: "reconfigure-agent", status: "queued" },
+    },
+  };
+  setCallerConversationResolverForTests(() => "conversation_agent");
+  try {
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const response = await POST(post({
+      path: PATHNAME,
+      conversationId: "conversation-reconfigure",
+      action: "reconfigure",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      fast: true,
+      accountId: "work",
+    }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }));
+
+    expect(response.status).toBe(202);
+    expect(structuredControlRequest).toMatchObject({
+      actor: { kind: "agent", conversationId: "conversation_agent" },
+    });
+  } finally {
+    setCallerConversationResolverForTests(null);
     structuredControlResult = null;
     if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = previous;
@@ -955,5 +963,197 @@ test("/api/tmux folds attachment paths into the structured send and cleans up a 
     structuredMessageRequest = null;
     if (previous === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = previous;
+  }
+});
+
+test("/api/tmux delivers an operator message and a dialog answer while the WakaTime state file is corrupt", async () => {
+  const { recordDirectOperatorWakatimeActivity } = await import("@/lib/wakatime/operatorActivity");
+  const { enqueueProductionOperatorHeartbeat } = await import("@/lib/wakatime/sync");
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-corrupt-state-"));
+  const stateFile = path.join(stateDirectory, "wakatime-state.json");
+  /* The production shape of this outage: a state file that is entirely NUL
+     bytes. `JSON.parse` throws before the queue can be touched. */
+  const corruptBytes = Buffer.alloc(4_096, 0);
+  fs.writeFileSync(stateFile, corruptBytes, { mode: 0o600 });
+  const at = Date.parse("2026-09-10T09:00:00.000Z");
+  const snapshot = {
+    conversationAliases: {},
+    conversations: {
+      conversation_corrupt_state: {
+        id: "conversation_corrupt_state",
+        engine: "codex",
+        generations: [{
+          id: "generation_corrupt_state",
+          path: PATHNAME,
+          accountId: null,
+          launchProfile: {
+            cwd: "/workspace/repository",
+            model: null,
+            effort: null,
+            fast: null,
+            permissionMode: null,
+            readOnly: null,
+            allowSubagents: true,
+            title: null,
+            project: "project-fixture",
+            parentConversationId: null,
+            role: "builder",
+            goal: null,
+            plan: null,
+          },
+          historyHash: null,
+          host: null,
+          createdAt: new Date(at).toISOString(),
+          archivedAt: null,
+        }],
+        continuityPaths: [],
+        abandonedContinuityPaths: [],
+        projectOwnership: {
+          project: "project-fixture",
+          source: "operator",
+          setAt: new Date(at).toISOString(),
+          operationId: "launch-fixture",
+        },
+        migration: null,
+        migrationOptOut: null,
+        supersededBy: null,
+        agentRole: "builder",
+        delegationDepth: 1,
+        turn: { state: "idle", source: "lifecycle", observedAt: new Date(at).toISOString() },
+        createdAt: new Date(at).toISOString(),
+        updatedAt: new Date(at).toISOString(),
+      },
+    },
+  };
+  const storageDiagnostics: string[] = [];
+  operatorActivityRequests = [];
+  operatorActivityRecorder = (request) => recordDirectOperatorWakatimeActivity(request as never, {
+    enabled: () => true,
+    now: () => at,
+    registrySnapshot: () => snapshot as never,
+    enqueue: (heartbeat) => enqueueProductionOperatorHeartbeat(heartbeat, stateFile, () => true),
+    reportStorageFailure: (event, fields) => { storageDiagnostics.push(`${event}:${String(fields.outcome)}`); },
+  });
+  let deliveries = 0;
+  delivery = async () => {
+    deliveries += 1;
+    return { ok: true, outcome: "delivered-to-live", target: "agents:4.0" };
+  };
+  try {
+    const message = await POST(post({
+      path: PATHNAME,
+      text: "the board still has to work",
+      clientMessageId: "corrupt-state-message",
+    }));
+    const dialog = await POST(post({
+      path: PATHNAME,
+      action: "dialog-key",
+      key: "1",
+      clientMessageId: "corrupt-state-dialog",
+    }));
+
+    expect(message.status).toBe(200);
+    expect(deliveries).toBe(1);
+    expect(dialog.status).toBe(200);
+    expect(operatorActivityRequests).toHaveLength(2);
+    expect(storageDiagnostics).toEqual([
+      "operator_activity_not_stored:state_unreadable",
+      "operator_activity_not_stored:state_unreadable",
+    ]);
+    /* Every corrupt byte survives: the outage is reported, never repaired by
+       overwriting an unreadable queue the operator may still want to recover. */
+    expect(fs.readFileSync(stateFile)).toEqual(corruptBytes);
+  } finally {
+    operatorActivityRecorder = null;
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test("/api/tmux still refuses a message whose target evidence conflicts, corrupt state file or not", async () => {
+  const { recordDirectOperatorWakatimeActivity } = await import("@/lib/wakatime/operatorActivity");
+  const { enqueueProductionOperatorHeartbeat } = await import("@/lib/wakatime/sync");
+  const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-conflict-state-"));
+  const stateFile = path.join(stateDirectory, "wakatime-state.json");
+  fs.writeFileSync(stateFile, Buffer.alloc(4_096, 0), { mode: 0o600 });
+  const at = Date.parse("2026-09-10T09:00:00.000Z");
+  const conversation = (id: string, transcript: string) => ({
+    id,
+    engine: "codex",
+    generations: [{
+      id: `generation_${id}`,
+      path: transcript,
+      accountId: null,
+      launchProfile: {
+        cwd: "/workspace/repository",
+        model: null,
+        effort: null,
+        fast: null,
+        permissionMode: null,
+        readOnly: null,
+        allowSubagents: true,
+        title: null,
+        project: "project-fixture",
+        parentConversationId: null,
+        role: "builder",
+        goal: null,
+        plan: null,
+      },
+      historyHash: null,
+      host: null,
+      createdAt: new Date(at).toISOString(),
+      archivedAt: null,
+    }],
+    continuityPaths: [],
+    abandonedContinuityPaths: [],
+    projectOwnership: {
+      project: "project-fixture",
+      source: "operator",
+      setAt: new Date(at).toISOString(),
+      operationId: "launch-fixture",
+    },
+    migration: null,
+    migrationOptOut: null,
+    supersededBy: null,
+    agentRole: "builder",
+    delegationDepth: 1,
+    turn: { state: "idle", source: "lifecycle", observedAt: new Date(at).toISOString() },
+    createdAt: new Date(at).toISOString(),
+    updatedAt: new Date(at).toISOString(),
+  });
+  /* The conversation named by the caller owns a DIFFERENT transcript than the
+     path it presents — an unresolvable identity, not a telemetry outage. */
+  const snapshot = {
+    conversationAliases: {},
+    conversations: {
+      conversation_elsewhere: conversation("conversation_elsewhere", "/sessions/elsewhere.jsonl"),
+      conversation_here: conversation("conversation_here", PATHNAME),
+    },
+  };
+  operatorActivityRequests = [];
+  operatorActivityRecorder = (request) => recordDirectOperatorWakatimeActivity(request as never, {
+    enabled: () => true,
+    now: () => at,
+    registrySnapshot: () => snapshot as never,
+    enqueue: (heartbeat) => enqueueProductionOperatorHeartbeat(heartbeat, stateFile, () => true),
+    reportStorageFailure: () => undefined,
+  });
+  let deliveries = 0;
+  delivery = async () => {
+    deliveries += 1;
+    return { ok: true, outcome: "delivered-to-live", target: "agents:4.0" };
+  };
+  try {
+    const response = await POST(post({
+      path: PATHNAME,
+      conversationId: "conversation_elsewhere",
+      text: "conflicting identity",
+      clientMessageId: "corrupt-state-conflict",
+    }));
+
+    expect(response.status).toBe(503);
+    expect(deliveries).toBe(0);
+  } finally {
+    operatorActivityRecorder = null;
+    fs.rmSync(stateDirectory, { recursive: true, force: true });
   }
 });

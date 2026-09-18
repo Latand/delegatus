@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
+import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 
 import { appendComposerDraft, mergeRuntimeReceipts, RuntimeComposerReceipts, TmuxComposer } from "./TmuxComposer";
 import { enqueueOutbox, nextDispatch, readOutbox, resetOutboxForTests, retryOutbox, updateOutbox } from "./conversation/outbox";
@@ -63,7 +64,12 @@ function Receipts(props: React.ComponentProps<typeof RuntimeComposerReceipts>) {
 
 const realFetch = globalThis.fetch;
 
+beforeEach(() => {
+  setRuntimeUiEnabledForTests(false);
+});
+
 afterEach(() => {
+  setRuntimeUiEnabledForTests(null);
   setLocale("en");
   globalThis.fetch = realFetch;
   document.body.replaceChildren();
@@ -231,8 +237,11 @@ test("repeated identical attempts share one grouped row with counts and final st
   ));
 
   const summary = host.querySelector("summary")!;
-  expect(summary.textContent).toContain("Спроб доставки: 3");
-  expect(summary.textContent).toContain("проблем: 3");
+  /* #1362: settled failures read as one compact notice — status word, terse
+     cause, attempt counter — never as a count of pills. */
+  expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
+    .toBe(`${translate("uk", "composer.receiptFailed")} — ${translate("uk", "receipt.human.deadHost")}`);
+  expect(summary.querySelector("[data-delivery-notice-count]")?.textContent).toContain("×3");
 
   // One logical send consumes one row: the text appears once with an attempt
   // count and the final state, never once per attempt.
@@ -337,7 +346,7 @@ test("multiple delivery attempts collapse into one bounded accessible receipt st
   expect(details.querySelectorAll("[data-receipt-message]")).toHaveLength(1);
   expect(details.querySelector("[data-receipt-attempt-count]")?.textContent).toContain("×3");
   expect(details.querySelector("[data-receipt-history]")?.textContent)
-    .toBe(`${translate("uk", "receipt.human.verbatim", { reason: "stale-turn" })} ×2`);
+    .toBe(`${translate("uk", "receipt.human.staleKey")} ×2`);
   expect(details.querySelector('[data-optimistic-message="true"]')?.textContent).toContain(text);
   expect(details.querySelectorAll("button")).toHaveLength(0);
 
@@ -665,20 +674,23 @@ test("expanded active attempts retain localized lifecycle status and aggregate c
 
     const summary = host.querySelector("summary")!;
     expect(summary.textContent).toContain(translate(locale, "runtime.receipt.pendingCount", { count: 4 }));
-    expect(summary.textContent).toContain(translate(locale, "runtime.receipt.problemCount", { count: 1 }));
+    /* #1362: the settled failure IS the notice beside the pending count — the
+       red issue badge no longer counts it a second time. */
+    expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
+      .toBe(`${translate(locale, "composer.receiptFailed")} — ${translate(locale, "receipt.human.deadHost")}`);
+    expect(summary.querySelector("[data-receipt-problem-count]")).toBeNull();
     const details = host.querySelector("[data-runtime-receipt-details]")!;
     expect(details.querySelector('[data-receipt-status="pending"]')?.textContent)
       .toBe(translate(locale, "runtime.receipt.pending"));
-    /* #1213: `queued` is "admitted, parked until the turn ends" and names that
-       wait and its age instead of a bare lifecycle word; `uncertain` is the
-       opposite fact — the composer's own row for a send it never saw admitted —
-       and says exactly that. `pending`/`delivering` are momentary and keep
-       their own wording. */
+    /* Queued retains its wait and age. Unknown arrival has a recovery row
+       bound to the original operation; pending/delivering keep their wording. */
     const waited = (seconds: number) => translate(locale, "runtime.receipt.waitedSec", { n: seconds });
     expect(details.querySelector('[data-receipt-status="queued"]')?.textContent)
       .toBe(translate(locale, "runtime.receipt.awaitingTurnPos", { position: 3, waited: waited(4) }));
-    expect(details.querySelector('[data-receipt-status="uncertain"]')?.textContent)
-      .toBe(translate(locale, "runtime.receipt.admissionUnconfirmed", { waited: waited(3) }));
+    const unknown = details.querySelector(`[data-operation="${locale}-uncertain"]`)!;
+    expect(unknown.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
+    expect(unknown.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+    expect(unknown.querySelector("[data-receipt-edit]")).toBeNull();
     expect(details.querySelector('[data-receipt-status="delivering"]')?.textContent)
       .toBe(translate(locale, "runtime.receipt.delivering"));
     expect(details.querySelector('[data-receipt-status="failed"]')?.textContent)
@@ -959,8 +971,12 @@ const openSendMenu = async (host: HTMLElement) => {
   const send = host.querySelector('button[type="submit"]') as HTMLButtonElement;
   await settle(() => send.dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true }) as unknown as Event));
 };
+/* The send menu renders through a portal into the document the composer is in
+   — the composer's own box is bounded and scrolls, and an in-flow menu was
+   clipped by it (#1629) — so the menu is looked for in the document rather
+   than under the mount. */
 const quickAckItems = (host: HTMLElement) =>
-  [...host.querySelectorAll('[role="menuitem"]')].filter((n) => (n.textContent ?? "").includes(quickAckLabel));
+  [...host.ownerDocument.querySelectorAll('[role="menuitem"]')].filter((n) => (n.textContent ?? "").includes(quickAckLabel));
 
 test("a live composer offers an enabled quick-ack in the send menu", async () => {
   globalThis.fetch = (async () => ({ ok: true, json: async () => ({ targets: {} }) } as Response)) as unknown as typeof fetch;
@@ -977,7 +993,7 @@ test("a dead-host composer exposes no quick-ack action (finding: dead composer)"
   const { host, root } = await renderInto(<TmuxComposer file={relaySubagent} deadHost />);
   await openSendMenu(host);
   // the menu never opens (no actions) and no quick-ack item exists anywhere
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.ownerDocument.querySelector('[role="menu"]')).toBeNull();
   expect(quickAckItems(host).length).toBe(0);
   await act(async () => root.unmount());
 });
@@ -986,7 +1002,7 @@ test("an unresolved-host composer exposes no quick-ack action (finding: unresolv
   globalThis.fetch = (async () => ({ ok: true, json: async () => ({ targets: {} }) } as Response)) as unknown as typeof fetch;
   const { host, root } = await renderInto(<TmuxComposer file={relaySubagent} sendBlockedReason="resolving the agent host…" />);
   await openSendMenu(host);
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.ownerDocument.querySelector('[role="menu"]')).toBeNull();
   expect(quickAckItems(host).length).toBe(0);
   await act(async () => root.unmount());
 });
@@ -1141,9 +1157,8 @@ test("queue-first: retrying a failed bubble replays the same key and settles on 
     const body = JSON.parse(String(init?.body)) as { clientMessageId: string };
     sentKeys.push(body.clientMessageId);
     if (sentKeys.length === 1) {
-      /* The server accepted and delivers, yet the response is lost: a hard
-         failure without a receipt keeps the draft for the retry. */
-      return { ok: false, status: 503, json: async () => ({ ok: false, error: "runtime host request timed out" }) } as Response;
+      /* Affirmative pre-dispatch rejection permits ordinary same-key retry. */
+      return { ok: false, status: 400, json: async () => ({ ok: false, error: "Rejected before dispatch" }) } as Response;
     }
     /* The retry replays the same key; the conflict carries the original
        delivered receipt — the message reached the agent and the turn runs. */
@@ -1194,7 +1209,7 @@ test("queue-first: retrying a failed bubble replays the same key and settles on 
 
   /* Queue-first (round-1 P1#1): the submit clears the composer immediately and
      the message lives in the durable outbox; the dispatcher takes it to the
-     wire, where the lost first attempt marks the bubble failed. */
+     wire, where the pre-dispatch rejection marks the bubble failed. */
   await settle(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   expect(textarea.value).toBe("");
   const failedEntry = readOutbox("conv-replay")[0]!;
@@ -1225,7 +1240,7 @@ test("queue-first: a stale delivered replay of one turn never bleeds across to a
     requests += 1;
     const body = JSON.parse(String(init?.body)) as { clientMessageId: string };
     if (requests === 1) {
-      return { ok: false, status: 503, json: async () => ({ ok: false, error: "runtime host request timed out" }) } as Response;
+      return { ok: false, status: 400, json: async () => ({ ok: false, error: "Rejected before dispatch" }) } as Response;
     }
     return {
       ok: false,
@@ -1303,26 +1318,27 @@ test("queue-first: a stale delivered replay of one turn never bleeds across to a
 
 /** Production shape of operation op-timeout-terminal-0001: the
     first `/api/tmux` send times out with an `uncertain` receipt, the operator
-    types more while the fate is unknown, and the idempotent retry comes back
-    `queued`. Queue admission is durable, so exactly the submitted generation
-    must leave the composer — the later typing survives, the receipt stack
-    carries the payload, and no stale failure lingers. */
+    types more while the fate is unknown, and original-operation recovery returns
+    `queued`. The later typing survives and the receipt stack carries the
+    immutable payload. Queue admission preserves unknown arrival until terminal
+    evidence arrives. */
 async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth: number) {
   (dom as unknown as { innerWidth: number }).innerWidth = viewportWidth;
   setLocale(locale);
   const conversationId = `conv-timeout-${locale}-${viewportWidth}`;
   const prompt = "довгий виробничий запит — ship the composer reconciliation contract";
   const sentKeys: string[] = [];
+  const recoveries: Array<{ url: string; method: string; body: unknown }> = [];
   globalThis.fetch = (async (input, init) => {
     if (String(input) === "/api/tmux/targets") {
       return { ok: true, json: async () => ({ targets: { "0": null } }) } as Response;
     }
-    if (String(input) !== "/api/tmux") throw new Error(`unexpected request: ${String(input)}`);
-    const body = JSON.parse(String(init?.body)) as { clientMessageId: string; text: string };
-    sentKeys.push(body.clientMessageId);
-    if (sentKeys.length === 1) {
+    const url = String(input);
+    if (url === "/api/tmux") {
+      const body = JSON.parse(String(init?.body)) as { clientMessageId: string; text: string };
+      sentKeys.push(body.clientMessageId);
       /* The runtime host request timed out; the server can only attest an
-         uncertain receipt — nothing durable yet, the draft must stay. */
+         uncertain receipt, so the outbox generation stays with unknown arrival. */
       return {
         ok: false,
         status: 503,
@@ -1338,28 +1354,28 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
             status: "uncertain",
             reason: "runtime host request timed out",
             text: prompt,
-            at: "2026-07-18T00:00:00.000Z",
+            at: new Date().toISOString(),
             revision: 1,
           },
         }),
       } as Response;
     }
-    /* The idempotent retry replays the key: the operation is durably queued. */
+    if (url !== "/api/runtime/operations/op-timeout-terminal-0001") throw new Error(`unexpected request: ${url}`);
+    recoveries.push({ url, method: init!.method!, body: JSON.parse(String(init?.body)) });
+    /* Recovery returns the original operation's durable queue admission. */
     return {
-      ok: false,
-      status: 409,
+      ok: true,
+      status: 200,
       json: async () => ({
-        ok: false,
-        structured: true,
-        error: "idempotency key already accepted",
+        ok: true,
         receipt: {
           operationId: "op-timeout-terminal-0001",
-          idempotencyKey: body.clientMessageId,
+          idempotencyKey: sentKeys[0],
           conversationId,
           kind: "send",
           status: "queued",
           text: prompt,
-          at: "2026-07-18T00:00:02.000Z",
+          at: new Date().toISOString(),
           revision: 2,
         },
       }),
@@ -1399,40 +1415,49 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
 
   try {
     /* Queue-first (round-1 P1#1): the submit clears the composer immediately and
-       the durable outbox carries the message. The timeout is a truthful failure
-       — the bubble reads failed and the receipt announces the timeout. */
+       the durable outbox carries the message with an unknown arrival outcome. */
     await settle(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
     expect(textarea.value).toBe("");
     const entry = readOutbox(conversationId).find((e) => e.text === prompt)!;
-    expect(entry.state).toBe("failed");
+    expect(entry.state).toBe("delivering");
+    expect(entry.deliveryUncertain).toBe(true);
     expect(host.textContent).toContain("runtime host request timed out");
 
-    /* Retrying the failed bubble replays the SAME key — an uncertain receipt
-       never rotates it, so the retry never double-sends. */
+    await settle(() => appendComposerDraft(conversationId, "later draft"));
     await settle(() => retryOutbox(conversationId, entry.id));
-    expect(sentKeys).toHaveLength(2);
-    expect(sentKeys[1]).toBe(sentKeys[0]);
-    expect(sentKeys[1]).toBe(entry.id);
-    /* Durable queue admission settles the bubble to delivering (admitted, not
-       yet delivered — round-1 P1#4) and no stale failure lingers. */
-    expect(readOutbox(conversationId).find((e) => e.id === entry.id)!.state).toBe("delivering");
-    expect(host.textContent).not.toContain("runtime host request timed out");
+    expect(sentKeys).toEqual([entry.id]);
+    expect(readOutbox(conversationId).find((e) => e.id === entry.id)).toEqual(entry);
+    await settle(() => host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click());
+    expect(recoveries).toEqual([{ url: "/api/runtime/operations/op-timeout-terminal-0001",
+      method: "POST", body: { action: "retry-uncertain" } }]);
+    expect(sentKeys).toEqual([entry.id]);
+    expect(textarea.value).toBe("later draft");
+    expect(readOutbox(conversationId).find((e) => e.id === entry.id)?.text).toBe(prompt);
+    /* Queue admission preserves unknown arrival and the original evidence. */
+    const admitted = readOutbox(conversationId).find((e) => e.id === entry.id)!;
+    expect(admitted.state).toBe("delivering");
+    expect(admitted.deliveryUncertain).toBe(true);
+    expect(admitted.deliveryReceipt).toMatchObject({ operationId: "op-timeout-terminal-0001",
+      idempotencyKey: entry.id, status: "queued", revision: 2 });
+    expect(host.textContent).toContain("runtime host request timed out");
     expect(host.textContent).not.toContain(translate(locale, "common.failedSend"));
-    /* The payload lives on in a compact truthful receipt: queued, pending
-       count of one, preview text — announced through the live status region. */
+    /* One pending recovery row retains the payload and announces uncertainty. */
     const stack = host.querySelector("details[data-runtime-receipt-stack]") as HTMLDetailsElement;
     expect(stack).toBeTruthy();
     const summary = stack.querySelector("summary")!;
     expect(summary.textContent).toContain(translate(locale, "runtime.receipt.summary", { count: 1 }));
     expect(summary.querySelector("[data-receipt-preview]")?.textContent).toBe(prompt);
     expect(summary.querySelector("[data-receipt-pending-count] [data-receipt-count-value]")?.textContent).toBe("1");
-    expect(host.querySelector('[data-receipt-status="queued"]')?.textContent)
-      .toBe(translate(locale, "runtime.receipt.queued"));
+    expect(host.querySelectorAll('[data-operation="op-timeout-terminal-0001"]')).toHaveLength(1);
+    expect(host.querySelectorAll("[data-receipt-uncertain-retry]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-receipt-discard]")).toHaveLength(1);
+    expect(host.querySelector("[data-outbox-retry], [data-outbox-cancel]")).toBeNull();
     expect(host.querySelector('[data-optimistic-message="true"]')?.textContent).toContain(prompt);
     const status = host.querySelector("[data-runtime-receipt-status]")!;
     expect(status.getAttribute("role")).toBe("status");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain(translate(locale, "runtime.receipt.statusPending", { count: 1 }));
+    expect(status.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
     /* Mobile keeps the 44px summary row; desktop keeps the compact stack. */
     expect(summary.className.split(/\s+/)).toContain("min-h-11");
   } finally {
@@ -1442,10 +1467,10 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
   }
 }
 
-test("a timed-out send settles on queued admission via idempotent retry (desktop, EN)", async () => {
+test("a timed-out send retains unknown arrival after queued original-operation recovery (desktop, EN)", async () => {
   await runTimeoutThenQueuedAdmission("en", 1024);
 });
 
-test("a timed-out send settles on queued admission via idempotent retry (390px, UK)", async () => {
+test("a timed-out send retains unknown arrival after queued original-operation recovery (390px, UK)", async () => {
   await runTimeoutThenQueuedAdmission("uk", 390);
 });

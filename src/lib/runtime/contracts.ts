@@ -6,6 +6,7 @@ import type { Workflow } from "@/lib/workflows/types";
 import type { RuntimeLiveTurn } from "@/lib/runtime/liveTurn";
 import type { RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+import type { NativeQueueCommand } from "./nativeQueueContracts";
 import type { MessageOrigin } from "./messageOrigin";
 import type { RuntimeImageCapability, StructuredImageRef } from "./structuredContent";
 
@@ -43,21 +44,14 @@ export interface RuntimeSessionAxes {
 
 export type RuntimeAttentionKind = "approval" | "permission" | "question" | "waiting_heuristic";
 export type RuntimeAttentionState = "open" | "resolving" | "resolved" | "expired-confirmed" | "cancelled" | "resolution-unknown";
-export type RuntimeOperationKind = "send" | "steer" | "interrupt" | "answer" | "kill" | "spawn" | "reconfigure" | "compact";
-export type RuntimeReceiptStatus =
-  | "pending"
-  | "delivering"
-  | "applying"
-  | "turn-started"
-  | "steered"
-  | "queued"
-  | "delivered"
-  | "applied"
-  | "interrupted"
-  | "answered"
-  | "rejected"
-  | "failed"
-  | "uncertain";
+export type RuntimeOperationKind = "send" | "steer" | "inject" | "interrupt" | "answer" | "kill" | "spawn" | "reconfigure" | "compact" | "native-queue";
+export const RUNTIME_RECEIPT_STATUSES = [
+  "pending", "delivering", "applying", "turn-started", "steered", "queued",
+  "delivered", "applied", "interrupted", "answered", "rejected", "failed", "uncertain",
+] as const;
+export type RuntimeReceiptStatus = (typeof RUNTIME_RECEIPT_STATUSES)[number];
+/** Absorbing terminal reason written when the operator discards a send. */
+export const RUNTIME_DELIVERY_DISCARDED_REASON = "delivery-discarded";
 export type OperationKind = RuntimeOperationKind;
 export type ReceiptStatus = RuntimeReceiptStatus;
 
@@ -165,11 +159,19 @@ export interface RuntimeAttention {
   unowned: boolean;
   createdAt: string;
   request: RuntimeAttentionRequest;
+  isBlocking?: boolean;
   autoResolutionMs?: number | null;
   turnId?: string | null;
 }
 
 export interface RuntimeOperationReceipt {
+  nativeQueue?: {
+    entryId: string;
+    nativeSubmissionId: string | null;
+    revision: number;
+    dispatchedRevision: number | null;
+    profilePolicy: "thread-at-dispatch";
+  };
   operationId: string;
   /** The terminal attempt this operation replaces, when it was created by Retry. */
   retryOfOperationId?: string | null;
@@ -197,9 +199,25 @@ export interface RuntimeOperationReceipt {
       long has this message been waiting". Absent on receipts written before
       this field existed; readers fall back to `at`. */
   admittedAt?: string;
+  /** Retry guidance from the durable delivery settlement. `verify-first`
+      selects the explicit same-identity retry path for an unknown fate. */
+  resend?: "not-needed" | "safe" | "verify-first";
   revision: number;
 }
 export type RuntimeReceipt = RuntimeOperationReceipt;
+
+export interface RuntimeTransitionOptions {
+  /** Compare-and-set fence evaluated inside the journal write transaction. */
+  fromStatuses?: readonly RuntimeReceiptStatus[];
+  /** Marks a terminal transition as owed a durable projection, inside the same
+      write transaction that commits it (#1612). The caller is saying: the
+      answer to this call is what carries the outcome into the delivery record,
+      so the receipt has to outlive compaction until the projection is
+      acknowledged — the acknowledgement is the one thing that can be lost
+      while the outcome itself is already committed. A runtime host from before
+      this option ignores it and retains nothing extra. */
+  awaitProjection?: boolean;
+}
 
 export function runtimePresentationReceipt(receipt: RuntimeOperationReceipt): RuntimeOperationReceipt {
   if (!receipt.presentationOperationId || receipt.presentationRevision === undefined) return receipt;
@@ -226,14 +244,37 @@ interface RuntimeCommandBase {
     the composer snapshots the conversation's selected model/effort/fast onto the
     send so a replay re-delivers with identical settings. Absent field = today's
     behaviour, keeping the durable format forward-compatible. */
+/**
+ * One canonical realtime transcript segment, projected to the browser (#1629).
+ *
+ * The app-server's own record of what was said, carried over the runtime bus so
+ * the panel shows what the backend committed rather than only what one WebRTC
+ * data channel happened to deliver.
+ */
+export interface RuntimeVoiceTranscriptSegment {
+  segmentId: string;
+  realtimeSessionId: string;
+  role: "user" | "assistant";
+  text: string;
+  final: boolean;
+}
+
 export interface RuntimeSendSettings {
   model?: string;
   effort?: string;
   fast?: boolean;
+  serviceTier?: string | null;
+  serviceTierForTurn?: string | null;
 }
 
 export interface RuntimeSendCommand extends RuntimeCommandBase {
-  kind: "send" | "steer";
+  /** `inject` is native Codex `thread/inject_items` (#1560): the operator's raw
+      text is appended to the thread's model-visible input WITHOUT interrupting
+      the running turn and WITHOUT starting one. It shares this command shape
+      because it carries the same immutable payload, fence and authorship as a
+      message — it is not a control — but it carries no `policy`: there is no
+      interrupt to choose and no queue to fall back to. */
+  kind: "send" | "steer" | "inject";
   text: string;
   images?: StructuredImageRef[];
   contentDigest?: string;
@@ -263,17 +304,10 @@ export interface RuntimeSettingsCapability {
   perTurnModel: boolean;
 }
 
-/**
- * Advertisement per issue #390 §11 sequencing. codex-app-server honors a
- * per-turn `effort` (the snapshot rides the durable send effect and lands on
- * `turn/start`), but model and service tier are thread-level in its protocol
- * (`thread/resume` carries `model`/`serviceTier`), so `perTurnModel` stays
- * false. claude-broker fixes `--model`/`--effort` at process boot; both axes
- * read false until between-turns succession (§5 phase 3) ships. False axes
- * render honest disabled-with-reason rows in the composer pill.
- */
-export function runtimeSettingsCapability(engine: RuntimeEngine): RuntimeSettingsCapability {
-  return { perTurnEffort: engine === "codex", perTurnModel: false };
+/** Model overrides require an observed native protocol/catalog capability.
+ * Claude's stream broker retains its process-level profile. */
+export function runtimeSettingsCapability(engine: RuntimeEngine, nativeTurnProfile = false): RuntimeSettingsCapability {
+  return { perTurnEffort: engine === "codex", perTurnModel: engine === "codex" && nativeTurnProfile };
 }
 
 export interface RuntimeInterruptCommand extends RuntimeCommandBase {
@@ -372,7 +406,7 @@ export interface RuntimeSpawnCommand extends RuntimeCommandBase {
   sessionId?: string | null;
 }
 
-export type RuntimeOperationCommand = RuntimeSendCommand | RuntimeInterruptCommand | RuntimeAnswerCommand | RuntimeKillCommand | RuntimeSpawnCommand | RuntimeReconfigureCommand | RuntimeCompactCommand;
+export type RuntimeOperationCommand = RuntimeSendCommand | RuntimeInterruptCommand | RuntimeAnswerCommand | RuntimeKillCommand | RuntimeSpawnCommand | RuntimeReconfigureCommand | RuntimeCompactCommand | NativeQueueCommand;
 
 export interface RuntimeOperationResult {
   operationId: string;
@@ -382,6 +416,14 @@ export interface RuntimeOperationResult {
 
 export interface RuntimeRetryOptions {
   requireHostedConversationId?: string;
+}
+
+export type RuntimeDeliveryAction = "discard" | "retry";
+
+export interface RuntimeDeliveryActionClaim {
+  operationId: string;
+  winner: RuntimeDeliveryAction;
+  replayed: boolean;
 }
 
 export class RuntimeIdempotencyConflictError extends Error {
@@ -404,7 +446,28 @@ export interface RuntimeDrift {
   at: string;
 }
 
+export interface RuntimeHostDiagnostics {
+  executable: string;
+  version: string | null;
+  nativeQueue: boolean;
+  queueCapability: "unknown" | "supported" | "unsupported";
+  /** Whether this host generation can append model-visible input without a turn
+      (#1560). `unknown` is fail-closed: the composer offers no injection action
+      and an admitted one is refused rather than delivered as a steer. */
+  injectCapability: "unknown" | "supported" | "unsupported";
+  authRecovery: "unknown" | "started" | "completed-unverified";
+}
+
+export interface RuntimeInjectionBinding {
+  threadId: string;
+  accountId: string | null;
+  writerClaim: string;
+}
+
 export interface RuntimeSession {
+  /** Structured writer identity published with this session generation. */
+  writerClaim?: string | null;
+  diagnostics?: RuntimeHostDiagnostics;
   conversationId: string;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
   hostKind: RuntimeHostKind;
@@ -420,7 +483,7 @@ export interface RuntimeSession {
   workflowId: string | null;
   cwd: string | null;
   artifactPath: string | null;
-  capabilities: { steer: boolean; structuredAttention: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
+  capabilities: { steer: boolean; structuredAttention: boolean; nativeQueue?: boolean; inject?: boolean; imageInput?: RuntimeImageCapability; runtimeSettings?: RuntimeSettingsCapability };
   activeTurnId: string | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   drift?: RuntimeDrift | null;
@@ -430,6 +493,15 @@ export interface RuntimeSession {
   /** Canonical terminal assistant items retained independently from the
       bounded live UI projection until Live Mode acknowledges delivery. */
   voiceDeliveries?: RuntimeVoiceDelivery[];
+  /** Bodies omitted only on the opted-in browser summary; hydrate before voice reconciliation. */
+  voiceDeliverySnapshotRevision?: number;
+  /** The canonical realtime transcript this session has published (#1629), as a
+      bounded tail. Distinct from `voiceDeliveries`, which is worker output being
+      spoken INTO the call. */
+  voiceTranscript?: RuntimeVoiceTranscriptSegment[];
+  /** Bumped by every native `thread/queue/changed` (#1629); the signal a queue
+      reader refreshes on, never the queue itself. */
+  nativeQueueRevision?: number;
   /** Bounded durable tombstones prevent terminal-event replay from recreating
       deliveries already acknowledged by Live Mode. */
   acknowledgedVoiceDeliveryIds?: string[];
@@ -577,6 +649,48 @@ export interface ViewerRuntimeHostHealthEvidence {
   log?: string[];
 }
 
+export interface RuntimeHostGenerationIdentity {
+  image: string;
+  revision: string;
+  container: string;
+}
+
+export type ViewerRuntimeHostStartupPhase =
+  | "fence-waiting"
+  | "fence-acquired"
+  | "journal-open"
+  | "handoff-cleanup-complete"
+  | "consumers-recovered"
+  | "socket-listening"
+  | "ready";
+
+export interface ViewerRuntimeHostStartupPhaseEvidence {
+  phase: ViewerRuntimeHostStartupPhase;
+  recordedAt: string;
+  generation: RuntimeHostGenerationIdentity;
+  pid: number;
+  startIdentity: string;
+  hostEpoch: number;
+}
+
+export interface ViewerRuntimeHostProbeReceipt {
+  checkedAt: string;
+  requestId: string;
+  responseId: string;
+  elapsedMs: number;
+}
+
+/** Success evidence written only by the generation that took the singleton
+    fence and answered an external framed request with its exact identity. */
+export interface ViewerRuntimeHostHandoffEvidence {
+  generation: RuntimeHostGenerationIdentity;
+  pid: number;
+  startIdentity: string;
+  hostEpoch: number;
+  phases: ViewerRuntimeHostStartupPhaseEvidence[];
+  probe: ViewerRuntimeHostProbeReceipt;
+}
+
 export type ViewerHealthProbeName = "root" | "authenticated" | "unauthorized" | "capability";
 
 /** One readiness request, kept with what the gate asked for. A failed candidate
@@ -633,6 +747,8 @@ export interface ViewerDeploymentOwner {
 }
 
 export interface ViewerDeploymentStatus {
+  /** Live adapter observation; does not authorize readiness or terminal state. */
+  servingProgress?: string;
   deploymentId: string;
   idempotencyKey: string;
   requestedRevision: string;
@@ -643,6 +759,7 @@ export interface ViewerDeploymentStatus {
   previous: ViewerReleaseIdentity | null;
   mcpRuntime: ViewerDeploymentMcpRuntimeStatus;
   health: ViewerHealthEvidence[];
+  runtimeHostHandoff?: ViewerRuntimeHostHandoffEvidence;
   error: string | null;
   owner: ViewerDeploymentOwner;
   createdAt: string;
@@ -671,7 +788,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-retry" | "effect-batch" | "operation-transition" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "mcp-health-probe-admission";
+  method: "runtime-host-health" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

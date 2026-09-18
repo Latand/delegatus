@@ -108,6 +108,10 @@ const click = async (el: Element) => {
   });
 };
 
+/* The runtime popover renders through a portal into the document the pill is in
+   — the composer's box is bounded and scrolls its own content, and an in-flow
+   popover was clipped by exactly that (#1629) — so its rows and its own root are
+   looked for in the document rather than under the mount. */
 const keydown = async (el: Element, key: string) => {
   await act(async () => {
     el.dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true }) as unknown as Event);
@@ -135,7 +139,7 @@ test("the pill face reads shortLabel · tier and opens a menu with the active ti
 
   await click(pill);
   expect(pill.getAttribute("aria-expanded")).toBe("true");
-  const menu = host.querySelector('[role="menu"][data-runtime-popover]')!;
+  const menu = host.ownerDocument.querySelector('[role="menu"][data-runtime-popover]')!;
   const tiers = [...menu.querySelectorAll('[data-runtime-row="tier"]')];
   // The sol scale: all six tiers, lowest first, standalone display names.
   expect(tiers.map((row) => row.textContent)).toEqual(["Light", "Medium", "High", "Extra High", "Max", "Ultra"]);
@@ -154,7 +158,7 @@ test("selecting a tier persists the sparse profile, announces, and closes (auto-
   );
   const pill = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
   await click(pill);
-  const ultra = [...host.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Ultra")!;
+  const ultra = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Ultra")!;
   await click(ultra);
   // Only the explicitly selected field persists (finding 4).
   expect(JSON.parse(localStorage.getItem(key + ":profile")!)).toEqual({ effort: "ultra" });
@@ -175,7 +179,7 @@ test("Strict Mode emits one structured reconfigure request for one selection", a
     </StrictMode>,
   );
   await click(host.querySelector("[data-runtime-pill]")!);
-  const ultra = [...host.querySelectorAll('[data-runtime-row="tier"]')]
+  const ultra = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
     .find((row) => row.textContent === "Ultra")!;
   await click(ultra);
 
@@ -189,7 +193,7 @@ test("a failed structured reconfigure restores the browser profile before future
     <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
   await click(mounted.host.querySelector("[data-runtime-pill]")!);
-  const ultra = [...mounted.host.querySelectorAll('[data-runtime-row="tier"]')]
+  const ultra = [...mounted.host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
     .find((row) => row.textContent === "Ultra")!;
   await click(ultra);
   expect(sendRuntimeFrom(codexFile)).toEqual({ effort: "ultra" });
@@ -224,11 +228,11 @@ test("a failed newest selection restores the last confirmed browser profile", as
     <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
   await click(mounted.host.querySelector("[data-runtime-pill]")!);
-  const ultra = [...mounted.host.querySelectorAll('[data-runtime-row="tier"]')]
+  const ultra = [...mounted.host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
     .find((row) => row.textContent === "Ultra")!;
   await click(ultra);
   await click(mounted.host.querySelector("[data-runtime-pill]")!);
-  const max = [...mounted.host.querySelectorAll('[data-runtime-row="tier"]')]
+  const max = [...mounted.host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
     .find((row) => row.textContent === "Max")!;
   await click(max);
 
@@ -271,7 +275,7 @@ test("remount transfers rollback ownership from pending A to durable B before B 
       <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
     );
     await click(mounted.host.querySelector("[data-runtime-pill]")!);
-    const ultra = [...mounted.host.querySelectorAll('[data-runtime-row="tier"]')]
+    const ultra = [...mounted.host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
       .find((row) => row.textContent === "Ultra")!;
     await click(ultra);
 
@@ -292,7 +296,7 @@ test("remount transfers rollback ownership from pending A to durable B before B 
     });
 
     await click(mounted.host.querySelector("[data-runtime-pill]")!);
-    const max = [...mounted.host.querySelectorAll('[data-runtime-row="tier"]')]
+    const max = [...mounted.host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')]
       .find((row) => row.textContent === "Max")!;
     await click(max);
     expect(requests).toHaveLength(2);
@@ -398,20 +402,23 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
     <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
   await click(host.querySelector("[data-runtime-pill]")!);
-  const submenu = [...host.querySelectorAll('[data-runtime-row="submenu"]')];
+  const submenu = [...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')];
   expect(submenu.map((row) => row.getAttribute("data-runtime-value"))).toEqual(["model", "speed"]);
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
-  const modelRows = [...host.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-5.6-Sol", "GPT-5.6-Terra"]);
-  expect(modelRows[0]!.getAttribute("aria-checked")).toBe("true");
-  expect(modelRows[1]!.hasAttribute("disabled")).toBe(false);
+  const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
+  // The conversation runs on Sol, so its row is the checked one wherever the
+  // catalog puts it; the others stay selectable.
+  expect(modelRows[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
+  expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
   // The back row returns to the root panel; its accessible name is the wired
   // composer.backTo copy, distinct from the submenu row's "Model" (#405).
-  const backRow = host.querySelector('[data-runtime-row="back"]')!;
+  const backRow = host.ownerDocument.querySelector('[data-runtime-row="back"]')!;
   expect(backRow.getAttribute("aria-label")).toBe("Back — Model");
   await click(backRow);
-  expect(host.querySelectorAll('[data-runtime-row="tier"]').length).toBe(6);
+  expect(host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]').length).toBe(6);
   await act(async () => root.unmount());
 });
 
@@ -420,10 +427,10 @@ test("speed rows exist only for codex and remain available on the structured sur
     <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
   await click(codex.host.querySelector("[data-runtime-pill]")!);
-  const speed = [...codex.host.querySelectorAll('[data-runtime-row="submenu"]')]
+  const speed = [...codex.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
     .find((row) => row.getAttribute("data-runtime-value") === "speed")!;
   await click(speed);
-  const speedRows = [...codex.host.querySelectorAll('[data-runtime-row="speed"]')];
+  const speedRows = [...codex.host.ownerDocument.querySelectorAll('[data-runtime-row="speed"]')];
   expect(speedRows.map((row) => row.textContent)).toEqual(["Standard", "Fast — priority tier"]);
   expect(speedRows.every((row) => !row.hasAttribute("disabled"))).toBe(true);
   await act(async () => codex.root.unmount());
@@ -433,7 +440,7 @@ test("speed rows exist only for codex and remain available on the structured sur
     <RuntimePill file={claudeFile} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
   );
   await click(claude.host.querySelector("[data-runtime-pill]")!);
-  const values = [...claude.host.querySelectorAll('[data-runtime-row="submenu"]')]
+  const values = [...claude.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')]
     .map((row) => row.getAttribute("data-runtime-value"));
   expect(values).toEqual(["model"]);
   await act(async () => claude.root.unmount());
@@ -444,7 +451,7 @@ test("a claude-broker queues a reasoning change at the active turn boundary", as
     <RuntimePill file={claudeFile} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />,
   );
   await click(host.querySelector("[data-runtime-pill]")!);
-  const tiers = [...host.querySelectorAll('[data-runtime-row="tier"]')];
+  const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
   expect(tiers).toHaveLength(5); // claude scale: low…max
   expect(tiers.every((row) => !row.hasAttribute("disabled"))).toBe(true);
   await click(tiers[0]!);
@@ -456,7 +463,7 @@ test("a claude-broker queues a reasoning change at the active turn boundary", as
 test("on the resume surface a selection saves the concrete :resume profile — auto-apply is the save", async () => {
   const { host, root } = await renderPill(<RuntimePill file={codexFile} surface="resume" />);
   await click(host.querySelector("[data-runtime-pill]")!);
-  const medium = [...host.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!;
+  const medium = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!;
   expect(medium.hasAttribute("disabled")).toBe(false);
   await click(medium);
   expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-5.6-sol", effort: "medium", fast: false });
@@ -470,29 +477,40 @@ test("Escape closes the popover and returns focus to the pill", async () => {
   );
   const pill = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
   await click(pill);
-  const menu = host.querySelector("[data-runtime-popover]")!;
+  const menu = host.ownerDocument.querySelector("[data-runtime-popover]")!;
   await keydown(menu, "Escape");
-  expect(host.querySelector("[data-runtime-popover]")).toBeNull();
+  expect(host.ownerDocument.querySelector("[data-runtime-popover]")).toBeNull();
   expect(pill.getAttribute("aria-expanded")).toBe("false");
   expect(document.activeElement).toBe(pill);
   await act(async () => root.unmount());
 });
 
-test("at 390px the pill opens a modal sheet with 44px radio rows that stays open across selections", async () => {
+test("at 390px the chip opens the «Next message» sheet, which stays open across selections", async () => {
   mobile = true;
   const { host, root } = await renderPill(
     <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
   );
-  await click(host.querySelector("[data-runtime-pill]")!);
+  /* Mobile v2 §4.4: the chip inside the composer box is what opens it, and the
+     capture reaches it by that hook. */
+  const chip = host.querySelector("[data-runtime-pill]")!;
+  expect(chip.getAttribute("data-mobile2-open")).toBe("model");
+  await click(chip);
   const sheet = host.querySelector('[role="dialog"][data-runtime-sheet]')!;
   expect(sheet.getAttribute("aria-modal")).toBe("true");
   expect(sheet.getAttribute("aria-label")).toBe("Model and reasoning — applies to your next message");
+  expect(sheet.getAttribute("data-mobile2-sheet")).toBe("model");
+  /* It says what it applies to, and in the operator's own tier words (§7 Q5). */
+  expect(host.querySelector("[data-mobile2-next-message]")!.textContent)
+    .toBe("Applies to your next message: 5.6-Sol · high");
   const sections = [...sheet.querySelectorAll('[role="radiogroup"]')];
-  expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Reasoning", "Model", "Speed"]);
+  expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Model", "Reasoning", "Speed"]);
   const rows = [...sheet.querySelectorAll("[data-runtime-sheet-row]")];
   expect(rows.every((row) => row.className.includes("min-h-11"))).toBe(true);
+  /* One vocabulary: the rows are the tier ids, never a third spelling of them. */
+  const reasoning = [...sections[1]!.querySelectorAll("[data-runtime-sheet-row]")].map((row) => row.textContent);
+  expect(reasoning).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   // Selecting a tier commits but keeps the sheet open (model + reasoning in one visit).
-  const ultra = rows.find((row) => row.textContent === "Ultra")!;
+  const ultra = rows.find((row) => row.textContent === "ultra")!;
   await click(ultra);
   expect(JSON.parse(localStorage.getItem(key + ":profile")!)).toEqual({ effort: "ultra" });
   expect(host.querySelector("[data-runtime-sheet]")).not.toBeNull();

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { requireOperatorAuthority, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { requireOperatorAuthority, rotationActor, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases } from "@/lib/projects/aliases";
@@ -37,8 +37,8 @@ afterEach(() => {
 const AT = "2026-07-29T00:00:00.000Z";
 const SEATED_ID = "conversation_66666666-6666-4666-8666-666666666666";
 
-function seatActive(project: string, conversationId: string, transcriptPath: string | null): void {
-  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", now: AT });
+function seatActive(project: string, conversationId: string, transcriptPath: string | null, promptVersion: number | null = null): void {
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", promptVersion, now: AT });
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
 }
 
@@ -53,15 +53,31 @@ function controlStub(responses: Record<string, Record<string, unknown>> = {}) {
   return { posts, control };
 }
 
-/** A control plane whose DESIGNATION endpoints run the REAL operator gate
+/** A control plane whose DESIGNATION endpoint runs the REAL operator gate
     against exactly the headers the binding forwarded — the same check the seat
-    and rotation routes make first, without reaching a real spawn. */
+    route makes first, without reaching a real spawn.
+
+    The rotation route is deliberately NOT on that gate (#1402): it runs the
+    rotation authority contract, which admits the caller and names it, and the
+    rotations it admits are recorded under that name. */
 function gatedControlStub() {
   const designations: string[] = [];
+  const rotations: (string | null)[] = [];
   const control: ViewerControlDependencies = {
     post: async (pathname, _body, headers) => {
-      if (pathname === "/api/orchestrator/seat" || pathname === "/api/orchestrator/rotate") {
-        const operator = requireOperatorAuthority({ headers: new Headers(headers ?? {}) });
+      const request = { headers: new Headers(headers ?? {}) };
+      if (pathname === "/api/orchestrator/rotate") {
+        const actor = rotationActor(request);
+        rotations.push(actor.conversationId);
+        return {
+          ok: true,
+          conversationId: SEATED_ID,
+          seat: { conversationId: SEATED_ID },
+          triggeredBy: { kind: actor.kind, conversationId: actor.conversationId, seatEpoch: null },
+        };
+      }
+      if (pathname === "/api/orchestrator/seat") {
+        const operator = requireOperatorAuthority(request);
         if (!operator.ok) throw new Error(operator.error);
         designations.push(pathname);
         return { ok: true, conversationId: SEATED_ID, seat: { conversationId: SEATED_ID } };
@@ -69,7 +85,7 @@ function gatedControlStub() {
       return { ok: true, outcome: "delivered" };
     },
   };
-  return { designations, control };
+  return { designations, rotations, control };
 }
 
 function bindingsWith(control: ViewerControlDependencies) {
@@ -157,6 +173,9 @@ test("get_orchestrator surfaces bidirectional predecessor lineage after a replac
     seatEpoch: 1,
     revokedAt: AT,
     successorConversationId: SEATED_ID,
+    /* This replacement was seeded directly on the store, so it carries no
+       actor; a rotation through either surface names one (#1402). */
+    triggeredBy: null,
   }]);
 });
 
@@ -314,27 +333,46 @@ function restoreCapabilityCaller(): void {
   setCallerConversationResolverForTests(null);
 }
 
-test("a NON-OPERATOR caller cannot designate itself or anyone: create, rotate and send's create branch are refused by the real operator gate, writing nothing — while the tools stay callable", async () => {
+test("a NON-OPERATOR caller cannot DESIGNATE itself or anyone: create and send's create branch are refused by the real operator gate, writing nothing", async () => {
   asCapabilityCaller();
   try {
     const { designations, control } = gatedControlStub();
     const tools = bindingsWith(control);
 
-    /* All three designation paths run — the tools are ON the surface for this
-       session (axis 1) — and every one is refused by the gate that reads the
+    /* Both designation paths run — the tools are ON the surface for this
+       session (axis 1) — and both are refused by the gate that reads the
        forwarded conversation capability, before anything durable changes. */
     await expect(tools.create_orchestrator({
       clientRequestId: "create-x",
       project: "proj-a",
       conversationId: "conversation_worker",
     })).rejects.toThrow();
-    await expect(tools.rotate_orchestrator({ clientRequestId: "rotate-x", project: "proj-a" })).rejects.toThrow();
     await expect(tools.send_message_to_orchestrator({ clientRequestId: "send-x", project: "proj-a", text: "hi" })).rejects.toThrow();
 
     expect(designations).toEqual([]);
     const { active, pending } = orchestratorSeatFor("proj-a");
     expect(active).toBeNull();
     expect(pending).toBeNull();
+  } finally {
+    restoreCapabilityCaller();
+  }
+});
+
+test("REGRESSION (#1402): the same non-operator caller ROTATES, and the rotation is attributed to it", async () => {
+  asCapabilityCaller();
+  try {
+    const { rotations, control } = gatedControlStub();
+    const result = await bindingsWith(control).rotate_orchestrator({
+      clientRequestId: "rotate-x",
+      project: "proj-a",
+    }) as Record<string, unknown>;
+
+    /* The tool forwarded the caller's own capability, exactly as it does for
+       create — and rotation reads that name to attribute the rotation. See
+       src/lib/orchestrator/rotationAuthority.test.ts for the same call carried
+       end to end into the durable seat record. */
+    expect(rotations).toEqual(["conversation_worker"]);
+    expect(result.triggeredBy).toMatchObject({ kind: "agent", conversationId: "conversation_worker" });
   } finally {
     restoreCapabilityCaller();
   }
@@ -371,6 +409,44 @@ test("the adoption target reaches the authorized seat route while prompt provena
   const rotate = posts.find((post) => post.pathname === "/api/orchestrator/rotate");
   expect(rotate!.body).not.toHaveProperty("conversationId");
   expect(rotate!.body).not.toHaveProperty("promptVersion");
+});
+
+/* #1452: the route's own default is the incumbent's text, which is how a seat
+   created under mandate v3 («you do not talk to the user») rotated v3 into
+   every successor. The tool decides the default from the incumbent's recorded
+   version, and the incumbent's text stays one explicit argument away. */
+test("rotate_orchestrator over a STALE seat sends the current default mandate (#1452)", async () => {
+  seatActive("proj-a", SEATED_ID, null, 3);
+  const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
+  await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-stale", project: "proj-a" });
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.body.mandate).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
+});
+
+test("rotate_orchestrator over a seat on the current default names no mandate, so the route keeps the incumbent's (#1452)", async () => {
+  seatActive("proj-a", SEATED_ID, null, ORCHESTRATOR_PROMPT_VERSION);
+  const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
+  await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-current", project: "proj-a" });
+  expect(posts[0]!.body).not.toHaveProperty("mandate");
+});
+
+test("rotate_orchestrator over bespoke (unversioned) rules keeps them — they claim no version and are never stale (#1452)", async () => {
+  seatActive("proj-a", SEATED_ID, null, null);
+  const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
+  await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-bespoke", project: "proj-a" });
+  expect(posts[0]!.body).not.toHaveProperty("mandate");
+});
+
+test("keepIncumbentMandate carries a STALE incumbent's text forward explicitly, and an explicit mandate wins over both (#1452)", async () => {
+  seatActive("proj-a", SEATED_ID, null, 3);
+  const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
+  await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-keep", project: "proj-a", keepIncumbentMandate: true });
+  expect(posts[0]!.body).not.toHaveProperty("mandate");
+  expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
+
+  await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-named", project: "proj-a", mandate: "run it my way" });
+  expect(posts[1]!.body.mandate).toBe("run it my way");
 });
 
 test("rotate_orchestrator forwards the requested effort to the rotation route so it reaches the successor spawn", async () => {

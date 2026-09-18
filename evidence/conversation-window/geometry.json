@@ -2,7 +2,7 @@
   "queued-desktop": {
     "scrollWidth": 1280,
     "viewportWidth": 1280,
-    "feedHeight": 667.75,
+    "feedHeight": 665.75,
     "composerHeight": 99,
     "controlStrip": true,
     "mobileDetailsToggle": false,
@@ -13,7 +13,7 @@
   "pre-transcript-prompt-desktop": {
     "scrollWidth": 1280,
     "viewportWidth": 1280,
-    "feedHeight": 667.75,
+    "feedHeight": 665.75,
     "composerHeight": 99,
     "controlStrip": true,
     "mobileDetailsToggle": false,
@@ -24,7 +24,7 @@
   "delivering-desktop": {
     "scrollWidth": 1280,
     "viewportWidth": 1280,
-    "feedHeight": 667.75,
+    "feedHeight": 665.75,
     "composerHeight": 99,
     "controlStrip": true,
     "mobileDetailsToggle": false,
@@ -35,7 +35,7 @@
   "live-desktop": {
     "scrollWidth": 1280,
     "viewportWidth": 1280,
-    "feedHeight": 667.75,
+    "feedHeight": 665.75,
     "composerHeight": 99,
     "controlStrip": true,
     "mobileDetailsToggle": false,
@@ -46,10 +46,10 @@
   "queued-mobile-390": {
     "scrollWidth": 390,
     "viewportWidth": 390,
-    "feedHeight": 653,
+    "feedHeight": 706,
     "composerHeight": 105,
     "controlStrip": false,
-    "mobileDetailsToggle": true,
+    "mobileDetailsToggle": false,
     "textarea": true,
     "launchChips": true,
     "outbox": false
@@ -57,10 +57,10 @@
   "pre-transcript-prompt-mobile-390": {
     "scrollWidth": 390,
     "viewportWidth": 390,
-    "feedHeight": 653,
+    "feedHeight": 706,
     "composerHeight": 105,
     "controlStrip": false,
-    "mobileDetailsToggle": true,
+    "mobileDetailsToggle": false,
     "textarea": true,
     "launchChips": true,
     "outbox": true
@@ -68,10 +68,10 @@
   "delivering-mobile-390": {
     "scrollWidth": 390,
     "viewportWidth": 390,
-    "feedHeight": 653,
+    "feedHeight": 706,
     "composerHeight": 105,
     "controlStrip": false,
-    "mobileDetailsToggle": true,
+    "mobileDetailsToggle": false,
     "textarea": true,
     "launchChips": true,
     "outbox": true
@@ -79,10 +79,10 @@
   "live-mobile-390": {
     "scrollWidth": 390,
     "viewportWidth": 390,
-    "feedHeight": 653,
+    "feedHeight": 706,
     "composerHeight": 105,
     "controlStrip": false,
-    "mobileDetailsToggle": true,
+    "mobileDetailsToggle": false,
     "textarea": true,
     "launchChips": true,
     "outbox": false

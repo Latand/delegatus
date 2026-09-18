@@ -9,6 +9,7 @@ import {
   RUNTIME_HOST_REVISION_ENV,
   type RuntimeHostHandoffIntent,
   type RuntimeHostReleaseRecord,
+  type RuntimeHostRollbackTarget,
 } from "./hostRelease";
 import {
   completeRuntimeHostHandoff,
@@ -43,14 +44,29 @@ test("issue 521 review: separate deployments of the same revision receive distin
     .not.toBe(runtimeHostSuccessorName(repeatCandidate.revision, repeatCandidate.image));
 });
 
-test("issue 521 review: the fenced successor removes its durable predecessor and clears cleanup ownership", async () => {
+test("issue 1270: the fenced successor retains its predecessor as the durable rollback target", async () => {
   const successorContainer = runtimeHostSuccessorName(candidate.revision, candidate.image);
   const calls: string[][] = [];
+  const targets: RuntimeHostRollbackTarget[] = [];
+  const previousRelease: RuntimeHostReleaseRecord = {
+    image: "agent-log-viewer:deploy-previous",
+    revision: "a".repeat(40),
+    container: "runtime-host-previous",
+    endpoint: "http://127.0.0.1:8898",
+    stagedAt: "2026-07-20T09:00:00.000Z",
+  };
+  const successorRelease: RuntimeHostReleaseRecord = {
+    ...candidate,
+    container: successorContainer,
+    stagedAt: "2026-07-21T09:00:00.000Z",
+  };
   let intent: RuntimeHostHandoffIntent | null = {
     revision: candidate.revision,
     image: candidate.image,
     successorContainer,
     predecessorId: "predecessor-for-cleanup",
+    previousRelease,
+    successorRelease,
     recordedAt: "2026-07-21T09:00:00.000Z",
   };
 
@@ -64,14 +80,21 @@ test("issue 521 review: the fenced successor removes its durable predecessor and
       return argv[1] === "inspect" ? JSON.stringify([{ Id: "successor-id" }]) : "";
     },
     readHandoffIntent: () => intent,
+    writeRollbackTarget: (target) => { targets.push(target); },
     clearHandoffIntent: () => { intent = null; },
   });
 
   expect(completed).toBe(true);
   expect(calls).toEqual([
     ["container", "inspect", successorContainer],
-    ["container", "rm", "-f", "predecessor-for-cleanup"],
   ]);
+  expect(targets).toEqual([{
+    version: 1,
+    active: successorRelease,
+    previous: previousRelease,
+    predecessorId: "predecessor-for-cleanup",
+    recordedAt: "2026-07-21T09:00:00.000Z",
+  }]);
   expect(intent).toBeNull();
 });
 
@@ -94,6 +117,7 @@ test("issue 521 review: successor cleanup converges when the predecessor is alre
       predecessorId: "predecessor-already-gone",
       recordedAt: "2026-07-21T09:00:00.000Z",
     }),
+    writeRollbackTarget: () => {},
     clearHandoffIntent: () => { cleared = true; },
   });
 
@@ -155,6 +179,10 @@ function harness(overrides: {
   updateFailure?: Error;
   startFailure?: Error;
   predecessorInspect?: string;
+  /** Containers outside this deployment's own predecessor/successor pair,
+      keyed by name — used to describe the successor an ABANDONED handoff
+      intent names, which belongs to an earlier generation entirely (#1412). */
+  foreignContainers?: Record<string, string>;
   wait?: (milliseconds: number) => Promise<void>;
 } = {}): Harness {
   const calls: string[][] = [];
@@ -201,6 +229,9 @@ function harness(overrides: {
       if (argv[0] === "container" && argv[1] === "inspect" && argv[2] === "abc123") {
         return overrides.predecessorInspect ?? predecessorInspect;
       }
+      if (argv[0] === "container" && argv[1] === "inspect" && overrides.foreignContainers?.[argv[2]] !== undefined) {
+        return overrides.foreignContainers[argv[2]];
+      }
       if (argv[0] === "container" && argv[1] === "start" && overrides.startFailure) throw overrides.startFailure;
       if (argv[0] === "run") {
         if (overrides.runFailure) throw overrides.runFailure;
@@ -238,6 +269,7 @@ function harness(overrides: {
       events.push("clear-handoff-intent");
       storedIntent = null;
     },
+    writeRollbackTarget: () => {},
     fenceOwnerPid: () => overrides.fenceOwnerPid === undefined ? 3970 : overrides.fenceOwnerPid,
     now: () => "2026-07-21T09:00:00.000Z",
     wait: overrides.wait ?? (async () => undefined),
@@ -412,6 +444,8 @@ test("issue 518: staging creates a dockerd-owned successor from the candidate im
   expect(run).toBeDefined();
   expect(run).toContain(candidate.image);
   expect(run?.join(" ")).toContain("--restart unless-stopped");
+  expect(run?.join(" ")).toContain("--health-cmd bun-container run scripts/runtime-host-healthcheck.ts");
+  expect(run?.join(" ")).toContain("--health-interval 10s --health-timeout 3s --health-retries 3");
   expect(run?.join(" ")).toContain(`-e ${RUNTIME_HOST_FENCE_WAIT_ENV}=`);
   expect(run?.filter((entry) => entry === `${AGENT_REGISTRY_SQLITE_ENV}=dual-write`)).toHaveLength(1);
   expect(run?.some((entry) => entry === `${AGENT_REGISTRY_SQLITE_ENV}=off`)).toBe(false);
@@ -498,6 +532,7 @@ test("issue 521 review: A to B to A stages each deployment generation and never 
   const starts: string[] = [];
   const releases: RuntimeHostReleaseRecord[] = [];
   let intent: RuntimeHostHandoffIntent | null = null;
+  let rollbackTarget: RuntimeHostRollbackTarget | null = null;
   let active = containers[0]!;
   let nextContainerId = 1;
 
@@ -585,6 +620,8 @@ test("issue 521 review: A to B to A stages each deployment generation and never 
     readHandoffIntent: () => intent,
     writeHandoffIntent: (next) => { intent = next; },
     clearHandoffIntent: () => { intent = null; },
+    readRollbackTarget: () => rollbackTarget,
+    writeRollbackTarget: (target) => { rollbackTarget = target; },
     fenceOwnerPid: () => active.pid,
     now: () => "2026-07-21T09:00:00.000Z",
     wait: async () => undefined,
@@ -605,7 +642,11 @@ test("issue 521 review: A to B to A stages each deployment generation and never 
   for (const key of [RUNTIME_HOST_FENCE_WAIT_ENV, RUNTIME_HOST_IMAGE_ENV, RUNTIME_HOST_REVISION_ENV, RUNTIME_HOST_CONTAINER_ENV]) {
     expect(active.env.filter((entry) => entry.startsWith(`${key}=`))).toHaveLength(1);
   }
-  expect(containers).toHaveLength(1);
+  expect(containers).toHaveLength(2);
+  expect(rollbackTarget).toMatchObject({
+    active: { container: successorNames[2] },
+    previous: { container: successorNames[1] },
+  });
   expect(intent).toBeNull();
 });
 
@@ -804,8 +845,12 @@ test("issue 521 review: a foreign durable intent blocks staging before Docker mu
   await expect(stageRuntimeHostSuccessorContainer(candidate, "agent-log-viewer:node22", ports))
     .rejects.toThrow("runtime-host handoff intent is owned by another generation");
 
-  expect(calls).toEqual([]);
-  expect(events).toEqual([]);
+  /* Staging now reads the recorded successor before refusing, so it can tell an
+     abandoned intent from a live claim (#1412). That read is the only Docker
+     call allowed here; the point of this case is still that nothing MUTATES
+     before the refusal, and that the foreign intent survives untouched. */
+  expect(calls).toEqual([["container", "inspect", existingIntent.successorContainer]]);
+  expect(events).toEqual([`docker:container inspect ${existingIntent.successorContainer}`]);
   expect(records).toEqual([]);
   expect(intents).toEqual([]);
   expect(JSON.stringify(storedIntent())).toBe(originalBytes);
@@ -1027,4 +1072,69 @@ test("issue 1216: an unheld fence names no predecessor at all", async () => {
   const harnessed = harness({ fenceOwnerPid: null });
 
   expect(await findRuntimeHostPredecessor(harnessed.ports)).toBeNull();
+});
+
+test("#1412: an intent abandoned by a completed handoff is cleared and no longer wedges the next deployment", async () => {
+  /* The incident: cleanup clears the intent only from the matching successor
+     generation, so a deployment that never reached that step left one behind.
+     Every later promote then read a foreign intent, refused, and wedged at
+     host-handoff while the host stayed a revision back. The abandoned intent
+     names a successor that is already running on the recorded image — proof
+     its own handoff finished. */
+  const abandoned: RuntimeHostHandoffIntent = {
+    revision: "earlier-revision",
+    image: candidate.image,
+    successorContainer: "llv-runtime-host-earlier-generation",
+    predecessorId: "earlier-predecessor",
+    recordedAt: "2026-07-21T08:00:00.000Z",
+  };
+  const earlierImage = "agent-log-viewer:deploy-earlier-generation";
+  const { ports, storedIntent, phases } = harness({
+    handoffIntent: { ...abandoned, image: earlierImage },
+    foreignContainers: {
+      [abandoned.successorContainer]: JSON.stringify([{
+        Id: "ear11e5gen",
+        State: { Status: "running", Running: true, Restarting: false },
+        Config: { Image: earlierImage },
+      }]),
+    },
+  });
+
+  const staged = await stageRuntimeHostSuccessorContainer(candidate, "agent-log-viewer:node22", ports);
+
+  expect(staged.successorContainer).toBe(runtimeHostSuccessorName(candidate.revision, candidate.image));
+  expect(storedIntent()?.revision).toBe(candidate.revision);
+  expect(phases.some((phase) => phase.includes("abandoned handoff intent"))).toBe(true);
+});
+
+test("#1412: an intent whose successor is not running keeps its claim and still refuses", async () => {
+  /* The dangerous inverse. Clearing an intent whose handoff did NOT complete
+     would strand its predecessor, which is worse than the wedge being fixed
+     here, so anything short of a running successor on the recorded image must
+     still refuse. */
+  const live: RuntimeHostHandoffIntent = {
+    revision: "earlier-revision",
+    image: candidate.image,
+    successorContainer: "llv-runtime-host-earlier-generation",
+    predecessorId: "earlier-predecessor",
+    recordedAt: "2026-07-21T08:00:00.000Z",
+  };
+  const originalBytes = JSON.stringify({ ...live, image: "agent-log-viewer:deploy-earlier-generation" });
+  const earlierImage = "agent-log-viewer:deploy-earlier-generation";
+  const { ports, storedIntent, records } = harness({
+    handoffIntent: { ...live, image: earlierImage },
+    foreignContainers: {
+      [live.successorContainer]: JSON.stringify([{
+        Id: "ear11e5gen",
+        State: { Status: "exited", Running: false, Restarting: false },
+        Config: { Image: earlierImage },
+      }]),
+    },
+  });
+
+  await expect(stageRuntimeHostSuccessorContainer(candidate, "agent-log-viewer:node22", ports))
+    .rejects.toThrow("runtime-host handoff intent is owned by another generation");
+
+  expect(JSON.stringify(storedIntent())).toBe(originalBytes);
+  expect(records).toEqual([]);
 });

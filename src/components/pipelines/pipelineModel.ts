@@ -198,6 +198,15 @@ export function stageAttempts(pipeline: Pipeline, stageId: string): PipelineStag
   return pipeline.runs.find((run) => run.stageId === stageId)?.attempts ?? [];
 }
 
+/** Whether a stage is still open to configuration: it never ran, in a pipeline
+    that is not over. The engine snapshots a stage's config at its first
+    attempt, so the desktop's placeholder pane, the strip's configure chip and
+    the phone's stage row all ask this one predicate rather than each keeping
+    its own copy of the rule. */
+export function stageConfigurable(pipeline: Pipeline, stageId: string): boolean {
+  return stageAttempts(pipeline, stageId).length === 0 && pipeline.state !== "completed" && pipeline.state !== "closed";
+}
+
 /** Pipeline lifecycle states that still project planned-stage placeholders on the
     board: a draft/provisioning/running/blocked pipeline shows its yet-to-launch
     stages as conversation-shaped placeholders inside its colored halo (#353).
@@ -852,7 +861,31 @@ export function stageOutcomeReason(
   if (output) return output;
   if (attempt?.verdict) return verdictStatusLabel(t, attempt.verdict.status);
   if (attempt) return attemptStateLabel(t, attempt.state);
-  return t(`pipelineChipState.${stageChipState(pipeline, stage)}`);
+  const state = stageChipState(pipeline, stage);
+  return state === "pending" ? stageNotStartedReason(t, pipeline, stage) : t(`pipelineChipState.${state}`);
+}
+
+/**
+ * Why a stage that has never run has not run (#1668). Repeating the badge's own
+ * word — a `pending` chip beside the line "pending" — told the operator nothing,
+ * and the two situations it collapsed are genuinely different: a stage queued
+ * behind the one the chain is on, and a stage nothing will reach until the
+ * operator answers. Both are stated as not started, because they are; this never
+ * describes unstarted work as finished, and it never claims a stage is blocked
+ * when it is merely later in the chain.
+ */
+export function stageNotStartedReason(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+  if (pipeline.state === "needs_decision") return t("pipelineSlot.reasonHeldDecision");
+  if (pipeline.state === "paused") return t("pipelineSlot.reasonHeldPaused");
+  if (pipeline.state === "draft") return t("pipelineSlot.reasonPlanned");
+  /* The chain is over and this stage has no attempt: it was never reached. */
+  if (pipeline.state === "completed" || pipeline.state === "closed") return t("pipelineSlot.reasonNeverRan");
+  const index = pipeline.stages.findIndex((entry) => entry.id === stage.id);
+  const cursorIndex = pipeline.cursor ? pipeline.stages.findIndex((entry) => entry.id === pipeline.cursor!.stageId) : -1;
+  const current = cursorIndex >= 0 && index > cursorIndex ? pipeline.stages[cursorIndex] : null;
+  return current
+    ? t("pipelineSlot.reasonQueuedAfter", { title: stageChipLabel(t, current), k: cursorIndex + 1, n: pipeline.stages.length })
+    : t("pipelineSlot.reasonNotStarted");
 }
 
 /* A cursorless pipeline rests on its last in-flight stage; the live attempt states

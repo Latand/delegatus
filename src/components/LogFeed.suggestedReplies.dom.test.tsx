@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
+import type { ReactElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -29,10 +30,15 @@ const dom = new HappyWindow({ width: 1280, height: 800 });
   dispatchEvent: () => false,
 });
 
+const resizeCallbacks = new Set<ResizeObserverCallback>();
+
 class TestResizeObserver {
+  constructor(private readonly callback: ResizeObserverCallback) {
+    resizeCallbacks.add(callback);
+  }
   observe() {}
   unobserve() {}
-  disconnect() {}
+  disconnect() { resizeCallbacks.delete(this.callback); }
 }
 
 Object.assign(globalThis, {
@@ -46,6 +52,7 @@ Object.assign(globalThis, {
   Event: dom.Event,
   CustomEvent: dom.CustomEvent,
   MouseEvent: dom.MouseEvent,
+  PointerEvent: dom.PointerEvent,
   KeyboardEvent: dom.KeyboardEvent,
   sessionStorage: dom.sessionStorage,
   localStorage: dom.localStorage,
@@ -139,6 +146,7 @@ afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   dom.document.body.replaceChildren();
+  tailState.lines = TRANSCRIPT;
 });
 afterAll(() => {
   globalThis.fetch = previousFetch;
@@ -168,26 +176,115 @@ const file = {
   conversationId: CONVERSATION_ID,
 } as FileEntry;
 
-function render(follow: boolean): HTMLElement {
+function conversationFile(suffix: string): FileEntry {
+  return {
+    ...file,
+    path: `/fixtures/claude/projects/-repo/seat-${suffix}.jsonl`,
+    name: `seat-${suffix}.jsonl`,
+    conversationId: `conversation_seat_${suffix.replaceAll("-", "_")}`,
+  };
+}
+
+function feedElement(
+  follow: boolean,
+  setFollow: (value: boolean) => void,
+  feedFile: FileEntry,
+): ReactElement {
+  return (
+    <LogFeed
+      file={feedFile}
+      showSvc={false}
+      lineFilter=""
+      onStatus={() => undefined}
+      paused
+      follow={follow}
+      setFollow={setFollow}
+      compact
+    />
+  );
+}
+
+function transcriptWithUpdates(idPrefix: string, textPrefix: string, count: number): string[] {
+  return [
+    ...TRANSCRIPT,
+    ...Array.from({ length: count }, (_, index) => JSON.stringify({
+      type: "assistant",
+      uuid: `uuid-${idPrefix}-${index}`,
+      timestamp: AT(3 + index),
+      message: { role: "assistant", content: [{ type: "text", text: `${textPrefix} ${index + 1}.` }] },
+    })),
+  ];
+}
+
+function render(
+  follow: boolean,
+  setFollow: (value: boolean) => void = () => undefined,
+  feedFile: FileEntry = file,
+): HTMLElement {
   const host = dom.document.createElement("div");
   dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
   roots.add(root);
   flushSync(() => {
-    root.render(
-      <LogFeed
-        file={file}
-        showSvc={false}
-        lineFilter=""
-        onStatus={() => undefined}
-        paused
-        follow={follow}
-        setFollow={() => undefined}
-        compact
-      />,
-    );
+    root.render(feedElement(follow, setFollow, feedFile));
   });
   return host as unknown as HTMLElement;
+}
+
+function setScrollerGeometry(element: HTMLElement, height: number, viewport: number, initialTop: number) {
+  let scrollHeight = height;
+  let top = initialTop;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    clientHeight: { configurable: true, get: () => viewport },
+    scrollTop: {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(Number(value), scrollHeight - viewport));
+      },
+    },
+  });
+  return {
+    setHeight: (value: number) => { scrollHeight = value; },
+    setTop: (value: number) => { element.scrollTop = value; },
+  };
+}
+
+function touchEvent(type: "touchstart" | "touchmove" | "touchend", clientY?: number): Event {
+  const event = new dom.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "touches", {
+    value: clientY === undefined ? [] : [{ clientX: 20, clientY }],
+  });
+  return event as unknown as Event;
+}
+
+function pointerEvent(type: "pointerdown" | "pointerup", clientX: number): Event {
+  return new dom.PointerEvent(type, {
+    bubbles: true,
+    button: 0,
+    clientX,
+    clientY: 100,
+    pointerType: "mouse",
+  }) as unknown as Event;
+}
+
+function setScrollerPointerGeometry(element: HTMLElement, contentWidth: number, totalWidth: number): void {
+  Object.defineProperties(element, {
+    clientLeft: { configurable: true, value: 0 },
+    clientWidth: { configurable: true, value: contentWidth },
+  });
+  element.getBoundingClientRect = () => ({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: totalWidth,
+    bottom: element.clientHeight,
+    width: totalWidth,
+    height: element.clientHeight,
+    toJSON: () => ({}),
+  });
 }
 
 async function settle(host: HTMLElement, selector: string, timeoutMs = 4_000): Promise<void> {
@@ -224,4 +321,356 @@ test("with the magnet released the drafts pin above the composer instead of stay
      inline copy is gone rather than doubled. */
   expect(host.querySelector("[data-log-feed-scroller]")!.contains(row)).toBe(false);
   expect(host.querySelectorAll('[data-reply-suggestions="inline"]')).toHaveLength(0);
+});
+
+test("a floating pill row with no vertical range forwards vertical wheel movement to the feed", async () => {
+  const host = render(false);
+  await settle(host, '[data-reply-suggestions="floating"]');
+
+  const row = host.querySelector('[data-reply-suggestions="floating"]') as HTMLElement;
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  setScrollerGeometry(row, 40, 40, 0);
+  setScrollerGeometry(scroller, 1_000, 200, 600);
+
+  flushSync(() => {
+    row.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 }) as unknown as Event);
+  });
+
+  expect(scroller.scrollTop).toBe(480);
+
+  setScrollerGeometry(row, 100, 40, 20);
+  flushSync(() => {
+    row.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -20 }) as unknown as Event);
+  });
+  expect(scroller.scrollTop).toBe(480);
+});
+
+test("an upward wheel survives a concurrent glue and releases the scroll magnet on the first gesture", () => {
+  const originalNow = Date.now;
+  const fixedNow = originalNow();
+  Date.now = () => fixedNow;
+  try {
+    const followChanges: boolean[] = [];
+    const host = render(true, (value) => followChanges.push(value));
+    const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+    const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+
+    flushSync(() => {
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -20 }) as unknown as Event);
+      geometry.setHeight(1_100);
+      for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+      geometry.setTop(880);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    });
+
+    expect(scroller.scrollTop).toBe(880);
+    expect(followChanges).toEqual([false]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("a burst of tail records cannot move the viewport down during an upward wheel gesture", () => {
+  const followChanges: boolean[] = [];
+  const feedFile = conversationFile("wheel-burst");
+  const host = render(true, (value) => followChanges.push(value), feedFile);
+  const root = [...roots].at(-1)!;
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+  const viewportPositions = [scroller.scrollTop];
+
+  try {
+    flushSync(() => {
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 }) as unknown as Event);
+    });
+
+    for (let record = 1; record <= 3; record += 1) {
+      tailState.lines = transcriptWithUpdates("wheel-burst", "Burst update", record);
+      geometry.setHeight(1_000 + record * 100);
+      flushSync(() => {
+        root.render(feedElement(true, (value) => followChanges.push(value), feedFile));
+      });
+      viewportPositions.push(scroller.scrollTop);
+    }
+
+    expect(viewportPositions).toEqual([800, 800, 800, 800]);
+    expect(followChanges).toEqual([false]);
+  } finally {
+    tailState.lines = TRANSCRIPT;
+  }
+});
+
+test("a burst of tail records cannot move the viewport down during an upward touch gesture", () => {
+  const followChanges: boolean[] = [];
+  const feedFile = conversationFile("touch-burst");
+  const host = render(true, (value) => followChanges.push(value), feedFile);
+  const root = [...roots].at(-1)!;
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+  const viewportPositions = [scroller.scrollTop];
+
+  try {
+    flushSync(() => {
+      scroller.dispatchEvent(touchEvent("touchstart", 400));
+      scroller.dispatchEvent(touchEvent("touchmove", 460));
+    });
+
+    for (let record = 1; record <= 3; record += 1) {
+      tailState.lines = transcriptWithUpdates("touch-burst", "Touch burst update", record);
+      geometry.setHeight(1_000 + record * 100);
+      flushSync(() => {
+        root.render(feedElement(true, (value) => followChanges.push(value), feedFile));
+      });
+      viewportPositions.push(scroller.scrollTop);
+    }
+
+    expect(viewportPositions).toEqual([800, 800, 800, 800]);
+    expect(followChanges).toEqual([false]);
+  } finally {
+    tailState.lines = TRANSCRIPT;
+  }
+});
+
+test("follow stays disarmed across further arrivals and resizes until the operator reaches bottom", () => {
+  const followChanges: boolean[] = [];
+  const feedFile = conversationFile("durable-release");
+  const host = render(true, (value) => followChanges.push(value), feedFile);
+  const root = [...roots].at(-1)!;
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+
+  try {
+    flushSync(() => {
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+      geometry.setTop(600);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    });
+
+    const releasedPositions: number[] = [];
+    for (let record = 1; record <= 3; record += 1) {
+      tailState.lines = transcriptWithUpdates("durable-release", "Durable update", record);
+      geometry.setHeight(1_000 + record * 100);
+      flushSync(() => {
+        root.render(feedElement(true, (value) => followChanges.push(value), feedFile));
+        for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+      });
+      releasedPositions.push(scroller.scrollTop);
+    }
+
+    expect(releasedPositions).toEqual([600, 600, 600]);
+    expect(followChanges).toEqual([false]);
+
+    flushSync(() => {
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }) as unknown as Event);
+      geometry.setTop(1_100);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    });
+    expect(followChanges).toEqual([false, true]);
+
+    tailState.lines = [
+      ...tailState.lines,
+      JSON.stringify({
+        type: "assistant",
+        uuid: "uuid-after-bottom-return",
+        timestamp: AT(6),
+        message: { role: "assistant", content: [{ type: "text", text: "Following again." }] },
+      }),
+    ];
+    geometry.setHeight(1_400);
+    flushSync(() => {
+      root.render(feedElement(true, (value) => followChanges.push(value), feedFile));
+    });
+    expect(scroller.scrollTop).toBe(1_200);
+  } finally {
+    tailState.lines = TRANSCRIPT;
+  }
+});
+
+test("a pointer-driven scrollbar return to bottom re-arms follow without authorizing content clicks", () => {
+  const followChanges: boolean[] = [];
+  const host = render(true, (value) => followChanges.push(value), conversationFile("scrollbar-return"));
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+  setScrollerPointerGeometry(scroller, 300, 320);
+
+  flushSync(() => {
+    scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => {
+    scroller.dispatchEvent(pointerEvent("pointerdown", 100));
+    geometry.setTop(800);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    scroller.dispatchEvent(pointerEvent("pointerup", 100));
+  });
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => {
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    scroller.dispatchEvent(pointerEvent("pointerdown", 310));
+    geometry.setTop(700);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => {
+    geometry.setTop(800);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    scroller.dispatchEvent(pointerEvent("pointerup", 310));
+  });
+  expect(followChanges).toEqual([false, true]);
+});
+
+test("an ended scrollbar gesture cannot authorize a later uncaused bottom-reaching scroll", () => {
+  const followChanges: boolean[] = [];
+  const host = render(true, (value) => followChanges.push(value), conversationFile("programmatic-bottom"));
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+  setScrollerPointerGeometry(scroller, 300, 320);
+
+  flushSync(() => {
+    scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => {
+    scroller.dispatchEvent(pointerEvent("pointerdown", 310));
+    geometry.setTop(700);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    scroller.dispatchEvent(pointerEvent("pointerup", 310));
+  });
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => {
+    geometry.setTop(800);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  expect(followChanges).toEqual([false]);
+});
+
+test("the jump-to-latest control clears the durable disarm and restores live-tail follow", async () => {
+  const followChanges: boolean[] = [];
+  const feedFile = conversationFile("jump-latest");
+  const host = render(true, (value) => followChanges.push(value), feedFile);
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_200, 200, 1_000);
+
+  flushSync(() => {
+    scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -200 }) as unknown as Event);
+    geometry.setTop(600);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  });
+  await settle(host, 'button[aria-label="Back to the live tail"]');
+
+  const jump = host.querySelector('button[aria-label="Back to the live tail"]') as HTMLButtonElement;
+  expect(jump).toBeTruthy();
+  expect(followChanges).toEqual([false]);
+
+  flushSync(() => { jump.click(); });
+
+  expect(scroller.scrollTop).toBe(1_000);
+  expect(followChanges).toEqual([false, true]);
+  expect(host.querySelector('button[aria-label="Back to the live tail"]')).toBeNull();
+  expect(host.querySelector("[data-live-tail-pill]")).toBeTruthy();
+});
+
+test("growth before an upward wheel survives resize glue and stays released through the next append", () => {
+  const originalNow = Date.now;
+  const fixedNow = originalNow();
+  Date.now = () => fixedNow;
+  try {
+    const followChanges: boolean[] = [];
+    const feedFile = {
+      ...file,
+      path: "/fixtures/claude/projects/-repo/seat-growth-before-input.jsonl",
+      name: "seat-growth-before-input.jsonl",
+      conversationId: "conversation_seat_growth_before_input",
+    };
+    const host = render(true, (value) => followChanges.push(value), feedFile);
+    const root = [...roots].at(-1)!;
+    const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+    const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+
+    flushSync(() => {
+      geometry.setHeight(1_100);
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 }) as unknown as Event);
+      for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+      geometry.setTop(780);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    });
+
+    expect(scroller.scrollTop).toBe(780);
+    expect(followChanges).toEqual([false]);
+
+    tailState.lines = [
+      ...TRANSCRIPT,
+      JSON.stringify({
+        type: "assistant",
+        uuid: "uuid-after-release",
+        timestamp: AT(3),
+        message: { role: "assistant", content: [{ type: "text", text: "A later update arrived." }] },
+      }),
+    ];
+    geometry.setHeight(1_200);
+    flushSync(() => {
+      root.render(
+        <LogFeed
+          file={feedFile}
+          showSvc={false}
+          lineFilter=""
+          onStatus={() => undefined}
+          paused
+          follow={false}
+          setFollow={(value) => followChanges.push(value)}
+          compact
+        />,
+      );
+    });
+
+    expect(scroller.scrollTop).toBe(780);
+    expect(followChanges).toEqual([false]);
+  } finally {
+    tailState.lines = TRANSCRIPT;
+    Date.now = originalNow;
+  }
+});
+
+test("a wheel that cannot move the feed does not tag a later settling scroll as user initiated", () => {
+  const originalNow = Date.now;
+  const fixedNow = originalNow();
+  Date.now = () => fixedNow;
+  try {
+    const followChanges: boolean[] = [];
+    const host = render(
+      true,
+      (value) => followChanges.push(value),
+      {
+        ...file,
+        path: "/fixtures/claude/projects/-repo/seat-settling.jsonl",
+        name: "seat-settling.jsonl",
+        conversationId: "conversation_seat_settling",
+      },
+    );
+    const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+    const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+
+    flushSync(() => {
+      scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 120 }) as unknown as Event);
+      geometry.setTop(600);
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+    });
+
+    expect(scroller.scrollTop).toBe(800);
+    expect(followChanges).toEqual([]);
+  } finally {
+    Date.now = originalNow;
+  }
 });

@@ -10,8 +10,9 @@ import { darwinProcessIdentity } from "@/lib/proc/darwinIdentity";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "./accountMutation";
 
+import { readClaudeCredentials } from "./claudeCredentials";
 import type { LoginOperationSummary, LoginPhase, LoginResult } from "./contracts";
-import { claudeAccountForSpawn, claudeManagedEnvironment, isManagedClaudeHome, legacyClaudeHome, managedClaudeCredentialIsSafe } from "./claude";
+import { claudeAccountForSpawn, claudeManagedEnvironment, isManagedClaudeHome, legacyClaudeHome } from "./claude";
 
 const OUTPUT_LIMIT = 64 * 1024;
 const CODE_LIMIT = 8 * 1024;
@@ -580,7 +581,7 @@ export class ClaudeLoginSupervisor {
       const status = await this.ports.status(home);
       const current = this.operations.get(id);
       if (!current || current.phase !== "verifying") return;
-      const credentialsSafe = !status.loggedIn || managedClaudeCredentialIsSafe(home, true);
+      const credentialsSafe = !status.indeterminate && isSupervisedClaudeHome(home) && readClaudeCredentials(home).state === "present";
       try {
         this.finish(
           id,
@@ -664,10 +665,11 @@ export class ClaudeLoginSupervisor {
           try {
             const account = claudeAccountForSpawn(inherited.accountId);
             // Verify recovery for either a safe managed home or the exact legacy
-            // Main home, and only when its credential file passes the safety check.
-            if (isSupervisedClaudeHome(account.home) && managedClaudeCredentialIsSafe(account.home, true)) {
+            // Main home with account-scoped credential evidence.
+            if (isSupervisedClaudeHome(account.home) && readClaudeCredentials(account.home).state === "present") {
               const status = await this.ports.status(account.home);
-              authenticated = status.loggedIn;
+              authenticated = status.loggedIn && !status.indeterminate
+                && isSupervisedClaudeHome(account.home) && readClaudeCredentials(account.home).state === "present";
             }
           } catch { /* recovery publishes interruption when verification fails */ }
         }

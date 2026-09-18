@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
+import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan } from "@/lib/scanner/scanCache";
 import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
@@ -30,8 +31,11 @@ type ProjectionResult = {
   cacheStatus: "hit" | "joined" | "miss" | "stale";
 };
 type CachedProjection = { key: string; representation: ProjectionRepresentation };
+// v2: pre-#1718 full bodies lack lastAgentWorkAt even after a fresh scan.
+// Invalidate them independently of the persisted scan's schema.
+const PERSISTED_PROJECTION_VERSION = 2;
 type PersistedProjection = {
-  version: 1;
+  version: typeof PERSISTED_PROJECTION_VERSION;
   bodyFile: string;
   contentType: string;
   etag: string;
@@ -110,8 +114,9 @@ function projectionBaseKey(
 
 function projectionScopeKey(
   pinnedPath: string | undefined,
+  summary = false,
 ): string {
-  return JSON.stringify([pinnedPath ?? null]);
+  return JSON.stringify(summary ? [pinnedPath ?? null, "summary"] : [pinnedPath ?? null]);
 }
 
 function projectionKey(baseKey: string): string {
@@ -159,7 +164,7 @@ function rememberProjection(scopeKey: string, key: string, representation: Proje
 function validPersistedProjection(value: unknown): value is PersistedProjection {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return candidate.version === 1
+  return candidate.version === PERSISTED_PROJECTION_VERSION
     && typeof candidate.bodyFile === "string"
     && new RegExp(`^${PERSISTED_PROJECTION_BODY_PREFIX}[0-9a-f]{40}\\.json$`).test(candidate.bodyFile)
     && typeof candidate.contentType === "string"
@@ -209,7 +214,7 @@ async function persistProjection(representation: ProjectionRepresentation): Prom
   await fs.promises.writeFile(bodyTemporary, representation.body, { encoding: "utf8", mode: 0o600 });
   await fs.promises.rename(bodyTemporary, bodyPath);
   const metadata: PersistedProjection = {
-    version: 1,
+    version: PERSISTED_PROJECTION_VERSION,
     bodyFile,
     contentType: representation.contentType,
     etag: representation.etag,
@@ -333,6 +338,16 @@ export async function GET(request: Request): Promise<Response> {
     requiredGeneration,
   );
 
+  /* One-time, in the long-lived server process rather than in the per-request
+     response worker: the guard there would be re-armed on every spawn, and the
+     board must not pay a task-file transaction per poll. It runs here, after
+     the scan and before the projection that reads the tasks, because what it
+     decides is membership — which task still holds a conversation THIS BOARD
+     carries — and only the scan can answer that. A partial scan is not an
+     answer: it would report a conversation as gone because it had not been
+     reached yet, so an incomplete one defers to the next request. */
+  if (scan.snapshot.complete) ensureEmptyTaskBoardVisibilityMigration(scan.snapshot.files);
+
   /* Completion retries already hold the last successful representation. While
      its requested scan is still running, rebuilding the multi-store projection
      only delays that scan and can form a self-sustaining retry storm. */
@@ -351,8 +366,9 @@ export async function GET(request: Request): Promise<Response> {
 
   const baseKey = projectionBaseKey(scan, pinnedPath);
   const key = projectionKey(baseKey);
-  const scopeKey = projectionScopeKey(pinnedPath);
-  warmPersistedProjection(scopeKey, pinnedPath);
+  const summary = url.searchParams.get("view") === "summary";
+  const scopeKey = projectionScopeKey(pinnedPath, summary);
+  if (!summary) warmPersistedProjection(scopeKey, pinnedPath);
   const projected = await projectionFor(scopeKey, key, request, scan);
   const notModified = request.headers.get("if-none-match") === projected.representation.etag;
   const projectionTiming = [

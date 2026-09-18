@@ -1,4 +1,5 @@
-import { RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse } from "@/lib/runtime/contracts";
+import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
+import { RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -6,6 +7,7 @@ import { RuntimeJournal } from "./journal";
 import type { ViewerDeploymentCoordinator } from "./deployment";
 import type { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
 import { PreserializedJson } from "./preserializedJson";
+import type { RuntimeHostReadyEvidence } from "./runtimeHostStartup";
 
 export { RuntimeHostFence } from "./runtimeHostFence";
 
@@ -20,6 +22,7 @@ export class RuntimeHost {
     private readonly structuredHosts = structuredHostsEnabled(),
     private readonly signalFlowPipelineProgress?: () => void,
     private readonly mcpHealthProbeAdmissions?: McpHealthProbeAdmissions,
+    private readonly runtimeHostHealth?: () => RuntimeHostReadyEvidence,
   ) {}
 
   async recoverConsumers(): Promise<number> {
@@ -80,7 +83,12 @@ export class RuntimeHost {
   async handle(request: RuntimeSocketRequest, options: { signal?: AbortSignal } = {}): Promise<RuntimeSocketResponse> {
     try {
       let result: unknown;
-      if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson());
+      if (request.method === "runtime-host-health") {
+        if (!this.runtimeHostHealth) throw new Error("runtime-host startup evidence is unavailable");
+        result = this.runtimeHostHealth();
+      } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
+        ? request.params.voiceBodiesFor.filter((id): id is string => typeof id === "string").slice(0, 1)
+        : undefined));
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),
@@ -112,6 +120,15 @@ export class RuntimeHost {
         result = currentRetryLeaf
           ? this.journal.currentRetryResult(String(request.params?.operationId ?? ""))
           : this.journal.operationResult(String(request.params?.operationId ?? ""));
+      } else if (request.method === "operation-delivery-action") {
+        const action = request.params?.action;
+        if (action !== "discard" && action !== "retry") {
+          throw new Error("runtime delivery action is invalid");
+        }
+        result = this.journal.claimDeliveryAction(
+          String(request.params?.operationId ?? ""),
+          action,
+        );
       } else if (request.method === "operation-retry") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const nextIdempotencyKey = request.params?.nextIdempotencyKey;
@@ -147,6 +164,24 @@ export class RuntimeHost {
           throw new Error("runtime producer cursor is invalid");
         }
         result = this.journal.producerCursor(producerKind, eventKeyPrefix);
+      } else if (request.method === "native-queue-read") {
+        if (typeof request.params?.conversationId !== "string") throw new Error("conversationId is invalid");
+        result = this.journal.nativeQueueRead(request.params.conversationId);
+      } else if (request.method === "native-queue-transition") {
+        if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+        const transition = request.params?.transition as NativeQueueTransition | undefined;
+        if (!transition || !["prepared", "acknowledged", "observed-queued", "withdrawn", "removed", "refused", "uncertain", "proven"].includes(transition.phase)) throw new Error("native queue transition is invalid");
+        result = this.journal.nativeQueueTransition(String(request.params?.operationId ?? ""), transition);
+      } else if (request.method === "native-queue-settle-compacted") {
+        if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+        const params = request.params as Partial<NativeQueueCompactedProof> | undefined;
+        const binding = params?.binding;
+        const proof = canonicalNativeQueueProof(params?.proof);
+        if (typeof params?.conversationId !== "string" || typeof params.entryId !== "string"
+          || !binding || typeof binding !== "object" || typeof binding.threadId !== "string" || (binding.accountId !== null && typeof binding.accountId !== "string")
+          || !proof) throw new Error("native queue compacted proof is invalid");
+        result = this.journal.nativeQueueSettleCompacted({ conversationId: params.conversationId, entryId: params.entryId,
+          binding: { threadId: binding.threadId, accountId: binding.accountId }, proof });
       } else if (request.method === "operation-transition") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const status = request.params?.status;
@@ -164,11 +199,32 @@ export class RuntimeHost {
           throw new Error("runtime operation transition status is invalid");
         }
         const details = request.params?.details;
+        const fromStatuses = request.params?.fromStatuses;
+        const awaitProjection = request.params?.awaitProjection;
+        if (awaitProjection !== undefined && typeof awaitProjection !== "boolean") {
+          throw new Error("runtime operation projection retention flag is invalid");
+        }
+        if (fromStatuses !== undefined && (!Array.isArray(fromStatuses)
+          || fromStatuses.some((candidate) => typeof candidate !== "string"
+            || !RUNTIME_RECEIPT_STATUSES.includes(candidate as RuntimeReceiptStatus)))) {
+          throw new Error("runtime operation transition fence is invalid");
+        }
         result = this.journal.transitionOperation(
           String(request.params?.operationId ?? ""),
           status as Exclude<RuntimeReceiptStatus, "pending">,
           details && typeof details === "object" ? details as { turnId?: string | null; queuePosition?: number | null; reason?: string | null } : {},
+          {
+            ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
+            ...(awaitProjection === true ? { awaitProjection: true } : {}),
+          },
         );
+      } else if (request.method === "operation-projection-ack") {
+        if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+        const operationIds = request.params?.operationIds;
+        if (!Array.isArray(operationIds) || operationIds.some((operationId) => typeof operationId !== "string" || !operationId)) {
+          throw new Error("runtime projection acknowledgement ids are invalid");
+        }
+        result = this.journal.acknowledgeTerminalProjection(operationIds as string[]);
       } else if (request.method === "viewer-deployment-request") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = await this.deployments.requestViewerDeployment({
@@ -176,6 +232,9 @@ export class RuntimeHost {
           ref: typeof request.params?.ref === "string" ? request.params.ref : undefined,
           idempotencyKey: String(request.params?.idempotencyKey ?? ""),
         });
+      } else if (request.method === "viewer-deployment-cancel") {
+        if (!this.deployments) throw new Error("viewer deployments are disabled");
+        result = this.deployments.cancelViewerDeployment(String(request.params?.deploymentId ?? ""));
       } else if (request.method === "viewer-deployment-read") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = this.deployments.readViewerDeployment(String(request.params?.deploymentId ?? ""));

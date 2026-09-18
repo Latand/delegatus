@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { createSpawnAttempt, spawnRequestBody } from "@/components/draftSpawn";
@@ -24,7 +24,10 @@ import { POST } from "./route";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const routeSandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-route-tests-"));
-process.env.LLV_STATE_DIR = path.join(routeSandbox, "state");
+
+beforeAll(() => {
+  process.env.LLV_STATE_DIR = path.join(routeSandbox, "state");
+});
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -107,7 +110,7 @@ test("spawn admission rejects an explicit model outside the selected engine cata
 
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   });
 });
 
@@ -180,6 +183,74 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
     idempotencyKey: "spawn:operator_spawn_gesture_20260815",
     resolvedAttribution: expect.objectContaining({ engine: "claude" }),
   })]);
+});
+
+test("a corrupt WakaTime state file does not refuse an authorized direct spawn", async () => {
+  const { recordDirectOperatorWakatimeActivity } = await import("@/lib/wakatime/operatorActivity");
+  const { enqueueProductionOperatorHeartbeat } = await import("@/lib/wakatime/sync");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "operator-spawn-corrupt-state-"));
+  const stateFile = path.join(cwd, "wakatime-state.json");
+  /* The production shape of this outage: an all-NUL state file that throws in
+     `JSON.parse` before the heartbeat queue can be opened. */
+  const corruptBytes = Buffer.alloc(4_096, 0);
+  fs.writeFileSync(stateFile, corruptBytes, { mode: 0o600 });
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const outcomes: string[] = [];
+  const dependencies = {
+    ...structuredRouteDependencies(cwd),
+    registry: () => store,
+    defer: () => {},
+    recordOperatorActivity: (input: Parameters<typeof recordDirectOperatorWakatimeActivity>[0]) =>
+      recordDirectOperatorWakatimeActivity(input, {
+        enabled: () => true,
+        now: () => Date.parse("2026-09-10T09:00:00.000Z"),
+        registrySnapshot: () => { throw new Error("resolved attribution should avoid registry access"); },
+        enqueue: (heartbeat) => enqueueProductionOperatorHeartbeat(heartbeat, stateFile, () => true),
+        reportStorageFailure: (event, fields) => { outcomes.push(`${event}:${String(fields.outcome)}`); },
+      }),
+  };
+  const previous = {
+    transport: process.env.LLV_SPAWN_TRANSPORT,
+    hosts: process.env.LLV_STRUCTURED_HOSTS,
+    events: process.env.LLV_RUNTIME_EVENTS,
+    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
+    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
+  };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  try {
+    const spawned = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: {
+        host: "127.0.0.1",
+        origin: "http://127.0.0.1",
+        "sec-fetch-site": "same-origin",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "claude · spawn under a corrupt activity state",
+        engine: "claude",
+        cwd,
+        /* Bracketed like the fixture above: a bare `prompt:` at the head of a
+           source line reads as transcript content to the publication gate. */
+        ["prompt"]: "inspect",
+        clientAttemptId: "operator_spawn_corrupt_state_20260910",
+      }),
+    }), dependencies);
+
+    expect(spawned.status).toBe(202);
+    expect(outcomes).toEqual(["operator_activity_not_stored:state_unreadable"]);
+    expect(fs.readFileSync(stateFile)).toEqual(corruptBytes);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      const envKey = ({ transport: "LLV_SPAWN_TRANSPORT", hosts: "LLV_STRUCTURED_HOSTS", events: "LLV_RUNTIME_EVENTS", socket: "LLV_RUNTIME_HOST_SOCKET", ui: "NEXT_PUBLIC_RUNTIME_UI" } as const)[key as keyof typeof previous];
+      if (value === undefined) delete process.env[envKey];
+      else process.env[envKey] = value;
+    }
+  }
 });
 
 test("new semantic, empty, and image-only prompts require an explicit semantic title", async () => {
@@ -593,7 +664,7 @@ test("derived, custom-title, and migrated generic receipts preserve pre-title re
     const replay = await post(restarted, { title: null });
 
     expect(replay.status).toBe(202);
-    expect(await replay.json()).toMatchObject({ launchId: firstBody.launchId, path: sharedPath });
+    expect(await replay.json()).toMatchObject({ launchId: firstBody.launchId, path: null });
   } finally {
     if (previous.transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
     else process.env.LLV_SPAWN_TRANSPORT = previous.transport;
@@ -2826,7 +2897,7 @@ test("structured replay keeps its admitted account after routing changes", async
     routedAccountId = "account-b";
 
     const replay = await POST.withDependencies(request(), dependencies);
-    expect(accountResolutions).toEqual(["healthy:account-a", "exact:account-a"]);
+    expect(accountResolutions).toEqual(["healthy:account-a", "exact:account-a", "exact:account-a"]);
     expect(replay.status).toBe(202);
     expect(await replay.json()).toMatchObject({
       launchId: admittedBody.launchId,
@@ -2947,7 +3018,7 @@ test("unknown Codex models reject before image blob and receipt mutation", async
     }), dependencies);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
     });
     expect(storageCalled).toBeFalse();
     expect(Object.keys(agentRegistry().snapshot().receipts).sort()).toEqual(beforeReceipts);
@@ -3212,6 +3283,83 @@ test("a terminal structured replay returns its reserved identity and retry-safe 
   }
 });
 
+test("a concurrent HTTP replay withholds a staged transcript path (#1123)", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "staged-http-replay-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
+  const previousEvents = process.env.LLV_RUNTIME_EVENTS;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const previousUi = process.env.NEXT_PUBLIC_RUNTIME_UI;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "runtime.sock");
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  const dependencies = {
+    ...structuredRouteDependencies(cwd),
+    registry: () => store,
+    defer: () => {},
+  } satisfies SpawnRouteTestDependencies;
+  const request = () => new NextRequest("http://127.0.0.1:8898/api/spawn", {
+    method: "POST",
+    headers: {
+      host: "127.0.0.1:8898",
+      origin: "http://127.0.0.1:8898",
+      "sec-fetch-site": "same-origin",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      title: "Inspect staged replay publication",
+      engine: "claude",
+      cwd,
+      "prompt": "inspect",
+      clientAttemptId: "staged_http_replay_20260830",
+    }),
+  });
+
+  try {
+    const admitted = await POST.withDependencies(request(), dependencies);
+    expect(admitted.status).toBe(202);
+    const receipt = store.spawnReceiptForClientAttempt("staged_http_replay_20260830");
+    if (!receipt) throw new Error("spawn receipt was unavailable");
+    const stagedPath = path.join(cwd, "provisional.jsonl");
+    store.stageStructuredSpawn(receipt.launchId, {
+      key: { engine: "claude", sessionId: "provisional-session" },
+      artifactPath: stagedPath,
+      cwd,
+      accountId: receipt.accountId,
+      launchProfile: receipt.launchProfile,
+      status: "starting",
+      host: null,
+      structuredHost: null,
+      claimEpoch: 0,
+      claimOwner: null,
+      pendingAction: "spawn",
+    });
+
+    const replay = await POST.withDependencies(request(), dependencies);
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toMatchObject({
+      launchId: receipt.launchId,
+      conversationId: receipt.conversationId,
+      state: "path-pending",
+      path: null,
+    });
+  } finally {
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
+    else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousHosts === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
+    if (previousEvents === undefined) delete process.env.LLV_RUNTIME_EVENTS;
+    else process.env.LLV_RUNTIME_EVENTS = previousEvents;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    if (previousUi === undefined) delete process.env.NEXT_PUBLIC_RUNTIME_UI;
+    else process.env.NEXT_PUBLIC_RUNTIME_UI = previousUi;
+  }
+});
+
 test("a clientAttemptId replay recovers the reserved card from runtime evidence", async () => {
   const cwd = fs.mkdtempSync(path.join(routeSandbox, "p0-282-runtime-replay-"));
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
@@ -3292,6 +3440,8 @@ test("a clientAttemptId replay recovers the reserved card from runtime evidence"
     const admitted = await POST.withDependencies(request(), dependencies);
     const admittedBody = await admitted.json();
     await runDeferred(deferred);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "user", message: { content: "Own issue #282" } })}\n`);
 
     const replay = await POST.withDependencies(request(), dependencies);
     expect(replay.status).toBe(200);
@@ -3778,5 +3928,50 @@ test("a structured launch that dies on an unreachable host terminalizes its rece
     else process.env.LLV_RUNTIME_HOST_SOCKET = previous.socket;
     if (previous.ui === undefined) delete process.env.NEXT_PUBLIC_RUNTIME_UI;
     else process.env.NEXT_PUBLIC_RUNTIME_UI = previous.ui;
+  }
+});
+
+test("Astra and Sol orchestrator spawns carry top-tier effort and images into the launch profile", async () => {
+  const saved = { ...process.env };
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "codex-seat-"));
+  Object.assign(process.env, {
+    LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1",
+    LLV_RUNTIME_EVENTS: "1", NEXT_PUBLIC_RUNTIME_UI: "1",
+    LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "runtime.sock"),
+  });
+  const codexBinary = path.join(cwd, "codex-test");
+  fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[]'\n", { mode: 0o755 });
+  process.env.LLV_CODEX_BINARY = codexBinary;
+  const base = structuredRouteDependencies(cwd);
+  const profiles: Array<{ model: string | null; effort: string | null }> = [];
+  const deps: SpawnRouteTestDependencies = {
+    ...base,
+    resolveHealthySpawnAccount: async () => ({
+      engine: "codex", accountId: "codex-test", kind: "managed",
+      home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "sessions"), env: { NODE_ENV: "test" },
+    }),
+    spawnStructuredConversation: async (input) => {
+      profiles.push(input.receipt.launchProfile);
+      return base.spawnStructuredConversation!(input);
+    },
+  };
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex").toString("base64");
+  try {
+    for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
+      for (const effort of ["max", "ultra"]) {
+        const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+          method: "POST",
+          headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
+          body: JSON.stringify({ title: "Coordinate project", clientAttemptId: `seat_${model.replaceAll(".", "_")}_${effort}`, engine: "codex", model, effort, role: "orchestrator", cwd, prompt: "Coordinate the project", images: [{ base64: png, mime: "image/png" }] }),
+        }), deps);
+        expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
+        expect(profiles.at(-1)).toMatchObject({ model, effort });
+      }
+    }
+  } finally {
+    for (const key of ["LLV_CODEX_BINARY", "LLV_SPAWN_TRANSPORT", "LLV_STRUCTURED_HOSTS", "LLV_RUNTIME_EVENTS", "NEXT_PUBLIC_RUNTIME_UI", "LLV_RUNTIME_HOST_SOCKET"]) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
   }
 });

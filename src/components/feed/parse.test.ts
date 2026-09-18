@@ -17,10 +17,11 @@ const plainFile = { path: "/tmp/x.output", engine: "codex", fmt: "plain", activi
    which differ between a windowed parse and a start-0 one-shot for the same
    logical line. Both are opaque provenance tokens; normalize them out before
    structural comparison. */
-function normalize(items: Item[]): unknown {
+function normalize(items: Item[], start = 0): unknown {
   return JSON.parse(
     JSON.stringify(items, (key, value) => {
       if (key === "srcCall" || key === "srcResult") return 0;
+      if (key === "anchorKey" && typeof value === "string") return value.replace(/^row:(\d+):/, (_, src) => `row:${Number(src) - start}:`);
       return typeof value === "string" && (key === "id" || key === "ids") ? value.replace(/^plain-\d+-/, "plain-N-") : value;
     }),
   );
@@ -50,7 +51,7 @@ function assertParity(file: FileEntry, lines: string[], opts: { cap?: number; ch
     }
     const incremental = session.feed(window, start, live);
     const oneShot = buildFeed(liveFile, window, showSvc, "");
-    expect(normalize(incremental.items.map((entry) => entry.item))).toEqual(normalize(oneShot.items));
+    expect(normalize(incremental.items.map((entry) => entry.item), start)).toEqual(normalize(oneShot.items));
     expect(incremental.hiddenServiceCount).toBe(oneShot.hiddenServiceCount);
   }
   return session;
@@ -102,7 +103,122 @@ function itemsOfKind(feed: ReturnType<typeof buildFeed>, kind: Item["kind"]) {
   return feed.items.filter((item) => item.kind === kind);
 }
 
+describe("feed session reuse across panes (#1432)", () => {
+  const record = (text: string, index: number) =>
+    JSON.stringify({ type: "assistant", uuid: `row-${index}`, timestamp: "2026-08-31T10:00:00.000Z", message: { role: "assistant", content: [{ type: "text", text }] } });
+
+  test("a window of the same length with different bytes is re-parsed, never served from the stale snapshot", () => {
+    /* A pooled session outlives its pane and can meet the same path rewritten
+       in place — the same line count, other content. Same start, same end. */
+    const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const first = session.feed([record("First mandate accepted.", 1)], 0, false);
+    expect(first.items.map((entry) => (entry.item as { text?: string }).text)).toEqual(["First mandate accepted."]);
+
+    const rewritten = session.feed([record("Second mandate accepted.", 2)], 0, false);
+    expect(rewritten.items.map((entry) => (entry.item as { text?: string }).text)).toEqual(["Second mandate accepted."]);
+  });
+
+  test("an unchanged window keeps its snapshot identity and appended lines parse incrementally", () => {
+    const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const lines = [record("one", 1), record("two", 2)];
+    const first = session.feed(lines, 0, false);
+    expect(session.feed(lines, 0, false)).toBe(first);
+    const grown = session.feed([...lines, record("three", 3)], 0, false);
+    expect(grown.items.map((entry) => (entry.item as { text?: string }).text)).toEqual(["one", "two", "three"]);
+    /* Rows already parsed keep their identity: the memoised feed items skip. */
+    expect(grown.items[0]!.item).toBe(first.items[0]!.item);
+  });
+});
+
 describe("feed session parity with one-shot parse", () => {
+  test("a completed response keeps its receipt-to-completion total after the next turn starts", () => {
+    const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const firstTurn = [
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:01:00.000Z", message: { role: "user", content: "delivered after a hold" } }),
+      JSON.stringify({ type: "assistant", timestamp: "2026-08-31T10:05:32.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "First response." }] } }),
+    ];
+
+    const completed = session.feed(firstTurn, 0, false);
+    const firstResponse = completed.items.find((entry) => entry.item.kind === "prose");
+    expect(firstResponse?.responseDurationMs).toBe(272_000);
+
+    const nextTurn = [
+      ...firstTurn,
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:06:00.000Z", message: { role: "user", content: "continue" } }),
+      JSON.stringify({ type: "assistant", timestamp: "2026-08-31T10:06:01.000Z", message: { role: "assistant", stop_reason: null, content: [{ type: "text", text: "Working on it." }] } }),
+    ];
+    const later = session.feed(nextTurn, 0, true);
+    const retained = later.items.find((entry) => entry.item.kind === "prose" && entry.item.text === "First response.");
+    expect(retained?.responseDurationMs).toBe(272_000);
+  });
+
+  test("a completed response keeps its receipt-to-completion total after its receipt leaves the window", () => {
+    const session = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const lines = [
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:01:00.000Z", message: { role: "user", content: "delivered after a hold" } }),
+      JSON.stringify({ type: "assistant", timestamp: "2026-08-31T10:05:32.000Z", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Completed response." }] } }),
+    ];
+
+    const completed = session.feed(lines, 0, false);
+    const completedResponse = completed.items.find((entry) => entry.item.kind === "prose");
+    expect(completedResponse?.responseDurationMs).toBe(272_000);
+
+    const slid = session.feed(lines.slice(1), 1, false);
+    const retainedResponse = slid.items.find((entry) => entry.item.kind === "prose");
+    expect(retainedResponse?.responseDurationMs).toBe(272_000);
+  });
+
+  test("a Codex structured delivery keeps its receipt-to-completion total", () => {
+    const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+    const lines = [
+      codexUserResponse("2026-08-31T10:01:00.000Z", [{ type: "input_text", text: `${CODEX_STRUCTURED_USER_MARKER}run the task` }]),
+      codexUserEvent("2026-08-31T10:01:00.000Z", `${CODEX_STRUCTURED_USER_MARKER}run the task`),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-08-31T10:01:00.050Z", payload: { type: "task_started" } }),
+      codexAssistantResponse("2026-08-31T10:05:31.000Z", "Completed response."),
+      codexAssistantEvent("2026-08-31T10:05:31.000Z", "Completed response."),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-08-31T10:05:32.000Z", payload: { type: "task_complete" } }),
+    ];
+    const response = session.feed(lines, 0, false).items.find((entry) => entry.item.kind === "prose");
+    expect(response?.responseDurationMs).toBe(272_000);
+  });
+
+  test("tool completion timestamps become the row duration", () => {
+    const lines = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-31T10:00:00.000Z",
+        message: { role: "assistant", content: [{ type: "tool_use", id: "tool-duration", name: "ToolSearch", input: { query: "duration" } }] },
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-08-31T10:00:00.750Z",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-duration", content: "found" }] },
+      }),
+    ];
+    const tool = buildFeed(claudeFile, lines, false, "").items.find((item) => item.kind === "tool");
+    if (tool?.kind !== "tool") throw new Error("expected tool row");
+    expect(tool.endTs).toBe("2026-08-31T10:00:00.750Z");
+    expect(tool.durationMs).toBe(750);
+  });
+
+  test("an action group ends at the latest parallel result", () => {
+    const lines = [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-31T10:00:00.000Z",
+        message: { role: "assistant", content: [
+          { type: "tool_use", id: "parallel-a", name: "Bash", input: { command: "first" } },
+          { type: "tool_use", id: "parallel-b", name: "ToolSearch", input: { query: "second" } },
+        ] },
+      }),
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:00:02.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "parallel-b", content: "second done" }] } }),
+      JSON.stringify({ type: "user", timestamp: "2026-08-31T10:00:05.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "parallel-a", content: "first done" }] } }),
+    ];
+    const group = buildFeed(claudeFile, lines, false, "").items.find((item) => item.kind === "cmd-group");
+    if (group?.kind !== "cmd-group") throw new Error("expected action group");
+    expect(group.t1).toBe("2026-08-31T10:00:05.000Z");
+  });
+
   test("keeps a Claude Bash command when the enclosing record carries Viewer MCP attribution", () => {
     const call = JSON.stringify({
       type: "assistant",
@@ -967,11 +1083,84 @@ describe("Codex assistant prose coalescing", () => {
   });
 });
 
+describe("Codex token usage service visibility (#1523)", () => {
+  const usage = JSON.stringify({
+    timestamp: "2026-09-01T05:00:06.002Z",
+    type: "token_usage_record",
+    payload: { input_tokens: 12, output_tokens: 5 },
+  });
+  const tokenCount = JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_tokens: 17 } } });
+  const unknown = JSON.stringify({ type: "future_record", payload: { detail: "inspectable" } });
+
+  test("hides known usage and counts it alongside token_count while retaining unknown records", () => {
+    const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+    const hidden = session.feed([usage], 0, false);
+    expect(hidden.items).toEqual([]);
+    expect(hidden.hiddenServiceCount).toBe(1);
+
+    const mixed = session.feed([usage, tokenCount, unknown], 0, false);
+    expect(mixed.items.map((entry) => entry.item)).toEqual([
+      expect.objectContaining({ kind: "record", recordType: "future_record" }),
+    ]);
+    expect(mixed.hiddenServiceCount).toBe(2);
+    expect(session.feed([usage, tokenCount, unknown], 0, false)).toBe(mixed);
+    const trimmed = session.feed([unknown], 2, false);
+    expect(trimmed.hiddenServiceCount).toBe(0);
+    expect(trimmed.items).toHaveLength(1);
+  });
+
+  test("keeps the inspectable redacted usage payload when services are enabled", () => {
+    const feed = buildFeed(codexFile, [usage, tokenCount, unknown], true, "");
+    expect(feed.hiddenServiceCount).toBe(0);
+    expect(feed.items).toEqual([
+      expect.objectContaining({ kind: "record", recordType: "token_usage_record", body: expect.stringContaining('"input_tokens": "[redacted]"') }),
+      expect.objectContaining({ kind: "svc", text: "token_count" }),
+      expect.objectContaining({ kind: "record", recordType: "future_record" }),
+    ]);
+    expect(feed.items[0]).toMatchObject({ body: expect.stringContaining('"output_tokens": "[redacted]"') });
+  });
+
+  test("preserves mirrored tools and final prose across incremental live and completed feeds", () => {
+    const fixture = fixtureLines("codex-turn-chronology-0.151.jsonl");
+    const lines = [...fixture.slice(0, -1), usage, unknown, fixture[fixture.length - 1]];
+    for (const showSvc of [false, true]) {
+      const session = assertParity(codexFile, lines, { chunks: [1], live: true, showSvc });
+      const completed = session.feed(lines, 0, false);
+      const items = completed.items.map((entry) => entry.item);
+      expect(items).toEqual(buildFeed(codexFile, lines, showSvc, "").items);
+      expect(items.flatMap((item) => {
+        if (item.kind === "prose") return [item.text];
+        if (item.kind === "tool") return [item.id];
+        if (item.kind === "cmd-group") return item.calls.map((call) => call.id);
+        return [];
+      })).toEqual(["Inspecting the parser first.", "command-first", "command-second", "The task is complete."]);
+      expect(items.filter((item) => item.kind === "record").map((item) => item.recordType))
+        .toEqual(showSvc ? ["token_usage_record", "future_record"] : ["future_record"]);
+      expect(completed.hiddenServiceCount).toBe(buildFeed(codexFile, fixture, showSvc, "").hiddenServiceCount + (showSvc ? 0 : 1));
+      assertParity(codexFile, lines, { chunks: [1, 3], cap: 4, live: true, showSvc });
+    }
+  });
+});
+
 describe("Codex functions.exec orchestration", () => {
   const orch = (input: string, callId: string, ts = "t") =>
     JSON.stringify({ type: "response_item", timestamp: ts, payload: { type: "custom_tool_call", id: "ctc-" + callId, call_id: callId, name: "exec", status: "completed", input } });
   const orchOutput = (callId: string, text: string) =>
     JSON.stringify({ type: "response_item", timestamp: "t", payload: { type: "custom_tool_call_output", call_id: callId, output: [{ type: "input_text", text }] } });
+
+  test("literal nested exec retains recursive ownership without duplicating children as siblings", () => {
+    const inner = 'await tools.exec_command({cmd:"nested leaf"})';
+    const middle = `await tools.exec(${JSON.stringify(inner)})`;
+    const outer = `await tools.exec(${JSON.stringify(middle)}); await tools.read_file({path:"peer.ts"})`;
+    const feed = buildFeed(codexFile, [orch(outer, "recursive")], false, "");
+    const event = feed.items.find(item => item.kind === "tool");
+    if (event?.kind !== "tool") throw Error("expected tool");
+    const calls = event.orchestration!.calls;
+    expect(calls.map(call => call.tool)).toEqual(["exec", "read_file"]);
+    expect(calls[0].children![0].tool).toBe("exec");
+    expect(calls[0].children![0].children![0].tool).toBe("exec_command");
+    expect(calls[0].children![0].children![0].summary).toContain("nested leaf");
+  });
 
   test("four concurrent tools read as one record with structured, distinct children", () => {
     const src =
@@ -1410,15 +1599,21 @@ describe("Codex payload audit fixture", () => {
     }
   });
 
-  test("typed tool output keeps an image placeholder beside captured text", () => {
+  test("typed tool output carries its image on the card and keeps a text placeholder for copy/speech (#1498)", () => {
     const feed = buildFeed(codexFile, lines, false, "");
     const tools = feed.items.flatMap((item): Extract<Item, { kind: "tool" }>[] =>
       item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : [],
     );
     const custom = tools.find((item) => item.id === "custom-call");
     expect(custom?.outputPreview).toContain("Synthetic poll output");
+    /* The flattened text keeps a placeholder where the picture sits, never the payload. */
     expect(custom?.outputPreview.toLowerCase()).toContain("image");
     expect(custom?.outputPreview).not.toContain("c3ludGhldGlj");
+    /* The picture itself rides the card as an ordered block after the text. */
+    expect(custom?.outputBlocks).toEqual([
+      { type: "text", text: "Synthetic poll output" },
+      { type: "image", media: "image/png", data: "c3ludGhldGlj" },
+    ]);
   });
 
   test("typed tool output keeps primitive values and unknown block labels", () => {
@@ -1460,6 +1655,497 @@ describe("Codex payload audit fixture", () => {
     if (event?.kind !== "tool") throw new Error("expected secret-output tool");
     expect(event.outputPreview).not.toContain(credential);
     expect(event.outputPreview).toContain("[redacted]");
+  });
+});
+
+describe("Codex 0.151 thread items", () => {
+  const fixture = fixtureLines("codex-thread-items-0.151.jsonl");
+
+  test("renders a PascalCase item_completed FileChange as the existing file-edit card", () => {
+    const item = buildFeed(codexFile, [fixture[0]], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      id: "file-change-pascal",
+      family: "edit",
+      status: "ok",
+      body: {
+        type: "diff",
+        files: [{
+          path: "src/widget.ts",
+          op: "update",
+          added: 1,
+          removed: 1,
+        }],
+      },
+    });
+  });
+
+  test("renders a camelCase paginated fileChange as the same file-edit card", () => {
+    const item = buildFeed(codexFile, [fixture[1]], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      id: "file-change-camel",
+      family: "edit",
+      status: "ok",
+      body: {
+        type: "diff",
+        files: [{
+          path: "src/new-widget.ts",
+          op: "add",
+          added: 1,
+          removed: 0,
+        }, {
+          path: "src/empty-widget.ts",
+          op: "add",
+          added: 0,
+          removed: 0,
+          hunks: [],
+        }],
+      },
+    });
+  });
+
+  test("renders real-shaped PascalCase add and delete content as signed diff lines", () => {
+    const lines = [
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-31T10:00:20Z",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "FileChange",
+            id: "file-add-pascal",
+            status: "Completed",
+            changes: {
+              "src/new-widget.ts": {
+                type: "add",
+                content: "export const ready = true;\nexport const count = 1;",
+              },
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-31T10:00:21Z",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "FileChange",
+            id: "file-delete-pascal",
+            status: "Completed",
+            changes: {
+              "src/retired-widget.ts": {
+                type: "delete",
+                content: "export const retired = true;\nexport const legacy = true;",
+              },
+            },
+          },
+        },
+      }),
+    ];
+    const items = buildFeed(codexFile, lines, false, "").items;
+    const tools = items.flatMap((item) => item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []);
+
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toMatchObject({
+      kind: "tool",
+      id: "file-add-pascal",
+      family: "edit",
+      body: {
+        type: "diff",
+        files: [{
+          path: "src/new-widget.ts",
+          op: "add",
+          added: 2,
+          removed: 0,
+          hunks: [{
+            lines: [
+              { t: "+", text: "export const ready = true;" },
+              { t: "+", text: "export const count = 1;" },
+            ],
+          }],
+        }],
+      },
+    });
+    expect(tools[1]).toMatchObject({
+      kind: "tool",
+      id: "file-delete-pascal",
+      family: "edit",
+      body: {
+        type: "diff",
+        files: [{
+          path: "src/retired-widget.ts",
+          op: "delete",
+          added: 0,
+          removed: 2,
+          hunks: [{
+            lines: [
+              { t: "-", text: "export const retired = true;" },
+              { t: "-", text: "export const legacy = true;" },
+            ],
+          }],
+        }],
+      },
+    });
+  });
+
+  test("keeps PascalCase move changes on the diff-backed path", () => {
+    const line = JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-31T10:00:22Z",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "FileChange",
+          id: "file-move-pascal",
+          status: "Completed",
+          changes: {
+            "src/old-widget.ts": {
+              type: "update",
+              move_path: "src/new-widget.ts",
+              unified_diff: "@@ -1 +1 @@\n-old\n+new",
+            },
+          },
+        },
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      id: "file-move-pascal",
+      body: {
+        type: "diff",
+        files: [{ path: "src/new-widget.ts", op: "move", added: 1, removed: 1 }],
+      },
+    });
+  });
+
+  test("renders commandExecution as the existing shell command card", () => {
+    const item = buildFeed(codexFile, [fixture[2]], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      id: "command-camel",
+      family: "shell",
+      command: "bun test src/widget.test.ts",
+      cwd: "repo",
+      status: "ok",
+      outputPreview: "3 tests passed",
+      exitCode: 0,
+      durationMs: 1250,
+    });
+  });
+
+  test("coalesces real-shaped PascalCase command lifecycle records into one shell card", () => {
+    const lines = [
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-31T10:00:20Z",
+        payload: {
+          type: "item_started",
+          item: {
+            type: "CommandExecution",
+            id: "command-pascal",
+            command: ["bun", "test", "src/widget.test.ts"],
+            cwd: "repo",
+            status: "InProgress",
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-31T10:00:21Z",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "CommandExecution",
+            id: "command-pascal",
+            command: ["bun", "test", "src/widget.test.ts"],
+            cwd: "repo",
+            status: "Completed",
+            aggregated_output: "3 tests passed",
+            exit_code: 0,
+            duration: { secs: 1, nanos: 250_000_000 },
+          },
+        },
+      }),
+    ];
+    const items = buildFeed(codexFile, lines, false, "").items;
+    const tools = items.flatMap((item) => item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({
+      kind: "tool",
+      id: "command-pascal",
+      family: "shell",
+      command: "bun test src/widget.test.ts",
+      cwd: "repo",
+      status: "ok",
+      outputPreview: "3 tests passed",
+      exitCode: 0,
+      durationMs: 1250,
+    });
+  });
+
+  test("keeps an in-progress paginated command in the running state", () => {
+    const line = JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-08-31T10:00:20Z",
+      payload: { type: "commandExecution", id: "command-running", command: "bun test", cwd: "repo", status: "inProgress", commandActions: [] },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+
+    expect(item).toMatchObject({ kind: "tool", id: "command-running", status: "run", statusLabel: "executing…" });
+  });
+
+  test("marks a completed MCP item with an error payload as failed", () => {
+    const line = JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-08-31T10:00:21Z",
+      payload: {
+        type: "mcpToolCall",
+        id: "mcp-failed",
+        server: "sample",
+        tool: "lookup",
+        arguments: { query: "widget" },
+        status: "completed",
+        error: { message: "Widget unavailable" },
+        result: null,
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+
+    expect(item).toMatchObject({ kind: "tool", id: "mcp-failed", status: "err", outputPreview: expect.stringContaining("Widget unavailable") });
+  });
+
+  test("marks completed image generation with a failure payload as failed", () => {
+    const line = JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-08-31T10:00:22Z",
+      payload: {
+        type: "imageGeneration",
+        id: "image-failed",
+        status: "completed",
+        result: "",
+        revisedPrompt: "A compact widget",
+        savedPath: null,
+        transparentBackground: false,
+        failure: "Content policy",
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+
+    expect(item).toMatchObject({ kind: "tool", id: "image-failed", status: "err", outputPreview: "Content policy" });
+  });
+
+  test("maps every remaining 0.151 ThreadItem kind onto a semantic feed card", () => {
+    const expected: Item["kind"][] = [
+      "user",
+      "sysmsg",
+      "prose",
+      "tool",
+      "note",
+      "think",
+      "tool",
+      "tool",
+      "tool",
+      "note",
+      "tool",
+      "tool",
+      "note",
+      "tool",
+      "note",
+      "note",
+      "compact",
+    ];
+
+    expect(fixture.slice(3).map((line) => buildFeed(codexFile, [line], false, "").items[0]?.kind)).toEqual(expected);
+  });
+
+  test("summarizes an invented future item in one bounded fallback line", () => {
+    const line = JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-31T10:01:00Z",
+      payload: {
+        type: "item_completed",
+        item: { type: "FutureWidget", detail: "A future widget event " + "x".repeat(500) },
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+    if (item?.kind !== "record") throw new Error("expected future-item fallback");
+
+    expect(item.recordType).toBe("FutureWidget");
+    expect(item.summary.startsWith("A future widget event ")).toBe(true);
+    expect(item.summary).toHaveLength(160);
+    expect(item.summary.endsWith("…")).toBe(true);
+  });
+
+  test("coalesces item_started and item_completed siblings onto one final card", () => {
+    const lines = [
+      JSON.stringify({ type: "event_msg", timestamp: "t1", payload: { type: "item_started", item: { type: "AgentMessage", id: "lifecycle-message", text: "Working…" } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "t2", payload: { type: "item_completed", item: { type: "AgentMessage", id: "lifecycle-message", text: "Done." } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "t3", payload: { type: "item_started", item: { type: "CommandExecution", id: "lifecycle-command", command: "bun test", cwd: "repo", status: "InProgress" } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "t4", payload: { type: "item_completed", item: { type: "CommandExecution", id: "lifecycle-command", command: "bun test", cwd: "repo", status: "Completed", aggregatedOutput: "ok", exitCode: 0 } } }),
+    ];
+    const items = buildFeed(codexFile, lines, false, "").items;
+    const prose = items.filter((item) => item.kind === "prose");
+    const tools = items.flatMap((item) => item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []);
+
+    expect(prose).toHaveLength(1);
+    expect(prose[0]).toMatchObject({ kind: "prose", text: "Done.", ts: "t2" });
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ id: "lifecycle-command", status: "ok", outputPreview: "ok" });
+  });
+
+  test("keeps command and file-change delta siblings off the raw-record path", () => {
+    const lines = [
+      JSON.stringify({ type: "event_msg", timestamp: "t1", payload: { type: "command_execution_output_delta", item_id: "command-item", delta: "partial output" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "t2", payload: { type: "file_change_patch_updated", item_id: "file-item", changes: [] } }),
+    ];
+    const feed = buildFeed(codexFile, lines, false, "");
+
+    expect(feed.items.some((item) => item.kind === "record" || item.kind === "raw")).toBe(false);
+    expect(feed.hiddenServiceCount).toBe(2);
+  });
+});
+
+describe("Codex item_completed envelope generation", () => {
+  const fixture = fixtureLines("codex-item-completed-envelope.jsonl");
+
+  test("renders a real-shaped CommandExecution with envelope timing and split output streams", () => {
+    const item = buildFeed(codexFile, [fixture[1]], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      id: "command-envelope",
+      family: "shell",
+      command: "bun test src/widget.test.ts",
+      cwd: "repo",
+      status: "ok",
+      outputPreview: "2 tests passed",
+      stderr: "warning: fixture warning",
+      exitCode: 0,
+      durationMs: 1250,
+      ts: new Date(1_700_000_001_000).toISOString(),
+      endTs: new Date(1_700_000_002_250).toISOString(),
+    });
+  });
+
+  test("passes envelope command streams through the existing redaction and output caps", () => {
+    const sensitiveValue = "fixture-private-value";
+    const sensitiveKey = String.fromCharCode(97, 112, 105, 95, 107, 101, 121);
+    const authHeader = String.fromCharCode(65, 117, 116, 104, 111, 114, 105, 122, 97, 116, 105, 111, 110);
+    const bearerScheme = String.fromCharCode(66, 101, 97, 114, 101, 114);
+    const line = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        started_at_ms: 1_700_000_002_000,
+        completed_at_ms: 1_700_000_002_001,
+        item: {
+          type: "CommandExecution",
+          id: "bounded-command-envelope",
+          command: "print fixture output",
+          stdout: "x".repeat(13_000) + `\n${sensitiveKey}=${sensitiveValue}`,
+          stderr: `${authHeader}: ${bearerScheme} ${sensitiveValue}`,
+          status: "Completed",
+          exit_code: 0,
+        },
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+    if (item?.kind !== "tool") throw new Error("expected command tool");
+
+    expect(item.outputTruncated).toBe(true);
+    expect(item.outputPreview.length).toBeLessThanOrEqual(12_000);
+    expect(item.outputPreview).not.toContain(sensitiveValue);
+    expect(item.outputPreview).toContain("[redacted]");
+    expect(item.stderr).not.toContain(sensitiveValue);
+    expect(item.stderr).toContain("[redacted]");
+  });
+
+  test("collapses an identified envelope Reasoning item whose text fields are empty", () => {
+    const feed = buildFeed(codexFile, [fixture[0]], false, "");
+
+    expect(feed.items).toMatchObject([{ kind: "think", text: "", availability: "unavailable", sourceId: "reasoning-envelope", members: [{ sourceId: "reasoning-envelope", text: "" }] }]);
+    expect(feed.hiddenServiceCount).toBe(0);
+  });
+
+  test("renders populated envelope Reasoning fields as one reasoning entry", () => {
+    const line = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        started_at_ms: 1_700_000_000_000,
+        completed_at_ms: 1_700_000_000_001,
+        item: { type: "Reasoning", summary_text: "Check the parser.", raw_content: "Keep the semantic seam." },
+      },
+    });
+
+    expect(buildFeed(codexFile, [line], false, "").items).toEqual([{ kind: "think", text: "Check the parser.\nKeep the semantic seam." }]);
+  });
+
+  test("renders a real-shaped McpToolCall with a compact summary, result, and timing", () => {
+    const item = buildFeed(codexFile, [fixture[2]], false, "").items[0];
+
+    expect(item).toMatchObject({
+      kind: "tool",
+      family: "mcp",
+      tool: "mcp__sample__lookup",
+      summary: "sample · lookup · widget",
+      outputPreview: expect.stringContaining("Widget found"),
+      status: "ok",
+      durationMs: 250,
+      ts: new Date(1_700_000_003_000).toISOString(),
+      endTs: new Date(1_700_000_003_250).toISOString(),
+    });
+  });
+
+  test("maps envelope AgentMessage, UserMessage, and Extension items onto semantic cards", () => {
+    const items = buildFeed(codexFile, fixture.slice(3, 6), false, "").items;
+
+    expect(items.map((item) => item.kind)).toEqual(["prose", "user", "tool"]);
+    expect(items[0]).toMatchObject({ kind: "prose", text: "Envelope answer.", ts: new Date(1_700_000_004_000).toISOString() });
+    expect(items[1]).toMatchObject({ kind: "user", text: "Envelope request.", ts: new Date(1_700_000_005_000).toISOString() });
+    expect(items[2]).toMatchObject({
+      kind: "tool",
+      tool: "Extension",
+      summary: "workspace · search · widget",
+      outputPreview: expect.stringContaining("Widget result"),
+    });
+  });
+
+  test("renders mixed envelope and legacy generations without noise or raw record cards", () => {
+    const feed = buildFeed(codexFile, fixture, false, "");
+    const tools = feed.items.flatMap((item) => item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []);
+
+    expect(feed.items.flatMap((item) => item.kind === "prose" ? [item.text] : [])).toEqual(["Envelope answer.", "Legacy answer."]);
+    expect(feed.items.flatMap((item) => item.kind === "user" ? [item.text] : [])).toEqual(["Envelope request."]);
+    expect(tools.map((item) => item.tool)).toEqual(["exec_command", "mcp__sample__lookup", "Extension"]);
+    expect(feed.items.some((item) => ["raw", "record", "note"].includes(item.kind))).toBe(false);
+  });
+
+  test("keeps an unknown envelope item to one redacted bounded fallback line", () => {
+    const line = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        started_at_ms: 1_700_000_007_000,
+        completed_at_ms: 1_700_000_007_001,
+        item: { type: "FutureWidget", detail: "future detail " + "x".repeat(500) },
+      },
+    });
+    const item = buildFeed(codexFile, [line], false, "").items[0];
+    if (item?.kind !== "record") throw new Error("expected future-item fallback");
+
+    expect(item.recordType).toBe("FutureWidget");
+    expect(item.summary).toHaveLength(160);
+    expect(item.body).toBe(item.summary);
+    expect(item.body).not.toContain("{");
   });
 });
 
@@ -1675,4 +2361,421 @@ test("a delegation envelope truncated mid-transcript still yields its turn", () 
 test("ordinary user text is never mistaken for a voice turn", () => {
   expect(parseRealtimeDelegation("Talk about <realtime_delegation> in the docs")).toBeNull();
   expect(parseRealtimeDelegation("<realtime_conversation>\nRealtime conversation started.\n")).toBeNull();
+});
+
+describe("issue 1398: one Codex user message reaches the rollout as several records and renders once", () => {
+  /* Codex 0.151 journals every user message twice, three milliseconds apart:
+     the persisted input item (`response_item` / `message` role user) and the
+     thread lifecycle's `item_completed` envelope carrying the same text as a
+     `UserMessage` item. The operator saw a pipeline stage's INTERNAL prompt
+     twice in its starting window — one bubble per record, identical text,
+     identical timestamp to the second. Every later record of the same text at
+     the same instant is an ECHO of the first, exactly like the legacy
+     `user_message` event: it replaces the provisional row like for like. */
+  const PROMPT = "You are the Builder.\n\nPinned task: the starting window renders the stage prompt exactly once.";
+  const INTERNAL = "<!-- llv:structured-user origin=agent sender=builder -->\n" + PROMPT;
+  const persistedUserItem = (timestamp: string, text: string) =>
+    JSON.stringify({
+      type: "response_item",
+      timestamp,
+      payload: { type: "message", id: "item_user_1398", role: "user", content: [{ type: "input_text", text }] },
+    });
+  const userItemCompleted = (timestamp: string, text: string) =>
+    JSON.stringify({
+      type: "event_msg",
+      timestamp,
+      payload: {
+        type: "item_completed",
+        thread_id: "thread_1398",
+        turn_id: "turn_1398",
+        item: {
+          type: "UserMessage",
+          id: "item_user_1398",
+          client_id: "spawn_message_launch_1398",
+          content: [{ type: "text", text, text_elements: [] }],
+        },
+        started_at_ms: Date.parse(timestamp),
+        completed_at_ms: Date.parse(timestamp),
+      },
+    });
+  const tmsgRows = (feed: ReturnType<typeof buildFeed>) => itemsOfKind(feed, "tmsg");
+  const userRows = (feed: ReturnType<typeof buildFeed>) => itemsOfKind(feed, "user");
+
+  test("a stage's INTERNAL prompt is one relay card, one-shot and fed incrementally", () => {
+    const lines = [
+      persistedUserItem("2026-09-01T09:00:08.277Z", INTERNAL),
+      userItemCompleted("2026-09-01T09:00:08.453Z", INTERNAL),
+    ];
+    const oneShot = buildFeed(codexFile, lines, false, "");
+    expect(userRows(oneShot)).toHaveLength(0);
+    expect(tmsgRows(oneShot)).toHaveLength(1);
+    expect(tmsgRows(oneShot)[0]).toMatchObject({ kind: "tmsg", dir: "in", internal: true, peer: "builder", text: PROMPT });
+
+    /* The live tail sees the persisted item on one tick and its echo on the
+       next: the echo must fold into the row already on screen. */
+    const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+    const provisional = session.feed(lines.slice(0, 1), 0, true);
+    expect(provisional.items.filter((entry) => entry.item.kind === "tmsg")).toHaveLength(1);
+    const echoed = session.feed(lines, 0, true);
+    expect(echoed.items.filter((entry) => entry.item.kind === "tmsg")).toHaveLength(1);
+    expect(echoed.items.filter((entry) => entry.item.kind === "user")).toHaveLength(0);
+  });
+
+  test("an operator's own message keeps one bubble", () => {
+    const feed = buildFeed(codexFile, [
+      persistedUserItem("2026-09-01T09:00:08.277Z", PROMPT),
+      userItemCompleted("2026-09-01T09:00:08.453Z", PROMPT),
+    ], false, "");
+    expect(userRows(feed)).toHaveLength(1);
+    expect(tmsgRows(feed)).toHaveLength(0);
+    expect(userRows(feed)[0]).toMatchObject({ kind: "user", text: PROMPT });
+  });
+
+  test("a window that opens on the echo alone still shows the message once", () => {
+    const feed = buildFeed(codexFile, [userItemCompleted("2026-09-01T09:00:08.453Z", INTERNAL)], false, "");
+    expect(tmsgRows(feed)).toHaveLength(1);
+    expect(userRows(feed)).toHaveLength(0);
+  });
+
+  test("the legacy user_message event after the lifecycle echo is absorbed as well", () => {
+    const feed = buildFeed(codexFile, [
+      persistedUserItem("2026-09-01T09:00:08.277Z", INTERNAL),
+      userItemCompleted("2026-09-01T09:00:08.453Z", INTERNAL),
+      codexUserEvent("2026-09-01T09:00:08.460Z", INTERNAL),
+    ], false, "");
+    expect(tmsgRows(feed)).toHaveLength(1);
+    expect(userRows(feed)).toHaveLength(0);
+  });
+
+  test("the lifecycle echo ahead of the persisted item is still one row", () => {
+    const feed = buildFeed(codexFile, [
+      userItemCompleted("2026-09-01T09:00:08.453Z", PROMPT),
+      persistedUserItem("2026-09-01T09:00:08.455Z", PROMPT),
+    ], false, "");
+    expect(userRows(feed)).toHaveLength(1);
+    expect(tmsgRows(feed)).toHaveLength(0);
+  });
+
+  test("two different messages stay two rows", () => {
+    const feed = buildFeed(codexFile, [
+      persistedUserItem("2026-09-01T09:00:08.277Z", PROMPT),
+      userItemCompleted("2026-09-01T09:00:08.453Z", PROMPT),
+      persistedUserItem("2026-09-01T09:01:00.000Z", "A second question."),
+      userItemCompleted("2026-09-01T09:01:00.002Z", "A second question."),
+    ], false, "");
+    expect(userRows(feed).map((item) => (item as { text: string }).text)).toEqual([PROMPT, "A second question."]);
+  });
+});
+
+describe("tool results carry their images (#1498)", () => {
+  const frameData = "c3ludGhldGljLWZyYW1l";
+  const claudeRead = (id: string, file: string) =>
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-09-03T23:52:20.000Z",
+      message: { content: [{ type: "tool_use", id, name: "Read", input: { file_path: file } }] },
+    });
+  /* The CLI's own shape for a Read of a raster: the base64 sits in the
+     tool_result block, and `toolUseResult.file` repeats it with the dimensions. */
+  const claudeImageResult = (id: string, data: string, more: Record<string, unknown>[] = []) =>
+    JSON.stringify({
+      type: "user",
+      timestamp: "2026-09-03T23:52:23.000Z",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data } }, ...more] }],
+      },
+      toolUseResult: {
+        type: "image",
+        file: { base64: data, type: "image/jpeg", originalSize: 304134, dimensions: { originalWidth: 1999, originalHeight: 1161, displayWidth: 1999, displayHeight: 1161 } },
+      },
+    });
+  const codexTyped = (id: string, output: unknown[]) => [
+    JSON.stringify({ type: "response_item", timestamp: "t1", payload: { type: "custom_tool_call", call_id: id, name: "exec", input: "capture();" } }),
+    JSON.stringify({ type: "response_item", timestamp: "t2", payload: { type: "custom_tool_call_output", call_id: id, output } }),
+  ];
+  const toolItems = (feed: ReturnType<typeof buildFeed>) =>
+    feed.items.flatMap((item): Extract<Item, { kind: "tool" }>[] => (item.kind === "tool" ? [item] : item.kind === "cmd-group" ? item.calls : []));
+
+  test("a Claude Read of an image file puts the picture on the Read card instead of beside it", () => {
+    const lines = [claudeRead("toolu-frame", "/workspace/frames/op-image-1.jpg"), claudeImageResult("toolu-frame", frameData)];
+    const feed = buildFeed(claudeFile, lines, false, "");
+    const read = toolItems(feed).find((item) => item.id === "toolu-frame");
+    expect(read?.status).toBe("ok");
+    expect(read?.outputBlocks).toEqual([{ type: "image", media: "image/jpeg", data: frameData, w: 1999, h: 1161, bytes: 304134 }]);
+    /* The card owns the picture: no standalone image row is pushed around it. */
+    expect(itemsOfKind(feed, "image")).toHaveLength(0);
+    expect(read?.outputPreview).not.toContain(frameData);
+    /* A result that carries a picture opens on the desktop the way an edit's diff does. */
+    expect(read?.open).toBe(true);
+    assertParity(claudeFile, lines, { chunks: [1] });
+  });
+
+  test("a pasted Claude image keeps its own standalone card (the path that already worked)", () => {
+    const pasted = JSON.stringify({
+      type: "user",
+      timestamp: "2026-09-03T23:50:00.000Z",
+      message: { role: "user", content: [{ type: "text", text: "compare with this" }, { type: "image", source: { type: "base64", media_type: "image/png", data: frameData } }] },
+    });
+    const feed = buildFeed(claudeFile, [pasted], false, "");
+    expect(itemsOfKind(feed, "image")).toEqual([{ kind: "image", media: "image/png", data: frameData, w: undefined, h: undefined, bytes: undefined }]);
+    expect(itemsOfKind(feed, "user")).toHaveLength(1);
+  });
+
+  test("a Codex typed output keeps text and images in order, neither replacing the other", () => {
+    const lines = codexTyped("mixed-image", [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\nbefore the frame" },
+      { type: "input_image", image_url: "data:image/png;base64,c3ludGhldGlj" },
+      { type: "input_text", text: "after the frame" },
+    ]);
+    const feed = buildFeed(codexFile, lines, false, "");
+    const call = toolItems(feed).find((item) => item.id === "mixed-image");
+    expect(call?.outputBlocks).toEqual([
+      { type: "text", text: "before the frame" },
+      { type: "image", media: "image/png", data: "c3ludGhldGlj" },
+      { type: "text", text: "after the frame" },
+    ]);
+    expect(call?.outputPreview).toContain("before the frame");
+    expect(call?.outputPreview).toContain("after the frame");
+    expect(call?.outputPreview).not.toContain("c3ludGhldGlj");
+    expect(itemsOfKind(feed, "image")).toHaveLength(0);
+    assertParity(codexFile, lines, { chunks: [1] });
+  });
+
+  test("a malformed, unsupported or oversized image block degrades to the text placeholder and keeps the card's text", () => {
+    const oversized = "A".repeat(Math.ceil((12 * 1024 * 1024 * 4) / 3));
+    const lines = codexTyped("broken-image", [
+      { type: "input_text", text: "captured" },
+      { type: "input_image" },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg" } },
+      { type: "input_image", image_url: "data:image/svg+xml;base64,PHN2Zz4=" },
+      { type: "input_image", image_url: `data:image/png;base64,${oversized}` },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "not base64 at all!" } },
+    ]);
+    const feed = buildFeed(codexFile, lines, false, "");
+    const call = toolItems(feed).find((item) => item.id === "broken-image");
+    expect(call?.status).toBe("ok");
+    expect(call?.outputPreview).toContain("captured");
+    expect(call?.outputPreview.toLowerCase()).toContain("image");
+    /* Nothing survived as a picture, so the card keeps the plain text path. */
+    expect(call?.outputBlocks).toBeUndefined();
+    const serialized = JSON.stringify(feed.items);
+    expect(serialized).not.toContain("PHN2Zz4=");
+    expect(serialized).not.toContain(oversized.slice(0, 128));
+    expect(serialized).not.toContain("not base64 at all!");
+  });
+
+  test("a Claude result mixing text and images keeps both in order and the file's dimensions on the picture", () => {
+    const lines = [
+      claudeRead("toolu-mixed", "/workspace/frames/op-image-2.jpg"),
+      claudeImageResult("toolu-mixed", frameData, [{ type: "text", text: "1999x1161 frame, captured at 100%" }]),
+    ];
+    const feed = buildFeed(claudeFile, lines, false, "");
+    const read = toolItems(feed).find((item) => item.id === "toolu-mixed");
+    expect(read?.outputBlocks).toEqual([
+      { type: "image", media: "image/jpeg", data: frameData, w: 1999, h: 1161, bytes: 304134 },
+      { type: "text", text: "1999x1161 frame, captured at 100%" },
+    ]);
+    expect(read?.outputPreview).toContain("1999x1161 frame, captured at 100%");
+    assertParity(claudeFile, lines, { chunks: [1] });
+  });
+});
+
+
+describe("compact identified reasoning (#1534)", () => {
+  const reasoning = (id: string, text = "", turnId = "turn-a") => JSON.stringify({
+    type: "event_msg", payload: { type: "item_completed", turn_id: turnId,
+      item: { type: "Reasoning", id, summary_text: text || [], raw_content: [] } },
+  });
+  const mirror = (id: string, text = "") => JSON.stringify({
+    type: "response_item", payload: { type: "reasoning", id,
+      summary: text ? [{ type: "summary_text", text }] : [], encrypted_content: "opaque-fixture" },
+  });
+  const session = () => createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+
+  test("40 envelopes and mirrors retain 20 identities and anchors in one unavailable group", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => [reasoning(`reason-${i}`), mirror(`reason-${i}`)]).flat();
+    const parser = session();
+    const live = parser.feed(lines, 100, true);
+    expect(live.items).toHaveLength(1);
+    const item = live.items[0].item;
+    expect(item).toMatchObject({ kind: "think", availability: "unavailable", text: "" });
+    if (item.kind !== "think") throw new Error("missing reasoning");
+    expect(item.members?.map((member) => member.sourceId)).toEqual(Array.from({ length: 20 }, (_, i) => `reason-${i}`));
+    expect(item.members?.map((member) => member.anchorKey)).toEqual(Array.from({ length: 20 }, (_, i) => `row:${100 + i * 2}:0`));
+    expect(parser.feed(lines, 100, false).items).toEqual(live.items);
+  });
+
+  test("same-ID delivered text upgrades in place and survives empty mirrors and replay", () => {
+    const parser = session();
+    const lines = [reasoning("first"), reasoning("second")];
+    const before = parser.feed(lines, 0, true);
+    lines.push(mirror("first", "Actual exposed summary"), mirror("first"), reasoning("second", "Actual exposed summary"));
+    const after = parser.feed(lines, 0, false);
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0].anchorKey).toBe(before.items[0].anchorKey);
+    expect(after.items[0].key).toBe(before.items[0].key);
+    expect(after.items[0].item).toMatchObject({ availability: "available", members: [
+      { sourceId: "first", text: "Actual exposed summary", availability: "available" },
+      { sourceId: "second", text: "Actual exposed summary", availability: "available" },
+    ] });
+    expect(before.items[0].item).toMatchObject({ availability: "unavailable" });
+    expect(parser.feed(lines, 0, false)).toEqual(after);
+    expect(session().feed(lines, 0, false).items.map(({ item }) => item)).toEqual(after.items.map(({ item }) => item));
+  });
+
+  test("native exposed array text is readable and opaque content never becomes text", () => {
+    const native = JSON.stringify({ type: "event_msg", payload: { type: "item_completed", item: {
+      type: "Reasoning", id: "arrays", summary_text: ["First paragraph", { text: "Second paragraph" }], raw_content: [],
+      encrypted_content: "opaque-fixture",
+    } } });
+    const item = session().feed([native, mirror("arrays")], 0, false).items[0].item;
+    expect(item).toMatchObject({ text: "First paragraph\nSecond paragraph", availability: "available" });
+    expect(JSON.stringify(item)).not.toContain("opaque-fixture");
+  });
+
+  test("filtered message and hidden turn context still separate runs", () => {
+    const filtered = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "reasoning" });
+    const lines = [reasoning("one"), JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Next task" } }), reasoning("two")];
+    expect(filtered.feed(lines, 0, false).items).toHaveLength(2);
+    expect(session().feed([reasoning("one"), JSON.stringify({ type: "turn_context", payload: {} }), reasoning("two")], 0, false).items).toHaveLength(2);
+  });
+
+  test("a result attached to an earlier tool still separates the reasoning around it", () => {
+    const call = JSON.stringify({ type: "response_item", payload: { type: "function_call", call_id: "earlier-tool", name: "exec_command", arguments: "{}" } });
+    const result = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "earlier-tool", output: "done" } });
+    const rows = session().feed([call, reasoning("before"), result, reasoning("after")], 0, false).items;
+    expect(rows.filter(({ item }) => item.kind === "think")).toHaveLength(2);
+  });
+
+  test("Extension completion separates reasoning while retaining the earlier tool slot", () => {
+    const extension = (type: string) => JSON.stringify({ type: "event_msg", payload: {
+      type, turn_id: "turn-a", item: { type: "Extension", id: "extension-a",
+        kind: "search", action: "lookup", query: "fixture", results: type === "item_completed" ? "done" : "" },
+    } });
+    const lines = [extension("item_started"), reasoning("before"), extension("item_completed"), reasoning("after")];
+    const parser = session();
+    const before = parser.feed(lines.slice(0, 2), 0, true);
+    const live = parser.feed(lines, 0, true);
+    expect(live.items.map(({ item }) => item.kind)).toEqual(["tool", "think", "think"]);
+    expect(live.items[0].key).toBe(before.items[0].key);
+    expect(live.items[0].item).toMatchObject({ kind: "tool", id: "extension-a", tool: "Extension", status: "ok", outputPreview: '"done"' });
+    expect(live.items.slice(1).map(({ item }) => item.kind === "think" ? item.members : [])).toEqual([
+      [{ sourceId: "before", anchorKey: "row:1:0", text: "", availability: "unavailable" }],
+      [{ sourceId: "after", anchorKey: "row:3:0", text: "", availability: "unavailable" }],
+    ]);
+    expect(parser.feed(lines, 0, false).items).toEqual(live.items);
+    expect(session().feed(lines, 0, false).items).toEqual(live.items);
+    assertParity(codexFile, lines, { chunks: [1] });
+  });
+
+  const fixtureLines = (name: string) => readFileSync(join(import.meta.dir, "fixtures", name), "utf8").trim().split("\n");
+  const auditLines = fixtureLines("codex-payload-audit.jsonl");
+  const threadLines = [
+    ...fixtureLines("codex-thread-items-0.151.jsonl"),
+    ...fixtureLines("codex-item-completed-envelope.jsonl"),
+  ];
+  const toolTypes = ["FileChange", "fileChange", "commandExecution", "CommandExecution", "functionCallOutput",
+    "mcpToolCall", "McpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration", "Extension"];
+  const toolFixtures = threadLines.filter((line) => {
+    const p = JSON.parse(line).payload;
+    return toolTypes.includes(p.item?.type ?? p.type);
+  });
+
+  // Keep the existing audit fixture forms, including all four web actions and
+  // the patch's add/delete/update map. No synthetic replacement envelopes.
+  const completions = [
+    ...auditLines.filter((line) => ["web_search_end", "patch_apply_end", "mcp_tool_call_end",
+      "custom_tool_call_output", "function_call_output", "tool_search_call", "tool_search_output"].includes(JSON.parse(line).payload?.type)),
+    ...toolFixtures,
+    ...["mcp_tool_call_begin", "command_execution_output_delta", "file_change_output_delta", "file_change_patch_updated"]
+      .map((type) => JSON.stringify({ type: "event_msg", payload: { type, call_id: "earlier", delta: "tool update" } })),
+  ];
+  for (const [index, completion] of completions.entries()) {
+    const p = JSON.parse(completion).payload;
+    test(`semantic tool fixture ${index}: ${p.item?.type ?? p.type} preserves both runs and anchors`, () => {
+      const turnId = p.turn_id ?? "turn-a";
+      const lines = [reasoning("a", "Before", turnId), mirror("a"), completion,
+        reasoning("b", "After", turnId), mirror("b"), reasoning("c", "Adjacent", turnId)];
+      const parser = session();
+      for (let n = 1; n <= lines.length; n++) parser.feed(lines.slice(0, n), 0, true);
+      const live = parser.feed(lines, 0, true);
+      const groups = live.items.filter(({ item }) => item.kind === "think");
+      expect(groups.map(({ item }) => item.kind === "think" ? item.members : [])).toEqual([
+        [{ sourceId: "a", anchorKey: "row:0:0", text: "Before", availability: "available" }],
+        [{ sourceId: "b", anchorKey: "row:3:0", text: "After", availability: "available" },
+          { sourceId: "c", anchorKey: "row:5:0", text: "Adjacent", availability: "available" }],
+      ]);
+      expect(parser.feed(lines, 0, false).items).toEqual(live.items);
+      expect(session().feed(lines, 0, false).items).toEqual(live.items);
+      assertParity(codexFile, lines, { chunks: [1], live: true });
+    });
+  }
+
+  // Every renderer-recognized tool family can complete by updating an earlier
+  // slot. Exercise lifecycle and nested/direct response forms at that seam.
+  for (const fixture of toolFixtures) {
+    const record = JSON.parse(fixture);
+    const original = record.payload.item ?? record.payload;
+    for (const form of ["event", "nested", "direct"] as const) {
+      test(`${original.type} ${form} completion retains its earlier tool slot`, () => {
+        const item = { ...original, id: "earlier-tool" };
+        const started = JSON.stringify({ type: "event_msg", payload: { type: "item_started", item: { ...item, status: "inProgress" } } });
+        const completed = JSON.stringify(form === "event"
+          ? { type: "event_msg", payload: { type: "item_completed", item } }
+          : { type: "response_item", payload: form === "nested" ? { item } : item });
+        const lines = [started, reasoning("a"), completed, reasoning("b"), reasoning("c")];
+        const parser = session();
+        const before = parser.feed(lines.slice(0, 2), 0, true);
+        const live = parser.feed(lines, 0, true);
+        expect(live.items.map(({ item }) => item.kind)).toEqual(["tool", "think", "think"]);
+        expect(live.items[0].key).toBe(before.items[0].key);
+        expect(live.items[0].item).toMatchObject({ kind: "tool", id: "earlier-tool", status: "ok" });
+        expect(live.items.slice(1).map(({ item }) => item.kind === "think" ? item.members?.map(({ sourceId, anchorKey }) => ({ sourceId, anchorKey })) : [])).toEqual([
+          [{ sourceId: "a", anchorKey: "row:1:0" }],
+          [{ sourceId: "b", anchorKey: "row:3:0" }, { sourceId: "c", anchorKey: "row:4:0" }],
+        ]);
+        expect(parser.feed(lines, 0, false).items).toEqual(live.items);
+        expect(session().feed(lines, 0, false).items).toEqual(live.items);
+      });
+    }
+  }
+
+  for (const service of auditLines.filter((line) => {
+    const obj = JSON.parse(line);
+    return ["world_state", "inter_agent_communication_metadata"].includes(obj.type)
+      || ["token_count", "thread_settings_applied", "sub_agent_activity"].includes(obj.payload?.type);
+  })) {
+    test(`nonsemantic service ${JSON.parse(service).payload?.type ?? JSON.parse(service).type} retains adjacent compaction`, () => {
+      const lines = [reasoning("a"), service, mirror("a"), reasoning("b")];
+      const parser = session();
+      parser.feed(lines.slice(0, 2), 0, true);
+      const live = parser.feed(lines, 0, true);
+      expect(live.items).toHaveLength(1);
+      expect(live.items[0].item).toMatchObject({ kind: "think", members: [
+        { sourceId: "a", anchorKey: "row:0:0" }, { sourceId: "b", anchorKey: "row:3:0" },
+      ] });
+      expect(parser.feed(lines, 0, false).items).toEqual(live.items);
+      expect(session().feed(lines, 0, false).items).toEqual(live.items);
+    });
+  }
+
+  for (const boundary of [
+    { type: "event_msg", payload: { type: "task_started" } },
+    { type: "event_msg", payload: { type: "turn_aborted" } },
+    { type: "event_msg", payload: { type: "turn_completed" } },
+    { type: "event_msg", payload: { type: "context_compacted" } },
+    { type: "event_msg", payload: { type: "agent_message", message: "Commentary" } },
+    { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Final" }] } },
+    { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Next task" }] } },
+    { type: "response_item", payload: { type: "function_call", call_id: "tool-boundary", name: "exec_command", arguments: "{}" } },
+  ]) {
+    test(`splits at ${boundary.payload.type} even with hidden service rows`, () => {
+      const rows = session().feed([reasoning("before"), JSON.stringify(boundary), reasoning("after")], 0, false).items;
+      expect(rows.filter(({ item }) => item.kind === "think")).toHaveLength(2);
+    });
+  }
+  test("different native turn identities split adjacent reasoning", () => {
+    expect(session().feed([reasoning("one", "", "turn-a"), reasoning("two", "", "turn-b")], 0, false).items).toHaveLength(2);
+  });
 });

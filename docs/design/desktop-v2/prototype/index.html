@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Desktop v2 — the yard (issue #1453, rewrite)</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!-- The bench shows only when the window is larger than the chosen frame:
+     width, scheme, scenario and one link per key screen. Inside a frame-sized
+     window (or with device emulation) the app fills the viewport. -->
+<div id="bench" hidden></div>
+<div id="frame"><div id="app" data-ready="0"></div></div>
+<script src="fixture.js"></script>
+<script src="screens.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

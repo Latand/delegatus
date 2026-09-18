@@ -7,7 +7,7 @@ import { performVoiceSend } from "@/hooks/composerVoiceSend";
 import { useAutosizePinned } from "@/hooks/useAutosizePinned";
 import { useDictation } from "@/hooks/useDictation";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { COMPOSER_MAX_PX, keyboardInset, mobileComposerCeiling, visibleViewportHeight } from "@/lib/composerScroll";
+import { cardComposerCeiling, keyboardInset, mobileComposerCeiling, visibleViewportHeight } from "@/lib/composerScroll";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
 /* Live VISIBLE viewport height, tracked the same way as `useIsMobile`
@@ -27,8 +27,17 @@ function subscribeViewport(onChange: () => void) {
     visual?.removeEventListener("resize", onChange);
   };
 }
-function useViewportHeight(): number {
-  return useSyncExternalStore(subscribeViewport, () => visibleViewportHeight(window.innerHeight, window.visualViewport), () => 800);
+const noViewportSubscription = () => () => {};
+function useViewportHeight(active: boolean): number {
+  return useSyncExternalStore(active ? subscribeViewport : noViewportSubscription, () => visibleViewportHeight(window.innerHeight, window.visualViewport), () => 800);
+}
+/* The LAYOUT viewport height, tracked beside the visible one. The composer
+   box's own maximum height is written in `dvh`, which the on-screen keyboard
+   does not shrink (#983), so the ceiling needs both numbers: the visible one
+   says what fits above the keyboard, this one says how tall the composer's own
+   scroll box is allowed to be (#1483). */
+function useLayoutViewportHeight(active: boolean): number {
+  return useSyncExternalStore(active ? subscribeViewport : noViewportSubscription, () => window.innerHeight, () => 800);
 }
 
 /**
@@ -51,6 +60,8 @@ export interface ComposerStatus {
 }
 
 export interface UseComposerOptions {
+  /** Suspend view-local viewport listeners while delivery remains mounted. */
+  viewActive?: boolean;
   /** The draft's initial text, read once on mount (e.g. a persisted draft or a
       seeded prompt). Passed as a lazy initializer so it runs a single time. */
   initialText: () => string;
@@ -76,6 +87,17 @@ export interface UseComposerOptions {
       queue, so the input must stay typable while it is delivered — there is no
       long-lived "sending" state holding the draft hostage. */
   holdInputWhileBusy?: boolean;
+  /** How many surfaces the accessory region above the field holds right now —
+      a docked call, the native queue, sends awaiting an answer, receipts of the
+      ones that failed (#1629). They share this composer's ONE bounded box with
+      the field, so the field's ceiling stops short of the room they need to
+      stay reachable, and hands it back the moment they are gone. */
+  accessorySurfaces?: number;
+  /** The conversation box this composer is laid out in, in px, from
+      `useComposerBox`. Zero is "not measured": the ceiling is the fixed cap
+      then, which is also what an unbounded box gets, because the form's own
+      percentage budget does not resolve there either. */
+  boxHeight?: number;
 }
 
 /**
@@ -86,15 +108,17 @@ export interface UseComposerOptions {
  * own delivery (`submit`) and its own surrounding chrome; everything below the
  * text lives in `ComposerBar`.
  */
-export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true }: UseComposerOptions) {
+export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true, viewActive = true, accessorySurfaces = 0, boxHeight = 0 }: UseComposerOptions) {
   /* A remount mid-typing (column reshuffles, draft handovers) restores the
      draft from storage; the ref always holds the latest text so async
      dictation callbacks append to what the user typed meanwhile instead of
      overwriting it. */
   const [text, setTextState] = useState(initialText);
   const textRef = useRef(text);
+  const draftRevision = useRef(0);
   const setText = (value: string | ((prev: string) => string)) => {
     const next = typeof value === "function" ? value(textRef.current) : value;
+    draftRevision.current += 1;
     textRef.current = next;
     setTextState(next);
     persistText(next);
@@ -161,10 +185,22 @@ export function useComposer({ initialText, persistText, submit, disabled = false
      screen — budgeting against the full layout height there grew the field
      past what fits above the keyboard and pushed the picker/send controls out
      of view (#983); on a short rotated viewport even the 160px cap overflows,
-     so the ceiling yields the chrome's share first and shrinks below it. */
-  const isMobile = useIsMobile();
-  const viewportH = useViewportHeight();
-  const maxPx = isMobile ? mobileComposerCeiling(viewportH) : COMPOSER_MAX_PX;
+     so the ceiling yields the chrome's share first and shrinks below it.
+     The LAYOUT height goes in beside it because the composer box's own cap is
+     written in `dvh`, which the keyboard leaves alone: with the keyboard DOWN
+     the visible viewport says the field has room it does not have, and the
+     field grew until the tools row holding Stop fell out of its own box
+     (#1483). The card composer now budgets the same way against the box it is
+     in — the conversation is a card of whatever height the board gave it, not
+     the screen — and both take the accessory region's reserve off the top, so
+     a grown draft cannot squeeze a surface the operator still has to reach
+     (#1629). One rule, two boxes. */
+  const isMobile = useIsMobile(viewActive);
+  const viewportH = useViewportHeight(viewActive);
+  const layoutH = useLayoutViewportHeight(viewActive);
+  const maxPx = isMobile
+    ? mobileComposerCeiling(viewportH, layoutH, accessorySurfaces)
+    : cardComposerCeiling(boxHeight, accessorySurfaces);
 
   const attachments = useImageAttachments({
     onError: (message) => setStatus({ kind: "err", text: message }),
@@ -178,11 +214,18 @@ export function useComposer({ initialText, persistText, submit, disabled = false
     setStatus(null);
     /* After the state-driven value updates, drop the caret at the end and
        scroll the newest words into view — an insert always follows the text,
-       so the batch/unclaimed transcript never lands off-screen. */
+       so the batch/unclaimed transcript never lands off-screen.
+
+       `preventScroll` is what keeps that promise to the field alone (#1483):
+       an unqualified focus() lets the browser scroll every ancestor to bring
+       the field into view, and dictation calls this on EVERY segment, so each
+       chunk yanked the operator's viewport back up — off the Stop control they
+       had just scrolled down to reach. The field's own scrollTop below shows
+       the newest words without moving anything outside the textarea. */
     requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
-      el.focus();
+      el.focus({ preventScroll: true });
       const end = el.value.length;
       el.setSelectionRange(end, end);
       el.scrollTop = el.scrollHeight;
@@ -206,6 +249,7 @@ export function useComposer({ initialText, persistText, submit, disabled = false
      the field pins to the bottom on every update so the latest spoken words
      stay visible; while typing it pins only when the caret is at the end. */
   useAutosizePinned(inputRef, displayText, {
+    active: viewActive,
     maxPx,
     pinned: Boolean(dictation.liveText),
   });
@@ -243,6 +287,7 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   return {
     text,
     textRef,
+    draftRevision,
     setText,
     /* The raw setter, for restoring an already-persisted draft from outside
        (a link-arrow drop) without re-persisting it through setText. */

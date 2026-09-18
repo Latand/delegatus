@@ -1,6 +1,7 @@
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 
 import type { Pipeline } from "./types";
+import { pathIsDeclaredOutput } from "./stageAccess";
 
 export type PipelineGitResult = { ok: true; sha: string; baseBranch?: string } | { ok: false; error: string };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
@@ -25,6 +26,22 @@ function validPipelineBranch(value: string): boolean {
   return validBaseBranch(value);
 }
 
+/* A single-branch fetch of a repository that is already cloned. The bound
+   only has to stop an unanswered connection from holding the caller: the
+   create request, or the provisioning tick with the pipeline mutation held. */
+const BASE_FETCH_TIMEOUT = "60s";
+
+/** `--signal=KILL` takes `timeout` down with its command, so a real expiry
+    usually ends on SIGKILL with no exit status at all (#1692). */
+function killedAtBound(result: ExecResult): boolean {
+  return result.code === 124 || result.code === 137 || result.signal === "SIGKILL";
+}
+
+/** Resolves the exact commit a pipeline starts from. Without `baseRef` this
+    is the one remote read an internal pipeline makes: a bounded fetch of
+    `origin/<base>`, so the worktree starts from the current base (#360). A
+    remote that cannot answer refuses the creation rather than starting from
+    a stale ref. A pinned `baseRef` never touches the network. */
 export function resolvePipelineBase(
   repoDir: string,
   input: { baseBranch?: string; baseRef?: string },
@@ -35,10 +52,11 @@ export function resolvePipelineBase(
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = exec(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
+      "timeout",
+      ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
       repoDir,
     );
+    if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
   }
   const ref = requestedRef || `origin/${baseBranch}`;
@@ -64,18 +82,93 @@ export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
-export function commitPipelineStage(pipeline: Pipeline, stageId: string, allowCommit: boolean, exec: ExecPort): PipelineGitResult {
+function changedWorktreePaths(
+  exec: ExecPort,
+  cwd: string,
+  declaredOutputs: readonly string[] = [],
+): { ok: true; paths: string[] } | { ok: false; error: string } {
+  const tracked = exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+  if (tracked.code !== 0) return failure("checking tracked stage output paths", tracked);
+  const untracked = exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--"], cwd);
+  if (untracked.code !== 0) return failure("checking untracked stage output paths", untracked);
+  let ignoredOutputs = "";
+  if (declaredOutputs.length > 0) {
+    const ignored = exec(
+      "git",
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs],
+      cwd,
+    );
+    if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
+    ignoredOutputs = ignored.stdout;
+  }
+  const paths = `${tracked.stdout}\0${untracked.stdout}\0${ignoredOutputs}`.split("\0").filter(Boolean);
+  return { ok: true, paths: [...new Set(paths)] };
+}
+
+export function commitPipelineStage(
+  pipeline: Pipeline,
+  stageId: string,
+  allowCommit: boolean,
+  exec: ExecPort,
+  declaredOutputs: readonly string[] = [],
+  protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
+): PipelineGitResult {
   const status = exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
-  if (status.stdout.trim()) {
-    if (!allowCommit) return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
-    const add = exec("git", ["add", "-A"], pipeline.worktreeDir);
-    if (add.code !== 0) return failure("staging the passed stage", add);
-    const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
-    if (commit.code !== 0) return failure("committing the passed stage", commit);
+  const initialHead = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
+  if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
+    return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
+  let changedOutputPaths: string[] = [];
+  if (!allowCommit) {
+    if (declaredOutputs.length === 0) {
+      if (!status.stdout.trim()) return { ok: true, sha: initialHead.stdout.trim() };
+      return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
+    }
+    const changed = changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs);
+    if (!changed.ok) return changed;
+    const refused = changed.paths.filter((candidate) => !pathIsDeclaredOutput(candidate, declaredOutputs));
+    if (refused.length > 0) {
+      return { ok: false, error: `read-only stage ${stageId} modified undeclared worktree paths` };
+    }
+    if (changed.paths.length === 0) return { ok: true, sha: initialHead.stdout.trim() };
+    changedOutputPaths = changed.paths;
+  } else if (!status.stdout.trim()) {
+    return { ok: true, sha: initialHead.stdout.trim() };
+  }
+  const add = exec(
+    "git",
+    ["add", ...(allowCommit ? ["-A"] : ["-f", "-A", "--", ...declaredOutputs])],
+    pipeline.worktreeDir,
+  );
+  if (add.code !== 0) return failure("staging the passed stage", add);
+  if (!allowCommit) {
+    const staged = exec(
+      "git",
+      ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--", ...declaredOutputs],
+      pipeline.worktreeDir,
+    );
+    if (staged.code !== 0) return failure("verifying staged declared output paths", staged);
+    const stagedPaths = new Set(staged.stdout.split("\0").filter(Boolean));
+    const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
+    if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
+  }
+  const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir);
+  if (commit.code !== 0) return failure("committing the passed stage", commit);
   const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
+  if (!allowCommit) {
+    const committed = exec(
+      "git",
+      ["diff", "--name-only", "--no-renames", "-z", initialHead.stdout.trim(), head.stdout.trim(), "--", ...declaredOutputs],
+      pipeline.worktreeDir,
+    );
+    if (committed.code !== 0) return failure("verifying committed declared output paths", committed);
+    const committedPaths = new Set(committed.stdout.split("\0").filter(Boolean));
+    const missing = changedOutputPaths.find((candidate) => !committedPaths.has(candidate));
+    if (missing) return { ok: false, error: `declared output ${missing} was not committed` };
+  }
   return { ok: true, sha: head.stdout.trim() };
 }
 
@@ -129,15 +222,33 @@ export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): P
   return { ok: true, sha };
 }
 
+export type PipelineRemoteHeadResult =
+  | { ok: true; sha: string }
+  | { ok: false; error: string; transient: boolean };
+
+/* Checked first: an SSH login the server refused can also print "Connection
+   closed by …", and that is a credential problem no retry fixes. */
+const REMOTE_READ_REFUSED = /permission denied|authentication failed|host key verification failed|could not read (username|password)|repository not found|does not appear to be a git repository|returned error: 40[134]/i;
+const REMOTE_READ_TRANSPORT = /timed out|could not resolve host|temporary failure in name resolution|connection refused|connection reset|connection closed by|network is unreachable|no route to host|failed to connect to|returned error: 5\d\d/i;
+
+/** Whether a failed remote read is one the network failed (#1692): it says
+    nothing about the branch, so asking again is sound. A refused login, a
+    missing repository and anything unrecognized are not. */
+function remoteReadFailureIsTransient(error: string): boolean {
+  return !REMOTE_READ_REFUSED.test(error) && REMOTE_READ_TRANSPORT.test(error);
+}
+
 /** Reads the authoritative remote pipeline branch without relying on a stale
-    tracking ref. Approval fences use this alongside the clean local HEAD. */
-export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
-  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
-  const remote = exec("git", ["ls-remote", "--heads", "origin", `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
-  if (remote.code !== 0) return failure("checking the remote pipeline branch", remote);
-  const sha = remote.stdout.trim().split(/\s+/)[0] ?? "";
-  if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA" };
-  return { ok: true, sha };
+    tracking ref. Approval fences use this alongside the clean local HEAD. The
+    read is time-bounded like the publication read: an unbounded `ls-remote`
+    waited out a two-minute SSH connect timeout while holding the pipeline
+    mutation (#1692). */
+export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
+  if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
+  const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
+  if (!remote.ok) return { ok: false, error: remote.error, transient: remoteReadFailureIsTransient(remote.error) };
+  if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
+  return { ok: true, sha: remote.sha };
 }
 
 export type PipelinePublishResult =
@@ -162,7 +273,7 @@ function readRemotePipelineBranch(
     pipeline.worktreeDir,
   );
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
-  if (result.code === 124 || result.code === 137) {
+  if (killedAtBound(result)) {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
   }
   return failure(step, result);

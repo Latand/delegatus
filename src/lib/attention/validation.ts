@@ -44,7 +44,7 @@ function finite(value: unknown, field: string): number {
   return value;
 }
 
-const VIEW_MODES: readonly ViewMode[] = ["overview", "scheme", "list", "mobile-focus", "mobile-map"];
+const VIEW_MODES: readonly ViewMode[] = ["overview", "scheme", "list", "mobile-focus"];
 
 function frame(value: unknown): FocusFrame {
   const raw = object(value, "frameAtCreation");
@@ -144,7 +144,7 @@ export function validateAttentionEvent(value: unknown): AttentionEvent {
     }
     case "arrive": {
       const resolution = body.resolution;
-      if (resolution !== "exact" && resolution !== "approximate" && resolution !== "lost") {
+      if (resolution !== "exact" && resolution !== "approximate" && resolution !== "reader" && resolution !== "lost") {
         throw new AttentionRequestError("INVALID_REQUEST", "invalid resolution");
       }
       return {

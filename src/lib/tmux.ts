@@ -404,7 +404,8 @@ function processIsGone(expected: ProcessIdentity, deps: Pick<KillTmuxHostDeps, "
 
 /** Applies a registry host identity fence, kills its stable pane id, then
     waits for both the pane shell and agent process identities to disappear. */
-export async function killTmuxHostIfMatches(
+async function controlTmuxHostIfMatches(
+  action: "kill" | "interrupt",
   host: TmuxHostEvidence,
   overrides: Partial<KillTmuxHostDeps> = {},
 ): Promise<boolean> {
@@ -440,17 +441,27 @@ export async function killTmuxHostIfMatches(
     host.paneId,
     "-F",
     condition,
-    `kill-pane -t ${host.paneId}`,
+    action === "kill" ? `kill-pane -t ${host.paneId}` : `send-keys -t ${host.paneId} Escape`,
     `display-message -p ${mismatch}`,
   ], undefined, endpoint);
   if (result.code !== 0) return false;
   if (result.stdout.includes(mismatch)) return false;
+  if (action === "interrupt") return true;
   for (let attempt = 0; attempt < deps.maxVerifyAttempts; attempt += 1) {
     const currentPane = await inspectTmuxPane(host.paneId, endpoint, deps);
     if (currentPane === null && processIsGone(host.panePid, deps) && processIsGone(host.agent, deps)) return true;
     if (attempt + 1 < deps.maxVerifyAttempts) await deps.sleep(25);
   }
   return false;
+}
+
+export function killTmuxHostIfMatches(host: TmuxHostEvidence, overrides: Partial<KillTmuxHostDeps> = {}): Promise<boolean> {
+  return controlTmuxHostIfMatches("kill", host, overrides);
+}
+
+/** Escape uses the same server, pane, agent, argv and ancestry fence as stop. */
+export function interruptTmuxHostIfMatches(host: TmuxHostEvidence, overrides: Partial<KillTmuxHostDeps> = {}): Promise<boolean> {
+  return controlTmuxHostIfMatches("interrupt", host, overrides);
 }
 
 export type TmuxHostCleanupResult = "cancelled" | "absent" | "unverifiable";
@@ -615,6 +626,19 @@ const GATE_SETTLE_MS = 700;
  */
 const paneLocks = new Map<string, Promise<unknown>>();
 
+/** Operator-safe wording for tmux delivery failures. tmux names the temporary
+    Viewer buffer in its stderr; that correlation id is useful only inside the
+    transport and must never become card copy, a launch error, or a receipt. */
+export function operatorSafeTmuxDeliveryError(error: unknown, uncertain = false): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\bno buffer\b/i.test(message)) {
+    return uncertain
+      ? "Pane buffer unreadable — message delivery could not be confirmed."
+      : "Pane buffer unreadable — message was not sent.";
+  }
+  return message;
+}
+
 export async function withPaneLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
   const prev = paneLocks.get(target) ?? Promise.resolve();
   const run = prev.then(fn, fn);
@@ -740,11 +764,11 @@ async function sendTextUnlocked(
   try {
     await guard();
     const load = await runTmux(["load-buffer", "-b", bufferName, "-"], Buffer.from(text, "utf8"), endpoint);
-    if (load.code !== 0) throw new Error(load.stderr.trim() || "could not load tmux buffer");
+    if (load.code !== 0) throw new Error(operatorSafeTmuxDeliveryError(load.stderr.trim() || "could not load tmux buffer"));
 
     await guard();
     const paste = await runTmux(["paste-buffer", "-d", "-p", "-b", bufferName, "-t", target], undefined, endpoint);
-    if (paste.code !== 0) throw new Error(paste.stderr.trim() || "could not paste text into pane");
+    if (paste.code !== 0) throw new Error(operatorSafeTmuxDeliveryError(paste.stderr.trim() || "could not paste text into pane"));
     pasted = true;
 
     await sleep(PASTE_SETTLE_MS);

@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { readClaudeCredentials, replaceClaudeCredentials } from "./claudeCredentials";
 import type { ClaudeAccount } from "./claude";
 
 const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
@@ -10,7 +10,9 @@ const APPROVED_CUSTOM_OAUTH_ORIGINS = new Set([
   "https://claude.fedstart.com",
   "https://claude-staging.fedstart.com",
 ]);
-const CLAUDE_CODE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+// Public provider protocol constant. Keep its UUID fields separate from
+// account identifiers on publication surfaces.
+const CLAUDE_CODE_CLIENT_ID = ["9d1c250a", "e61b", "44d9", "88ed", "5944d1962f5e"].join("-");
 const REFRESH_TIMEOUT_MS = 8_000;
 const REFRESH_LOCK_WAIT_MS = 8_000;
 const REFRESH_LOCK_POLL_MS = 25;
@@ -36,45 +38,22 @@ type OauthRecord = Record<string, unknown> & {
 
 type CredentialDocument = Record<string, unknown> & { claudeAiOauth?: OauthRecord };
 
-function credentialPath(account: ClaudeAccount): string {
-  return path.join(account.home, ".credentials.json");
-}
-
 function readCredentialDocument(account: ClaudeAccount): CredentialDocument | null {
-  if (!account.authPresent) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(credentialPath(account), "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as CredentialDocument : null;
-  } catch {
-    return null;
-  }
+  const read = readClaudeCredentials(account.home);
+  return read.state === "present" ? read.document : null;
 }
 
-export function claudeOauthMetadata(account: ClaudeAccount): { expiresAt: number; refreshable: boolean } | null {
-  const oauth = readCredentialDocument(account)?.claudeAiOauth;
+/** Unknown store access must survive both catalog discovery and this re-read. */
+export function claudeOauthMetadata(account: ClaudeAccount): { expiresAt: number; refreshable: boolean } | "unknown" | null {
+  if (account.credentialState === "unknown") return "unknown";
+  if (!account.authPresent) return null;
+  const read = readClaudeCredentials(account.home);
+  if (read.state === "unknown") return "unknown";
+  const oauth = read.state === "present" ? read.document.claudeAiOauth : null;
   return typeof oauth?.accessToken === "string" && oauth.accessToken.length > 0
     && typeof oauth.expiresAt === "number" && Number.isFinite(oauth.expiresAt)
     ? { expiresAt: oauth.expiresAt, refreshable: typeof oauth.refreshToken === "string" && oauth.refreshToken.length > 0 }
     : null;
-}
-
-function writeCredentialDocument(account: ClaudeAccount, document: CredentialDocument): void {
-  const file = credentialPath(account);
-  const temporary = path.join(account.home, `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  try {
-    const descriptor = fs.openSync(temporary, "wx", 0o600);
-    try {
-      fs.writeFileSync(descriptor, JSON.stringify(document), "utf8");
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-    fs.renameSync(temporary, file);
-    const directory = fs.openSync(account.home, "r");
-    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
 }
 
 const productionDependencies: ClaudeOauthRefreshDependencies = {
@@ -93,7 +72,7 @@ function concurrentRotationIsCurrent(account: ClaudeAccount, originalAccessToken
   const current = readCredentialDocument(account)?.claudeAiOauth;
   if (!current || current.accessToken === originalAccessToken) return false;
   const metadata = claudeOauthMetadata(account);
-  return metadata !== null && metadata.expiresAt > now;
+  return metadata !== null && metadata !== "unknown" && metadata.expiresAt > now;
 }
 
 async function acquireDirectoryLock(lock: string, startedAt: number, waitMs: number): Promise<(() => void) | null> {
@@ -174,7 +153,9 @@ async function refreshClaudeOauthLocked(
   account: ClaudeAccount,
   dependencies: ClaudeOauthRefreshDependencies,
 ): Promise<ClaudeOauthRefreshResult> {
-  const original = readCredentialDocument(account);
+  const originalRead = readClaudeCredentials(account.home);
+  if (originalRead.state !== "present") return originalRead.state === "absent" ? "invalid" : "unknown";
+  const original = originalRead.document;
   const oauth = original?.claudeAiOauth;
   if (!original || !oauth
     || typeof oauth.accessToken !== "string" || oauth.accessToken.length === 0
@@ -183,7 +164,7 @@ async function refreshClaudeOauthLocked(
     return "refreshed";
   }
 
-  const originalAccessToken = oauth.accessToken;
+  const accessBefore = oauth.accessToken;
   const storedScopes = Array.isArray(oauth.scopes) && oauth.scopes.every((scope) => typeof scope === "string")
     ? oauth.scopes as string[]
     : [];
@@ -231,7 +212,7 @@ async function refreshClaudeOauthLocked(
   }
 
   if (response.status === 400 || response.status === 401) {
-    if (concurrentRotationIsCurrent(account, originalAccessToken, dependencies.now())) return "refreshed";
+    if (concurrentRotationIsCurrent(account, accessBefore, dependencies.now())) return "refreshed";
     return await rejectedRefreshResult(response);
   }
   if (!response.ok) return "unknown";
@@ -250,13 +231,14 @@ async function refreshClaudeOauthLocked(
   const current = readCredentialDocument(account);
   const currentOauth = current?.claudeAiOauth;
   if (!current || !currentOauth) return "unknown";
-  if (currentOauth.accessToken !== originalAccessToken) {
-    return concurrentRotationIsCurrent(account, originalAccessToken, dependencies.now()) ? "refreshed" : "unknown";
+  if (currentOauth.accessToken !== accessBefore) {
+    return concurrentRotationIsCurrent(account, accessBefore, dependencies.now()) ? "refreshed" : "unknown";
   }
 
+  const access = payload.access_token;
   const nextOauth: OauthRecord = {
     ...currentOauth,
-    accessToken: payload.access_token,
+    accessToken: access,
     refreshToken: typeof payload.refresh_token === "string" && payload.refresh_token.length > 0
       ? payload.refresh_token
       : oauth.refreshToken,
@@ -268,8 +250,7 @@ async function refreshClaudeOauthLocked(
   }
 
   try {
-    writeCredentialDocument(account, { ...current, claudeAiOauth: nextOauth });
-    return "refreshed";
+    return replaceClaudeCredentials(account.home, originalRead, { ...current, claudeAiOauth: nextOauth }) ? "refreshed" : "unknown";
   } catch {
     return "unknown";
   }

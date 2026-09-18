@@ -9,15 +9,16 @@ import { translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /*
- * The pin in the phone's OTHER two leaves (PRD #976 decision 5, issue #979).
+ * The seat card in the phone's OTHER two leaves (PRD #976 decision 5, issue
+ * #979; mobile v2 lane 6).
  *
  * `ProjectDashboard` chooses between three mobile leaves — the focus view, the
  * catalog list behind the Схема/Список toggle, and the empty project — and the
  * operator's requirement is one row that is always first in the project's
  * conversation list, not one row in whichever leaf happens to be showing. The
- * focus view's own strip is covered by `mobileOrchestratorRow.dom.test.tsx`;
- * these cases mount the REAL dashboard at 390×844 and drive it into the other
- * two, because that is where the row went missing.
+ * board leaf's own card is covered by `mobileSeatCard.dom.test.tsx`; these
+ * cases mount the REAL dashboard at 390×844 and drive it into the other two,
+ * because that is where the card went missing.
  *
  * What each case proves is structural, and happy-dom does no layout: the row is
  * a SIBLING of the leaf rather than one of its rows, so nothing the leaf does
@@ -152,7 +153,7 @@ const dashboardProps = (over: Partial<DashboardProps> = {}): DashboardProps => (
   files: [], flows: [], pipelines: [], workflows: [], tasks: [],
   project: PROJECT, loaded: true, openNonce: 0, archived: false,
   catalogKnown: false, catalogConversationCount: 0,
-  projectCwd: "/repo/atlas", onArchive: () => {}, onUnarchive: () => {}, onMenu: () => {},
+  projectCwd: "/repo/atlas", onArchive: () => {}, onUnarchive: () => {},
   ...over,
 });
 
@@ -179,11 +180,11 @@ function mount(props: Partial<DashboardProps> = {}): HTMLElement {
   return host as unknown as HTMLElement;
 }
 
-const rows = (host: HTMLElement) => [...host.querySelectorAll("[data-orchestrator-row]")];
+const rows = (host: HTMLElement) => [...host.querySelectorAll("[data-mobile2-seat-card]")];
 const row = (host: HTMLElement) => rows(host)[0] as unknown as HTMLElement;
 const slot = (host: HTMLElement) => host.querySelector('[data-testid="mobile-orchestrator-slot"]') as unknown as HTMLElement;
 const listLeaf = (host: HTMLElement) => (host.querySelector("input[type=search]")?.closest(".overflow-y-auto") ?? null) as unknown as HTMLElement | null;
-const openButton = (host: HTMLElement) => host.querySelector("[data-orchestrator-row-open]") as unknown as HTMLButtonElement;
+const openButton = (host: HTMLElement) => host.querySelector("[data-mobile2-seat-open]") as unknown as HTMLButtonElement;
 
 /** The pin, wherever it is mounted: exactly one, before the leaf in document
     order, and outside whatever that leaf scrolls. */
@@ -213,9 +214,9 @@ test("the catalog list leaf carries the pin first, outside the scroller, and nev
   expect(slot(host)).not.toBeNull();
   /* Once the seat read answers, this leaf's row is the create affordance — the
      same one the focus view shows, from the same projection. */
-  expect(await waitFor(() => row(host)?.getAttribute("data-orchestrator-row-state") === "draft")).toBe(true);
-  expect(openButton(host).textContent).toContain(translate("en", "orchMobile.create"));
-  expect(leaf.querySelectorAll("[data-orchestrator-row]")).toHaveLength(0);
+  expect(await waitFor(() => row(host)?.getAttribute("data-mobile2-seat-state") === "draft")).toBe(true);
+  expect(openButton(host).textContent).toContain(translate("en", "mobile2.seat.create"));
+  expect(leaf.querySelectorAll("[data-mobile2-seat-card]")).toHaveLength(0);
 });
 
 test("searching the list cannot filter the pin away", async () => {
@@ -240,14 +241,15 @@ test("searching the list cannot filter the pin away", async () => {
   expectPinnedBefore(host, leaf);
 });
 
-test("a project with nothing in it still offers the create row — the leaf where an orchestrator is most wanted", async () => {
+test("a project with nothing in it still offers the invitation — the leaf where an orchestrator is most wanted", async () => {
   const host = mount();
-  expect(await waitFor(() => row(host)?.getAttribute("data-orchestrator-row-state") === "draft")).toBe(true);
+  expect(await waitFor(() => row(host)?.getAttribute("data-mobile2-seat-state") === "draft")).toBe(true);
 
   const empty = [...host.querySelectorAll("div")].find((node) => node.textContent === translate("en", "dash.emptyTitle"))!;
   expectPinnedBefore(host, empty as unknown as HTMLElement);
-  expect(row(host).getAttribute("data-orchestrator-row-state")).toBe("draft");
-  expect(openButton(host).textContent).toContain(translate("en", "orchMobile.create"));
+  expect(row(host).getAttribute("data-mobile2-seat-state")).toBe("draft");
+  expect(row(host).getAttribute("data-mobile2-seat-shape")).toBe("invitation");
+  expect(openButton(host).textContent).toContain(translate("en", "mobile2.seat.create"));
 
   /* And it is the same create path, not a second one: the sheet the row opens
      posts the draft to the seat route. */
@@ -264,13 +266,48 @@ test("a project with nothing in it still offers the create row — the leaf wher
   expect(String(seatPosts[0]!.clientRequestId)).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
 });
 
-test("the focus view leaf still owns its own single pin — the leaves never double-mount it", async () => {
+test("with no seat the board's footer is the invitation's other half, and it opens the same create draft", async () => {
   const files = [conversation({ activity: "live", proc: "running", pid: 42 })];
   const host = mount({ files, catalogKnown: true, catalogConversationCount: 1 });
-  expect(await waitFor(() => host.querySelector('[data-testid="mobile-chat-shell"]') !== null)).toBe(true);
+  expect(await waitFor(() => row(host)?.getAttribute("data-mobile2-seat-shape") === "invitation")).toBe(true);
 
+  /* The dock says what the board is missing rather than offering to talk to
+     something that is not there (README §4.1). */
+  const dock = host.querySelector("[data-mobile2-dock] button") as unknown as HTMLButtonElement;
+  expect(dock).not.toBeNull();
+  expect(dock.textContent).toContain(translate("en", "mobile2.seat.createDock"));
+  /* Nothing to dictate to yet, so the mic is not on it. */
+  expect(dock.querySelector("svg.lucide-mic")).toBeNull();
+
+  /* And it opens the card's OWN draft — one create path, not a second. */
+  flushSync(() => dock.click());
+  await settle();
+  const sheet = host.querySelector('[data-mobile2-sheet="rotate"]') as unknown as HTMLElement;
+  expect(sheet).not.toBeNull();
+  expect((sheet.querySelector("[data-orchestrator-mandate]") as unknown as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
+});
+
+test("the board leaf carries the single pin above its sections, and the conversation it opens mounts no pin at all", async () => {
+  const files = [conversation({ activity: "live", proc: "running", pid: 42 })];
+  const host = mount({ files, catalogKnown: true, catalogConversationCount: 1 });
+  /* The phone's first leaf is the board (mobile v2 lane 2): the pin is its
+     Orchestrator card, above every section row and outside what the list
+     scrolls. */
+  expect(await waitFor(() => host.querySelector("[data-mobile2-board]") !== null)).toBe(true);
+  const board = host.querySelector("[data-mobile2-board]") as unknown as HTMLElement;
   expect(rows(host)).toHaveLength(1);
-  /* Inside the focus view's strip, and NOT in the dashboard's own slot. */
+  expect(slot(host)).not.toBeNull();
+  const firstRow = board.querySelector('[data-mobile2-row="conversation"]') as unknown as HTMLElement;
+  expect(firstRow).not.toBeNull();
+  expect(row(host).compareDocumentPosition(firstRow) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  /* Opening a row pushes the conversation screen (mobile v2 lane 3), which has
+     no strip: the pin that used to ride it is gone from this leaf — the seat is
+     reached from the switcher's first section and from `⋯ › Orchestrator seat`,
+     and lane 6 gives it the board's seat card. What must never happen is TWO
+     pins, so the dashboard's own slot stays absent here as well. */
+  flushSync(() => firstRow.click());
+  expect(await waitFor(() => host.querySelector('[data-testid="mobile-chat-shell"]') !== null)).toBe(true);
+  expect(rows(host)).toHaveLength(0);
   expect(slot(host)).toBeNull();
-  expect(row(host).closest('[data-testid="mobile-chat-shell"]')).not.toBeNull();
 });

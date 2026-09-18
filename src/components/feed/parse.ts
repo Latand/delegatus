@@ -14,12 +14,14 @@ import type { MandateDelivery, MessageOrigin } from "@/lib/runtime/messageOrigin
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 import { isViewerMcpServer } from "@/lib/mcp/presentation";
 import type { FileEntry } from "@/lib/types";
+import { classifyTurnRecord } from "@/lib/turnRecords";
 import { parseScheduleWakeup, refineWakeupFromResult, type WakeupInfo } from "@/lib/wakeup";
 
 import type { GlyphName } from "../icons";
 import { hhmm } from "../utils";
 import { decodeTerminalText } from "./ansi";
-import { diffFromApplyPatch, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
+import { elapsedDurationMs, timestampMilliseconds } from "./duration";
+import { diffFromApplyPatch, diffFromCodexFileChange, normalizeEdit, type DiffModel, type FileDiff } from "./diff";
 import { familyOf, summarizeTool, type ArgChip, type FeedEngine, type ToolFamily } from "./tools";
 
 /* Feed labels resolve against the active locale at build/render time; a locale
@@ -33,6 +35,16 @@ export type ToolStatus = "run" | "ok" | "err";
     (e.g. a highlighted Read body) actually needs them. */
 export type ToolBody = { type: "diff"; files: FileDiff[]; filesTruncated: boolean };
 
+/** One ordered block of a tool result (#1498). A result is text until an
+    engine hands the agent a picture — a Read of a raster, a capture script's
+    frame — and a picture cannot survive the flattened string. A `text` block
+    is decoded, redacted and capped like the preview; an `image` block is the
+    raster the agent saw, bounded by the inbox image policy, with the file's
+    dimensions when the engine reported them. */
+export type ToolOutputBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; media: string; data: string; w?: number; h?: number; bytes?: number };
+
 /** One inner operation of a `functions.exec` orchestration record. Per-call
     status and output are not in the transcript — the combined output attaches
     to the outer event — so a nested call carries only what was parsed: its
@@ -43,9 +55,10 @@ export type NestedCall = {
   family: ToolFamily;
   icon: GlyphName;
   summary: string;
+  children?: NestedCall[];
 };
 
-/** The two-level orchestration detail of a `functions.exec` record. */
+/** Parsed orchestration detail, including statically known nested exec inputs. */
 export type Orchestration = { source: string; sourceTruncated: boolean; calls: NestedCall[] };
 
 /** A `ScheduleWakeup` call, resolved for the dedicated countdown card.
@@ -90,11 +103,18 @@ export type ToolEvent = {
   statusLabel: string;
   outputPreview: string;
   outputTruncated: boolean;
+  /** The result's ordered text and image blocks (#1498). Present only when the
+      result carried at least one picture; a text-only result keeps
+      `outputPreview` alone and the card's plain text path. The flattened
+      preview keeps a text placeholder where each picture sits, so copy,
+      speech and the phone's failure detail still read in order. */
+  outputBlocks?: ToolOutputBlock[];
   /** Working directory recovered from the call args or a `cd … &&` prefix. */
   cwd?: string;
   /** Numeric exit code recovered from a `exited with code N` result line. */
   exitCode?: number;
-  /** Wall-clock duration in ms, from a Codex `Wall time` preamble. */
+  /** Elapsed duration in ms. Transcript timestamps take precedence; legacy
+      Codex wrappers can supply a `Wall time` fallback. */
   durationMs?: number;
   /** Result timestamp, once the tool result attaches (end of the run). */
   endTs?: unknown;
@@ -181,6 +201,7 @@ export type TranscriptRecordItem = {
   kind: "record";
   ts: unknown;
   recordType: string;
+  summary: string;
   body: string;
   truncated: boolean;
 };
@@ -222,6 +243,13 @@ export type CmdGroupItem = {
     prove nothing beyond the row being one. Nothing about the transcript
     changes: this kind exists only between the resolver and the card. */
 export type MandateItem = { kind: "mandate"; ts: unknown; text: string; mandate: MandateDelivery };
+export interface ReasoningMember {
+  sourceId: string;
+  anchorKey: string;
+  text: string;
+  availability: "available" | "unavailable";
+}
+
 export type Item =
   | { kind: "prose"; ts: unknown; text: string; engine: "codex" | "claude" | "openclaw"; sourceId?: string }
   | { kind: "user"; ts: unknown; text: string; selectedContext?: SelectedContextRef }
@@ -236,7 +264,7 @@ export type Item =
   | TranscriptRecordItem
   | Tmsg
   | { kind: "tnote"; text: string }
-  | { kind: "think"; text: string }
+  | { kind: "think"; text: string; sourceId?: string; availability?: "available" | "unavailable"; members?: ReasoningMember[] }
   | { kind: "image"; media: string; data: string; w?: number; h?: number; bytes?: number }
   | { kind: "inbox-image"; name: string; path: string }
   | { kind: "blob"; bytes: number; text: string; sourceId?: string }
@@ -255,6 +283,8 @@ export interface FeedEntry {
   anchorKey: string | null;
   key: string;
   item: Item;
+  /** Receipt-to-completion total attached to the response that closed a turn. */
+  responseDurationMs?: number;
 }
 
 export interface FeedSnapshot {
@@ -467,6 +497,7 @@ interface CodexUserContent {
    render approved inline raster data as an image, and describe every other
    non-empty attachment without exposing its payload in the feed. */
 function normalizeCodexUserContent(content: unknown): CodexUserContent {
+  if (typeof content === "string") return { ...decodeCodexStructuredUserText(content), attachments: [] };
   const text: string[] = [];
   const attachments: Item[] = [];
   for (const part of arr(content)) {
@@ -504,26 +535,103 @@ function normalizeCodexUserContent(content: unknown): CodexUserContent {
   return { ...decodeCodexStructuredUserText(text.join(" ").trim()), attachments };
 }
 
-/** Responses custom tools return either plain text or typed text blocks. */
-function toolOutputText(value: unknown): string {
-  if (typeof value === "string") return redactTranscriptText(value);
-  if (Array.isArray(value)) {
-    return value
-      .map((part) => {
-        if (typeof part === "string") return redactTranscriptText(part);
-        if (typeof part === "number" || typeof part === "boolean") return String(part);
-        if (!part || typeof part !== "object" || Array.isArray(part)) return "";
-        const block = rec(part);
-        const text = textPart(block.text) || textPart(block.input_text) || textPart(block.output_text);
-        if (text) return redactTranscriptText(text);
-        if (block.type === "input_image" || block.type === "image") return `[${tr("render.imageOutput")}]`;
-        const type = redactTranscriptText(textPart(block.type)).slice(0, ATTACHMENT_TYPE_MAX);
-        return `[${type ? tr("render.toolOutputType", { type }) : tr("render.toolOutput")}]`;
-      })
-      .filter(Boolean)
-      .join("\n");
+type ToolImageBlock = Extract<ToolOutputBlock, { type: "image" }>;
+/** A tool result parsed for the card: the flattened text every consumer reads,
+    and — only when a picture survived — the ordered blocks the card draws. */
+type ToolOutput = { text: string; blocks?: ToolOutputBlock[] };
+
+const BASE64_BODY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/* The raster a tool-result block carries, in either engine's shape: Claude's
+   `{ source: { type: "base64", media_type, data } }` and Codex's
+   `{ image_url: "data:…;base64,…" }` (or `{ image_url: { url } }` / `data`).
+   Null for anything the feed may not draw — no payload, an unsupported media
+   type, a body that is not base64, or one over the inbox limit — so the caller
+   keeps the text placeholder for it and the card degrades to text (#1498). */
+function toolImageBlock(block: Record<string, unknown>): ToolImageBlock | null {
+  const source = rec(block.source);
+  const inline = textPart(source.data);
+  if (inline) {
+    const media = textPart(source.media_type).trim().toLowerCase();
+    if (!inboxImageExt(media)) return null;
+    if (!BASE64_BODY_RE.test(inline) || base64DecodedLength(inline) > MAX_INBOX_IMAGE_BYTES) return null;
+    return { type: "image", media, data: inline };
   }
-  return value === undefined || value === null ? "" : redactTranscriptText(JSON.stringify(value));
+  const url = textPart(block.image_url) || textPart(rec(block.image_url).url) || textPart(block.data);
+  const image = url ? codexImageFromDataUrl(url) : null;
+  return image ? { type: "image", media: image.media, data: image.data } : null;
+}
+
+/* Typed result parts become one flattened text and, when a picture survived,
+   the ordered blocks. Text parts keep flowing into the string exactly as
+   before; a picture leaves a placeholder in the string and rides beside it as
+   a block, so the card can draw it where the transcript put it (#1498).
+   `decorate` lets the Claude arm attach the file's reported dimensions. */
+function toolOutputFromBlocks(parts: unknown[], decorate: (image: ToolImageBlock, ordinal: number) => ToolImageBlock = (image) => image): ToolOutput {
+  const texts: string[] = [];
+  const blocks: ToolOutputBlock[] = [];
+  let pictures = 0;
+  const pushText = (text: string) => {
+    if (!text) return;
+    texts.push(text);
+    const last = blocks[blocks.length - 1];
+    if (last?.type === "text") last.text = `${last.text}\n${text}`;
+    else blocks.push({ type: "text", text });
+  };
+  for (const part of parts) {
+    if (typeof part === "string") {
+      pushText(redactTranscriptText(part));
+      continue;
+    }
+    if (typeof part === "number" || typeof part === "boolean") {
+      pushText(String(part));
+      continue;
+    }
+    if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+    const block = rec(part);
+    const text = textPart(block.text) || textPart(block.input_text) || textPart(block.output_text);
+    if (text) {
+      pushText(redactTranscriptText(text));
+      continue;
+    }
+    if (block.type === "input_image" || block.type === "image") {
+      const image = toolImageBlock(block);
+      if (image) {
+        pictures += 1;
+        blocks.push(decorate(image, pictures));
+        texts.push(`[${tr("render.imageOutput")}]`);
+      } else {
+        pushText(`[${tr("render.imageOutput")}]`);
+      }
+      continue;
+    }
+    const type = redactTranscriptText(textPart(block.type)).slice(0, ATTACHMENT_TYPE_MAX);
+    pushText(`[${type ? tr("render.toolOutputType", { type }) : tr("render.toolOutput")}]`);
+  }
+  return { text: texts.join("\n"), ...(pictures ? { blocks } : {}) };
+}
+
+/** Responses custom tools return either plain text or typed text blocks, and a
+    typed block may be a picture (#1498). */
+function toolOutput(value: unknown): ToolOutput {
+  if (typeof value === "string") return { text: redactTranscriptText(value) };
+  if (Array.isArray(value)) return toolOutputFromBlocks(value);
+  return { text: value === undefined || value === null ? "" : redactTranscriptText(JSON.stringify(value)) };
+}
+
+function toolOutputText(value: unknown): string {
+  return toolOutput(value).text;
+}
+
+/* A Read's `toolUseResult.file` describes the one raster the Read returned:
+   its dimensions and byte size label the picture's chip. It says nothing about
+   a result carrying several pictures, so those keep their bare blocks. */
+function withFileDimensions(image: ToolImageBlock, fileWrap: Record<string, unknown>): ToolImageBlock {
+  const dims = rec(fileWrap.dimensions);
+  const w = num(dims.originalWidth);
+  const h = num(dims.originalHeight);
+  const bytes = num(fileWrap.originalSize);
+  return { ...image, ...(w !== undefined ? { w } : {}), ...(h !== undefined ? { h } : {}), ...(bytes !== undefined ? { bytes } : {}) };
 }
 
 /* Read the interactive session identifier from the original output envelope
@@ -553,6 +661,7 @@ function toolOutputFailed(text: string): boolean {
 }
 
 const RECORD_FIELD_MAX = 4_000;
+const RECORD_SUMMARY_MAX = 160;
 const SENSITIVE_RECORD_KEY = /(?:api.?key|access.?token|refresh.?token|authorization|bearer|secret|password|passwd|pwd|token)/i;
 const SENSITIVE_RECORD_TEXT = /(?:api|token|authorization|bearer|secret|password|passwd|pwd)/i;
 const JSON_SECRET_VALUE = /("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|bearer|secret|password|passwd|pwd|token)"\s*:\s*")[^"]*/gi;
@@ -588,6 +697,15 @@ function transcriptRecordBody(value: unknown): { body: string; truncated: boolea
   ) ?? "{}";
   const bounded = debugRaw(serialized);
   return { body: bounded.raw, truncated: fieldTruncated || bounded.truncated };
+}
+
+function transcriptRecordSummary(value: unknown, body: string): string {
+  const record = rec(value);
+  const preferred = [record.summary, record.message, record.text, record.detail, record.name, record.query, record.path, record.status]
+    .find((candidate) => typeof candidate === "string" && candidate.trim());
+  const source = typeof preferred === "string" ? preferred : body;
+  const safe = redactTranscriptText(source).replace(/\s+/g, " ").trim();
+  return safe.length > RECORD_SUMMARY_MAX ? safe.slice(0, RECORD_SUMMARY_MAX - 1) + "…" : safe;
 }
 
 function boundedMcpRecord(value: unknown): Record<string, unknown> {
@@ -656,6 +774,29 @@ const WAKEUP_PROMPT_MAX = 4_000;
 /* A Codex result-preamble line (custom-tool + interactive-shell wrappers, all
    known variants). Used to strip the contiguous leading metadata block. */
 const PREAMBLE_LINE = /^(?:Chunk ID:|Wall time\b|Original token count:|Output:[ \t]*$|Script completed\b|Script running with (?:cell|session) ID\b|Process running with (?:cell|session) ID\b|Process exited with code\b)/;
+
+/* One result text made readable: real newlines, ANSI removed (issue #141), and
+   — for the leading block of a result — the Codex wrapper preamble stripped.
+   A bare `{}` (a script that returned nothing) is no output (issue #90). */
+function cleanOutputText(text: string, stripPreamble: boolean): string {
+  const lines = decodeTerminalText(text).split("\n");
+  let start = 0;
+  if (stripPreamble) while (start < lines.length && PREAMBLE_LINE.test(lines[start]!)) start += 1;
+  const stripped = lines.slice(start).join("\n").trim();
+  return stripped === "{}" ? "" : stripped;
+}
+
+/* Adjacent text blocks read as one block, so the seam between what earlier
+   polls carried and what a new result adds never splits a paragraph. */
+function mergeTextBlocks(blocks: readonly ToolOutputBlock[]): ToolOutputBlock[] {
+  const out: ToolOutputBlock[] = [];
+  for (const block of blocks) {
+    const last = out[out.length - 1];
+    if (block.type === "text" && last?.type === "text") out[out.length - 1] = { type: "text", text: `${last.text}\n${block.text}` };
+    else out.push(block);
+  }
+  return out;
+}
 const CODE_EXT_RE = /\.([A-Za-z0-9]{1,10})$/;
 const CWD_MAX = 400;
 
@@ -996,7 +1137,7 @@ function batchCommands(fullInput: string): string[] {
  * the full source and raw record expose the ground truth at level 2. Returns
  * null for a plain custom tool, which keeps rendering as one generic row.
  */
-function parseOrchestration(input: string): {
+function parseOrchestration(input: string, depth = 0): {
   overlay: Partial<ToolEvent>;
   body?: Orchestration;
   diff?: DiffModel;
@@ -1005,16 +1146,21 @@ function parseOrchestration(input: string): {
   if (!input || !/\btools\.[A-Za-z_]\w*\s*\(/.test(input)) return null;
   const calls: NestedCall[] = [];
   let concreteInteractive: { tool: "wait" | "write_stdin"; args: Record<string, unknown> } | undefined;
-  ORCH_CALL_RE.lastIndex = 0;
+  const callPattern = new RegExp(ORCH_CALL_RE.source, "g");
   let match: RegExpExecArray | null;
-  while ((match = ORCH_CALL_RE.exec(input)) && calls.length < ORCH_MAX_CALLS) {
+  while ((match = callPattern.exec(input)) && calls.length < ORCH_MAX_CALLS) {
     const method = match[1];
     const open = match.index + match[0].length - 1; // the '(' at the end of the match
     const argsSrc = sliceCallArgs(input, open);
     const tool = ORCH_METHOD_TOOL[method] ?? method;
     const args = orchCallArgs(tool, argsSrc, input);
     const s = summarizeTool(tool, args, "codex");
-    calls.push({ id: `${method}#${calls.length}`, tool: method, family: s.family, icon: s.icon, summary: s.summary });
+    // Only a literal exec input establishes another level. Dynamic arguments
+    // stay at their known summary; source text is never evaluated.
+    const nestedSource = method === "exec" ? decodeJsString(resolveField(argsSrc, input, ["input"]) || positionalLiteral(argsSrc)) : "";
+    const children = nestedSource && depth < 8 ? parseOrchestration(nestedSource, depth + 1)?.body?.calls : undefined;
+    calls.push({ id: `${method}#${calls.length}`, tool: method, family: s.family, icon: s.icon, summary: s.summary, ...(children?.length ? { children } : {}) });
+    if (method === "exec") callPattern.lastIndex = open + argsSrc.length + 2;
     if (tool === "wait" || tool === "write_stdin") {
       const concreteSession = objFieldIsConcreteScalar(argsSrc, ["session_id", "cell_id"]);
       const concreteInput = tool === "wait" || objFieldIsConcreteScalar(argsSrc, ["chars"]);
@@ -1101,9 +1247,11 @@ interface StoredEntry {
   /** Initial source line. A later echo can move `src`; crossing that seam
       requires a fresh window parse to preserve one-shot ordering. */
   bornSrc: number;
+  reasoningBoundary: number;
   /** Absolute index of the source line, for window-slide eviction. */
   src: number;
   item: Item;
+  responseDurationMs?: number;
 }
 
 interface CallRec {
@@ -1117,6 +1265,10 @@ interface PendingCodexUser {
   text: string;
   entrySeqs: number[];
   structured: boolean;
+  /** A later record of the same text at the same instant already replaced
+      this row like for like (#1398): the message is real whatever its text
+      looks like, and any further echo folds into the same row. */
+  echoed?: boolean;
 }
 
 type CodexAssistantShape = "event-agent" | "response-assistant";
@@ -1126,6 +1278,7 @@ interface CodexAssistantRecord {
   text: string;
   ts: unknown;
   src: number;
+  sourceId?: string;
   firstSeq: number;
   lastSeq: number;
 }
@@ -1169,6 +1322,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw";
 
   const entries: StoredEntry[] = [];
+  let reasoningBoundary = 0;
+  let reasoningTurnId = "";
+  const reasoningSeqs = new Map<string, number>();
   const calls = new Map<string, CallRec>();
   const sessionOwners = new Map<string, SessionOwner>();
   const sessionIdentity = (value: unknown): { label?: string; owner: SessionOwner } | undefined => {
@@ -1197,13 +1353,17 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /** Window start of the previous feed — a start that moved backwards means
       prepended history, which a sequential parser cannot resume across. */
   let lastStart = -Infinity;
+  /** The last line consumed, so a rewritten window of equal length is caught. */
+  let lastConsumedLine: string | undefined;
   /* Dedup/marker state remembers the source line it came from: when that line
      slides out of the window the state clears, matching what a re-parse of
      the shortened window would know. */
   let codexAssistantRecord: CodexAssistantRecord | null = null;
-  /* A composer turn is recorded as a user response item immediately followed
-     by its user_message event. The event owns the logical turn, while this
-     provisional record keeps a live tail visible until its echo arrives. */
+  /* A user turn is recorded as a user response item immediately followed by
+     its echo — the legacy user_message event, or since Codex 0.151 the thread
+     lifecycle's item_completed UserMessage envelope (#1398). The echo owns the
+     logical turn, while this provisional record keeps a live tail visible until
+     it arrives and absorbs every further echo of the same message. */
   let pendingCodexUsers: PendingCodexUser[] = [];
   let codexCompacted: { src: number } | null = null;
   /* The provider·model pair the last real OpenClaw assistant record ran on,
@@ -1226,13 +1386,68 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   let prevGroups = new Map<number, CmdGroupItem>();
   let snapshot: FeedSnapshot | null = null;
   let snapshotLive: boolean | null = null;
+  let turnStartedAt: number | null = null;
+  let turnStartedSrc: number | null = null;
+  let turnOpen = false;
+  let turnResponseSeq: number | null = null;
+  let turnFailed = false;
+  let failedResponseSeq: number | null = null;
+  let latestTurnTimestamp: number | null = null;
 
   const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
 
   const push = (item: Item): number => {
-    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, item });
+    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item });
     snapshot = null;
     return pushSeq++;
+  };
+
+  const setResponseDuration = (seq: number, durationMs: number | undefined) => {
+    const idx = entryIndex(seq);
+    if (idx < 0 || idx >= entries.length) return;
+    const entry = entries[idx];
+    if (durationMs === undefined) {
+      if (entry.responseDurationMs === undefined) return;
+      const { responseDurationMs: _removed, ...rest } = entry;
+      entries[idx] = rest;
+    } else {
+      entries[idx] = { ...entry, responseDurationMs: durationMs };
+    }
+    snapshot = null;
+  };
+
+  const finishTurn = (failed: boolean) => {
+    if (turnOpen && turnStartedAt !== null && turnResponseSeq !== null) {
+      const endedAt = Math.max(latestTurnTimestamp ?? turnStartedAt, turnStartedAt);
+      setResponseDuration(turnResponseSeq, endedAt - turnStartedAt);
+      failedResponseSeq = failed ? turnResponseSeq : null;
+    } else {
+      failedResponseSeq = null;
+    }
+    turnOpen = false;
+    turnFailed = failed;
+  };
+
+  const beginTurn = (timestampMs: number | null) => {
+    if (!turnOpen || turnStartedAt === null) {
+      turnStartedAt = timestampMs;
+      turnStartedSrc = curSrc;
+      turnResponseSeq = null;
+      turnFailed = false;
+      failedResponseSeq = null;
+    }
+    turnOpen = true;
+  };
+
+  const recoverFailedTurn = () => {
+    if (!turnFailed) return;
+    if (failedResponseSeq !== null) {
+      setResponseDuration(failedResponseSeq, undefined);
+      turnResponseSeq = failedResponseSeq;
+    }
+    failedResponseSeq = null;
+    turnFailed = false;
+    turnOpen = true;
   };
 
   const pushBlobIfHuge = (text: string, sourceId?: string): boolean => {
@@ -1330,7 +1545,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   ): { firstSeq: number; lastSeq: number } | null => {
     if (!text.trim()) return null;
     const firstSeq = pushSeq;
-    if (pushBlobIfHuge(text, sourceId)) return { firstSeq, lastSeq: pushSeq - 1 };
+    const remember = (emitted: { firstSeq: number; lastSeq: number }) => {
+      if (turnOpen) turnResponseSeq = emitted.lastSeq;
+      return emitted;
+    };
+    if (pushBlobIfHuge(text, sourceId)) return remember({ firstSeq, lastSeq: pushSeq - 1 });
     const engine = feedEngine(cfg.engine);
     if (pushStructured(ts, text, (segment) => push({
       kind: "prose",
@@ -1339,10 +1558,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       engine,
       ...(sourceId ? { sourceId } : {}),
     }), push, sourceId)) {
-      return { firstSeq, lastSeq: pushSeq - 1 };
+      return remember({ firstSeq, lastSeq: pushSeq - 1 });
     }
     push({ kind: "prose", ts, text, engine, ...(sourceId ? { sourceId } : {}) });
-    return { firstSeq, lastSeq: pushSeq - 1 };
+    return remember({ firstSeq, lastSeq: pushSeq - 1 });
   };
   const addCodexAssistant = (
     shape: CodexAssistantShape,
@@ -1352,12 +1571,18 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   ) => {
     const normalizedText = text.trim();
     const candidate = codexAssistantRecord;
+    const sameSource = Boolean(sourceId && candidate?.sourceId === sourceId);
+    const sameSourcePrefix = Boolean(
+      sameSource && candidate && (normalizedText.startsWith(candidate.text) || candidate.text.startsWith(normalizedText)),
+    );
     if (
       candidate &&
       candidate.shape !== shape &&
       candidate.src === curSrc - 1 &&
-      candidate.text === normalizedText &&
-      sameCodexTextAtTime(candidate.ts, candidate.text, ts, normalizedText)
+      (sameSourcePrefix || (
+        candidate.text === normalizedText &&
+        sameCodexTextAtTime(candidate.ts, candidate.text, ts, normalizedText)
+      ))
     ) {
       const eventTimestamp = shape === "event-agent" ? ts : candidate.shape === "event-agent" ? candidate.ts : ts;
       for (let seq = candidate.firstSeq; seq <= candidate.lastSeq; seq += 1) {
@@ -1377,13 +1602,20 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
                 : item,
         };
       }
+      /* Current envelopes can finish with the visible answer while the adjacent
+         response mirror appends a structured citation block under the same id.
+         Keep the envelope's chronological slot and add only that suffix. */
+      if (sameSource && normalizedText.startsWith(candidate.text)) {
+        const suffix = normalizedText.slice(candidate.text.length).trim();
+        if (suffix) addProse(ts, suffix, sourceId);
+      }
       codexAssistantRecord = null;
       snapshot = null;
       return;
     }
     const emitted = addProse(ts, text, sourceId);
     codexAssistantRecord = emitted
-      ? { shape, text: normalizedText, ts, src: curSrc, firstSeq: emitted.firstSeq, lastSeq: emitted.lastSeq }
+      ? { shape, text: normalizedText, ts, src: curSrc, ...(sourceId ? { sourceId } : {}), firstSeq: emitted.firstSeq, lastSeq: emitted.lastSeq }
       : null;
   };
   /* One redaction/cap funnel for every tool event: the summary and chips are
@@ -1536,7 +1768,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   /* Attaches a result copy-on-write: the record gets a fresh ToolEvent and the
      owning entry a fresh item, so exactly one row changes identity. */
-  const attach = (callRec: CallRec | undefined, output: string, errFlag?: boolean, rawSession?: string) => {
+  const attach = (callRec: CallRec | undefined, output: string, errFlag?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
     if (!callRec) return null;
     const code = output.match(/exited with code (\d+)/)?.[1];
     /* Codex interactive-shell wall time, read before the preamble is stripped, so
@@ -1552,11 +1784,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        Strip the contiguous leading block of those lines, decode the payload (real
        newlines, ANSI removed — issue #141), and treat a bare `{}` (a script that
        returned nothing) as no output (issue #90). */
-    const lines = decodeTerminalText(output).split("\n");
-    let start = 0;
-    while (start < lines.length && PREAMBLE_LINE.test(lines[start]!)) start += 1;
-    const stripped = lines.slice(start).join("\n").trim();
-    const body = stripped === "{}" ? "" : stripped;
+    const body = cleanOutputText(output, true);
     const isErr = errFlag === true || (code !== undefined && code !== "0");
     const prev = callRec.event;
     /* An empty codex wait/stdin chunk collapses to "waiting Ns" rather than an
@@ -1581,6 +1809,25 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       outputTruncated = prev.outputTruncated || combined.length > limit;
       outputPreview = combined.slice(-limit);
     }
+    /* #1498: a result that carried pictures keeps them as ordered blocks
+       beside the flattened preview. Each text block gets the preview's own
+       decode, wrapper strip (leading block only), redaction and cap; what
+       earlier polls of the same call already showed stays ahead of them. */
+    let outputBlocks = prev.outputBlocks;
+    if (blocks?.some((block) => block.type === "image")) {
+      const limit = isErr ? OUTPUT_ERR_MAX : OUTPUT_OK_MAX;
+      const carried: ToolOutputBlock[] = prev.outputBlocks ?? (prev.outputPreview ? [{ type: "text", text: prev.outputPreview }] : []);
+      const fresh: ToolOutputBlock[] = [];
+      blocks.forEach((block, index) => {
+        if (block.type === "image") {
+          fresh.push(block);
+          return;
+        }
+        const text = redactSecrets(cleanOutputText(block.text, index === 0)).slice(-limit);
+        if (text) fresh.push({ type: "text", text });
+      });
+      outputBlocks = mergeTextBlocks([...carried, ...fresh]);
+    }
     let stderr = prev.stderr;
     let stderrTruncated = prev.stderrTruncated;
     if (stderrBody) {
@@ -1589,14 +1836,21 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       stderr = combined.slice(-OUTPUT_ERR_MAX);
     }
     const exitCode = code !== undefined ? Number(code) : prev.exitCode;
-    const durationMs = wallSeconds !== undefined ? Math.round(Number(wallSeconds) * 1000) : prev.durationMs;
+    const transcriptDurationMs = elapsedDurationMs(prev.ts, resultTs) ?? undefined;
+    const wrapperDurationMs = wallSeconds !== undefined ? Math.round(Number(wallSeconds) * 1000) : undefined;
+    const durationMs = transcriptDurationMs ?? wrapperDurationMs ?? prev.durationMs;
     /* The exec that opened the session reports it in its result preamble; a
        follow-up already carries its session from its args, so keep that. */
     const detectedSession = prev.family === "shell" ? sessionIdentity(rawSession ?? output.match(SESSION_RESULT_RE)?.[1]) : undefined;
     const session = prev.session ?? detectedSession?.label;
     const sessionOwner = sessionOwnership.get(prev) ?? detectedSession?.owner;
-    const startMs = typeof prev.ts === "string" || typeof prev.ts === "number" ? Date.parse(String(prev.ts)) : NaN;
-    const endTs = durationMs !== undefined && Number.isFinite(startMs) ? new Date(startMs + durationMs).toISOString() : prev.endTs;
+    const startMs = timestampMilliseconds(prev.ts);
+    const resultMs = timestampMilliseconds(resultTs);
+    const endTs = resultMs !== null
+      ? resultTs
+      : durationMs !== undefined && startMs !== null
+        ? new Date(startMs + durationMs).toISOString()
+        : prev.endTs;
     /* A wakeup's result carries the RESOLVED schedule (issue #161): on success
        refine the fire time from it (it overrides the requested delay); on error
        the call is rejected — mark it failed so it never counts down and never
@@ -1623,10 +1877,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         : idleWait
           ? tr("tools.waitingSeconds", { n: Math.round(Number(wallSeconds)) })
           : "ok",
-      open: prev.open || isErr,
+      /* A result that carried a picture opens the card by default the way an
+         edit's diff does (issue #90): the chip is visible without a click and
+         decodes nothing until the operator opens it (#1498). */
+      open: prev.open || isErr || outputBlocks !== prev.outputBlocks,
       srcResult: curSrc,
       outputPreview,
       outputTruncated,
+      ...(outputBlocks !== undefined ? { outputBlocks } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(endTs !== undefined ? { endTs } : {}),
@@ -1650,7 +1908,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (wakeup && wakeup.failed) recomputeWakeupStates();
     return event;
   };
-  const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string) => {
+  const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[]) => {
     if (!callId) return;
     const tseq = tmsgSeqs.get(callId);
     if (tseq !== undefined) {
@@ -1667,7 +1925,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       return;
     }
-    const event = attach(calls.get(callId), output, err, rawSession);
+    const event = attach(calls.get(callId), output, err, rawSession, resultTs, blocks);
     if (!event && output && showSvc) push({ kind: "svc", text: "output: " + redactSecrets(output).slice(0, 200) });
   };
   const addSvc = (text: string) => {
@@ -1681,10 +1939,359 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const addNote = (text: string) => {
     push({ kind: "note", text });
   };
+  const addThink = (text: string, sourceId?: string) => {
+    const normalized = text.trim();
+    if (sourceId) {
+      const seq = reasoningSeqs.get(sourceId);
+      const idx = seq === undefined ? -1 : entryIndex(seq);
+      const previous = idx >= 0 ? entries[idx] : undefined;
+      if (previous?.item.kind === "think") {
+        // Track the last echo for window eviction, while bornSrc remains the
+        // stable anchor. Sliding across an echo seam reparses the new window.
+        entries[idx] = { ...previous, src: curSrc };
+        // Empty completions and mirrors cannot erase exposed text. Enrichment
+        // keeps the original source position and React row identity.
+        if (normalized && !previous.item.text) {
+          entries[idx] = { ...previous, src: curSrc, item: { ...previous.item, text: normalized, availability: "available" } };
+          snapshot = null;
+        }
+        return true;
+      }
+      reasoningSeqs.set(sourceId, push({ kind: "think", text: normalized, sourceId,
+        availability: normalized ? "available" : "unavailable" }));
+      return true;
+    }
+    if (!normalized) return false;
+    push({ kind: "think", text: normalized });
+    return true;
+  };
   const addRecord = (ts: unknown, recordType: string, value: unknown) => {
     const detail = transcriptRecordBody(value);
     const safeType = redactTranscriptText(recordType).slice(0, ATTACHMENT_TYPE_MAX);
-    push({ kind: "record", ts, recordType: safeType || tr("render.record"), ...detail });
+    push({ kind: "record", ts, recordType: safeType || tr("render.record"), summary: transcriptRecordSummary(value, detail.body), ...detail });
+  };
+  const addThreadItemFallback = (ts: unknown, recordType: string, value: unknown) => {
+    const detail = transcriptRecordBody(value);
+    const summary = transcriptRecordSummary(value, detail.body);
+    const safeType = redactTranscriptText(recordType).slice(0, ATTACHMENT_TYPE_MAX);
+    push({
+      kind: "record",
+      ts,
+      recordType: safeType || tr("render.record"),
+      summary,
+      body: summary,
+      truncated: detail.truncated || detail.body !== summary,
+    });
+  };
+  const codexThreadItemKind = (value: unknown): string => textPart(value).replace(/[_-]/g, "").toLowerCase();
+  const codexThreadToolStatus = (item: Record<string, unknown>, lifecycle: string): ToolStatus => {
+    const status = codexThreadItemKind(item.status);
+    if (["failed", "declined", "interrupted", "error", "errored"].includes(status)
+      || item.error !== undefined && item.error !== null
+      || item.failure !== undefined && item.failure !== null
+      || item.success === false
+      || (num(item.exitCode ?? item.exit_code) ?? 0) !== 0) return "err";
+    if (["inprogress", "running", "pending"].includes(status)) return "run";
+    if (["completed", "complete", "success", "succeeded"].includes(status)) return "ok";
+    if (lifecycle === "itemcompleted") return "ok";
+    return "run";
+  };
+  const codexThreadStatusLabel = (status: ToolStatus): string => {
+    if (status === "ok") return "ok";
+    if (status === "err") return tr("render.error");
+    return tr("render.executing");
+  };
+  const upsertCodexThreadTool = (event: ToolEvent): void => {
+    const existing = calls.get(event.id);
+    if (!existing) return void registerCall(event);
+    const next = {
+      ...event,
+      ts: existing.event.ts,
+      ...(event.status !== "run" ? { endTs: event.endTs ?? event.ts } : {}),
+    };
+    existing.event = next;
+    const idx = entryIndex(existing.seq);
+    if (idx >= 0 && entries[idx]?.item.kind === "tool") {
+      entries[idx] = { ...entries[idx], src: curSrc, item: next };
+      snapshot = null;
+    }
+  };
+  const codexThreadArgs = (value: unknown): Record<string, unknown> => {
+    if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+    if (value === undefined || value === null) return {};
+    return { input: typeof value === "string" ? value : JSON.stringify(value) };
+  };
+  const codexThreadPreview = (value: unknown): string => {
+    if (value === undefined || value === null) return "";
+    return transcriptRecordBody(value).body.replace(/\s+/g, " ").trim().slice(0, 120);
+  };
+  type CodexThreadTiming = { ts: unknown; endTs?: unknown; durationMs?: number };
+  const codexThreadTimestamp = (value: unknown): string | undefined => {
+    const milliseconds = num(value);
+    if (milliseconds === undefined) return undefined;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  };
+  const codexThreadTiming = (payload: Record<string, unknown>, fallback: unknown): CodexThreadTiming => {
+    const startMs = num(payload.started_at_ms);
+    const completedMs = num(payload.completed_at_ms);
+    const ts = codexThreadTimestamp(startMs) ?? fallback ?? codexThreadTimestamp(completedMs);
+    const endTs = codexThreadTimestamp(completedMs);
+    const durationMs = startMs !== undefined && completedMs !== undefined && completedMs >= startMs
+      ? completedMs - startMs
+      : undefined;
+    return {
+      ts,
+      ...(endTs !== undefined ? { endTs } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    };
+  };
+  const codexThreadDurationMs = (item: Record<string, unknown>, timing: CodexThreadTiming): number | undefined => {
+    const explicit = num(item.durationMs);
+    if (explicit !== undefined) return explicit;
+    const duration = rec(item.duration);
+    const seconds = num(duration.secs);
+    const nanos = num(duration.nanos);
+    if (seconds !== undefined || nanos !== undefined) {
+      return Math.round((seconds ?? 0) * 1_000 + (nanos ?? 0) / 1_000_000);
+    }
+    return timing.durationMs;
+  };
+  const codexCommandOutput = (item: Record<string, unknown>): string => {
+    const stdout = toolOutputText(item.stdout).trim();
+    const stderr = toolOutputText(item.stderr).trim();
+    const aggregate = toolOutputText(item.aggregatedOutput ?? item.aggregated_output ?? item.output).trim();
+    const combinedStreams = [stdout, stderr].filter(Boolean).join("\n");
+    let stdoutWithAggregate = stdout;
+    if (aggregate && aggregate !== stdout && aggregate !== stderr && aggregate !== combinedStreams) {
+      stdoutWithAggregate = [stdout, aggregate].filter(Boolean).join("\n");
+    } else if (!stdout && !stderr) {
+      stdoutWithAggregate = aggregate;
+    }
+    return stderr
+      ? [stdoutWithAggregate, "[stderr]", stderr].filter(Boolean).join("\n")
+      : stdoutWithAggregate;
+  };
+  const emitCodexThreadTool = (opts: {
+    item: Record<string, unknown>;
+    timing: CodexThreadTiming;
+    lifecycle: string;
+    tool: string;
+    args?: Record<string, unknown>;
+    summary?: string;
+    output?: unknown;
+  }): void => {
+    const id = textPart(opts.item.id) || "plain-" + pushSeq + "-" + String(opts.timing.ts ?? "");
+    const status = codexThreadToolStatus(opts.item, opts.lifecycle);
+    const base = newToolEvent({
+      ts: opts.timing.ts,
+      id,
+      tool: opts.tool,
+      args: opts.args,
+      engine: "codex",
+      ...(opts.summary ? { summary: opts.summary } : {}),
+    });
+    upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
+    if (status !== "run") {
+      attach(calls.get(id), toolOutputText(opts.output), status === "err", undefined, opts.timing.endTs ?? opts.timing.ts);
+    }
+    const current = calls.get(id)?.event;
+    if (!current) return;
+    const durationMs = codexThreadDurationMs(opts.item, opts.timing);
+    upsertCodexThreadTool({
+      ...current,
+      status,
+      statusLabel: codexThreadStatusLabel(status),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(opts.timing.endTs !== undefined ? { endTs: opts.timing.endTs } : {}),
+    });
+  };
+  const renderCodexThreadItem = (
+    item: Record<string, unknown>,
+    timing: CodexThreadTiming,
+    lifecycle: string,
+    assistantShape: CodexAssistantShape,
+  ): boolean => {
+    const kind = codexThreadItemKind(item.type);
+    const id = textPart(item.id) || "plain-" + pushSeq + "-" + String(timing.ts ?? "");
+    const toolKind = ["functioncalloutput", "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall", "websearch", "imageview", "imagegeneration", "extension"].includes(kind);
+    // Use the renderer's tool families for every lifecycle/envelope form.
+    // A completion can update an earlier slot without appending a tool row.
+    if (toolKind) reasoningBoundary += 1;
+    if (lifecycle === "itemdelta" || (lifecycle === "itemstarted" && !toolKind)) {
+      addSvc(`${textPart(item.type) || "item"} ${lifecycle}`);
+      return true;
+    }
+    if (kind === "usermessage") {
+      addCodexUserRecord(timing.ts, normalizeCodexUserContent(item.content));
+      return true;
+    }
+    if (kind === "hookprompt") {
+      const text = arr(item.fragments).map((fragment) => textPart(fragment.text)).filter(Boolean).join("\n");
+      addSysMsg(text || "Hook prompt", "Hook prompt");
+      return true;
+    }
+    if (kind === "agentmessage") {
+      const text = normalizeCodexUserContent(item.content).text || textPart(item.text);
+      addCodexAssistant(assistantShape, timing.ts, text, id);
+      return true;
+    }
+    if (kind === "functioncalloutput") {
+      const name = [textPart(item.namespace), textPart(item.name)].filter(Boolean).join(" · ") || "function output";
+      emitCodexThreadTool({ item, timing, lifecycle, tool: textPart(item.name) || "functionCallOutput", summary: name, output: item.output });
+      return true;
+    }
+    if (kind === "plan") {
+      addNote(textPart(item.text) || "Plan updated");
+      return true;
+    }
+    if (kind === "reasoning") {
+      const exposedField = (value: unknown): string => typeof value === "string" ? value
+        : Array.isArray(value) ? value.map((part) => typeof part === "string" ? part : textPart(rec(part).text)).filter(Boolean).join("\n") : "";
+      const envelopeText = [exposedField(item.summary_text), exposedField(item.raw_content)]
+        .filter((part, index, parts) => Boolean(part.trim()) && parts.indexOf(part) === index)
+        .join("\n");
+      const text = [...arr(item.summary), ...arr(item.content)].map((part) => textPart(part.text)).filter(Boolean).join("\n")
+        || [...(Array.isArray(item.summary) ? item.summary : []), ...(Array.isArray(item.content) ? item.content : [])]
+          .filter((part): part is string => typeof part === "string" && Boolean(part.trim())).join("\n")
+        || envelopeText
+        || textPart(item.text);
+      const sourceId = textPart(item.id) || undefined;
+      const settled = addThink(text, sourceId);
+      if (!settled) addSvc("reasoning");
+      return true;
+    }
+    if (kind === "mcptoolcall") {
+      const server = textPart(item.server) || "mcp";
+      const tool = textPart(item.tool) || "tool";
+      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? item.result });
+      return true;
+    }
+    if (kind === "extension") {
+      const extensionKind = textPart(item.kind) || codexThreadPreview(item.kind);
+      const action = textPart(item.action) || codexThreadPreview(item.action);
+      const query = textPart(item.query) || codexThreadPreview(item.query);
+      emitCodexThreadTool({
+        item,
+        timing,
+        lifecycle,
+        tool: "Extension",
+        args: { kind: item.kind, action: item.action, query: item.query },
+        summary: [extensionKind, action, query].filter(Boolean).join(" · ") || "Extension",
+        output: codexThreadPreview(item.results),
+      });
+      return true;
+    }
+    if (kind === "dynamictoolcall") {
+      const tool = textPart(item.tool) || "dynamicToolCall";
+      const namespace = textPart(item.namespace);
+      const args = codexThreadArgs(item.arguments);
+      const preview = codexThreadPreview(item.arguments);
+      emitCodexThreadTool({
+        item,
+        timing,
+        lifecycle,
+        tool,
+        args,
+        summary: [namespace, tool, preview].filter(Boolean).join(" · "),
+        output: item.contentItems,
+      });
+      return true;
+    }
+    if (kind === "collabagenttoolcall") {
+      const tool = textPart(item.tool) || "collabAgentToolCall";
+      const args = { prompt: item.prompt, model: item.model, reasoningEffort: item.reasoningEffort };
+      emitCodexThreadTool({ item, timing, lifecycle, tool, args, summary: `Collab · ${tool}`, output: { status: item.status, agents: item.agentsStates } });
+      return true;
+    }
+    if (kind === "subagentactivity") {
+      addNote(["Sub-agent", textPart(item.kind)].filter(Boolean).join(" · "));
+      return true;
+    }
+    if (kind === "websearch") {
+      emitCodexThreadTool({ item, timing, lifecycle, tool: "WebSearch", args: { query: item.query }, output: { results: item.results } });
+      return true;
+    }
+    if (kind === "imageview") {
+      const path = textPart(item.path);
+      emitCodexThreadTool({ item, timing, lifecycle, tool: "imageView", args: { path }, summary: ["imageView", path].filter(Boolean).join(" · "), output: path });
+      return true;
+    }
+    if (kind === "sleep") {
+      const durationMs = num(item.durationMs);
+      addNote(durationMs === undefined ? "Sleep" : `Sleep · ${durationMs} ms`);
+      return true;
+    }
+    if (kind === "imagegeneration") {
+      const preview = textPart(item.revisedPrompt) || textPart(item.result);
+      emitCodexThreadTool({
+        item,
+        timing,
+        lifecycle,
+        tool: "imageGeneration",
+        args: preview ? { prompt: preview } : {},
+        summary: preview ? `imageGeneration · ${preview}` : "imageGeneration",
+        output: item.failure ?? { result: item.result, savedPath: item.savedPath },
+      });
+      return true;
+    }
+    if (kind === "enteredreviewmode" || kind === "exitedreviewmode") {
+      const label = kind === "enteredreviewmode" ? "Entered review mode" : "Exited review mode";
+      addNote([label, textPart(item.review)].filter(Boolean).join(" · "));
+      return true;
+    }
+    if (kind === "contextcompaction") {
+      addCompact(timing.ts);
+      return true;
+    }
+    if (kind === "commandexecution") {
+      const command = Array.isArray(item.command)
+        ? item.command.filter((part): part is string => typeof part === "string").join(" ")
+        : textPart(item.command);
+      const base = newToolEvent({
+        ts: timing.ts,
+        id,
+        tool: "exec_command",
+        args: { cmd: command, cwd: item.cwd },
+        engine: "codex",
+        command,
+      });
+      const status = codexThreadToolStatus(item, lifecycle);
+      upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
+      if (status !== "run") {
+        attach(calls.get(id), codexCommandOutput(item), status === "err", undefined, timing.endTs ?? timing.ts);
+      }
+      const current = calls.get(id)?.event;
+      if (current) {
+        const exitCode = num(item.exitCode ?? item.exit_code);
+        const durationMs = codexThreadDurationMs(item, timing);
+        upsertCodexThreadTool({
+          ...current,
+          status,
+          statusLabel: codexThreadStatusLabel(status),
+          ...(exitCode !== undefined ? { exitCode } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(timing.endTs !== undefined ? { endTs: timing.endTs } : {}),
+        });
+      }
+      return true;
+    }
+    if (kind !== "filechange") return false;
+    const base = newToolEvent({
+      ts: timing.ts,
+      id,
+      tool: "apply_patch",
+      args: {},
+      engine: "codex",
+      diff: diffFromCodexFileChange(item.changes),
+    });
+    const status = codexThreadToolStatus(item, lifecycle);
+    upsertCodexThreadTool({
+      ...base,
+      status,
+      statusLabel: codexThreadStatusLabel(status),
+    });
+    return true;
   };
   /* Inbound teammate traffic arrives as user text wrapped in <teammate-message>;
      idle_notification JSON bodies collapse to a thin service-style row. */
@@ -1766,10 +2373,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const pendingUsers = pendingCodexUsers;
     pendingCodexUsers = pendingUsers.filter((pending) => pending.structured);
     for (const pending of pendingUsers) {
-      /* App-server structured input may persist without a user_message echo.
-         Its transcript marker preserves the declared user role while later
-         records arrive. Recognized harness envelopes move to the system lane. */
-      if (pending.structured) continue;
+      /* App-server structured input may persist without an echo. Its
+         transcript marker preserves the declared user role while later
+         records arrive, and an echoed row is a real message whatever its text
+         looks like (#1398). Recognized harness envelopes that nothing echoed
+         move to the system lane. */
+      if (pending.structured || pending.echoed) continue;
       if (!isCodexHarnessUserText(pending.text)) continue;
       let converted = false;
       for (const seq of pending.entrySeqs) {
@@ -1790,26 +2399,17 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
     }
   };
-  const addCodexResponseUser = (ts: unknown, content: unknown) => {
-    const normalized = normalizeCodexUserContent(content);
-    const pending = emitCodexUserContent(ts, normalized);
-    if (!pending.entrySeqs.length && !pending.text) addSvc("message user");
-    pendingCodexUsers.push(pending);
-  };
-  const addCodexEventUser = (ts: unknown, text: string) => {
-    const decoded = decodeCodexStructuredUserText(text);
-    const pendingIndex = pendingCodexUsers.findIndex((pending) => sameCodexTextAtTime(pending.ts, pending.text, ts, decoded.text));
-    if (pendingIndex < 0) {
-      emitCodexUserContent(ts, { ...decoded, attachments: [] });
-      return;
-    }
-    const [pending] = pendingCodexUsers.splice(pendingIndex, 1);
-    if (!pending) return;
+  /* One user message can reach the rollout as several records (#1398): the
+     persisted user item, the legacy user_message event, and since Codex 0.151
+     the thread lifecycle's item_completed UserMessage envelope — the last two
+     carry the same text within milliseconds of the first. The first sighting
+     renders the row; every later record of the same text at the same instant
+     is its ECHO and replaces that row LIKE FOR LIKE: an internal relay stays
+     the relay card (with the echo's timestamp), a user text stays the bubble —
+     the echo must never re-author the message, and never opens a second row. */
+  const reconcileCodexUserEcho = (pending: PendingCodexUser, ts: unknown, decoded: CodexUserContent) => {
     const { cleaned, images } = extractInboxImages(decoded.text);
     if (cleaned) {
-      /* The echo replaces its provisional row LIKE FOR LIKE: an internal relay
-         stays the relay card (with the echo's timestamp), a user text stays
-         the bubble — the echo must never re-author the message. */
       const internal = decoded.origin?.kind === "agent";
       const echoItem: Item = internal
         ? internalRelayItem(ts, cleaned, decoded.origin!)
@@ -1826,9 +2426,28 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         pending.entrySeqs.push(push(echoItem));
       }
     }
-    for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }));
+    /* The provisional row already showed the message's inbox images; an echo
+       repeats the same references and must not paint them again. */
+    const illustrated = pending.entrySeqs.some((seq) => {
+      const idx = entryIndex(seq);
+      return idx >= 0 && entries[idx]?.item.kind === "inbox-image";
+    });
+    if (!illustrated) {
+      for (const image of images) pending.entrySeqs.push(push({ kind: "inbox-image", name: image.name, path: image.path }));
+    }
     updateCodexPendingSource(pending, curSrc);
+    pending.echoed = true;
   };
+  const addCodexUserRecord = (ts: unknown, content: CodexUserContent) => {
+    const pending = pendingCodexUsers.find((candidate) => sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
+    if (pending) return reconcileCodexUserEcho(pending, ts, content);
+    const emitted = emitCodexUserContent(ts, content);
+    if (!emitted.entrySeqs.length && !emitted.text) addSvc("message user");
+    pendingCodexUsers.push(emitted);
+  };
+  const addCodexResponseUser = (ts: unknown, content: unknown) => addCodexUserRecord(ts, normalizeCodexUserContent(content));
+  const addCodexEventUser = (ts: unknown, text: string) =>
+    addCodexUserRecord(ts, { ...decodeCodexStructuredUserText(text), attachments: [] });
   const addCompact = (ts: unknown, meta?: { trigger?: string; preTokens?: number }) => {
     push({ kind: "compact", ts, trigger: meta?.trigger, preTokens: meta?.preTokens });
   };
@@ -1849,13 +2468,47 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const renderCodex = (obj: Record<string, unknown>) => {
     const p = rec(obj.payload);
     const ts = obj.timestamp;
+    // Hidden lifecycle records must still separate adjacent reasoning runs.
+    const turnId = textPart(p.turn_id) || textPart(p.turnId);
+    if (turnId && reasoningTurnId && turnId !== reasoningTurnId) reasoningBoundary += 1;
+    if (turnId) reasoningTurnId = turnId;
+    const boundaryType = codexThreadItemKind(p.type);
+    if (obj.type === "turn_context" || obj.type === "compacted") reasoningBoundary += 1;
+    const semanticKind = codexThreadItemKind(rec(p.item).type) || boundaryType;
+    // Messages and legacy Responses tools can reconcile into earlier rows.
+    // Thread-item tool boundaries are handled by renderCodexThreadItem itself.
+    if (["message", "usermessage", "agentmessage", "functioncall", "functioncalloutput", "customtoolcall",
+      "customtoolcalloutput"].includes(semanticKind)) reasoningBoundary += 1;
+    // These event records describe tool activity even when their display is
+    // service-only. Bookkeeping such as token_count does not split a run.
+    if (obj.type === "event_msg" && ["mcptoolcallbegin", "mcptoolcallend", "websearchend", "patchapplyend",
+      "commandexecutionoutputdelta", "filechangeoutputdelta", "filechangepatchupdated"].includes(boundaryType)) reasoningBoundary += 1;
+    if (["taskstarted", "taskcomplete", "turnstarted", "turncompleted", "turnaborted", "contextcompacted"].includes(boundaryType)) {
+      reasoningBoundary += 1;
+    }
     if (obj.type === "event_msg") {
       if (p.type === "user_message" && p.message) return addCodexEventUser(ts, textPart(p.message));
+      const lifecycle = codexThreadItemKind(p.type);
+      const threadItem = rec(p.item);
+      /* The thread lifecycle's own records of a user message (#1398) are
+         handled like the user_message event — before the provisional rows are
+         finalized — so the completed envelope reconciles with the row already
+         on screen and opens no second one. */
+      if (codexThreadItemKind(threadItem.type) === "usermessage" && (lifecycle === "itemcompleted" || lifecycle === "itemstarted")) {
+        if (lifecycle === "itemstarted") return addSvc(`${textPart(threadItem.type)} ${lifecycle}`);
+        return addCodexUserRecord(codexThreadTiming(p, ts).ts, normalizeCodexUserContent(threadItem.content));
+      }
       finalizePendingCodexUsers();
+      if (["itemstarted", "itemcompleted", "itemdelta"].includes(lifecycle) && textPart(threadItem.type)) {
+        const timing = codexThreadTiming(p, ts);
+        if (renderCodexThreadItem(threadItem, timing, lifecycle, "event-agent")) return;
+        if (lifecycle !== "itemcompleted") return addSvc(`${textPart(threadItem.type)} ${lifecycle}`);
+        return addThreadItemFallback(timing.ts, textPart(threadItem.type), threadItem);
+      }
       if (p.type === "agent_message" && p.message) {
         return addCodexAssistant("event-agent", ts, textPart(p.message));
       }
-      if (p.type === "task_started") return addNote(tr("render.taskStarted") + (ts ? " · " + hhmm(ts) : ""));
+      if (p.type === "task_started") return addSvc(textPart(p.type));
       if (p.type === "task_complete") return addNote(tr("render.taskComplete") + (ts ? " · " + hhmm(ts) : ""));
       if (p.type === "context_compacted") {
         if (codexCompacted) return void (codexCompacted = null);
@@ -1874,7 +2527,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (!mcp) return addSvc("mcp_tool_call_end");
         const parsed = codexMcpResult(p.result);
         const call = existing ?? registerCall(newToolEvent({ ts, id, tool: `mcp__${mcp.serverName}__${mcp.toolName}`, args: mcp.args, engine: "codex", mcp }));
-        attach(call, parsed.output, parsed.error);
+        attach(call, parsed.output, parsed.error, undefined, ts);
         if (call.event.mcp && parsed.result) {
           const event = { ...call.event, mcp: { ...call.event.mcp, result: boundedMcpRecord(parsed.result) } };
           call.event = event;
@@ -1884,12 +2537,31 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         }
         return;
       }
-      if (["patch_apply_end", "sub_agent_activity", "thread_settings_applied", "token_count", "turn_aborted", "web_search_end"].includes(textPart(p.type))) {
+      if ([
+        "patch_apply_end",
+        "sub_agent_activity",
+        "thread_settings_applied",
+        "token_count",
+        "turn_aborted",
+        "web_search_end",
+        "command_execution_output_delta",
+        "file_change_output_delta",
+        "file_change_patch_updated",
+      ].includes(textPart(p.type))) {
         return addSvc(textPart(p.type));
       }
       return addRecord(ts, textPart(p.type) || "event", p);
     }
     if (obj.type === "response_item") {
+      const nestedThreadItem = rec(p.item);
+      if (textPart(nestedThreadItem.type)) {
+        finalizePendingCodexUsers();
+        const timing = codexThreadTiming(p, ts);
+        if (renderCodexThreadItem(nestedThreadItem, timing, "itemcompleted", "response-assistant")) return;
+        return addThreadItemFallback(timing.ts, textPart(nestedThreadItem.type), nestedThreadItem);
+      }
+      const directItemType = textPart(p.type);
+      if (!directItemType.includes("_") && renderCodexThreadItem(p, codexThreadTiming(p, ts), "itemcompleted", "response-assistant")) return;
       if (p.type === "message") {
         if (p.role === "user") return addCodexResponseUser(ts, p.content);
         finalizePendingCodexUsers();
@@ -1927,8 +2599,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       if (p.type === "function_call_output") {
         const rawSession = toolOutputSession(p.output);
-        const output = toolOutputText(p.output);
-        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession);
+        const { text: output, blocks } = toolOutput(p.output);
+        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks);
       }
       /* Fresh rollouts wrap apply_patch as a "custom_tool_call": `input` is the
          raw patch text directly (unlike function_call, whose `arguments` is a
@@ -1944,8 +2616,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       if (p.type === "custom_tool_call_output") {
         const rawSession = toolOutputSession(p.output);
-        const output = toolOutputText(p.output);
-        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession);
+        const { text: output, blocks } = toolOutput(p.output);
+        return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks);
       }
       if (p.type === "reasoning" || p.type === "agent_message") return addSvc(textPart(p.type));
       return addRecord(ts, textPart(p.type) || "item", p);
@@ -1958,6 +2630,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       codexCompacted = { src: curSrc };
       return addCompact(ts);
     }
+    // Retain the diagnostic payload when shown; count hidden usage as service bookkeeping.
+    if (obj.type === "token_usage_record" && !showSvc) return addSvc(textPart(obj.type));
     if (obj.type === "turn_context" || obj.type === "world_state" || obj.type === "inter_agent_communication_metadata") {
       return addSvc(textPart(obj.type));
     }
@@ -1993,15 +2667,20 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           if (part.type === "text") addUserText(ts, textPart(part.text), isHarness, deliveredMessage);
           else if (part.type === "image") pushImage(part, fileWrap);
           else if (part.type === "tool_result") {
-            const inner = arr(part.content);
-            for (const block of inner) {
-              if (block.type === "image") pushImage(block, fileWrap);
+            if (typeof part.content === "string") {
+              addOutput(textPart(part.tool_use_id), part.content, part.is_error === true, undefined, ts);
+              continue;
             }
-            const contentText =
-              typeof part.content === "string"
-                ? part.content
-                : inner.filter((x) => x.type !== "image").map((x) => textPart(x.text)).join(" ");
-            addOutput(textPart(part.tool_use_id), contentText, part.is_error === true);
+            /* #1498: a picture in the result — a Read of a raster — belongs to
+               the tool's card, not to a standalone row pushed beside it. The
+               text keeps its shape; the file wrapper describes the one raster a
+               Read returned, so its dimensions label a lone picture only. */
+            const inner = arr(part.content);
+            const pictures = inner.filter((block) => block.type === "image").length;
+            const output = pictures
+              ? toolOutputFromBlocks(inner, (image) => (pictures === 1 ? withFileDimensions(image, fileWrap) : image))
+              : { text: inner.map((x) => textPart(x.text)).join(" ") };
+            addOutput(textPart(part.tool_use_id), output.text, part.is_error === true, undefined, ts, output.blocks);
           }
         }
       }
@@ -2108,7 +2787,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         .map((part) => (part.type === "toolResult" ? textPart(part.content) || textPart(part.text) : textPart(part.text)))
         .filter(Boolean)
         .join("\n");
-      return addOutput(callId, text, isError);
+      return addOutput(callId, text, isError, undefined, ts);
     }
     if (role !== "assistant") return void addSvc(role || tr("render.record"));
     /* A record a real provider served may announce a model switch; the
@@ -2196,7 +2875,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       /* A job log carries no stdout: attach only the status line. The absent
          output surfaces as the compact "no output captured" chip in the card,
          replacing the old apology paragraph (issue #9 §6). */
-      if (lastPlainCall) attach(lastPlainCall, rest, /^Command failed/.test(rest));
+      if (lastPlainCall) attach(lastPlainCall, rest, /^Command failed/.test(rest), undefined, ts);
       return;
     }
     if (/^Applying \d+ file/.test(rest)) {
@@ -2211,14 +2890,26 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     push({ kind: "raw", text: redactSecrets(line), err: /error|failed|traceback|exception/i.test(line) });
   };
   const consume = (line: string) => {
-    if (lineFilter && !line.toLowerCase().includes(lineFilter)) return;
+    if (lineFilter && !line.toLowerCase().includes(lineFilter)) {
+      reasoningBoundary += 1;
+      return;
+    }
     if (jsonl) {
       try {
         const obj = JSON.parse(line);
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          const tracksTurns = cfg.fmt === "claude" || cfg.fmt === "codex";
+          const facts = tracksTurns ? classifyTurnRecord(obj, cfg.fmt === "codex") : null;
+          if (facts) {
+            latestTurnTimestamp = facts.timestampMs ?? latestTurnTimestamp;
+            if (facts.starts) beginTurn(facts.timestampMs);
+            else if (facts.assistantRecord && !facts.fails && turnFailed) recoverFailedTurn();
+          }
           if (cfg.fmt === "claude") renderClaude(obj);
           else if (cfg.fmt === "openclaw") renderOpenclaw(obj);
           else renderCodex(obj);
+          if (facts?.fails) finishTurn(true);
+          else if (facts?.closes) finishTurn(false);
         } else addRecord(null, "malformed_record", { value: obj });
       } catch {
         addRecord(null, "malformed_record", { source: line });
@@ -2228,6 +2919,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const reset = () => {
     entries.length = 0;
+    reasoningBoundary = 0;
+    reasoningTurnId = "";
+    reasoningSeqs.clear();
     calls.clear();
     sessionOwners.clear();
     tmsgSeqs.clear();
@@ -2243,6 +2937,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     lastPlainCall = null;
     wakeupCalls.length = 0;
     prevGroups = new Map();
+    turnStartedAt = null;
+    turnStartedSrc = null;
+    turnOpen = false;
+    turnResponseSeq = null;
+    turnFailed = false;
+    failedResponseSeq = null;
+    latestTurnTimestamp = null;
     snapshot = null;
     /* pushSeq keeps counting across resets so React keys never collide. */
   };
@@ -2252,9 +2953,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       that cannot be resumed, so the caller re-parses the window whole. */
   const dropBefore = (start: number): boolean => {
     const crossedEchoSeam = entries.some((entry) => entry.bornSrc < start && entry.src >= start);
+    const crossedOpenTurn = turnOpen && turnStartedSrc !== null && turnStartedSrc < start;
     while (entries.length && entries[0].src < start) {
       const gone = entries.shift()!;
       snapshot = null;
+      if (gone.item.kind === "think" && gone.item.sourceId) reasoningSeqs.delete(gone.item.sourceId);
       if (gone.item.kind === "tool") {
         const callRec = calls.get(gone.item.id);
         /* A later tool_result for an evicted call now falls back to the svc
@@ -2288,14 +2991,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (entryIndex(wakeupCalls[i].seq) < 0) { wakeupCalls.splice(i, 1); wakeupsEvicted = true; }
     }
     if (wakeupsEvicted) recomputeWakeupStates();
-    return crossedEchoSeam || openclawBoundaryEvicted || (plainBlock !== null && plainBlock.src < start);
+    return crossedEchoSeam || crossedOpenTurn || openclawBoundaryEvicted || (plainBlock !== null && plainBlock.src < start);
   };
 
   /* Collapses a run of >=2 consecutive foldable tool entries into one cmd-group
      item so a long unbroken tool series reads as a single summary line. Every
-     tool event folds (Read/Bash/Edit/diff-bodied/orchestration alike); a "think"
-     item inside a run is absorbed without breaking it (it carries no signal once
-     the run it annotates is folded), while prose/user/tmsg/review/image break it.
+     tool event folds (Read/Bash/Edit/diff-bodied/orchestration alike). A durable,
+     source-identified reasoning row breaks the run so its chronological position
+     remains visible when a live turn settles; legacy anonymous thinking keeps
+     its established absorbed behavior. Every other non-tool row breaks the run.
      The live trailing run folds whole — the in-flight (`run`) calls included —
      into one aggregate marked `active`, which the card renders expanded so every
      command and output shows immediately (issue #475). An interior or settled
@@ -2315,8 +3019,29 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     let i = 0;
     while (i < entries.length) {
       const head = entries[i];
+      if (head.item.kind === "think" && head.item.sourceId) {
+        const members: ReasoningMember[] = [];
+        let j = i;
+        while (j < entries.length) {
+          const cur = entries[j];
+          if (cur.item.kind !== "think" || !cur.item.sourceId || cur.reasoningBoundary !== head.reasoningBoundary) break;
+          members.push({ sourceId: cur.item.sourceId, anchorKey: anchorKey({ ...cur, src: cur.bornSrc }, "row"), text: cur.item.text,
+            availability: cur.item.text ? "available" : "unavailable" });
+          j += 1;
+        }
+        const text = members.map((member) => member.text).filter(Boolean).join("\n\n");
+        out.push({ anchorKey: members[0].anchorKey, key: String(head.seq),
+          item: { ...head.item, text, members, availability: text ? "available" : "unavailable" } });
+        i = j;
+        continue;
+      }
       if (!foldableTool(head.item)) {
-        out.push({ anchorKey: anchorKey(head, "row"), key: String(head.seq), item: head.item });
+        out.push({
+          anchorKey: anchorKey(head, "row"),
+          key: String(head.seq),
+          item: head.item,
+          ...(head.responseDurationMs !== undefined ? { responseDurationMs: head.responseDurationMs } : {}),
+        });
         i += 1;
         continue;
       }
@@ -2325,7 +3050,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       while (j < entries.length) {
         const cur = entries[j];
         if (foldableTool(cur.item)) toolEntries.push({ idx: j, seq: cur.seq, item: cur.item });
-        else if (cur.item.kind !== "think") break;
+        else if (cur.item.kind !== "think" || cur.item.sourceId) break;
         j += 1;
       }
       /* The whole run folds into one aggregate. When it is the live trailing
@@ -2347,18 +3072,26 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           const byTool: Record<string, number> = {};
           let okCount = 0;
           let errCount = 0;
+          let groupEndedAt = grouped.at(-1)?.item.endTs ?? grouped.at(-1)?.item.ts;
+          let groupEndedAtMs = timestampMilliseconds(groupEndedAt);
           for (const entry of grouped) {
             const tool = toolBucket(entry.item);
             byTool[tool] = (byTool[tool] ?? 0) + 1;
             if (entry.item.status === "ok") okCount += 1;
             else if (entry.item.status === "err") errCount += 1;
+            const candidate = entry.item.endTs ?? entry.item.ts;
+            const candidateMs = timestampMilliseconds(candidate);
+            if (candidateMs !== null && (groupEndedAtMs === null || candidateMs > groupEndedAtMs)) {
+              groupEndedAt = candidate;
+              groupEndedAtMs = candidateMs;
+            }
           }
           group = {
             kind: "cmd-group",
             ids: grouped.map((entry) => entry.item.id),
             calls: grouped.map((entry) => entry.item),
             t0: grouped[0]?.item.ts,
-            t1: grouped.at(-1)?.item.ts,
+            t1: groupEndedAt,
             byTool,
             okCount,
             errCount,
@@ -2387,6 +3120,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       reset();
       consumedEnd = start;
     }
+    /* Same window, different bytes: a session that outlives its pane (#1432,
+       `feed/sessionPool`) can meet a transcript rewritten in place at the same
+       line count. The last consumed line is the cheapest witness; when it no
+       longer matches, nothing consumed can be trusted. */
+    if (consumedEnd > start && lines[consumedEnd - start - 1] !== lastConsumedLine) {
+      reset();
+      consumedEnd = start;
+    }
     lastStart = start;
     if (dropBefore(start)) {
       reset();
@@ -2396,6 +3137,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       curSrc = start + i;
       consume(lines[i]);
     }
+    if (lines.length) lastConsumedLine = lines[lines.length - 1]!;
     consumedEnd = end;
     if (!snapshot || snapshotLive !== isLive) {
       snapshot = buildSnapshot(isLive);

@@ -1,0 +1,965 @@
+{
+  "prototypeCompared": true,
+  "boardWidth": 1192,
+  "frames": {
+    "stages-light": {
+      "production": {
+        "title": "Redesign attachment upload for large files",
+        "progress": "8 stages · Build ui running",
+        "navChips": 8,
+        "loops": [
+          "↺ Verifier fails → Build ui · 0/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 8,
+        "lanePos": "Stage 4 of 8",
+        "focusedPane": "build-ui",
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "docs",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          }
+        ]
+      },
+      "prototype": {
+        "title": "Redesign attachment upload for large files",
+        "progress": "8 stages · Build UI running",
+        "navChips": 8,
+        "loops": [
+          "↺ Verify fails → Build UI · 0/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 8,
+        "lanePos": "Stage 4 of 8",
+        "focusedPane": "build-ui",
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "docs",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          }
+        ]
+      }
+    },
+    "stages-dark": {
+      "production": {
+        "title": "Redesign attachment upload for large files",
+        "progress": "8 stages · Build ui running",
+        "navChips": 8,
+        "loops": [
+          "↺ Verifier fails → Build ui · 0/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 8,
+        "lanePos": "Stage 4 of 8",
+        "focusedPane": "build-ui",
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "docs",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          }
+        ]
+      },
+      "prototype": {
+        "title": "Redesign attachment upload for large files",
+        "progress": "8 stages · Build UI running",
+        "navChips": 8,
+        "loops": [
+          "↺ Verify fails → Build UI · 0/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 8,
+        "lanePos": "Stage 4 of 8",
+        "focusedPane": "build-ui",
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-api",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "docs",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          }
+        ]
+      }
+    },
+    "stages-retry": {
+      "production": {
+        "title": "Restore search results after the index rebuild",
+        "progress": "4 stages · Verifier running · attempt 2",
+        "navChips": 4,
+        "loops": [
+          "↺ Verifier fails → Builder · 1/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 4,
+        "lanePos": "Stage 1 of 4",
+        "focusedPane": null,
+        "panes": [
+          {
+            "stage": "implement",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · passed",
+              "#2 · passed"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · passed",
+              "#2 · passed"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · failed",
+              "#2 · running"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+          }
+        ]
+      },
+      "prototype": {
+        "title": "Restore search results after the index rebuild",
+        "progress": "4 stages · Verify running · attempt 2",
+        "navChips": 4,
+        "loops": [
+          "↺ Verify fails → Implement · 1/2"
+        ],
+        "graphDir": "LR",
+        "graphNodes": 4,
+        "lanePos": "Stage 1 of 4",
+        "focusedPane": "implement",
+        "panes": [
+          {
+            "stage": "implement",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · passed",
+              "#2 · passed"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "review",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · passed",
+              "#2 · passed"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "verify",
+            "width": 432,
+            "folded": false,
+            "attempts": [
+              "#1 · failed",
+              "#2 · running"
+            ],
+            "draft": false,
+            "status": null,
+            "composerDisabled": null,
+            "reader": true,
+            "added": null
+          },
+          {
+            "stage": "merge",
+            "width": 432,
+            "folded": false,
+            "attempts": [],
+            "draft": true,
+            "status": "Waiting for stage start · not delivered",
+            "composerDisabled": true,
+            "reader": true,
+            "added": null
+          }
+        ]
+      }
+    },
+    "stage-details": {
+      "production": {
+        "bubble": "Check both anchors against the published notes before approving.",
+        "status": "Waiting for stage start · not delivered",
+        "edit": true,
+        "event": "Starts when Builder passes · last stage",
+        "engine": "Claude",
+        "composerDisabled": true,
+        "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract",
+        "width": 426
+      },
+      "prototype": {
+        "bubble": "Stage «Review» of «Repair old links in the release notes».",
+        "status": "Waiting for stage start · not delivered",
+        "edit": true,
+        "event": "Starts when Implement passes · last stage",
+        "engine": "Codex",
+        "composerDisabled": true,
+        "added": null,
+        "width": 426
+      }
+    }
+  },
+  "comparison": {
+    "stages-light": {
+      "panes": [
+        8,
+        8
+      ],
+      "navChips": [
+        8,
+        8
+      ],
+      "loops": [
+        1,
+        1
+      ],
+      "graphDir": [
+        "LR",
+        "LR"
+      ],
+      "graphNodes": [
+        8,
+        8
+      ],
+      "widths": {
+        "production": [
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432
+        ],
+        "prototype": [
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432
+        ]
+      },
+      "drafts": {
+        "production": [
+          "review-ui",
+          "verify",
+          "docs",
+          "merge"
+        ],
+        "prototype": [
+          "review-ui",
+          "verify",
+          "docs",
+          "merge"
+        ]
+      },
+      "attempts": {
+        "production": [
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
+        ],
+        "prototype": [
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      },
+      "lanePos": [
+        "Stage 4 of 8",
+        "Stage 4 of 8"
+      ]
+    },
+    "stages-dark": {
+      "panes": [
+        8,
+        8
+      ],
+      "navChips": [
+        8,
+        8
+      ],
+      "loops": [
+        1,
+        1
+      ],
+      "graphDir": [
+        "LR",
+        "LR"
+      ],
+      "graphNodes": [
+        8,
+        8
+      ],
+      "widths": {
+        "production": [
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432
+        ],
+        "prototype": [
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432,
+          432
+        ]
+      },
+      "drafts": {
+        "production": [
+          "review-ui",
+          "verify",
+          "docs",
+          "merge"
+        ],
+        "prototype": [
+          "review-ui",
+          "verify",
+          "docs",
+          "merge"
+        ]
+      },
+      "attempts": {
+        "production": [
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
+        ],
+        "prototype": [
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      },
+      "lanePos": [
+        "Stage 4 of 8",
+        "Stage 4 of 8"
+      ]
+    },
+    "stages-retry": {
+      "panes": [
+        4,
+        4
+      ],
+      "navChips": [
+        4,
+        4
+      ],
+      "loops": [
+        1,
+        1
+      ],
+      "graphDir": [
+        "LR",
+        "LR"
+      ],
+      "graphNodes": [
+        4,
+        4
+      ],
+      "widths": {
+        "production": [
+          432,
+          432,
+          432,
+          432
+        ],
+        "prototype": [
+          432,
+          432,
+          432,
+          432
+        ]
+      },
+      "drafts": {
+        "production": [
+          "merge"
+        ],
+        "prototype": [
+          "merge"
+        ]
+      },
+      "attempts": {
+        "production": [
+          [
+            "#1 · passed",
+            "#2 · passed"
+          ],
+          [
+            "#1 · passed",
+            "#2 · passed"
+          ],
+          [
+            "#1 · failed",
+            "#2 · running"
+          ],
+          []
+        ],
+        "prototype": [
+          [
+            "#1 · passed",
+            "#2 · passed"
+          ],
+          [
+            "#1 · passed",
+            "#2 · passed"
+          ],
+          [
+            "#1 · failed",
+            "#2 · running"
+          ],
+          []
+        ]
+      },
+      "lanePos": [
+        "Stage 1 of 4",
+        "Stage 1 of 4"
+      ]
+    },
+    "stage-details": {
+      "status": [
+        "Waiting for stage start · not delivered",
+        "Waiting for stage start · not delivered"
+      ],
+      "edit": [
+        true,
+        true
+      ],
+      "composerDisabled": [
+        true,
+        true
+      ]
+    }
+  },
+  "flows": {
+    "addedAtStart": {
+      "summary": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract",
+      "open": true,
+      "height": 220,
+      "head": [
+        "[previous stage output: not produced yet]",
+        "",
+        "Pinned task:"
+      ]
+    },
+    "saveDraft": {
+      "focused": true,
+      "saved": {
+        "id": "p-links",
+        "body": {
+          "action": "override-stage",
+          "stageId": "review",
+          "prompt": "{{prev.output}}\n\nCheck both anchors against the published notes, then the changelog.",
+          "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
+        }
+      },
+      "status": "Waiting for stage start · not delivered · edited 04:18 AM"
+    },
+    "startedDuringSave": {
+      "notice": {
+        "message": "Reviewer started with its previous first message. Your edit was not delivered.",
+        "kept": "Too late for this one.",
+        "receipts": []
+      },
+      "promoted": {
+        "panel": false,
+        "reader": "conversation_links-review"
+      }
+    },
+    "changedBetweenReadAndWrite": {
+      "notice": "Changed elsewhere since you began: «Theirs, saved between the read and the write.»",
+      "field": "Mine, typed before the other save landed.",
+      "writes": [
+        {
+          "action": "override-stage",
+          "stageId": "review",
+          "prompt": "{{prev.output}}\n\nMine, typed before the other save landed.",
+          "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
+        }
+      ],
+      "reads": 2,
+      "stored": "{{prev.output}}\n\nTheirs, saved between the read and the write."
+    },
+    "changedElsewhere": {
+      "changed": "Changed elsewhere since you began: «Document the resume token and link the migration note.»",
+      "writesBefore": 0,
+      "written": {
+        "id": "p-upload",
+        "body": {
+          "action": "override-stage",
+          "stageId": "docs",
+          "prompt": "{{prev.output}}\n\nDocument the resume token, the limits, and the retry header.",
+          "expectedStageDigest": "382c4b2ed9ec63d73a022630da557501ecc6e55a3545c233d8ec47ccb3287acd"
+        }
+      }
+    },
+    "pipelineActions": {
+      "pending": "Pausing…",
+      "pausedReceipt": "Paused «Redesign attachment upload for large files»",
+      "refused": "Resume was refused: the runtime host did not answer",
+      "unknown": {
+        "text": "Pause for «Redesign attachment upload for large files» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again.",
+        "action": "Check again"
+      },
+      "checkReads": 1,
+      "sent": [
+        {
+          "action": "pause"
+        },
+        {
+          "action": "resume"
+        },
+        {
+          "action": "resume"
+        },
+        {
+          "action": "pause"
+        }
+      ]
+    },
+    "movedCursor": {
+      "refused": "Skip Builder was refused: the stage worktree has uncommitted changes",
+      "notSent": "Skip Builder was not sent: the pipeline now waits on Reviewer.",
+      "writes": [
+        {
+          "action": "skip-stage",
+          "expectedStageId": "implement",
+          "expectedAttempt": 1
+        },
+        {
+          "action": "skip-stage",
+          "expectedStageId": "implement",
+          "expectedAttempt": 1
+        }
+      ],
+      "reads": 1
+    },
+    "persistentReader": {
+      "inPane": {
+        "probe": 1695,
+        "draft": "Keep this draft while the stages open.",
+        "inCard": false
+      },
+      "stepped": {
+        "focused": "review-ui",
+        "current": "review-ui"
+      },
+      "slash": {
+        "search": false,
+        "open": true
+      },
+      "back": {
+        "probe": 1695,
+        "draft": "Keep this draft while the stages open.",
+        "focus": true
+      }
+    }
+  },
+  "failures": []
+}

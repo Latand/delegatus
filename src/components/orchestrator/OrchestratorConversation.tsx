@@ -3,8 +3,10 @@
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
+import { ProcessStatusControls } from "../TaskHeader";
 import { AgentControlStrip } from "../AgentControlStrip";
 import { LogFeed } from "../LogFeed";
+import { ToolDisclosurePolicy } from "../feed/toolDisclosure";
 import { DeadHostBanner } from "../runtime/DeadHostBanner";
 import { TmuxComposer } from "../TmuxComposer";
 import { useAgentCapabilities } from "../useAgentCapabilities";
@@ -23,7 +25,13 @@ const noop = () => undefined;
  * conversation also has a card on the board behind the panel, and the one
  * hoisted composer must render HERE while both are on screen.
  */
-export function OrchestratorConversation({ file, projectName }: { file: FileEntry; projectName: string }) {
+export function OrchestratorConversation({ file, projectName, hostControls = true }: {
+  file: FileEntry;
+  projectName: string;
+  /** False where the surface's own header carries the host control (the
+      kanban seat, #1695), so it is not a second row here. */
+  hostControls?: boolean;
+}) {
   const { t } = useLocale();
   const { caps } = useAgentCapabilities(file);
   const deadHost = caps.surface === "dead";
@@ -32,16 +40,19 @@ export function OrchestratorConversation({ file, projectName }: { file: FileEntr
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
       {deadHost ? <DeadHostBanner file={file} /> : null}
-      <LogFeed
-        file={file}
-        showSvc={false}
-        lineFilter=""
-        onStatus={noop}
-        paused={false}
-        follow
-        setFollow={noop}
-        compact
-      />
+      <ToolDisclosurePolicy value="collapsed">
+        <LogFeed
+          file={file}
+          showSvc={false}
+          lineFilter=""
+          onStatus={noop}
+          paused={false}
+          follow
+          setFollow={noop}
+          compact
+        />
+      </ToolDisclosurePolicy>
+      {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
       <AgentControlStrip file={file} />
       <TmuxComposer
         file={file}

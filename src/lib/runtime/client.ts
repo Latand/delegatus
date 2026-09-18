@@ -1,6 +1,7 @@
+import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import net from "node:net";
 
-import type { RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -13,6 +14,52 @@ import { runtimeHostSocket } from "./flags";
 const MAX_RESPONSE_FRAME_BYTES = 64 * 1024 * 1024;
 export const RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS = 10_000;
 export const VIEWER_DEPLOYMENT_REQUEST_TIMEOUT_MS = 120_000;
+const RUNTIME_HOST_REQUEST_SAMPLE_LIMIT = 256;
+
+export interface RuntimeHostRequestHealth {
+  samples: number;
+  p95Ms: number;
+  maxMs: number;
+  timeouts: number;
+  windowSize: number;
+}
+
+type RuntimeHostRequestSample = { elapsedMs: number; timeout: boolean };
+const runtimeHostRequestSamples: RuntimeHostRequestSample[] = [];
+
+function recordRuntimeHostRequest(
+  method: RuntimeSocketRequest["method"],
+  elapsedMs: number,
+  timeout: boolean,
+): void {
+  /* `wait` deliberately holds a long poll for up to 30 seconds. Including its
+     normal residence time would make this pressure signal permanently slow. */
+  if (method === "wait") return;
+  runtimeHostRequestSamples.push({ elapsedMs: Math.max(0, Math.round(elapsedMs)), timeout });
+  if (runtimeHostRequestSamples.length > RUNTIME_HOST_REQUEST_SAMPLE_LIMIT) {
+    runtimeHostRequestSamples.splice(0, runtimeHostRequestSamples.length - RUNTIME_HOST_REQUEST_SAMPLE_LIMIT);
+  }
+}
+
+/** Numeric-only, process-local latency evidence for the most recent Viewer to
+    runtime-host socket calls. Request parameters and response data never enter
+    this window. */
+export function runtimeHostRequestHealth(): RuntimeHostRequestHealth {
+  const elapsed = runtimeHostRequestSamples.map((sample) => sample.elapsedMs).toSorted((left, right) => left - right);
+  return {
+    samples: elapsed.length,
+    p95Ms: elapsed.length ? elapsed[Math.max(0, Math.ceil(elapsed.length * 0.95) - 1)]! : 0,
+    maxMs: elapsed.at(-1) ?? 0,
+    timeouts: runtimeHostRequestSamples.filter((sample) => sample.timeout).length,
+    windowSize: RUNTIME_HOST_REQUEST_SAMPLE_LIMIT,
+  };
+}
+
+/** Tests only: isolates route and percentile assertions from earlier calls in
+    the same Bun process. */
+export function resetRuntimeHostRequestHealthForTests(): void {
+  runtimeHostRequestSamples.length = 0;
+}
 
 export class RuntimeHostUnavailableError extends Error {
   constructor(message: string, readonly code?: string) {
@@ -38,13 +85,19 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
-  snapshot(signal?: AbortSignal): Promise<RuntimeSnapshot>;
+  nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
+  nativeQueueTransition?(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult>;
+  /** Canonical proof for an entry whose add operation was compacted (#1664).
+      Answers the settled entry; there is no operation receipt to answer. */
+  nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
+  claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
   effectBatch(kinds?: readonly string[], afterEventSeq?: number): Promise<RuntimePendingEffect[]>;
@@ -52,8 +105,16 @@ export interface RuntimeHostClient {
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
     details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    options?: RuntimeTransitionOptions,
   ): Promise<RuntimeOperationResult>;
+  /** Releases the retention a terminal transition took out under
+      `awaitProjection` (#1612), once its outcome is in the durable delivery
+      record. Optional because a runtime host from before it answers
+      "unsupported": the receipt then expires on the ordinary compaction
+      cadence, which is exactly the behaviour that predates this method. */
+  acknowledgeTerminalProjection?(operationIds: readonly string[]): Promise<number>;
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
+  cancelViewerDeployment?(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   admitMcpHealthProbe?(capability: string): Promise<boolean>;
 }
@@ -66,7 +127,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     private readonly snapshotTimeoutMs = RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS,
   ) {}
 
-  snapshot(signal?: AbortSignal): Promise<RuntimeSnapshot> { return this.call("snapshot", undefined, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
+  nativeQueueRead(conversationId: string): Promise<NativeQueueRecord[]> {
+    return this.call("native-queue-read", { conversationId }) as Promise<NativeQueueRecord[]>;
+  }
+  nativeQueueTransition(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult> {
+    return this.call("native-queue-transition", { operationId, transition }) as Promise<RuntimeOperationResult>;
+  }
+  nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
+    return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
+  }
+  snapshot(signal?: AbortSignal, options?: { voiceBodiesFor: string[] }): Promise<RuntimeSnapshot> { return this.call("snapshot", options, this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>; }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
@@ -77,6 +147,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       operationId,
       ...(options.currentRetryLeaf ? { currentRetryLeaf: true } : {}),
     }) as Promise<RuntimeOperationResult | null>;
+  }
+  claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim> {
+    return this.call("operation-delivery-action", { operationId, action }) as Promise<RuntimeDeliveryActionClaim>;
   }
   retryOperation(operationId: string, nextIdempotencyKey?: string, options: RuntimeRetryOptions = {}): Promise<RuntimeOperationResult> {
     return this.call("operation-retry", {
@@ -99,10 +172,21 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
     details?: { turnId?: string | null; queuePosition?: number | null; reason?: string | null },
+    options: RuntimeTransitionOptions = {},
   ): Promise<RuntimeOperationResult> {
-    return this.call("operation-transition", { operationId, status, ...(details ? { details } : {}) }) as Promise<RuntimeOperationResult>;
+    return this.call("operation-transition", {
+      operationId,
+      status,
+      ...(details ? { details } : {}),
+      ...(options.fromStatuses ? { fromStatuses: [...options.fromStatuses] } : {}),
+      ...(options.awaitProjection ? { awaitProjection: true } : {}),
+    }) as Promise<RuntimeOperationResult>;
+  }
+  acknowledgeTerminalProjection(operationIds: readonly string[]): Promise<number> {
+    return this.call("operation-projection-ack", { operationIds: [...operationIds] }) as Promise<number>;
   }
   requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
+  cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }
 
@@ -110,15 +194,21 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
+      const startedAt = performance.now();
       let frame = "";
       let settled = false;
-      const timer = setTimeout(() => finish(new RuntimeHostUnavailableError("runtime host request timed out")), timeoutMs);
-      const finish = (error?: Error, result?: unknown) => {
+      const timer = setTimeout(() => {
+        const elapsedMs = performance.now() - startedAt;
+        console.error(`[runtime host] request timed out method=${method} elapsedMs=${Math.max(0, Math.round(elapsedMs))}`);
+        finish(new RuntimeHostUnavailableError("runtime host request timed out"), undefined, true, elapsedMs);
+      }, timeoutMs);
+      const finish = (error?: Error, result?: unknown, timeout = false, elapsedMs = performance.now() - startedAt) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         socket.destroy();
+        recordRuntimeHostRequest(method, elapsedMs, timeout);
         if (error) reject(error);
         else resolve(result);
       };

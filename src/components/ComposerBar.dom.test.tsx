@@ -55,7 +55,7 @@ afterEach(() => {
   setLocale("en");
 });
 
-function Harness() {
+function Harness({ onRecover }: { onRecover?: () => void } = {}) {
   const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => {} });
   return <ComposerBar
     composer={composer}
@@ -68,6 +68,8 @@ function Harness() {
     sendIdleClassName="bg-accent"
     imageDisabled
     imageDisabledReason="Capability unavailable"
+    sendDisabledReason={onRecover ? "Resolving conversation host…" : undefined}
+    onSendBlockedRecover={onRecover}
   />;
 }
 
@@ -130,8 +132,16 @@ test("390px staged images occupy the first compact row inside the composer (#440
   expect(tray).not.toBeNull();
   expect(tray!.className).toContain("overflow-x-auto");
   expect(tray!.className).toContain("max-h-16");
+  /* Still the first bounded row above the input, now as a surface of the
+     composer's accessory region — one budget and one scrollport for everything
+     above the field (#1629), rather than a sibling of the form with a bound of
+     its own. */
+  const region = form.querySelector('[data-testid="composer-accessories"]') as HTMLElement;
+  const unit = form.querySelector('[data-testid="composer-input-unit"]') as HTMLElement;
+  expect(region.contains(tray!)).toBe(true);
+  expect(unit.contains(inputSurface)).toBe(true);
   const rows = [...form.children];
-  expect(rows.indexOf(tray!)).toBeLessThan(rows.indexOf(inputSurface));
+  expect(rows.indexOf(region)).toBeLessThan(rows.indexOf(unit));
   expect(tray!.querySelectorAll('[data-testid="attachment-tile"]')).toHaveLength(3);
   expect(tray!.querySelectorAll('button[aria-label^="Remove image"]')).toHaveLength(3);
 
@@ -481,4 +491,52 @@ test("attachment preview copy remains accurate for structured and tmux delivery 
     flushSync(() => root.unmount());
     host.remove();
   }
+});
+
+test("desktop blocked-send recovery keeps its compact control and invokes recovery once", () => {
+  let recovered = 0;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<Harness onRecover={() => { recovered += 1; }} />));
+  const reason = host.querySelector('[data-testid="composer-send-blocked"]')!;
+  const recover = reason.querySelector("button") as HTMLButtonElement;
+  expect(reason.textContent).toContain("Resolving conversation host…");
+  expect(recover.textContent).toBe("Re-check");
+  expect(recover.type).toBe("button");
+  expect(recover.className).toContain("min-h-8");
+  expect(recover.className).not.toContain("min-h-11");
+  expect(recover.className).not.toContain("min-w-11");
+  expect(recover.className).toContain("bg-card");
+  expect(recover.children).toHaveLength(0);
+  flushSync(() => recover.click());
+  expect(recovered).toBe(1);
+  flushSync(() => root.unmount());
+});
+
+test("Send options has a visible keyboard and pointer opener without submitting", () => {
+  let selected = 0;
+  function MenuHarness() {
+    const composer = useComposer({ initialText: () => "context", persistText: () => {}, submit: () => { throw new Error("unexpected send"); } });
+    return <ComposerBar composer={composer} placeholder="Prompt" textareaAriaLabel="Prompt"
+      imageAriaLabel="Attach" leftSlot={null} sendLabelIdle="Send" sendLabelRecording="Stop"
+      sendIdleClassName="bg-accent" sendMenuLabel="Send options"
+      sendMenuActions={[{ id: "inject", label: "Add to context", onSelect: () => { selected++; } }]} />;
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  flushSync(() => root.render(<MenuHarness />));
+  const opener = container.querySelector<HTMLButtonElement>('button[aria-label="Send options"]');
+  expect(opener).not.toBeNull();
+  expect(opener!.type).toBe("button");
+  expect(opener!.getAttribute("aria-haspopup")).toBe("menu");
+  flushSync(() => opener!.click());
+  expect(opener!.getAttribute("aria-expanded")).toBe("true");
+  const item = document.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+  expect(item.textContent).toContain("Add to context");
+  flushSync(() => item.click());
+  expect(selected).toBe(1);
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  flushSync(() => root.unmount());
 });

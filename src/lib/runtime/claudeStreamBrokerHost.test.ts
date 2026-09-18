@@ -9,6 +9,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { saveTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
@@ -221,11 +222,17 @@ describe("ClaudeStreamBrokerHost", () => {
       },
     }));
     const child = new FakeClaude(new RecordingDeliveryLedger());
-    const captured: { args?: string[] } = {};
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const host = await ClaudeStreamBrokerHost.start({
       cwd: "/repo",
       claudeConfigDir: home,
       mcpServers: ["viewer", "agent-browser"],
+      env: {
+        NODE_ENV: "test",
+        LLV_STATE_DIR: "fixture-state",
+        LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+        LLV_VIEWER_PORT: "8898",
+      },
       eventStore: new MemoryEventStore(),
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       readTranscript: () => [],
@@ -233,6 +240,11 @@ describe("ClaudeStreamBrokerHost", () => {
     });
 
     expect(captured.args).toContain("--strict-mcp-config");
+    expect(captured.options?.env).toMatchObject({
+      LLV_STATE_DIR: "fixture-state",
+      LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+      LLV_VIEWER_PORT: "8898",
+    });
     expect(captured.args).not.toContain("--safe-mode");
     const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
     const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, "utf8")) as { mcpServers: Record<string, unknown> };
@@ -1075,7 +1087,7 @@ describe("ClaudeStreamBrokerHost", () => {
     await replacement.release();
   });
 
-  test("a missing replay confirmation times out and leaves retry ownership for adoption", async () => {
+  test("a missing replay confirmation keeps the incumbent alive and preserves adoption evidence", async () => {
     const ledger = new RecordingDeliveryLedger();
     const eventStore = new MemoryEventStore();
     const firstChild = new FakeClaude(ledger);
@@ -1092,7 +1104,8 @@ describe("ClaudeStreamBrokerHost", () => {
 
     await expect(first.send({ id: "timeout-entry", text: "retry after timeout" }))
       .rejects.toThrow("delivery confirmation timed out");
-    expect((await first.health()).status).toBe("dead");
+    expect((await first.health()).status).toBe("active");
+    expect(firstChild.signals).toEqual([]);
     expect(ledger.load("timeout-session")).toContainEqual(expect.objectContaining({
       entry: expect.objectContaining({ id: "timeout-entry", content: { text: "retry after timeout", images: [] } }),
       delivered: false,
@@ -1519,8 +1532,15 @@ describe("ClaudeStreamBrokerHost", () => {
     }
   });
 
-  test("boot adoption resumes claimed Claude rows and persists broker columns", async () => {
+  test("boot re-host resumes Claude with a relaunched Viewer MCP connector (#1346)", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-adoption-"));
+    const accountHome = path.join(directory, "claude-home");
+    fs.mkdirSync(accountHome, { recursive: true });
+    fs.writeFileSync(path.join(accountHome, ".claude.json"), JSON.stringify({
+      mcpServers: {
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+      },
+    }));
     const registryPath = path.join(directory, "agent-registry.json");
     const registry = new AgentRegistry(registryPath);
     const sessionId = "adopted-claude-session";
@@ -1548,11 +1568,20 @@ describe("ClaudeStreamBrokerHost", () => {
     });
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
-    const captured: { args?: string[] } = {};
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const adopted = await adoptClaudeRegistryHosts(
       registry,
       () => ({
         cwd: "/repo",
+        claudeConfigDir: accountHome,
+        mcpStatePath: path.join(accountHome, ".claude.json"),
+        mcpServers: ["viewer"],
+        env: {
+          NODE_ENV: "test",
+          LLV_STATE_DIR: "fixture-state",
+          LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+          LLV_VIEWER_PORT: "8898",
+        },
         deliveryLedger: ledger,
         eventStore: new MemoryEventStore(),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),
@@ -1563,6 +1592,17 @@ describe("ClaudeStreamBrokerHost", () => {
     );
     expect(adopted).toHaveLength(1);
     expect(captured.args).toContain("--resume");
+    const mcpConfigPath = captured.args![captured.args!.indexOf("--mcp-config") + 1]!;
+    expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({
+      mcpServers: {
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+      },
+    });
+    expect(captured.options?.env).toMatchObject({
+      LLV_STATE_DIR: "fixture-state",
+      LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+      LLV_VIEWER_PORT: "8898",
+    });
     expect(registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
       status: "idle",
       claimEpoch: 3,
@@ -1583,11 +1623,20 @@ describe("ClaudeStreamBrokerHost", () => {
 
     const restartedRegistry = new AgentRegistry(registryPath);
     const replacement = new FakeClaude(ledger);
-    const restartCaptured: { args?: string[] } = {};
+    const restartCaptured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const restarted = await adoptClaudeRegistryHosts(
       restartedRegistry,
       () => ({
         cwd: "/repo",
+        claudeConfigDir: accountHome,
+        mcpStatePath: path.join(accountHome, ".claude.json"),
+        mcpServers: ["viewer"],
+        env: {
+          NODE_ENV: "test",
+          LLV_STATE_DIR: "fixture-state",
+          LLV_VIEWER_DEPLOY_TARGET: "fixture-target",
+          LLV_VIEWER_PORT: "8898",
+        },
         deliveryLedger: ledger,
         eventStore: new MemoryEventStore(),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),
@@ -1598,6 +1647,12 @@ describe("ClaudeStreamBrokerHost", () => {
     );
     expect(restarted).toHaveLength(1);
     expect(restartCaptured.args).toContain("--resume");
+    const restartMcpConfigPath = restartCaptured.args![restartCaptured.args!.indexOf("--mcp-config") + 1]!;
+    expect(JSON.parse(fs.readFileSync(restartMcpConfigPath, "utf8"))).toEqual({
+      mcpServers: {
+        viewer: { type: "stdio", command: "bun", args: ["bin/mcp-server.mjs"] },
+      },
+    });
     expect(restartedRegistry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
       status: "idle",
       host: null,
@@ -1693,6 +1748,7 @@ describe("ClaudeStreamBrokerHost", () => {
       await orphanExit;
       throw new Error("orphan test process identity is unavailable");
     }
+    const orphanIdentity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
     registry.upsert({
       key: { engine: "claude", sessionId },
       artifactPath: `/sessions/${sessionId}.jsonl`,
@@ -1703,7 +1759,7 @@ describe("ClaudeStreamBrokerHost", () => {
       structuredHost: {
         kind: "claude-broker",
         endpoint: `stdio:${orphan.pid}`,
-        process: { pid: orphan.pid, startIdentity },
+        process: orphanIdentity,
         eventCursor: 2,
         protocolVersion: "2.1.197",
         writerClaimEpoch: 1,
@@ -1767,6 +1823,7 @@ describe("ClaudeStreamBrokerHost", () => {
       await orphanExit;
       throw new Error("orphan test process identity is unavailable");
     }
+    const orphanIdentity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
     registry.upsert({
       key: { engine: "claude", sessionId },
       artifactPath: `/sessions/${sessionId}.jsonl`,
@@ -1777,7 +1834,7 @@ describe("ClaudeStreamBrokerHost", () => {
       structuredHost: {
         kind: "claude-broker",
         endpoint: `stdio:${orphan.pid}`,
-        process: { pid: orphan.pid, startIdentity },
+        process: orphanIdentity,
         eventCursor: 2,
         protocolVersion: "2.1.197",
         writerClaimEpoch: 1,
@@ -2195,4 +2252,27 @@ describe("issue 367 concurrent launch admission", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+
+test("delayed replay echo during provider retry preserves unrelated Claude work and settles the original payload", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const host = await ClaudeStreamBrokerHost.adopt("delayed-echo-session", {
+    cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(), requestTimeoutMs: 10,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+  });
+  const send = host.send({ id: "delayed-entry", text: "retained instruction" });
+  child.emitJson({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 5, retry_delay_ms: 1000, error: "rate_limit" });
+  await expect(send).rejects.toThrow("delivery confirmation timed out");
+  expect((await host.health()).status).toBe("active");
+  expect(child.signals).toEqual([]);
+  await expect(host.send({ id: "delayed-entry", text: "retained instruction" })).rejects.toThrow("delivery confirmation timed out");
+  expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
+  child.emitJson({ type: "user", isReplay: true, session_id: "delayed-echo-session", uuid: "echo-id", message: { role: "user", content: [{ type: "text", text: "retained instruction" }] } });
+  expect(await host.send({ id: "delayed-entry", text: "retained instruction" })).toMatchObject({ outcome: "turn-started" });
+  expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
+  expect(ledger.load("delayed-echo-session")[0]?.delivered).toBeTrue();
+  await host.release();
 });

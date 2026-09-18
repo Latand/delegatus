@@ -28,7 +28,7 @@ import {
 } from "@/components/runtime/runtimeModel";
 import { rolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 
-export const SNAPSHOT_URL = "/api/runtime/snapshot";
+export const SNAPSHOT_URL = "/api/runtime/snapshot?view=summary";
 export const STREAM_URL = "/api/runtime/stream";
 
 /** Fired on `window` whenever the tab's SSE transport re-subscribes (connection
@@ -388,27 +388,41 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     }, delay);
   }
 
-  /** Resume the live stream: reopen from the cursor so the server replays only
-   *  missing revisions (A3). Refresh the deployment gate before reopening so
-   *  a tab converges after a server restart. */
+  /** Reconcile the complete projection before resuming SSE. A snapshot can
+   * repair a missing session even when the journal cursor has not advanced. */
   function resume(): void {
     if (!hasSnapshot) {
       void join(false);
       return;
     }
-    void refreshGateAndResume();
+    void refreshSnapshotAndResume();
   }
 
-  async function refreshGateAndResume(): Promise<void> {
+  async function refreshSnapshotAndResume(): Promise<void> {
     const myGen = generation;
+    const before = state.store;
     try {
       const snapshot = await fetchSnapshot();
       if (myGen !== generation) return;
-      setState({ structuredHostsEnabled: snapshot.structuredHostsEnabled === true });
+      // Manual refresh can install a newer projection while this read waits.
+      // Preserve it on equal cursors, as well as preserving newer live events.
+      if (snapshot.snapshotSeq > state.store.cursor
+        || (snapshot.snapshotSeq === state.store.cursor && state.store === before)) {
+        const previousFiles = state.store.filesRevision;
+        setState({
+          store: installSnapshot(snapshot),
+          lastEventAt: deps.now(),
+          structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
+        });
+        if (snapshot.filesRevision > previousFiles) {
+          for (const listener of filesListeners) listener(snapshot.filesRevision);
+        }
+      }
       openStream(state.store.cursor);
     } catch (error) {
-      if (error instanceof RuntimePlaneAbsentError) return markPlaneAbsent();
       if (myGen !== generation) return;
+      if (state.store !== before) return openStream(state.store.cursor);
+      if (error instanceof RuntimePlaneAbsentError) return markPlaneAbsent();
       onTransportLost();
     }
   }
@@ -529,7 +543,10 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
  * is inlined at build time and cannot know. The bus resolves that at runtime and
  * goes inert on a plane-absent deployment (see `markPlaneAbsent`).
  */
+let runtimeUiTestOverride: boolean | null = null;
+
 export function isRuntimeUiEnabled(): boolean {
+  if (runtimeUiTestOverride !== null) return runtimeUiTestOverride;
   // The literal member expression is what Next inlines at build time; keep it.
   if (!rolledBack(process.env.NEXT_PUBLIC_RUNTIME_UI)) return true;
   if (typeof window === "undefined") return false;
@@ -558,4 +575,23 @@ function browserDeps(): RuntimeBusDeps {
 export function getRuntimeBus(): RuntimeBus {
   if (!singleton) singleton = createRuntimeBus(browserDeps());
   return singleton;
+}
+
+/** Stop every timer/transport owned by the browser singleton and forget it. */
+export function resetRuntimeBusForTests(): void {
+  singleton?.stop();
+  singleton = null;
+}
+
+/** Lifecycle-scoped switch for DOM tests that intentionally exercise legacy UI. */
+export function setRuntimeUiEnabledForTests(enabled: boolean | null): void {
+  resetRuntimeBusForTests();
+  runtimeUiTestOverride = enabled;
+}
+
+/** Install one lifecycle-owned bus so component tests exercise the real hooks. */
+export function setRuntimeBusForTests(bus: RuntimeBus | null): void {
+  resetRuntimeBusForTests();
+  singleton = bus;
+  runtimeUiTestOverride = bus === null ? null : true;
 }

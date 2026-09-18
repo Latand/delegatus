@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { AgentRegistry, normalizeRegistry, RegistryParityError } from "./registry";
+import { AgentRegistry, normalizeRegistry, RegistryParityError, type SeatChildrenAnchor } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const CHILD = path.join(import.meta.dir, "registry.sqliteChild.ts");
@@ -109,6 +109,74 @@ test("a compact spawn lookup reads only requested receipts and their alias chain
     ["conversations", 1],
   ]));
   expect(snapshotLoads).toBe(0);
+});
+
+test("a compact spawn lookup withholds a transport-null structured failure after host cleanup (#1329)", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-failed-materialization-"));
+  const filename = path.join(directory, "agent-registry.json");
+  try {
+    const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    const cwd = "/failed-materialization";
+    const launchProfile = emptyLaunchProfile({ cwd, title: "Verify failed materialization projection" });
+    const begun = seed.beginSpawnRequest({
+      engine: "codex",
+      cwd,
+      transport: "structured",
+      accountId: null,
+      launchProfile,
+    });
+    if (begun.kind !== "created") throw new Error("expected structured spawn creation");
+    const sessionId = "failed-materialization-session";
+    const artifactPath = "/sessions/failed-materialization.jsonl";
+    const staged = seed.stageStructuredSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId },
+      artifactPath,
+      cwd,
+      accountId: null,
+      launchProfile,
+      status: "idle",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "stdio:failed-materialization",
+        process: { pid: process.pid, startIdentity: "failed-materialization-process" },
+        eventCursor: 0,
+        protocolVersion: "fixture-v1",
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: "structured-host:failed-materialization",
+      pendingAction: "spawn",
+    });
+    if (staged.kind !== "settled") throw new Error("expected staged structured spawn");
+
+    const persisted = JSON.parse(fs.readFileSync(filename, "utf8")) as {
+      receipts: Record<string, { transport: string | null }>;
+    };
+    persisted.receipts[begun.receipt.launchId]!.transport = null;
+    fs.writeFileSync(filename, JSON.stringify(persisted));
+    const cleanupRegistry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    cleanupRegistry.failStructuredSpawn(begun.receipt.launchId, "transcript did not materialize");
+    const initial = cleanupRegistry.snapshot();
+    expect(initial.entries[`codex:${sessionId}`]).toMatchObject({
+      structuredHost: null,
+      structuredHostOperationId: begun.receipt.launchId,
+    });
+
+    const store = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), {
+      initialSnapshot: initial,
+      normalize: normalizeRegistry,
+    });
+    expect(store.snapshotSpawns([begun.receipt.launchId])[begun.receipt.launchId]).toMatchObject({
+      state: "failed",
+      materializedPath: null,
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("snapshot title lookup reads only named alias chains and conversations", () => {
@@ -324,6 +392,8 @@ for (const version of [1, 2]) {
 
     const first = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });
     expect(first.snapshot().autoBalance.claude.restartedAt).toBe(first.snapshot().autoBalance.codex.restartedAt);
+    expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number })._sqliteRevision)
+      .toBe(first.storageDiagnostics().revision!);
 
     const ready = path.join(directory, "restart.ready");
     const release = path.join(directory, "restart.release");
@@ -342,6 +412,23 @@ for (const version of [1, 2]) {
     expect(await new Response(restarted.stderr).text()).toBe("");
   });
 }
+
+test("dual-write startup recreates a missing JSON mirror with the authoritative revision", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-dual-missing-mirror-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const first = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });
+  const receipt = beginTestSpawn(first, "/dual-missing-mirror");
+  const expected = first.snapshot();
+  fs.renameSync(filename, `${filename}.legacy-missing`);
+
+  const recovered = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });
+  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number };
+
+  expect(recovered.snapshot()).toEqual(expected);
+  expect(recovered.snapshot().receipts[receipt.launchId]).toBeDefined();
+  expect(mirror._sqliteRevision).toBe(recovered.storageDiagnostics().revision!);
+  expect(recovered.storageDiagnostics().mirrorRevision).toBe(mirror._sqliteRevision!);
+});
 
 test("supersedence edges round-trip JSON ↔ SQLite with parity intact", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-supersede-"));
@@ -421,6 +508,10 @@ test("dual-write keeps JSON authoritative and SQLite reads require parity", () =
   const sqliteFilename = path.join(directory, "agent-registry.sqlite");
   const dual = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });
   const receipt = beginTestSpawn(dual, "/parity");
+  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number };
+
+  expect(mirror._sqliteRevision).toBe(dual.storageDiagnostics().revision!);
+  expect(dual.storageDiagnostics().mirrorRevision).toBe(mirror._sqliteRevision!);
 
   expect(new AgentRegistry(filename).snapshot().receipts[receipt.launchId]).toEqual(
     new AgentRegistry(filename, undefined, undefined, { sqliteMode: "read" }).snapshot().receipts[receipt.launchId],
@@ -462,6 +553,7 @@ test("authoritative SQLite startup stamps and repairs a legacy mirror", () => {
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
   const receipt = beginTestSpawn(registry, "/sqlite-legacy-mirror");
   registry.checkpointRollbackMirror();
+  const expected = registry.snapshot();
 
   const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as ReturnType<AgentRegistry["snapshot"]> & { _sqliteRevision?: number };
   delete mirror._sqliteRevision;
@@ -473,6 +565,8 @@ test("authoritative SQLite startup stamps and repairs a legacy mirror", () => {
   const revision = recovered.storageDiagnostics().revision;
   if (revision === null) throw new Error("expected an authoritative SQLite revision");
   expect(recovered.snapshot().receipts[receipt.launchId]).toBeDefined();
+  expect(recovered.snapshot()).toEqual(expected);
+  expect(normalizeRegistry(repaired)).toEqual(expected);
   expect(repaired._sqliteRevision).toBe(revision);
 });
 
@@ -484,6 +578,7 @@ test.each(["malformed", "lower"] as const)(
     const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
     const receipt = beginTestSpawn(registry, `/sqlite-${scenario}-mirror`);
     registry.checkpointRollbackMirror();
+    const expected = registry.snapshot();
 
     const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as ReturnType<AgentRegistry["snapshot"]> & { _sqliteRevision: unknown };
     mirror._sqliteRevision = scenario === "malformed"
@@ -495,23 +590,40 @@ test.each(["malformed", "lower"] as const)(
     const recovered = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
     const revision = recovered.storageDiagnostics().revision;
     if (revision === null) throw new Error("expected an authoritative SQLite revision");
+    const repaired = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
     expect(recovered.snapshot().receipts[receipt.launchId]).toBeDefined();
-    expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number })._sqliteRevision)
-      .toBe(revision);
+    expect(recovered.snapshot()).toEqual(expected);
+    expect(normalizeRegistry(repaired)).toEqual(expected);
+    expect(repaired._sqliteRevision).toBe(revision);
   },
 );
 
-test("authoritative SQLite startup fences a mirror revision ahead of durable state", () => {
+test("authoritative SQLite startup fences an ahead mirror once and recovers on restart", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-ahead-"));
   const filename = path.join(directory, "agent-registry.json");
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const receipt = beginTestSpawn(registry, "/sqlite-ahead-mirror");
   registry.checkpointRollbackMirror();
-  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
+  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as ReturnType<AgentRegistry["snapshot"]> & {
+    _sqliteRevision: number;
+  };
   mirror._sqliteRevision += 1;
+  delete mirror.receipts[receipt.launchId];
+  const aheadRevision = mirror._sqliteRevision;
   fs.writeFileSync(filename, JSON.stringify(mirror));
 
   expect(() => new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" }))
-    .toThrow("agent registry JSON mirror revision is ahead of SQLite");
+    .toThrow(/mirror revision \d+ is ahead of authoritative SQLite revision \d+.*next startup will rebuild/i);
+  const conflicts = fs.readdirSync(directory).filter((entry) => entry.includes(".sqlite-conflict-r"));
+  expect(conflicts).toHaveLength(1);
+  const conflict = JSON.parse(fs.readFileSync(path.join(directory, conflicts[0]!), "utf8")) as typeof mirror;
+  expect(conflict._sqliteRevision).toBe(aheadRevision);
+  expect(conflict.receipts[receipt.launchId]).toBeUndefined();
+
+  const recovered = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const repaired = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
+  expect(recovered.snapshot().receipts[receipt.launchId]).toBeDefined();
+  expect(repaired._sqliteRevision).toBe(recovered.storageDiagnostics().revision!);
 });
 
 test("SQLite restart normalizes legacy held-delivery rows before parity", () => {
@@ -754,6 +866,25 @@ test("dual-write leaves both backends unchanged after a no-op mutation", () => {
   db.close();
 });
 
+test("dual-write rollback restores a stamped current mirror after a replacement failure", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-dual-rollback-stamp-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const dual = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "dual-write",
+    beforeDualWriteMutationReplace: () => { throw new Error("injected SQLite replacement failure"); },
+  });
+  const legacy = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number };
+  delete legacy._sqliteRevision;
+  fs.writeFileSync(filename, JSON.stringify(legacy));
+
+  expect(() => beginTestSpawn(dual, "/dual-rollback-stamp")).toThrow("injected SQLite replacement failure");
+
+  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number };
+  expect(mirror._sqliteRevision).toBe(dual.storageDiagnostics().revision!);
+  expect(dual.storageDiagnostics().mirrorRevision).toBe(mirror._sqliteRevision!);
+  expect(dual.snapshot().receipts).toEqual({});
+});
+
 for (const sqliteMode of ["read", "sqlite"] as const) {
   test(`${sqliteMode} mode leaves the durable revision unchanged after a missing claim release`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-registry-${sqliteMode}-noop-`));
@@ -827,6 +958,8 @@ test("dual-write startup serializes SQLite replacement with a concurrent writer"
   const dual = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });
   expect(Object.values(dual.snapshot().conversations).some((conversation) =>
     conversation.generations.some((generation) => generation.path === "/sessions/concurrent-dual-writer.jsonl"))).toBeTrue();
+  expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number })._sqliteRevision)
+    .toBe(dual.storageDiagnostics().revision!);
 });
 
 for (const mode of ["read", "sqlite"] as const) {
@@ -909,6 +1042,8 @@ test("dual-write mutation fails closed across a concurrent SQLite writer", async
   const recovered = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "read" });
   expect(recovered.conversationForPath("/sessions/sqlite.jsonl")).toBeDefined();
   expect(recovered.conversationForPath("/sessions/dual.jsonl")).toBeNull();
+  expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number })._sqliteRevision)
+    .toBe(recovered.storageDiagnostics().revision!);
   expect(new AgentRegistry(filename).snapshot()).toEqual(recovered.snapshot());
 });
 
@@ -1081,6 +1216,42 @@ test("restart refreshes the JSON rollback mirror after a post-commit process exi
   expect(new AgentRegistry(filename).snapshot()).toEqual(recovered);
 });
 
+test.each(["before", "after"] as const)(
+  "authoritative SQLite restart recovers a mirror process exit %s atomic rename",
+  async (boundary) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-registry-sqlite-${boundary}-rename-`));
+    const filename = path.join(directory, "agent-registry.json");
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    const initialRevision = (JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number })._sqliteRevision;
+    const receipt = beginTestSpawn(registry, `/sqlite-mirror-${boundary}-rename`);
+    const expected = registry.snapshot();
+    const child = Bun.spawn([
+      process.execPath,
+      CHILD,
+      "sqlite-mirror-crash",
+      filename,
+      path.join(directory, "unused-ready"),
+      path.join(directory, "unused-release"),
+      boundary,
+    ], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+
+    expect(await child.exited).toBe(boundary === "before" ? 75 : 76);
+    expect(await new Response(child.stderr).text()).toBe("");
+    const interrupted = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
+    expect(interrupted._sqliteRevision).toBe(
+      boundary === "before" ? initialRevision : registry.storageDiagnostics().revision!,
+    );
+    if (boundary === "after") expect(normalizeRegistry(interrupted)).toEqual(expected);
+
+    const recovered = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    const repaired = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision: number };
+    expect(recovered.snapshot()).toEqual(expected);
+    expect(recovered.snapshot().receipts[receipt.launchId]).toBeDefined();
+    expect(repaired._sqliteRevision).toBe(recovered.storageDiagnostics().revision!);
+    expect(fs.readdirSync(directory).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  },
+);
+
 test("SQLite-only operations avoid JSON rewrites and the read mode prepares rollback", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-only-"));
   const filename = path.join(directory, "agent-registry.json");
@@ -1130,6 +1301,8 @@ test("dual-write release demotion leaves the authoritative JSON handoff untouche
   beginTestSpawn(successor, "/successor");
 
   expect(rollbackWrites).toBe(0);
+  expect((JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: number })._sqliteRevision)
+    .toBe(successor.storageDiagnostics().revision!);
   expect(new AgentRegistry(filename, undefined, undefined, { sqliteMode: "read" }).snapshot())
     .toEqual(successor.snapshot());
 });
@@ -1447,6 +1620,106 @@ test("SQLite ordered collection reads use the collection-order index", () => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("SQLite replacement writes only changed positions while preserving replacement order", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-replacement-order-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const receipt = beginTestSpawn(seed, "/replacement-order");
+  const initial = seed.snapshot();
+  initial.receipts = Object.fromEntries(Array.from({ length: 650 }, (_, index) => {
+    const launchId = `replacement-${index}`;
+    return [launchId, { ...receipt, launchId }];
+  }));
+  const filename = path.join(directory, "registry.sqlite");
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const observer = new Database(filename);
+  observer.exec(`
+    CREATE TABLE position_writes (row_key TEXT);
+    CREATE TRIGGER observe_position_write AFTER UPDATE OF row_order ON registry_rows
+    BEGIN INSERT INTO position_writes VALUES (NEW.row_key); END;
+  `);
+  const next = store.snapshot();
+  next.file.receipts.appended = { ...receipt, launchId: "appended" };
+  expect(store.replace(next.file, next.revision).replaced).toBe(true);
+  expect(observer.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM position_writes").get()!.count).toBe(0);
+  expect(Object.keys(store.snapshot().file.receipts).at(-1)).toBe("appended");
+
+  const reordered = store.snapshot();
+  const rows = Object.entries(reordered.file.receipts);
+  reordered.file.receipts = Object.fromEntries([rows.at(-1)!, ...rows.slice(1, -1)]);
+  expect(store.replace(reordered.file, reordered.revision).replaced).toBe(true);
+  expect(Object.keys(store.snapshot().file.receipts)).toEqual(Object.keys(reordered.file.receipts));
+  expect(observer.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM position_writes").get()!.count).toBe(1);
+  observer.close();
+});
+
+test("SQLite writers acquire a released lock without the long busy-handler sleep", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-writer-wakeup-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const receipt = beginTestSpawn(seed, "/writer-wakeup");
+  const filename = path.join(directory, "registry.sqlite");
+  let acquiredAt = 0;
+  const store = new SqliteAgentRegistryStore(filename, {
+    initialSnapshot: seed.snapshot(), normalize: normalizeRegistry,
+    onWriterWait: () => { acquiredAt = Date.now(); },
+  });
+  const delays: number[] = [];
+  for (let pulse = 0; pulse < 4; pulse++) {
+    const ready = path.join(directory, `ready-${pulse}`);
+    const released = path.join(directory, `released-${pulse}`);
+    const holder = Bun.spawn([process.execPath, "-e", `
+      const fs = require("node:fs");
+      const { Database } = require("bun:sqlite");
+      const [filename, ready, released] = process.argv.slice(1);
+      const db = new Database(filename);
+      db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
+      fs.writeFileSync(ready, "ready");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 85);
+      db.exec("COMMIT");
+      fs.writeFileSync(released, String(Date.now()));
+      db.close();
+    `, filename, ready, released], { stdout: "pipe", stderr: "pipe" });
+    const deadline = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && performance.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+    }
+    expect(fs.existsSync(ready)).toBe(true);
+    store.mutate((file) => { file.receipts[receipt.launchId]!.error = `pulse-${pulse}`; }, false);
+    expect(await holder.exited).toBe(0);
+    expect(await new Response(holder.stderr).text()).toBe("");
+    delays.push(Math.max(0, acquiredAt - Number(fs.readFileSync(released, "utf8"))));
+  }
+  console.info(`[agent registry writer wakeup] release-to-acquire delays: ${delays.join(", ")}ms`);
+  expect(Math.max(...delays)).toBeLessThan(10);
+});
+
+test("SQLite mutation acquisition retains the five-second deadline and leaves a held writer untouched", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-writer-deadline-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const receipt = beginTestSpawn(seed, "/writer-deadline");
+  const filename = path.join(directory, "registry.sqlite");
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: seed.snapshot(), normalize: normalizeRegistry });
+  const before = store.snapshot();
+  const holder = new Database(filename);
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    const startedAt = performance.now();
+    expect(() => store.mutate((file) => { file.receipts[receipt.launchId]!.error = "must not land"; }, false))
+      .toThrow("database is locked");
+    const elapsed = performance.now() - startedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(5_000);
+    expect(elapsed).toBeLessThan(5_500);
+    expect(holder.inTransaction).toBe(true);
+  } finally {
+    holder.exec("ROLLBACK");
+    holder.close();
+  }
+  const after = store.snapshot();
+  expect(after.revision).toBe(before.revision);
+  expect(after.file).toEqual(before.file);
+  store.mutate((file) => { file.receipts[receipt.launchId]!.error = "after release"; }, false);
+  expect(store.snapshot().file.receipts[receipt.launchId]!.error).toBe("after release");
+}, 7_000);
+
 test.each(["off", "dual-write", "read", "sqlite"] as const)(
   "%s diagnostics keep cumulative counts and a rolling rate beyond the percentile sample cap",
   (sqliteMode) => {
@@ -1518,6 +1791,51 @@ test("SQLite adoption keeps structured-host writer epochs fenced across restarts
     replacement.claimEpoch,
     true,
   )).toMatchObject({ status: "idle", claimOwner: null, structuredHost: { eventCursor: 5 } });
+});
+
+test("SQLite preserves the release hand-off epoch across Viewer processes", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-release-handoff-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const key = { engine: "codex" as const, sessionId: "sqlite-release-handoff" };
+  const engine = { pid: 52, startIdentity: "engine:52" };
+  const first = new AgentRegistry(filename, () => true, undefined, { sqliteMode: "sqlite" });
+  first.upsert({
+    key,
+    artifactPath: "/sessions/sqlite-release-handoff.jsonl",
+    cwd: "/repo",
+    accountId: "work",
+    status: "unhosted",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "stdio:released",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const claim = first.claimStructuredHost(key, { pid: 51, startIdentity: "viewer:51" }, { allowUnhosted: true });
+  if (!claim?.structuredHost || !claim.claimOwner) throw new Error("expected the incumbent writer claim");
+  first.setStructuredHostClaimed(key, {
+    ...claim.structuredHost,
+    endpoint: "stdio:engine",
+    process: engine,
+  }, "live", claim.claimOwner, claim.claimEpoch);
+  expect(first.markStructuredHostHandoff(key, engine)).toBe(true);
+
+  const restarted = new AgentRegistry(filename, () => true, undefined, { sqliteMode: "sqlite" });
+  expect(restarted.readOnlySnapshot().entries["codex:sqlite-release-handoff"]).toMatchObject({
+    pendingAction: "handoff",
+    structuredHost: { process: engine, releaseHandoffClaimEpoch: claim.claimEpoch },
+  });
+  fs.rmSync(directory, { recursive: true, force: true });
 });
 
 test("production-sized SQLite registry bounds ten-lane writes, concurrent reads, and JSON rewrites", async () => {
@@ -1604,3 +1922,126 @@ test("production-sized SQLite registry bounds ten-lane writes, concurrent reads,
   expect(sqlite.writerWaitP95).toBeLessThan(100);
   expect(sqlite.readerP95).toBeLessThan(100);
 }, 60_000);
+
+test("seat child discovery uses its parent index and bounded payload reads across a large unrelated registry", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-seat-page-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const parent = seed.ensureConversation("codex", "/sessions/seat.jsonl", null);
+  const child = seed.beginSpawnRequest({ engine: "codex", cwd: "/seat-project", launchProfile: { title: "bounded child" }, parentConversationId: parent.id, parentSource: "explicit" });
+  const initial = seed.snapshot();
+  const edge = initial.lineageEdges[child.receipt.conversationId]!;
+  for (let n = 0; n < 3000; n++) {
+    const id = ["conversation", String(n).padStart(8, "0")].join("_") as typeof parent.id;
+    initial.lineageEdges[id] = { ...edge, childConversationId: id,
+      parentConversationId: n < 205 ? parent.id : ["conversation", "unrelated"].join("_") as typeof parent.id,
+      evidence: { ...edge.evidence, launchId: null } };
+  }
+  const reads = new Map<string, number>();
+  let snapshots = 0;
+  const filename = path.join(directory, "registry.sqlite");
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry,
+    onSnapshotLoad: () => snapshots++, onRowPayloadRead: (name, count) => reads.set(name, (reads.get(name) ?? 0) + count) });
+  const seen = new Set<string>();
+  let after: SeatChildrenAnchor | null = null;
+  let pages = 0;
+  for (let tick = 0; tick < 20; tick++) {
+    reads.clear();
+    const page = store.pageSeatChildren(parent.id, after, 20);
+    pages++;
+    expect(reads.get("lineageEdges")).toBeLessThanOrEqual(20);
+    expect(page.keys.length).toBeLessThanOrEqual(20);
+    page.keys.forEach((id) => seen.add(id));
+    after = page.after;
+    if (page.complete) break;
+  }
+  expect(seen.size).toBe(206);
+  expect(pages).toBe(11);
+  expect(snapshots).toBe(0);
+  const db = new Database(filename, { readonly: true });
+  const plan = db.query<{ detail: string }, [string, number, number]>(`EXPLAIN QUERY PLAN
+    SELECT row_key,value_json,row_order FROM registry_rows WHERE collection='lineageEdges'
+    AND json_extract(value_json,'$.source')='viewer-spawn'
+    AND json_extract(value_json,'$.parentConversationId')=? AND row_order>?
+    ORDER BY row_order LIMIT ?`).all(parent.id, -1, 20);
+  expect(plan.some((entry) => entry.detail.includes("registry_seat_children_order"))).toBe(true);
+  expect(plan.some((entry) => entry.detail.includes("TEMP B-TREE"))).toBe(false);
+  db.close();
+});
+
+/* Discovery pages in insertion order past a durable anchor (#1465): a child
+   spawned after the sweep completed is the very next page whatever its key
+   sorts like, and the anchor is re-resolved by key so a renumbered collection
+   is followed at its current order rather than skipped past. */
+test("a child spawned after a completed sweep is the next page, and a renumbered collection does not lose it", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-seat-anchor-"));
+  const filename = path.join(directory, "registry.sqlite");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: filename });
+  const parent = registry.ensureConversation("codex", "/sessions/anchor-seat.jsonl", null);
+  const spawn = (title: string) => registry.beginSpawnRequest({ engine: "codex", cwd: "/seat-project",
+    launchProfile: { title }, parentConversationId: parent.id, parentSource: "explicit" }).receipt.conversationId;
+  const initial = Array.from({ length: 25 }, (_, n) => spawn(`worker ${n}`));
+  const first = registry.pageSeatChildren(parent.id, null, 20)!;
+  expect(first.keys).toEqual(initial.slice(0, 20));
+  expect(first.complete).toBe(false);
+  const second = registry.pageSeatChildren(parent.id, first.after, 20)!;
+  expect(second.keys).toEqual(initial.slice(20));
+  expect(second.complete).toBe(true);
+  /* Nothing new: an empty page, the anchor where it was. */
+  const idle = registry.pageSeatChildren(parent.id, second.after, 20)!;
+  expect(idle).toMatchObject({ keys: [], complete: true, after: second.after });
+  /* A child spawned now is the next page, however its key compares. */
+  const late = spawn("late worker");
+  expect(registry.pageSeatChildren(parent.id, idle.after, 20)!.keys).toEqual([late]);
+  /* The whole collection renumbered underneath the anchor — every order
+     shifted down — and the anchor is followed by key to its current order,
+     so the child spawned after it is still the next page. */
+  const db = new Database(filename, { readwrite: true, create: false });
+  db.query("UPDATE registry_rows SET row_order = row_order - 1000 WHERE collection='lineageEdges'").run();
+  db.close();
+  const renumbered = spawn("after renumbering");
+  const followed = registry.pageSeatChildren(parent.id, idle.after, 20)!;
+  expect(followed.keys).toEqual([late, renumbered]);
+  /* An anchor whose edge is gone restarts the sweep from the beginning. */
+  const restarted = registry.pageSeatChildren(parent.id, { key: ["conversation", "gone"].join("_"), order: 7 }, 20)!;
+  expect(restarted.keys).toEqual(initial.slice(0, 20));
+});
+
+
+test("a cyclic child alias leaves other children in the same indexed page readable", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-seat-alias-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const parent = seed.ensureConversation("codex", "/sessions/seat.jsonl", null);
+  const spawn = (title: string) => seed.beginSpawnRequest({ engine: "codex", cwd: "/seat-project",
+    launchProfile: { title }, parentConversationId: parent.id, parentSource: "explicit" }).receipt;
+  const bad = spawn("ambiguous");
+  const good = spawn("readable");
+  const initial = seed.snapshot();
+  initial.conversationAliases[bad.conversationId] = bad.conversationId;
+  const store = new SqliteAgentRegistryStore(path.join(directory, "registry.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry });
+  const page = store.pageSeatChildren(parent.id, null, 20);
+  expect(page.evidenceGap).toBe(true);
+  expect(page.file.lineageEdges[bad.conversationId]).toBeUndefined();
+  expect(page.file.lineageEdges[good.conversationId]?.parentConversationId).toBe(parent.id);
+  expect(page.file.receipts[good.launchId]?.conversationId).toBe(good.conversationId);
+});
+
+
+/* The monitor's seat read under a JSON-mode registry (#1465): the seat's turn
+   is answered from the ordinary snapshot, and the children projection a JSON
+   backend cannot bound says so with null rather than failing the read. */
+test("a JSON-mode registry answers the seat tick's conversation read and declines to page children", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-seat-json-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const seat = registry.ensureConversation("codex", "/sessions/json-seat.jsonl", null);
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: "/sessions/json-seat.jsonl",
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: "/seat-project", title: "seat" }),
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-09-05T12:00:00.000Z",
+  }]);
+  expect(registry.seatTickConversation(seat.id)).toMatchObject({ id: seat.id, turn: { state: "busy" } });
+  expect(registry.seatTickConversation(["conversation", "0000000000000000"].join("_"))).toBeNull();
+  expect(registry.pageSeatChildren(seat.id, null, 20)).toBeNull();
+});

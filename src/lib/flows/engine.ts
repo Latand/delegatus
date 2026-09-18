@@ -2,8 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
-import { accountManager } from "@/lib/accounts/manager";
+import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
+import { projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { deliverToTranscriptHost } from "@/lib/agent/transcriptHost";
@@ -28,6 +30,7 @@ import {
   type HeadlessReviewLaunch,
 } from "./exec";
 import { resolveCleanFlowHead, resolveFlowRemoteHead } from "./git";
+import { decisionHead, decisionStageMatches, decisionStillOwned, flowTurn } from "./decisions";
 import {
   fallbackReviewFromTranscript,
   lastAssistantMessage,
@@ -123,14 +126,9 @@ export function lastRound(flow: Flow): Round | null {
   return flow.rounds.at(-1) ?? null;
 }
 
-function detectReadyMarker(flow: Flow, entry: FileEntry): string | null {
-  /* Only a finished turn counts. Both CLIs emit interim narration mid-turn,
-     and the marker line can appear there while the implementer is still
-     committing — reviewing that snapshot would cover a half-done diff. */
-  if (entry.activity === "live" || entry.activityReason === "jsonl_turn_open" || entry.activityReason === "jsonl_turn_stalled") {
-    return null;
-  }
-  const message = lastAssistantMessage(entry);
+function detectReadyMarker(flow: Flow, evidence: Awaited<ReturnType<typeof flowTurn>>): string | null {
+  if (evidence?.state !== "terminal" || !evidence.successful) return null;
+  const message = evidence.message;
   if (!message) return null;
   const lastStarted = Math.max(...flow.rounds.map((round) => unixMs(round.startedAt)), unixMs(flow.createdAt));
   if (message.ts <= lastStarted) return null;
@@ -273,7 +271,7 @@ export function reserveReviewerSpawn(
 export function captureReviewHead(flow: Flow, round: Round): string {
   const headSha = resolveCleanFlowHead(flow.cwd);
   if (!headSha) throw new Error("review requires a clean committed HEAD");
-  if (flow.headRef) {
+  if (flow.headRef && flow.requireRemoteHead === true) {
     const remoteSha = resolveFlowRemoteHead(flow.cwd, flow.headRef);
     if (remoteSha !== headSha) {
       const detail = remoteSha
@@ -442,9 +440,26 @@ export async function sendToImplementer(
      the stable client-message id above; legacy pane delivery has no comparable
      receipt, so an automatic replay could duplicate the findings. */
   if (overrides.requireIdempotentDelivery) throw new UnsafeInterruptedRelayRetryError();
+  /* #1279: the account this resume runs under. Recorded ownership is
+     CONTINUITY and asks neither the pool nor any quota — the session lives in
+     that home. With nothing recorded nobody has chosen, and omitting the id let
+     `claudeTranscriptOwnership` answer from the engine's ACTIVE account for a
+     transcript inside the SHARED store, where every account resolves to the
+     same root and the path names no owner (#935): a relay could hand a round's
+     verdict to the implementer under an account the flow's project never
+     allowed. That half is a pick, so it goes through the shared automatic
+     decision — this project's pool, then capacity — and a fenced pool or an
+     unreadable record refuses here, before the relay delivers anything. */
   const spec = resumeSpecFor(entry.root, entry.path, {
     model: entry.launchModel ?? entry.model,
     effort: entry.effort,
+    accountId: entry.engine === "claude" || entry.engine === "codex"
+      ? resolveResumeAccountId(
+        entry.engine,
+        registry.transcriptAccountId(entry.engine, entry.path),
+        flow.project,
+      )
+      : null,
     allowSubagents: agentRegistry().launchProfileForPath(entry.path)?.allowSubagents,
     mcpServers: agentRegistry().launchProfileForPath(entry.path)?.mcpServers,
     plugins: agentRegistry().launchProfileForPath(entry.path)?.plugins,
@@ -678,7 +693,21 @@ function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, account
 function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch {
   if (flow.reviewerMode === "pane") {
     const role = flow.roles.reviewer;
-    const account = accountManager.resolveSpawn(role.engine, round.accountId);
+    /* #1279: the flow's project fences this pick too. A round with no account
+       yet draws one from the project's pool, capacity-aware, exactly as the
+       headless path below does. A round that already has one is carrying the
+       account FROZEN at its start — `Round.accountId` exists so polling and
+       retry never silently adopt a different one — so it is passed as a pin,
+       and a frozen account the project forbids parks the flow with the reason
+       rather than being quietly re-seated mid-round. */
+    const resolution = accountManager.resolveProjectSpawn(role.engine, {
+      project: flow.project,
+      requestedId: round.accountId,
+    });
+    if (resolution.kind !== "available") {
+      throw new Error(projectAccountRefusalDetail(resolution, role.engine, flow.project));
+    }
+    const account = resolution.account;
     round.accountId = account.accountId;
     round.reviewerRole = { ...role };
     return { role, account };
@@ -687,7 +716,11 @@ function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch
     flow.roles.reviewer,
     flow.reviewerFallback,
     round.attemptedAccounts ?? [],
-    (engine, requestedId, excludedIds) => accountManager.resolveHeadlessSpawn(engine, requestedId, excludedIds),
+    /* The project is passed down so the automatic rate-limit switch draws from
+       the project's allowed set only. Every allowed account exhausted parks the
+       flow with `rateLimitStateDetail`, exactly as it already did — it just
+       can no longer reach an account the project forbids to avoid parking. */
+    (engine, requestedId, excludedIds) => accountManager.resolveHeadlessSpawn(engine, requestedId ?? null, excludedIds ?? [], flow.project),
   );
   if (decision.kind === "exhausted") throw new ReviewerAccountsExhaustedError(decision.resetsAt);
   if (decision.kind === "unavailable") throw new Error("no authenticated reviewer account is available");
@@ -713,9 +746,11 @@ async function launchReviewer(
   flow.state = "reviewing";
   flow.stateDetail = null;
   if (flow.reviewerMode === "pane") {
+    const restricted = flow.reviewerSandbox === "restricted";
     const spec = freshSpecFor(role.engine, flow.cwd, {
       model: role.model,
       effort: role.effort,
+      readOnly: restricted,
       codexHome: account.engine === "codex" ? account.home : null,
       claudeConfigDir: account.engine === "claude" ? account.home : null,
       claudeProjectsDir: account.engine === "claude" ? account.transcriptRoot : null,
@@ -762,6 +797,7 @@ async function launchReviewer(
     account.engine === "claude" ? { home: account.home, projectsDir: account.transcriptRoot, managed: account.kind === "managed" } : null,
     undefined,
     spawnCapability,
+    flow.reviewerSandbox === "restricted" ? "read-only" : "bypass",
   );
   recordHeadlessLaunch(round, launched);
   settleReviewerSpawn(flow, round, role, account.accountId);
@@ -1009,6 +1045,55 @@ export async function tickFlow(
     if (round.reviewerPath) round.reviewerPath = currentConversationPath(round.reviewerConversationId, round.reviewerPath);
   }
   if (flow.state === "closed" || flow.state === "paused") return JSON.stringify(flow) !== before;
+  const decision = flow.agentDecisions?.find((item) => item.disposition === "accepted");
+  if (decision) {
+    const evidence = await flowTurn(flow);
+    const refuse = (reason: string) => {
+      flow.agentDecisions = flow.agentDecisions!.map((item) => item === decision
+        ? { ...item, disposition: "needs_decision", settledAt: isoNow() } : item);
+      flow.decisionRequired = true;
+      markNeedsDecision(flow, reason);
+    };
+    if (!decisionStillOwned(flow, decision) || !decisionStageMatches(flow, decision.stage, loadPipelines())
+      || decision.round !== flow.rounds.length || (evidence?.turnId && evidence.turnId !== decision.turnId)) {
+      refuse("accepted agent decision lost its owner, generation, stage attempt or turn fence");
+      return true;
+    }
+    if (!evidence || evidence.state !== "terminal") return JSON.stringify(flow) !== before;
+    if (!evidence.successful) {
+      refuse("agent decision turn ended without successful completion");
+      return true;
+    }
+    if (evidence.turnId !== decision.turnId || decisionHead(flow.cwd, decision.decision) !== decision.expectedHead) {
+      refuse("completed agent decision no longer matches its turn or clean HEAD");
+      return true;
+    }
+    if (decision.decision === "submit-review") {
+      if (flow.roundLimit > 0 && flow.rounds.length >= flow.roundLimit) {
+        refuse("flow review round limit reached");
+        return true;
+      }
+      const next = newRound(flow, "button", decision.reason);
+      next.reviewHeadSha = decision.expectedHead;
+      flow.targetSha = decision.expectedHead;
+      flow.rounds.push(next);
+      flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
+      flow.stateDetail = null;
+    } else if (decision.decision === "stop") {
+      flow.state = "closed";
+      flow.closedAt = isoNow();
+      flow.stateDetail = decision.reason;
+    } else if (decision.decision === "completed") {
+      flow.state = "done_comment";
+      flow.stateDetail = decision.reason;
+    } else {
+      flow.decisionRequired = true;
+      markNeedsDecision(flow, `agent requested further fixing: ${decision.reason}`);
+    }
+    flow.agentDecisions = flow.agentDecisions!.map((item) => item === decision
+      ? { ...item, disposition: "applied", settledAt: isoNow() } : item);
+    return true;
+  }
   const implementer = entriesByPath.get(flow.implementerPath);
   if (!implementer) {
     const pausedFrom = flow.state;
@@ -1019,14 +1104,20 @@ export async function tickFlow(
   }
 
   if (flow.state === "waiting_ready" || flow.state === "fixing") {
-    const note = detectReadyMarker(flow, implementer);
+    const evidence = await flowTurn(flow);
+    const note = detectReadyMarker(flow, evidence);
     if (note !== null) {
+      if (flow.roundLimit > 0 && flow.rounds.length >= flow.roundLimit) {
+        markNeedsDecision(flow, "flow review round limit reached");
+        return true;
+      }
       const markerRound = newRound(flow, "marker", note);
       flow.rounds.push(markerRound);
       try {
-        /* Pipeline-owned flows carry headRef. Capture their clean published
-           repair fence in the same durable marker transition, before a delayed
-           reviewer launch or parent reconciliation can expose the prior HEAD. */
+        /* Pipeline-owned flows carry headRef. Capture their clean repair fence
+           (and its published copy, when the pipeline publishes) in the same
+           durable marker transition, before a delayed reviewer launch or
+           parent reconciliation can expose the prior HEAD. */
         if (flow.headRef) captureReviewHead(flow, markerRound);
         flow.state = flow.mode === "manual" ? "spawn_pending" : "spawning";
         flow.stateDetail = null;
@@ -1034,6 +1125,13 @@ export async function tickFlow(
         const detail = error instanceof Error ? error.message : "review head capture failed";
         markerRound.error = detail;
         markNeedsDecision(flow, detail);
+      }
+    } else {
+      const boundary = Math.max(unixMs(flow.createdAt), ...flow.rounds.map((item) => unixMs(item.relayedAt ?? item.startedAt)));
+      const completedAt = Date.parse(evidence?.terminalAt ?? "");
+      if (evidence?.state === "terminal" && (!Number.isFinite(completedAt) || completedAt > boundary)) {
+        flow.decisionRequired = true;
+        markNeedsDecision(flow, "completed implementer turn requires an explicit agent decision or legacy REVIEW_READY handoff");
       }
     }
     return JSON.stringify(flow) !== before;
@@ -1043,6 +1141,13 @@ export async function tickFlow(
   if (!round) return JSON.stringify(flow) !== before;
 
   if (flow.state === "spawning") {
+    const submission = flow.agentDecisions?.find((item) => item.decision === "submit-review" && item.disposition === "applied" && item.round + 1 === round.n);
+    if (submission && !round.spawnStartedAt && (!decisionStillOwned(flow, submission)
+      || !decisionStageMatches(flow, submission.stage, loadPipelines())
+      || resolveCleanFlowHead(flow.cwd) !== submission.expectedHead)) {
+      markNeedsDecision(flow, "submitted review lost its owner, generation, stage attempt or exact HEAD fence before launch");
+      return true;
+    }
     const status = flow.reviewerMode === "headless"
       ? headlessReviewStatus(flow.id, round.n, round, reviewerRoleFor(flow, round).engine)
       : null;
@@ -1303,13 +1408,19 @@ export function persistTickFlows(
       if (!start) continue;
       /* The tick touched nothing on this flow → whatever is on disk now wins. */
       if (JSON.stringify(tick) === start.snapshot) continue;
+      const baseFlow = JSON.parse(start.snapshot) as Flow;
+      /* Decision consumption has no external effects. If any flow revision
+         changed while its transcript was read, retain acceptance and retry
+         against that revision (including a reduced round budget/manual mode). */
+      if (JSON.stringify(tick.agentDecisions) !== JSON.stringify(baseFlow.agentDecisions)
+        && diskFlow.revision !== baseFlow.revision) continue;
       const takenOver =
+        JSON.stringify(diskFlow.agentDecisions) !== JSON.stringify(baseFlow.agentDecisions) ||
         diskFlow.state !== start.state ||
         diskFlow.rounds.length !== start.roundsLen ||
         diskFlow.closedAt !== start.closedAt;
       if (takenOver) {
         if (diskFlow.state !== "paused" && diskFlow.state !== "closed") continue;
-        const baseFlow = JSON.parse(start.snapshot) as Flow;
         const settledByRound = new Map(tick.rounds.flatMap((round) => {
           const baseRound = baseFlow.rounds.find((item) => item.n === round.n);
           return baseRound?.relayedAt == null && round.relayDelivery && round.relayedAt
@@ -1337,7 +1448,6 @@ export function persistTickFlows(
          difference on disk is a concurrent set-roles that must survive. When the tick
          DID change it (e.g. issue #117 retry nulls it to re-pick an account), the
          tick's value wins. */
-      const baseFlow = JSON.parse(start.snapshot) as Flow;
       const rounds = tick.rounds.map((round, index) => {
         const diskRound = diskFlow.rounds[index];
         const baseRound = baseFlow.rounds[index];

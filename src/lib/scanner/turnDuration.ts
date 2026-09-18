@@ -1,5 +1,5 @@
 import type { FileEntry, TurnBoundary } from "../types";
-import { isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { classifyTurnRecord, turnRecordTimestamp } from "@/lib/turnRecords";
 import { tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { recordValue, recordsValue, stringValue } from "./json";
@@ -9,19 +9,14 @@ type RecordLike = Record<string, unknown>;
 // v5: meta/command user records no longer open windows (issue #406) — persisted
 // v4 boundaries could start before the real initiating prompt.
 const turnBoundaryCache = globalCache<[number, number, TurnBoundary | null]>("last-turn-v5");
-const recentTurnWindowsCache = globalCache<[number, number, RecentTurnWindows]>("recent-turn-windows-v3");
+const recentTurnWindowsCache = globalCache<[number, number, RecentTurnWindows]>("recent-turn-windows-v4");
 
 export interface RecentTurnWindows {
   windows: TurnBoundary[];
   assistantMessagesAtMs?: number[];
+  lastAgentWorkAt?: number | null;
   prefixTruncated: boolean;
   complete: boolean;
-}
-
-function parseMillis(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const millis = Date.parse(value);
-  return Number.isFinite(millis) ? millis : null;
 }
 
 /** A real assistant message the conversation renders as prose. Tool-only
@@ -46,76 +41,6 @@ function visibleAssistantMessage(record: RecordLike, codex: boolean): boolean {
   );
 }
 
-/** True when a transcript record is a prompt that opens a turn — a human or
-    relayed user message, NOT a tool result echoed back as a user record and
-    NOT harness metadata. Both engines are covered: Claude `type:"user"` with
-    real prompt content, Codex `user_message` / `message`(role user) payloads.
-    Tool-result user records carry only `tool_result`/`function_call_output`
-    parts, so they yield no text and are correctly skipped. Claude journaled
-    metadata (command echoes, caveats, task notifications, interrupts,
-    compaction summaries) carries text but never initiates or steers a window;
-    SDK and idle-delivered peer/coordinator prompts DO (issue #406). */
-function isTurnStart(record: RecordLike, codex: boolean): boolean {
-  if (codex) {
-    const payload = recordValue(record.payload) ?? {};
-    if (stringValue(payload.type) === "user_message") {
-      return (stringValue(payload.message) ?? "").trim().length > 0;
-    }
-    if (stringValue(payload.type) === "message" && payload.role === "user") {
-      return recordsValue(payload.content).some(
-        (part) => (stringValue(part.text) ?? stringValue(part.input_text) ?? "").trim().length > 0,
-      );
-    }
-    return false;
-  }
-  if (record.type !== "user") return false;
-  if (isClaudeTurnWindowMeta(record)) return false;
-  const content = recordValue(record.message)?.content;
-  if (typeof content === "string") return content.trim().length > 0;
-  // An image part is prompt content in its own right: a screenshot-only
-  // prompt opens a window exactly like a typed one (feed renders it as user
-  // content, not metadata).
-  return recordsValue(content).some(
-    (part) =>
-      part.type === "image" ||
-      (part.type === "text" && (stringValue(part.text) ?? "").trim().length > 0),
-  );
-}
-
-/** True when a record closes the active run for start-detection purposes: the
-    next prompt after it INITIATES a new turn instead of steering the current
-    one. Claude: the turn's final assistant message (`end_turn`/`stop_sequence`)
-    or a headless `result` record. Codex: task/turn lifecycle completion. */
-function isTurnClose(record: RecordLike, codex: boolean): boolean {
-  if (codex) {
-    const type = stringValue((recordValue(record.payload) ?? {}).type);
-    return type === "task_complete" || type === "turn_complete" || type === "turn_completed" || type === "turn_aborted";
-  }
-  if (record.type === "result") return true;
-  if (record.type !== "assistant") return false;
-  const stop = stringValue((recordValue(record.message) ?? {}).stop_reason);
-  return stop === "end_turn" || stop === "stop_sequence";
-}
-
-/** Authoritative failure evidence that ends the run WITHOUT a terminal record:
-    the operator interrupted the turn (Claude appends a protocol user record —
-    `interruptedMessageId` plus the bracket sentinel) or the run crashed on an
-    API error surfaced as a flagged assistant message. The window must close on
-    it so the next prompt INITIATES a new turn instead of steering a run that
-    no longer exists (issue #268 review). Codex interruptions emit a real
-    `turn_aborted` lifecycle record, so only the Claude shape needs this. */
-function isTurnFailure(record: RecordLike, codex: boolean): boolean {
-  if (codex) return false;
-  if (record.type === "assistant") return record.isApiErrorMessage === true;
-  if (record.type !== "user") return false;
-  if ("interruptedMessageId" in record) return true;
-  const content = recordValue(record.message)?.content;
-  const text = typeof content === "string"
-    ? content
-    : recordsValue(content).map((part) => stringValue(part.text) ?? "").join("\n");
-  return /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text);
-}
-
 /** Turn boundaries for the most-recent turn from a chronological record slice.
     The turn opens at the prompt that INITIATED the work — the first prompt
     after the previous turn closed, whoever sent it (operator or a relaying
@@ -134,31 +59,32 @@ export function recentTurnWindowsFromRecords(records: RecordLike[], codex: boole
   let failedWindow: TurnBoundary | null = null;
   let latestTimestamp: number | null = null;
   for (const record of records) {
-    latestTimestamp = parseMillis(record.timestamp) ?? latestTimestamp;
+    const facts = classifyTurnRecord(record, codex);
+    latestTimestamp = facts.timestampMs ?? latestTimestamp;
     // Failure evidence outranks the prompt shape: the interrupt sentinel is a
     // user record with real text and would otherwise register as a prompt.
-    if (isTurnFailure(record, codex)) {
+    if (facts.fails) {
       if (open && startedAt !== null) {
-        const endedAt = Math.max(parseMillis(record.timestamp) ?? latestTimestamp ?? startedAt, startedAt);
+        const endedAt = Math.max(facts.timestampMs ?? latestTimestamp ?? startedAt, startedAt);
         failedWindow = { startedAt, endedAt };
         windows.push(failedWindow);
       }
       open = false;
       continue;
     }
-    if (isTurnStart(record, codex)) {
+    if (facts.starts) {
       // A later steering prompt only fills in for an initiating prompt whose
       // own timestamp failed to parse — it never moves a valid boundary.
       if (!open || startedAt === null) {
-        startedAt = parseMillis(record.timestamp);
+        startedAt = facts.timestampMs;
         failedWindow = null;
       }
       open = true;
       continue;
     }
-    if (isTurnClose(record, codex)) {
+    if (facts.closes) {
       if (open && startedAt !== null) {
-        const endedAt = Math.max(parseMillis(record.timestamp) ?? latestTimestamp ?? startedAt, startedAt);
+        const endedAt = Math.max(facts.timestampMs ?? latestTimestamp ?? startedAt, startedAt);
         windows.push({ startedAt, endedAt });
       }
       open = false;
@@ -167,7 +93,7 @@ export function recentTurnWindowsFromRecords(records: RecordLike[], codex: boole
     }
     // Assistant output after failure evidence proves the run survived it (a
     // retried API error): reopen so later prompts keep steering, not resetting.
-    if (failedWindow && record.type === "assistant") {
+    if (failedWindow && facts.assistantRecord) {
       if (windows.at(-1) === failedWindow) windows.pop();
       failedWindow = null;
       open = true;
@@ -181,14 +107,17 @@ export function recentTurnWindowsFromRecords(records: RecordLike[], codex: boole
 export function recentTurnActivityFromRecords(
   records: RecordLike[],
   codex: boolean,
-): Pick<RecentTurnWindows, "windows" | "assistantMessagesAtMs"> {
+): Pick<RecentTurnWindows, "windows" | "assistantMessagesAtMs" | "lastAgentWorkAt"> {
   const assistantMessages = new Set<number>();
+  let lastAgentWorkAt: number | null = null;
   for (const record of records) {
-    const atMs = parseMillis(record.timestamp);
+    const atMs = turnRecordTimestamp(record.timestamp);
     if (atMs === null) continue;
     if (visibleAssistantMessage(record, codex)) assistantMessages.add(atMs);
+    if (isAgentWorkRecord(record, codex)) lastAgentWorkAt = Math.max(lastAgentWorkAt ?? 0, atMs);
   }
   return {
+    lastAgentWorkAt,
     windows: recentTurnWindowsFromRecords(records, codex),
     assistantMessagesAtMs: [...assistantMessages].sort((left, right) => left - right),
   };
@@ -242,4 +171,26 @@ export function lastAssistantMessageAtFor(entry: FileEntry): number | null | und
   const last = recent.assistantMessagesAtMs?.at(-1);
   if (typeof last === "number") return last;
   return recent.prefixTruncated ? undefined : null;
+}
+
+/** Work evidence shares the existing bounded tail parse and revision cache. */
+export function isAgentWorkRecord(record: RecordLike, codex: boolean): boolean {
+  if (codex) {
+    const payload = recordValue(record.payload) ?? {};
+    const kind = stringValue(payload.type);
+    if (record.type === "response_item") return (kind === "message" && payload.role === "assistant")
+      || ["reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "web_search_call", "local_shell_call"].includes(kind ?? "");
+    return record.type === "event_msg" && ["agent_message", "agent_reasoning", "exec_command_begin", "exec_command_end", "mcp_tool_call_begin", "mcp_tool_call_end"].includes(kind ?? "");
+  }
+  if (record.isApiErrorMessage === true) return false;
+  const message = recordValue(record.message) ?? {};
+  if (message.model === "<synthetic>") return false;
+  if (record.type === "assistant") return typeof message.content === "string" ? Boolean(message.content.trim())
+    : recordsValue(message.content).some(part => ["text", "thinking", "tool_use"].includes(String(part.type)));
+  return record.type === "user" && recordsValue(message.content).some(part => part.type === "tool_result");
+}
+
+export function lastAgentWorkAtFor(entry: FileEntry): number | null | undefined {
+  const recent = recentTurnWindowsFor(entry);
+  return recent.lastAgentWorkAt ?? (recent.prefixTruncated ? undefined : null);
 }

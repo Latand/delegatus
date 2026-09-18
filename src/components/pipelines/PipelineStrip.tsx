@@ -7,8 +7,8 @@ import { createPortal } from "react-dom";
 import { currentRound } from "@/components/scheme/agentLinks";
 import { useModalLayer } from "@/components/modalLayer";
 import type { Flow } from "@/lib/flows/types";
-import { useLocale } from "@/lib/i18n";
-import type { Pipeline, PipelineAction, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { useLocale, type TFunction } from "@/lib/i18n";
+import type { Pipeline, PipelineAction, PipelineStage, PipelineStageAttempt, PipelineState } from "@/lib/pipelines/types";
 import type { StageSlot } from "@/components/scheme/layout";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -26,6 +26,7 @@ import {
   pipelineStateLabel,
   stageAccess,
   stageAttempts,
+  stageConfigurable,
   stageChipLabel,
   stageChipState,
   stageDockCompact,
@@ -37,6 +38,7 @@ import {
 } from "./pipelineModel";
 import { StagePlaceholderPane } from "./StagePlaceholderPane";
 import { VerdictPopover } from "./VerdictPopover";
+import { humanizeDuration } from "../turnDuration";
 
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 
@@ -81,8 +83,8 @@ export function verdictPlacement(
  * so a strip near the page header never renders it off-screen. Recomputed on
  * scroll/resize.
  *
- * The portal sits at z-[80] — above the z-[70] mobile pipeline dock sheet
- * (MobilePipelineDockSheet) that hosts the strip on a phone (#507 review F3).
+ * The portal sits at z-[80] — above the phone's z-[60] bottom sheets
+ * (`MobileSheet`), so it stays reachable over one (#507 review F3).
  * The verdict popover and the stage configuration editor both mount here, and a
  * z-[60] portal painted UNDER the sheet's z-[70] backdrop was invisible and
  * unclickable at 390px; z-[80] clears the sheet while staying below the
@@ -164,7 +166,7 @@ function AnchoredActionMenu({ anchorRef, children }: { anchorRef: RefObject<HTML
 /**
  * The on-canvas stage editor as a real modal dialog (#507 review F3 portal +
  * final F2 ownership). It mounts through the {@link AnchoredVerdict} body portal
- * (z-[80], above the mobile dock sheet's z-[70]) and registers as a modal LAYER:
+ * (z-[80], above the phone's z-[60] sheets) and registers as a modal LAYER:
  * Tab/Shift+Tab stay inside the editor, Escape closes it, and — because the
  * layer stack hands ownership to the topmost layer — the underlying phone sheet
  * yields its own trap/Escape while this editor is open. The autoFocus close
@@ -297,9 +299,7 @@ function StageChip({
     return compactStageOpenTarget(candidate, candidateAttempt, flows, renderableFlows, renderablePaths, files);
   };
   const openTarget = targetFor(stage);
-  const stageConfigurable = (candidate: PipelineStage) =>
-    stageAttempts(pipeline, candidate.id).length === 0 && pipeline.state !== "completed" && pipeline.state !== "closed";
-  const configurable = stageConfigurable(stage);
+  const configurable = stageConfigurable(pipeline, stage.id);
   const canUseTarget = (target: ReturnType<typeof targetFor>) => target
     ? (target.kind === "flow" ? Boolean(onOpenFlow) : Boolean(onOpenPath))
     : false;
@@ -345,7 +345,7 @@ function StageChip({
     && stageDockCompact(pipeline, stage, attempt, flows, renderableFlows, renderablePaths, files);
 
   const previousTarget = previousStage ? targetFor(previousStage) : null;
-  const previousConfigurable = previousStage ? stageConfigurable(previousStage) : false;
+  const previousConfigurable = previousStage ? stageConfigurable(pipeline, previousStage.id) : false;
   const previousLabel = previousStage ? stageChipLabel(t, previousStage) : "";
   const previousState = previousStage ? t(`pipelineChipState.${stageChipState(pipeline, previousStage)}`) : "";
   const configurationSlot: StageSlot = {
@@ -789,5 +789,119 @@ export function PipelineStrip({
         ) : null}
       </span>
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Mobile row mode (issue #1439, lane 7; docs/design/mobile-v2/README.md §4.7) *
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** What a phone row says about one pipeline. Pure, so the row on the pipelines
+    list and any surface that has to agree with it read one derivation. */
+export interface MobilePipelineRowModel {
+  id: string;
+  task: string;
+  state: PipelineState;
+  /** 1-based cursor position and how many stages the chain has. */
+  stage: number;
+  total: number;
+  /** The cursor stage in the operator's words — the role's name, «review loop»
+      for a loop — never the raw stage id. */
+  stageName: string;
+  /** That stage's own state word (`pipelineChipState.*`). */
+  stageState: string;
+  /** Seconds since the pipeline was created; the row says when it started. */
+  seconds: number | null;
+}
+
+/** The phone row's model for `pipeline`, at `now` (epoch seconds). */
+export function mobilePipelineRowModel(t: TFunction, pipeline: Pipeline, now: number): MobilePipelineRowModel {
+  const { k, n } = pipelineStagePosition(pipeline);
+  const index = Math.min(Math.max(k, 1), Math.max(n, 1)) - 1;
+  const stage = pipeline.stages[index] ?? pipeline.stages[pipeline.stages.length - 1] ?? null;
+  const created = Date.parse(pipeline.createdAt);
+  return {
+    id: pipeline.id,
+    task: pipeline.task,
+    state: pipeline.state,
+    stage: k,
+    total: n,
+    stageName: stage ? stageChipLabel(t, stage) : "",
+    stageState: stage ? t(`pipelineChipState.${stageChipState(pipeline, stage)}`) : "",
+    seconds: Number.isFinite(created) ? Math.max(0, now - created / 1_000) : null,
+  };
+}
+
+/** The badge word for a pipeline state on the phone (README §5: one recipe,
+    role text). The desktop's own `pipelineState.*` sentence is longer than a
+    20 px badge, so the phone keeps the state's word and nothing else. */
+export const MOBILE_PIPELINE_BADGE = {
+  draft: "mobile2.pipelines.badgeDraft",
+  provisioning: "mobile2.pipelines.badgeProvisioning",
+  running: "mobile2.pipelines.badgeRunning",
+  needs_decision: "mobile2.pipelines.badgeDecision",
+  paused: "mobile2.pipelines.badgePaused",
+  completed: "mobile2.pipelines.badgeCompleted",
+  closed: "mobile2.pipelines.badgeClosed",
+} as const satisfies Record<PipelineState, string>;
+
+const MOBILE_ROW_TONE: Record<PipelineState, { badge: string; dot: string; edge: string }> = {
+  draft: { badge: "bg-warning-soft text-warning", dot: "bg-warning", edge: "" },
+  provisioning: { badge: "bg-accent-soft text-accent", dot: "bg-accent", edge: "" },
+  running: { badge: "bg-accent-soft text-accent", dot: "bg-accent", edge: "" },
+  needs_decision: { badge: "bg-warning-soft text-warning", dot: "bg-warning", edge: "shadow-[inset_3px_0_0_var(--color-warning),var(--shadow-1)]" },
+  paused: { badge: "bg-warning-soft text-warning", dot: "bg-warning", edge: "" },
+  completed: { badge: "bg-success-soft text-success", dot: "bg-success", edge: "" },
+  closed: { badge: "bg-sunken text-muted", dot: "bg-strong", edge: "" },
+};
+
+const MOBILE_ROW = "flex w-full min-h-14 items-center gap-2.5 rounded-[12px] bg-card py-2 pl-3 pr-2.5 text-left shadow-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
+
+/**
+ * One pipeline as a phone row (README §4.7): dot · task title · one meta line
+ * (`stage k/n · <stage> · <state> · started`) · the state badge. A row that
+ * needs the operator carries the 3 px warning edge and takes two title lines;
+ * its dot keeps its 8 px so every title starts on the same line.
+ *
+ * This is the SAME description the board's queue row gives (`stage k/n · …`)
+ * and the same one the desktop strip's header carries, taken from
+ * `pipelineStagePosition` and `stageChipLabel` rather than written again.
+ */
+export function MobilePipelineRow({ pipeline, now, onOpen, quiet = false }: {
+  pipeline: Pipeline;
+  /** Epoch seconds. */
+  now: number;
+  onOpen?: (pipeline: Pipeline) => void;
+  /** Completed rows read quieter than active ones (README §10 P3-8). */
+  quiet?: boolean;
+}) {
+  const { t } = useLocale();
+  const row = mobilePipelineRowModel(t, pipeline, now);
+  const tone = MOBILE_ROW_TONE[row.state];
+  const attention = row.state === "needs_decision";
+  const meta = [
+    t("mobile2.pipelines.rowStage", { stage: row.stage, total: row.total, name: row.stageName, state: row.stageState }),
+    row.seconds === null ? null : t("mobile2.pipelines.rowStarted", { age: humanizeDuration(row.seconds) }),
+  ].filter(Boolean).join(" · ");
+  const Tag = onOpen ? "button" : "div";
+  return (
+    <Tag
+      {...(onOpen ? { type: "button" as const, onClick: () => onOpen(pipeline), "aria-label": t("mobile2.pipelines.open", { task: row.task }) } : {})}
+      data-mobile2-pipeline-row={row.id}
+      data-mobile2-go={onOpen ? "pipeline" : undefined}
+      data-mobile2-state={row.state}
+      className={`${MOBILE_ROW} ${quiet ? "bg-quiet shadow-none ring-1 ring-inset ring-border" : ""} ${tone.edge}`}
+    >
+      <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${attention ? "invisible" : tone.dot} ${row.state === "running" ? "motion-safe:animate-pulse" : ""}`} />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className={`text-body font-semibold leading-[1.25] ${quiet ? "text-secondary" : "text-primary"} ${attention ? "line-clamp-2" : "truncate"}`}>
+          {row.task}
+        </span>
+        <span className="truncate text-label tabular-nums text-muted">{meta}</span>
+      </span>
+      <span className={`inline-flex h-5 shrink-0 items-center rounded-full px-[7px] text-caption font-semibold leading-none ${tone.badge}`}>
+        {t(MOBILE_PIPELINE_BADGE[row.state])}
+      </span>
+    </Tag>
   );
 }

@@ -5,8 +5,10 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
+import { lastTurnFromRecords } from "@/lib/scanner/turnDuration";
 
 import { TurnStatusBar } from "./TurnStatusBar";
+import { resetWorkingSinceForTests } from "./workingSince";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -25,9 +27,11 @@ afterEach(() => {
   if (root) flushSync(() => root!.unmount());
   root = null;
   setSystemTime();
+  resetWorkingSinceForTests();
 });
 
-type StatusFile = Pick<FileEntry, "lastTurn" | "activity" | "mtime" | "pendingQuestion" | "waitingInput" | "rateLimit">;
+type StatusFile = Pick<FileEntry, "lastTurn" | "activity" | "mtime" | "pendingQuestion" | "waitingInput" | "rateLimit">
+  & Partial<Pick<FileEntry, "path" | "conversationId" | "spawn" | "launch" | "lastAssistantMessageAt">>;
 
 const file = (
   lastTurn: FileEntry["lastTurn"],
@@ -40,7 +44,7 @@ const render = (entry: StatusFile, container: HTMLElement) => {
   flushSync(() => root!.render(<TurnStatusBar file={entry} workingLabel="working…" workingIcon={Sparkle} />));
 };
 
-test("live open turn ticks the elapsed timer every second and freezes at terminal", () => {
+test("live open turn ticks the elapsed timer every second and unmounts at terminal", () => {
   const realSet = globalThis.setInterval;
   const realClear = globalThis.clearInterval;
   let tick: (() => void) | null = null;
@@ -61,27 +65,26 @@ test("live open turn ticks the elapsed timer every second and freezes at termina
     document.body.appendChild(container);
 
     // Prompt accepted at t0, agent working: the bottom slot carries the label
-    // and a named timer element seeded at 0:00.
+    // and a named timer element seeded at 0s.
     render(file({ startedAt: t0, endedAt: null }, "live"), container);
     const timer = () => container.querySelector('[role="timer"]');
     expect(container.querySelector('[data-turn-status="running"]')).not.toBeNull();
     expect(timer()?.getAttribute("aria-label")).toBe("elapsed work time");
-    expect(timer()?.textContent).toBe("0:00");
+    expect(timer()?.textContent).toBe("0s");
     expect(started).toBe(1);
 
     // 4 minutes 32 seconds into the turn (a long tool call in between — the
     // timer tracks the wall clock, not transcript writes).
     setSystemTime(new Date(t0 + (4 * 60 + 32) * 1000));
     flushSync(() => tick!());
-    expect(timer()?.textContent).toBe("4:32");
+    expect(timer()?.textContent).toBe("4m 32s");
 
-    // The turn ends: the timer unmounts (its interval cleared) and the frozen
-    // total spans initiating prompt → last activity, not the last action.
+    // The turn ends: the timer unmounts and its interval is cleared. The
+    // response row owns the completed total.
     render(file({ startedAt: t0, endedAt: t0 + 5 * 60 * 1000 }, "recent"), container);
     expect(timer()).toBeNull();
     expect(cleared).toContain(1);
-    const finished = container.querySelector('[data-turn-status="finished"]');
-    expect(finished?.textContent).toContain("Worked for 5m");
+    expect(container.querySelector('[data-turn-status="finished"]')).toBeNull();
     expect(container.querySelector('[data-turn-status="running"]')).toBeNull();
   } finally {
     globalThis.setInterval = realSet;
@@ -89,7 +92,7 @@ test("live open turn ticks the elapsed timer every second and freezes at termina
   }
 });
 
-test("a new prompt after a finished turn resets the timer to the new receipt", () => {
+test("a held delivery starts the timer at transcript receipt instead of composer send", () => {
   const realSet = globalThis.setInterval;
   let tick: (() => void) | null = null;
   // @ts-expect-error test double
@@ -98,36 +101,30 @@ test("a new prompt after a finished turn resets the timer to the new receipt", (
     return 1;
   };
   try {
-    const t0 = Date.parse("2026-07-18T10:00:00.000Z");
-    setSystemTime(new Date(t0));
+    const sentAt = Date.parse("2026-07-18T10:00:00.000Z");
+    const receivedAt = sentAt + 60_000;
+    setSystemTime(new Date(receivedAt));
     const container = document.createElement("div");
     document.body.appendChild(container);
-    render(file({ startedAt: t0 - 60 * 60 * 1000, endedAt: t0 - 30 * 60 * 1000 }, "idle"), container);
-    expect(container.querySelector('[data-turn-status="finished"]')).not.toBeNull();
 
-    // Second prompt lands at t0+10s and the scanner reopens the boundary: the
-    // timer restarts from the NEW receipt, not the previous turn's start.
-    const t1 = t0 + 10_000;
-    render(file({ startedAt: t1, endedAt: null }, "live"), container);
-    setSystemTime(new Date(t1 + 3000));
+    const laggedDelivery = {
+      sentAt,
+      file: file(lastTurnFromRecords([{
+        type: "user",
+        timestamp: new Date(receivedAt).toISOString(),
+        message: { role: "user", content: "delivered after a hold" },
+      }], false), "live"),
+    };
+    expect(laggedDelivery.file.lastTurn?.startedAt).toBe(receivedAt);
+    expect(laggedDelivery.file.lastTurn?.startedAt).not.toBe(laggedDelivery.sentAt);
+    render(laggedDelivery.file, container);
+    setSystemTime(new Date(receivedAt + 3000));
     flushSync(() => tick!());
-    expect(container.querySelector('[role="timer"]')?.textContent).toBe("0:03");
+    expect(container.querySelector('[role="timer"]')?.textContent).toBe("3s");
+    expect(container.querySelector('[role="timer"]')?.textContent).not.toBe("1m 3s");
   } finally {
     globalThis.setInterval = realSet;
   }
-});
-
-test("finished caption's accessible output is the localized visible duration text", () => {
-  const t0 = Date.parse("2026-07-18T10:00:00.000Z");
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  render(file({ startedAt: t0, endedAt: t0 + (12 * 60 + 30) * 1000 }, "idle"), container);
-  const caption = container.querySelector('[data-turn-status="finished"] .tabular-nums');
-  expect(caption?.textContent).toBe("Worked for 12m 30s");
-  // The caption span is role-less: an aria-label there would override the
-  // visible localized caption for assistive tech, so it must carry none and
-  // expose the caption itself as its accessible output (issue #268 review).
-  expect(caption?.hasAttribute("aria-label")).toBe(false);
 });
 
 test("live agent with no known boundary keeps the working label without a timer", () => {
@@ -200,4 +197,164 @@ test("a rate limit still renders the operator-blocked status without an open tur
   expect(container.querySelector('[data-turn-status="waiting"]')?.textContent).toContain("waiting for your answer");
   expect(container.querySelector('[data-turn-status="waiting"]')?.textContent).toContain("1:05");
   expect(container.querySelector('[data-turn-status="waiting"]')?.className).toContain("text-warning");
+});
+
+test("issue 1397: the starting window times working… from the launch admission and never runs backwards", () => {
+  const realSet = globalThis.setInterval;
+  let tick: (() => void) | null = null;
+  // @ts-expect-error test double
+  globalThis.setInterval = (fn: () => void) => {
+    tick = fn;
+    return 1;
+  };
+  try {
+    const admittedAt = Date.parse("2026-09-01T09:00:00.000Z");
+    /* The host journals the first user record eight seconds after admission:
+       a timer re-anchored on that record would drop by eight seconds. */
+    const recordAt = admittedAt + 8_000;
+    const conversationId = "conversation_1397";
+    const spawn: NonNullable<FileEntry["spawn"]> = {
+      launchId: "launch_1397",
+      clientAttemptId: null,
+      accountId: null,
+      conversationId,
+      generation: 1,
+      state: "reconciling",
+      initialMessage: "queued",
+      retrySafe: false,
+      error: null,
+      admittedAt,
+    };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const timer = () => container.querySelector('[data-turn-status="running"] [role="timer"]');
+
+    /* Reconciling, first message queued, no transcript turn at all: the
+       working label carries the elapsed time since the launch was admitted. */
+    setSystemTime(new Date(admittedAt + 45_000));
+    render({ ...file(null, "live"), path: "spawn:launch_1397", conversationId, spawn }, container);
+    expect(container.querySelector('[data-turn-status="running"]')?.textContent).toContain("working…");
+    expect(timer()?.textContent).toBe("45s");
+
+    /* The record lands, the agent answers within the same poll, and the board
+       flips the placeholder to the scanned row in ONE render: its open turn
+       starts at the record, it carries the assistant evidence, and the
+       projection has already retired the launch facts on it. The counter keeps
+       counting from the admission — never the record's own 52s. */
+    setSystemTime(new Date(admittedAt + 60_000));
+    render({
+      ...file({ startedAt: recordAt, endedAt: null }, "live"),
+      path: "/sessions/launch-1397.jsonl",
+      conversationId,
+      lastAssistantMessageAt: recordAt + 6_000,
+    }, container);
+    flushSync(() => tick!());
+    expect(timer()?.textContent).toBe("1m");
+
+    /* Ticking on, same open turn: still the admission, no jump. */
+    setSystemTime(new Date(admittedAt + 70_000));
+    render({
+      ...file({ startedAt: recordAt, endedAt: null }, "live"),
+      path: "/sessions/launch-1397.jsonl",
+      conversationId,
+      lastAssistantMessageAt: recordAt + 6_000,
+    }, container);
+    flushSync(() => tick!());
+    expect(timer()?.textContent).toBe("1m 10s");
+
+    /* The turn ends: nothing to time. The next turn is new work and counts
+       from its own transcript start. */
+    render({ ...file({ startedAt: recordAt, endedAt: admittedAt + 200_000 }, "recent"), path: "/sessions/launch-1397.jsonl", conversationId }, container);
+    expect(timer()).toBeNull();
+    setSystemTime(new Date(admittedAt + 305_000));
+    render({ ...file({ startedAt: admittedAt + 300_000, endedAt: null }, "live"), path: "/sessions/launch-1397.jsonl", conversationId }, container);
+    expect(timer()?.textContent).toBe("5s");
+  } finally {
+    globalThis.setInterval = realSet;
+  }
+});
+
+test("issue 1397: a poll that still carries the launch chips on the open turn is the same work", () => {
+  const realSet = globalThis.setInterval;
+  let tick: (() => void) | null = null;
+  // @ts-expect-error test double
+  globalThis.setInterval = (fn: () => void) => {
+    tick = fn;
+    return 1;
+  };
+  try {
+    const admittedAt = Date.parse("2026-09-01T09:00:00.000Z");
+    const recordAt = admittedAt + 8_000;
+    const conversationId = "conversation_1397_chips";
+    const spawn: NonNullable<FileEntry["spawn"]> = {
+      launchId: "launch_1397_chips",
+      clientAttemptId: null,
+      accountId: null,
+      conversationId,
+      generation: 1,
+      state: "reconciling",
+      initialMessage: "queued",
+      retrySafe: false,
+      error: null,
+      admittedAt,
+    };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const timer = () => container.querySelector('[data-turn-status="running"] [role="timer"]');
+    setSystemTime(new Date(admittedAt + 45_000));
+    render({ ...file(null, "live"), path: "spawn:launch_1397_chips", conversationId, spawn }, container);
+    expect(timer()?.textContent).toBe("45s");
+
+    /* The board caught the scanned row before the agent answered: the launch
+       still rides it as chips. */
+    setSystemTime(new Date(admittedAt + 60_000));
+    render({
+      ...file({ startedAt: recordAt, endedAt: null }, "live"),
+      path: "/sessions/launch-1397-chips.jsonl",
+      conversationId,
+      launch: { ...spawn, state: "recovered", initialMessage: "delivered", deliveredAt: recordAt },
+    }, container);
+    flushSync(() => tick!());
+    expect(timer()?.textContent).toBe("1m");
+
+    /* Then the chips retire on the first assistant message, same open turn. */
+    setSystemTime(new Date(admittedAt + 70_000));
+    render({
+      ...file({ startedAt: recordAt, endedAt: null }, "live"),
+      path: "/sessions/launch-1397-chips.jsonl",
+      conversationId,
+      lastAssistantMessageAt: recordAt + 15_000,
+    }, container);
+    flushSync(() => tick!());
+    expect(timer()?.textContent).toBe("1m 10s");
+  } finally {
+    globalThis.setInterval = realSet;
+  }
+});
+
+test("a fresh window that never saw the starting window counts from the transcript anchor", () => {
+  const admittedAt = Date.parse("2026-09-01T09:00:00.000Z");
+  const recordAt = admittedAt + 8_000;
+  setSystemTime(new Date(admittedAt + 60_000));
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  render({
+    ...file({ startedAt: recordAt, endedAt: null }, "live"),
+    path: "/sessions/launch-1397-fresh.jsonl",
+    conversationId: "conversation_1397_fresh",
+    launch: {
+      launchId: "launch_1397_fresh",
+      clientAttemptId: null,
+      accountId: null,
+      conversationId: "conversation_1397_fresh",
+      generation: 1,
+      state: "recovered",
+      initialMessage: "delivered",
+      retrySafe: false,
+      error: null,
+      admittedAt,
+      deliveredAt: recordAt,
+    },
+  }, container);
+  expect(container.querySelector('[data-turn-status="running"] [role="timer"]')?.textContent).toBe("52s");
 });

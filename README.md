@@ -277,6 +277,14 @@ scripts/rebuild.sh
 LLV_TEST_PORT=8901 docker compose --profile test up -d viewer-test
 ```
 
+`scripts/rebuild.sh` is the whole release command, run from any checkout of the
+repository — a worktree included — with nothing wrapping it and no `git pull`
+first. It posts a revision to the runtime host, which builds that revision from
+its own canonical Git mirror rather than from the working tree. With no argument
+and no `LLV_DEPLOY_REVISION` override, it resolves the canonical
+`refs/heads/main` tip and deploys that exact commit; a full 40-character commit
+SHA in either case pins a redeploy or a rollback and is posted lowercase.
+
 See [docs/docker.md](docs/docker.md) for the parity model, the nsenter shims,
 and volume/port details.
 
@@ -458,6 +466,11 @@ By default the CLI binds to `127.0.0.1`. With `--tailscale`, access is exposed
 inside the tailnet via `tailscale serve` and guarded by the token gate in
 `src/proxy.ts`. Non-loopback binds also force token mode. Treat any URL
 containing `?k=` as a credential.
+
+A Docker-deployed runtime host on a personal workstation can keep `LLV_TOKEN`
+for the tailnet while serving plain `http://127.0.0.1:8898/` token-free, by
+splitting its stable listener into a local entry and an authenticated remote
+entry; see [docs/docker.md](docs/docker.md#personal-workstation-token-free-localhost-authenticated-tailnet).
 
 ## Environment variables
 

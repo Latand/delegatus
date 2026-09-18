@@ -1,0 +1,182 @@
+{
+  "base": "e74649a0dc7b56f7048a663d705477f6326eaa53",
+  "browser": {
+    "baseline": {
+      "corpus": {
+        "files": 975,
+        "flows": 321,
+        "tasks": 1207
+      },
+      "domNodes": 3668,
+      "opens": [
+        {
+          "id": "export-impl",
+          "driverElapsedMs": 883,
+          "clickToReadableMs": 742.3000000044703,
+          "frames": 5
+        },
+        {
+          "id": "export-explore",
+          "driverElapsedMs": 718.1000000014901,
+          "clickToReadableMs": 630.8000000044703,
+          "frames": 5
+        },
+        {
+          "id": "auth-impl",
+          "driverElapsedMs": 598.1000000014901,
+          "clickToReadableMs": 544.3999999985099,
+          "frames": 5
+        },
+        {
+          "id": "export-impl",
+          "driverElapsedMs": 791.1000000014901,
+          "clickToReadableMs": 280.1000000014901,
+          "frames": 1
+        },
+        {
+          "id": "export-explore",
+          "driverElapsedMs": 676.7999999970198,
+          "clickToReadableMs": 278.59999999403954,
+          "frames": 1
+        }
+      ],
+      "inputSamples": 160,
+      "inputQueueP95Ms": 86.9,
+      "inputToFrameP95Ms": 103.6,
+      "longTasks": 123,
+      "longTaskMaxMs": 588,
+      "api": {
+        "/api/files": {
+          "wait": {
+            "samples": 44,
+            "maxMs": 22.1
+          }
+        },
+        "/api/logs": {
+          "wait": {
+            "samples": 27,
+            "maxMs": 13.1
+          },
+          "parse": {
+            "samples": 27,
+            "maxMs": 304.5
+          }
+        }
+      },
+      "browserErrors": []
+    },
+    "candidate": {
+      "corpus": {
+        "files": 975,
+        "flows": 321,
+        "tasks": 1207
+      },
+      "domNodes": 3668,
+      "opens": [
+        {
+          "id": "export-impl",
+          "driverElapsedMs": 448.70000000298023,
+          "clickToReadableMs": 308.70000000298023,
+          "frames": 7
+        },
+        {
+          "id": "export-explore",
+          "driverElapsedMs": 247.10000000149012,
+          "clickToReadableMs": 207,
+          "frames": 7
+        },
+        {
+          "id": "auth-impl",
+          "driverElapsedMs": 190.29999999701977,
+          "clickToReadableMs": 156.89999999850988,
+          "frames": 6
+        },
+        {
+          "id": "export-impl",
+          "driverElapsedMs": 445.6000000014901,
+          "clickToReadableMs": 85.5,
+          "frames": 1
+        },
+        {
+          "id": "export-explore",
+          "driverElapsedMs": 407.09999999403954,
+          "clickToReadableMs": 92,
+          "frames": 1
+        }
+      ],
+      "inputSamples": 160,
+      "inputQueueP95Ms": 6.3,
+      "inputToFrameP95Ms": 26.2,
+      "longTasks": 22,
+      "longTaskMaxMs": 116,
+      "api": {
+        "/api/files": {
+          "wait": {
+            "samples": 22,
+            "maxMs": 23
+          }
+        },
+        "/api/logs": {
+          "wait": {
+            "samples": 19,
+            "maxMs": 16.4
+          },
+          "parse": {
+            "samples": 19,
+            "maxMs": 80.4
+          }
+        }
+      },
+      "browserErrors": []
+    }
+  },
+  "search": {
+    "baseline": {
+      "corpus": 8247,
+      "selected": 951,
+      "results": [
+        {
+          "sample": 1,
+          "ms": 16535.657180000002,
+          "status": 200,
+          "total": 951,
+          "items": 10
+        },
+        {
+          "sample": 2,
+          "ms": 17709.289485,
+          "status": 200,
+          "total": 951,
+          "items": 10
+        }
+      ]
+    },
+    "candidate": {
+      "corpus": 8247,
+      "selected": 951,
+      "results": [
+        {
+          "sample": 1,
+          "ms": 2048.485286,
+          "status": 200,
+          "total": 951,
+          "items": 10
+        },
+        {
+          "sample": 2,
+          "ms": 118.90518999999995,
+          "status": 200,
+          "total": 951,
+          "items": 10
+        }
+      ]
+    }
+  },
+  "filesProjection": {
+    "fullBytes": 7270599,
+    "summaryBytes": 6495872,
+    "readMs": 170.442593,
+    "parseMs": 32.761357000000004,
+    "summaryMs": 49.710796000000016
+  }
+}

@@ -26,6 +26,7 @@ const {
   readLimits,
 } = await import("./limits");
 const { recordLimitSample } = await import("@/lib/limitsHistoryStore");
+const { selectHeadlessAccount } = await import("@/lib/accounts/headlessSelection");
 
 afterAll(() => {
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -231,7 +232,7 @@ test("a provider-exhausted transcript window overrides a newer app-server probe"
   expect(result.data?.weekly?.resetsAt).toBe(resetsAt);
 });
 
-test("usage_limit_exceeded makes the matching transcript window authoritative immediately", async () => {
+test("a usage_limit terminal record makes the matching transcript window authoritative immediately (#1371)", async () => {
   const account = createManagedCodexAccount("Rejected reconciliation");
   const nowS = Math.floor(Date.now() / 1000);
   const resetsAt = nowS + 6 * 86_400;
@@ -244,20 +245,72 @@ test("usage_limit_exceeded makes the matching transcript window authoritative im
     }),
     JSON.stringify({
       timestamp: new Date((nowS - 60) * 1000).toISOString(),
-      payload: { type: "task_complete", error: { message: "You've hit your usage limit. Try again after reset.", codex_error_info: "usage_limit_exceeded" } },
+      payload: { type: "task_complete", message: "You've hit your usage limit. Try again after reset.", codex_error_info: "usage_limit" },
     }),
   ].join("\n") + "\n");
 
   const result = await readCodexLimits({
     account,
     liveReader: async () => ({
-      primary: { usedPercent: 21, resetsAt, windowDurationMins: 10_080 },
+      primary: { usedPercent: 0, resetsAt, windowDurationMins: 10_080 },
       secondary: null,
       planType: "prolite",
     }),
   });
 
   expect(result.data?.weekly).toMatchObject({ usedPercent: 100, resetsAt, observedAt: nowS - 60 });
+  expect(result.source).toBe("transcript");
+});
+
+test("a redeemed reset makes the later live window authoritative and keeps the account admissible (#1406)", async () => {
+  const account = createManagedCodexAccount("Redeemed weekly reset");
+  const now = Date.parse("2026-09-01T09:00:00.000Z");
+  const transcriptReset = Date.parse("2026-09-07T02:36:00.000Z") / 1000;
+  const liveReset = Date.parse("2026-09-08T08:48:00.000Z") / 1000;
+  const session = path.join(account.sessionsDir, "2026", "09", "01", "redeemed-reset.jsonl");
+  fs.mkdirSync(path.dirname(session), { recursive: true });
+  fs.writeFileSync(session, [
+    JSON.stringify({
+      timestamp: "2026-09-01T02:35:00.000Z",
+      payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 90, window_minutes: 10_080, resets_at: transcriptReset }, secondary: null, plan_type: "prolite" } },
+    }),
+    JSON.stringify({
+      timestamp: "2026-09-01T02:36:00.000Z",
+      payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
+    }),
+  ].join("\n") + "\n");
+
+  const result = await readCodexLimits({
+    account,
+    now: () => now,
+    liveReader: async () => ({
+      primary: { usedPercent: 0, resetsAt: liveReset, windowDurationMins: 10_080 },
+      secondary: null,
+      planType: "prolite",
+    }),
+  });
+
+  expect(result).toMatchObject({
+    source: "live",
+    reason: null,
+    data: { weekly: { usedPercent: 0, resetsAt: liveReset } },
+  });
+  expect(selectHeadlessAccount(
+    [{ id: "account-a", authPresent: true }],
+    [{
+      engine: "codex",
+      accountId: "account-a",
+      authenticated: true,
+      authCheckedAt: new Date(now).toISOString(),
+      limits: result.data,
+      provenance: { source: result.source, reason: result.reason, staleSince: null },
+      observedAt: new Date(now).toISOString(),
+      bootId: "boot-selection-1406",
+    }],
+    "account-a",
+    [],
+    now,
+  )).toEqual({ kind: "available", accountId: "account-a" });
 });
 
 test("usage_limit_exceeded clears an already-expired quota reset", async () => {
@@ -1341,4 +1394,72 @@ test("a transcript left with only windowless events reports no snapshot rather t
   const result = await readCodexLimits({ account, liveReader: async () => { throw new Error("offline"); } });
   expect(result.data).toBeNull();
   expect(result.source).toBe("unavailable");
+});
+
+test("the Claude usage payload's flagship tier bucket becomes the flagship window, named by the provider's tier (#1358)", async () => {
+  const realFetch = globalThis.fetch;
+  let payload: Record<string, unknown> = {
+    five_hour: { utilization: 12, resets_at: "2026-09-01T14:00:00.000Z" },
+    seven_day: { utilization: 40, resets_at: "2026-09-05T08:00:00.000Z" },
+    seven_day_opus: { utilization: 63, resets_at: "2026-09-05T08:00:00.000Z" },
+    seven_day_sonnet: { utilization: 5, resets_at: "2026-09-05T08:00:00.000Z" },
+    seven_day_oauth_apps: { utilization: 1 },
+    seven_day_overage_included: false,
+  };
+  globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+  try {
+    const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
+    const withBucket = await fetchClaudeLimits(credentials);
+    expect(withBucket.source).toBe("live");
+    expect(withBucket.data?.flagship).toEqual({ usedPercent: 63, resetsAt: Math.round(Date.parse("2026-09-05T08:00:00.000Z") / 1000), windowMinutes: 10_080, tier: "opus" });
+    expect(withBucket.data?.weekly).toMatchObject({ usedPercent: 40 });
+    // The provider sends the key as null when the account has no distinct
+    // flagship bucket (observed on a live payload): the field is null and
+    // nothing renders. A lower tier's bucket never becomes the flagship row.
+    payload = { five_hour: { utilization: 12 }, seven_day: { utilization: 40 }, seven_day_opus: null, seven_day_sonnet: { utilization: 5 } };
+    const without = await fetchClaudeLimits(credentials);
+    expect(without.data?.flagship).toBeNull();
+    expect(without.data?.weekly).toMatchObject({ usedPercent: 40 });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("forgetting one account's cached limits sends the next read back to the provider (#1418)", async () => {
+  resetLimitsCache();
+  const { forgetCachedLimits } = await import("./limits");
+  const account = createManagedCodexAccount("Forgettable");
+  setActiveCodexAccount(account.id);
+  let reads = 0;
+  const reader = async () => { reads += 1; return { primary: { usedPercent: 12, resetsAt: 100, windowDurationMins: 10_080 }, secondary: null, planType: "pro" }; };
+  await readLimits({ codexLiveReader: reader });
+  await readLimits({ codexLiveReader: reader });
+  expect(reads).toBe(1); // the second read is served from the 30-second cache
+  forgetCachedLimits("codex", account.id);
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  const disk = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { engines: { codex: Record<string, unknown> } };
+  expect(disk.engines.codex[account.id]).toBeUndefined();
+  await readLimits({ codexLiveReader: reader });
+  expect(reads).toBe(2);
+  resetLimitsCache();
+});
+
+
+test("Claude limits uses the shared account store and contains unknown-store errors", async () => {
+  const store = await import("./accounts/claudeCredentials");
+  const read = spyOn(store, "readClaudeCredentials");
+  const request = spyOn(globalThis, "fetch").mockImplementation((async (_url: string | URL | Request, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture");
+    return Response.json({ five_hour: { utilization: 23 } });
+  }) as typeof fetch);
+  try {
+    read.mockReturnValue({ state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: "fixture", subscriptionType: "max" } } });
+    const file = path.join(SANDBOX, "keychain-account", ".credentials.json");
+    expect(await fetchClaudeLimits(file)).toMatchObject({ source: "live", data: { plan: "max", session: { usedPercent: 23 } } });
+    expect(read).toHaveBeenCalledWith(path.dirname(file));
+    read.mockReturnValue({ state: "unknown" });
+    expect(await fetchClaudeLimits(file)).toEqual({ source: "unavailable", data: null, reason: "credential store unavailable" });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(file)).toBe(false);
+  } finally { read.mockRestore(); request.mockRestore(); }
 });

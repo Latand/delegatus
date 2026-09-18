@@ -4,14 +4,15 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { isEngineEffort } from "@/lib/agent/efforts";
+import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
-import { initializeStateCollections, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "./limits";
-import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
+import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { normalizeStageOutputPath } from "./stageAccess";
+import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
 
 export const PIPELINES_SCHEMA_VERSION = 5;
@@ -39,11 +40,11 @@ function atomicWriteJson(filePath: string, value: unknown): void {
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
   fs.renameSync(temp, filePath);
 }
-function readJson(filePath: string): unknown | null {
+function readJson(filePath: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new PipelineStoreError(`could not read pipeline registry: ${filePath}`, { cause: error });
   }
 }
@@ -55,7 +56,7 @@ export function isEffectiveRole(value: unknown): value is EffectivePipelineRole 
   if (role.model !== null && typeof role.model !== "string") return false;
   if (role.model && role.engine === "claude" && !normalizeClaudeLaunchModel(role.model)) return false;
   if (role.model && role.engine === "codex" && (role.model.length > 128 || !role.model.startsWith("gpt-") || /[\u0000-\u001f\u007f]/.test(role.model))) return false;
-  if (role.effort !== null && (typeof role.effort !== "string" || !isEngineEffort(role.engine, role.effort))) return false;
+  if (role.effort !== null && (typeof role.effort !== "string" || !effortScale(role.engine, role.model)!.includes(role.effort))) return false;
   return (
     (role.roleId === null || PIPELINE_ROLE_IDS.includes(role.roleId as typeof PIPELINE_ROLE_IDS[number])) &&
     (role.access === "read-only" || role.access === "read-write") &&
@@ -144,6 +145,20 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.sessionId) &&
     isNullableString(attempt.agentPath) &&
     isNullableString(attempt.paneId) &&
+    (attempt.accountId === undefined || isNullableString(attempt.accountId)) &&
+    (attempt.usageLimitedAccounts === undefined || (
+      Array.isArray(attempt.usageLimitedAccounts)
+      && attempt.usageLimitedAccounts.every((limited) => (
+        limited !== null
+        && typeof limited === "object"
+        && !Array.isArray(limited)
+        && typeof limited.accountId === "string"
+        && limited.accountId.length > 0
+        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
+        && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
+      ))
+      && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
+    )) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
@@ -155,8 +170,72 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.output) &&
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
-    isVerdictRecovery(attempt.verdictRecovery)
+    isVerdictRecovery(attempt.verdictRecovery) &&
+    isAttemptDefinition(attempt.definition) &&
+    isRetiredLaunches(attempt.retiredLaunches) &&
+    isUnresolvedTermination(attempt.unresolvedTermination)
   );
+}
+
+function isAttemptDefinition(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  const definition = value as Record<string, unknown>;
+  const role = definition.role;
+  return typeof definition.boundAt === "string"
+    && typeof definition.stageDigest === "string"
+    && typeof definition.prompt === "string"
+    && isNullableString(definition.account)
+    && (role === null || Boolean(role && typeof role === "object" && !Array.isArray(role) && (PIPELINE_ROLE_IDS as readonly unknown[]).includes((role as { roleId?: unknown }).roleId)))
+    && (definition.sandbox === null || definition.sandbox === "full" || definition.sandbox === "restricted")
+    && (definition.outputs === null || (Array.isArray(definition.outputs) && definition.outputs.every((output) => typeof output === "string")));
+}
+
+const GRAPH_EDIT_ACTION_NAMES: readonly string[] = ["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"];
+
+function isGraphEdit(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const edit = value as Record<string, unknown>;
+  const actor = edit.actor as Record<string, unknown> | null;
+  return Number.isSafeInteger(edit.seq) && (edit.seq as number) >= 1
+    && typeof edit.at === "string"
+    && Boolean(actor && typeof actor === "object" && (actor.kind === "operator"
+      || (actor.kind === "agent" && isNullableString(actor.role) && isNullableString(actor.conversationId))))
+    && GRAPH_EDIT_ACTION_NAMES.includes(String(edit.action))
+    && isNullableString(edit.stageId)
+    && typeof edit.pipelineState === "string"
+    && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
+    && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
+    && typeof edit.summary === "string";
+}
+
+function isRetiredLaunches(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value)
+    && value.length <= 50
+    && value.every((retired) => retired !== null
+      && typeof retired === "object"
+      && !Array.isArray(retired)
+      && typeof (retired as { launchId: unknown }).launchId === "string"
+      && (retired as { launchId: string }).launchId.length > 0
+      && isNullableString((retired as { conversationId: unknown }).conversationId)
+      && typeof (retired as { error: unknown }).error === "string"
+      && typeof (retired as { retiredAt: unknown }).retiredAt === "string");
+}
+
+function isUnresolvedTermination(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.error === "string"
+    && typeof record.recordedAt === "string"
+    && Array.isArray(record.survivors)
+    && record.survivors.every((survivor) => survivor !== null
+      && typeof survivor === "object"
+      && Number.isSafeInteger((survivor as { pid: unknown }).pid)
+      && isNullableString((survivor as { startIdentity: unknown }).startIdentity)
+      && ((survivor as { bootEpoch: unknown }).bootEpoch === undefined
+        || isNullableString((survivor as { bootEpoch: unknown }).bootEpoch)));
 }
 
 function isRun(value: unknown): value is Pipeline["runs"][number] {
@@ -204,6 +283,8 @@ function isTerminalReap(value: unknown): value is PipelineTerminalReap {
   return Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
     && Number.isInteger(reap.stopped) && (reap.stopped as number) >= 0
     && typeof reap.lastAt === "string"
+    && (reap.settledAttempts === undefined
+      || (Array.isArray(reap.settledAttempts) && reap.settledAttempts.every((key) => typeof key === "string")))
     && isNullableString(reap.settledAt);
 }
 
@@ -222,10 +303,18 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
     (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
+    (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
+    (stage.outputs === undefined || (
+      stage.kind === "run" &&
+      Array.isArray(stage.outputs) &&
+      stage.outputs.length > 0 && stage.outputs.length <= MAX_STAGE_OUTPUTS &&
+      stage.outputs.every((output, index) => normalizeStageOutputPath(output) === output && stage.outputs!.indexOf(output) === index)
+    )) &&
     isEffectiveRole(stage.effectiveRole)
   )) return false;
   const effective = stage.effectiveRole;
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
+  if (stage.outputs !== undefined && effective.access !== "read-only") return false;
   if (effective.roleId !== referencedRoleId) return false;
   if (stage.kind === "review-loop" && effective.access !== "read-only") return false;
   if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
@@ -318,6 +407,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
     typeof pipeline.lastPassedCommit === "string" &&
+    (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
     Array.isArray(pipeline.stages) &&
     pipeline.stages.every(isStage) &&
@@ -333,10 +423,12 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.createdAt === "string" &&
     isNullableString(pipeline.closedAt) &&
     (pipeline.hiddenAt === undefined || isNullableString(pipeline.hiddenAt)) &&
+    (pipeline.dismissedAt === undefined || isNullableString(pipeline.dismissedAt)) &&
     (pipeline.unconfirmedHosts === undefined
       || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
+    (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
       Number.isFinite(pipeline.pos.x) && Number.isFinite(pipeline.pos.y)
@@ -470,9 +562,32 @@ export function loadPipelines(): Pipeline[] {
   return pipelineStore().snapshot();
 }
 
-function parsePipelinesFile(filename: string, lenient: boolean): Pipeline[] {
+/** Startup needs fresh, complete authority, including cold records. Read both
+    collections in one SQLite snapshot without projection caches or lenient
+    archive decoding. Before cutover, validate the legacy sources in memory;
+    this evidence read never migrates or rewrites an unreadable source. */
+export function loadPipelinesForStartup(): Pipeline[] {
+  const collections = readStateCollectionsRows(stateDatabaseFile(), ["pipelines", "pipelines_archive"]);
+  const active = collections.get("pipelines");
+  const archived = collections.get("pipelines_archive");
+  if ((active === null) !== (archived === null)) {
+    throw new PipelineStoreError("pipeline startup collections are incomplete");
+  }
+  const records = active === null && archived === null
+    ? [...parsePipelinesFile(pipelinesFile(), false, true), ...parsePipelinesFile(pipelinesArchiveFile(), false, true)]
+    : [...(active ?? []), ...(archived ?? [])];
+  if (!records.every(isPipeline)) throw new PipelineStoreError("pipeline registry contains malformed records");
+  if (new Set(records.map((record) => record.id)).size !== records.length) {
+    throw new PipelineStoreError("pipeline startup records have contradictory identities");
+  }
+  return records.map(reviveLoadedPipeline);
+}
+
+function parsePipelinesFile(filename: string, lenient: boolean, strictPresence = false): Pipeline[] {
   const raw = readJson(filename);
-  if (raw === null) return [];
+  // Ordinary legacy readers historically accept null as empty. Startup must
+  // distinguish that malformed content from positive missing-file evidence.
+  if (raw === undefined || (raw === null && !strictPresence)) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     if (lenient) return [];
     throw new PipelineStoreError("pipeline registry must be an object");
@@ -511,6 +626,12 @@ export function planPipelineStateMigration(): {
     run, attempt, cursor rows), so cached records stay pristine while callers
     receive independently mutable structures. Deep config leaves are shared. */
 function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
+  const settledAttempts = pipeline.terminalReap?.settledAttempts
+    ?? (pipeline.terminalReap?.settledAt
+      ? pipeline.runs.flatMap((run) => run.attempts
+          .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
+          .map((attempt) => `${run.stageId}:${attempt.n}`))
+      : []);
   return {
     ...pipeline,
     project: canonicalProject(pipeline.project),
@@ -530,7 +651,9 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
     unconfirmedHosts: pipeline.unconfirmedHosts?.length
       ? pipeline.unconfirmedHosts.map((host) => ({ ...host }))
       : undefined,
-    terminalReap: pipeline.terminalReap ? { ...pipeline.terminalReap } : undefined,
+    terminalReap: pipeline.terminalReap
+      ? { ...pipeline.terminalReap, settledAttempts: [...settledAttempts] }
+      : undefined,
     restored: undefined,
     stages: pipeline.stages.map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
     cursor: pipeline.cursor
@@ -546,6 +669,9 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             sessionId: attempt.sessionId ?? null,
             agentPath: attempt.agentPath ?? null,
             paneId: attempt.paneId ?? null,
+            ...(attempt.usageLimitedAccounts
+              ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
+              : {}),
             flowId: attempt.flowId ?? null,
             expectedReviewHeadSha: attempt.expectedReviewHeadSha ?? null,
             reviewHeadSha: attempt.reviewHeadSha ?? null,
@@ -558,6 +684,12 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             verdict: attempt.verdict ?? null,
             error: attempt.error ?? null,
             verdictRecovery: attempt.verdictRecovery ? { ...attempt.verdictRecovery } : undefined,
+            ...(attempt.retiredLaunches
+              ? { retiredLaunches: attempt.retiredLaunches.map((retired) => ({ ...retired })) }
+              : {}),
+            unresolvedTermination: attempt.unresolvedTermination
+              ? { ...attempt.unresolvedTermination, survivors: attempt.unresolvedTermination.survivors.map((survivor) => ({ ...survivor })) }
+              : undefined,
           }))
         : [],
     })),
@@ -709,6 +841,28 @@ export async function withPipelineControllerMutation<T>(
   return pipelineStore().mutate(mutate, undefined, true);
 }
 
+/** Hold the existing cross-process mutation lease through startup admission.
+ * Unavailable state or authority permits only the caller's deferred path.
+ * Never reinterpret a failure inside admission as permission to run it again.
+ */
+export async function withPipelineStartupAdmission<T>(
+  admit: (available: boolean) => Promise<T>,
+): Promise<T> {
+  let entered = false;
+  try {
+    // Refuse malformed legacy archives before the ordinary store can migrate
+    // them leniently. Admission rereads under the lease before any effects.
+    loadPipelinesForStartup();
+    return await withPipelineMutation(() => {
+      entered = true;
+      return admit(true);
+    });
+  } catch (error) {
+    if (entered) throw error;
+    return admit(false);
+  }
+}
+
 export function savePipelines(pipelines: Pipeline[]): void {
   pipelineStore().replaceSync(pipelines);
 }
@@ -754,6 +908,17 @@ export function checkpointPipelineRollbackMirrorsForDemotion(): { pipelines: num
     atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
   });
   const pipelinesArchive = archive.checkpointMirrorForDemotion((pipelines, revision) => {
+    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  });
+  return { pipelines, pipelinesArchive };
+}
+
+export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promise<{ pipelines: number; pipelinesArchive: number }> {
+  const { active, archive } = stores();
+  const pipelines = await active.checkpointMirrorForDemotionAsync((pipelines, revision) => {
+    atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  });
+  const pipelinesArchive = await archive.checkpointMirrorForDemotionAsync((pipelines, revision) => {
     atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
   });
   return { pipelines, pipelinesArchive };
@@ -810,6 +975,7 @@ export function buildPipeline(input: {
   srcConversationId: string | null;
   now: string;
   state?: "draft" | "provisioning";
+  publication?: PipelinePublication;
 }): Pipeline {
   const identity = pipelineIdentity(input.id, input.task, input.repoDir);
   return {
@@ -824,6 +990,7 @@ export function buildPipeline(input: {
     baseBranch: "",
     baseRef: "",
     lastPassedCommit: "",
+    ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,
     stages: (JSON.parse(JSON.stringify(input.stages)) as PipelineStage[]).map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),

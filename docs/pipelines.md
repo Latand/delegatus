@@ -24,6 +24,7 @@ Pipelines run a user-defined chain of two to four agent stages in one dedicated 
       "model": "sonnet",
       "effort": "high",
       "access": "read-only",
+      "outputs": ["docs/design/pipeline-support.md"],
       "prompt": "Plan {{task}}. Use the pinned specification.",
       "next": "build"
     },
@@ -41,6 +42,7 @@ Pipelines run a user-defined chain of two to four agent stages in one dedicated 
       "role": { "roleId": "reviewer" },
       "effort": "xhigh",
       "access": "read-only",
+      "sandbox": "restricted",
       "prompt": "Review the full pinned task and acceptance criteria.",
       "next": null
     }
@@ -49,6 +51,10 @@ Pipelines run a user-defined chain of two to four agent stages in one dedicated 
 ```
 
 Stage ids use letters, numbers, `_`, and `-`. They must be unique. Each `next` value names the following array entry; the last stage ends with `null`. A review-loop requires an earlier run session.
+
+`access` controls repository mutation policy at settlement. It does not remove read tools, network access, SSH, GitHub CLI access, or worktree visibility. `sandbox` independently controls the engine's tool/network boundary. Every stage gets full host access by default; set `"sandbox": "restricted"` to keep the same repository policy inside the restrictive engine sandbox.
+
+A read-only `run` stage may declare repository-relative `outputs`, such as a report or design document. The agent may write those files and scratch space. The controller verifies that the stage created no commit and touched no undeclared worktree path, then records the declared outputs itself. Unsafe paths, traversal, globs, duplicates, and `.git` are rejected at creation. Review-loop findings continue to use the flow's existing artifact and cannot declare worktree outputs.
 
 ### Role references and issue #35
 
@@ -68,17 +74,21 @@ A run stage completes only when its finished turn ends with a fenced JSON block 
 }
 ```
 
-Valid statuses are `pass`, `fail`, and `needs_decision`. Findings are optional, with at most 50 bounded strings. Confidence is optional and ranges from zero through one. A stage may include its own completion-evidence keys beside those controller fields; they remain in the canonical transcript while the controller persists only the bounded core verdict. The guard rejects invalid core fields, malformed JSON, and arbitrary trailing text. A terminal `REVIEW_READY` handoff line is accepted for compatibility with builder stages. Human-readable prose before the block becomes the stage output available through `{{prev.output}}`.
+Valid statuses are `pass`, `fail`, and `needs_decision`. Findings are optional, with at most 50 bounded strings. Confidence is optional and ranges from zero through one. A stage may include its own completion-evidence keys beside those controller fields; they remain in the canonical transcript while the controller persists only the bounded core verdict. The guard rejects invalid core fields, malformed JSON, and arbitrary trailing text. A terminal `REVIEW_READY` handoff line is accepted for compatibility with builder stages. Human-readable prose before the block becomes the stage output available through `{{prev.output}}`. A stage prompt (or role scaffold) that places the placeholder decides where the relay lands; one that never names it still receives the previous output, appended after the instruction as a labelled `Previous stage output` section, so a stage cannot lose its handoff to prompt authoring.
 
 A review-loop stage attaches the latest passed run session to a regular review Flow. The stage role supplies the fresh reviewer. Flow approval becomes a pipeline `pass`; comment, closed, missing, and decision states park the pipeline for an operator. Review rounds, verdict parsing, findings delivery, and fresh-reviewer behavior stay owned by the Flow engine.
 
+Two flow stops are technical rather than review outcomes, and the pipeline rides them out on a bounded wall-clock wait (ten minutes, backoff up to a minute) before it parks. A flow paused in `spawning` with `implementer transcript is missing` while the Viewer registry names that implementer's transcript is the controller's completed scan snapshot lagging behind the stage the pipeline already settled from its transcript artifact; the pipeline resumes the flow each round and reads `review flow waiting for its implementer transcript to be scanned; retry at <time>`. A flow that ended `needs_decision` on `account mutation is busy` before its round began any launch (no launch id, spawn start, reviewer transcript or session) is retried with the flow's own `retry-round`; the pipeline reads `review flow reviewer launch deferred: …; retry at <time>`. A round that had begun a launch is never retried this way. Exhaustion parks with the flow's own detail and the resumes or retries counted.
+
 ## Worktree, lineage, and recovery
 
-Creation provisions a sibling worktree on `pipeline/<task-slug>-<id>`. Passed stages commit pending work and advance the saved `lastPassedCommit`. Retry closes an embedded flow, runs `git reset --hard <lastPassedCommit>` plus `git clean -fd` inside the pipeline-owned worktree, and appends a fresh attempt.
+Creation provisions a sibling worktree on `pipeline/<task-slug>-<id>`. Passed read-write stages commit pending work. For passed read-only stages, the controller commits only verified declared outputs. Both advance the saved `lastPassedCommit`. Retry closes an embedded flow, runs `git reset --hard <lastPassedCommit>` plus `git clean -fd` inside the pipeline-owned worktree, and appends a fresh attempt.
 
-The stage transcript artifact is the completion authority. When a durable read of the attempt's transcript shows a native terminal turn whose final assistant message ends with a valid fenced verdict, the attempt settles once: the controller records the verdict, commits any pending work, advances `lastPassedCommit` to the actual stage HEAD, and schedules the next stage — even when the runtime session ledger is still reporting the turn as running, the scanner projection has transiently lost the transcript, or the host is already gone. A transcript whose turn is still open is mid-work: its messages are never verdict candidates, so a recovered idle host cannot terminalize the attempt.
+The stage transcript artifact is the completion authority. When a durable read of the attempt's transcript shows a native terminal turn whose final assistant message contains a valid fenced verdict without a conflicting verdict fence, the attempt settles once from the last valid fence: the controller records the verdict, commits any pending work, advances `lastPassedCommit` to the actual stage HEAD, and schedules the next stage — even when the runtime session ledger is still reporting the turn as running, the scanner projection has transiently lost the transcript, or the host is already gone. A transcript whose turn is still open is mid-work: its messages are never verdict candidates, so a recovered idle host cannot terminalize the attempt.
 
 A terminal parser miss starts up to three durable evaluations. Identical evidence is rechecked no more often than every 30 seconds, while a newer completed assistant message is evaluated immediately. The attempt receipt records the check count, selected assistant-message timestamp, and a content-free rejection reason. A newer valid completed turn in the same conversation settles immediately, including after restart, resume, generation rollover, transcript compaction, or exhaustion of the evaluation budget. Three failed checks settle into a durable `needs_decision` state naming the missing evidence. Retry and skip are refused for that recovery state because both actions clean the worktree; the operator can continue the same conversation or close the pipeline with its lineage and worktree intact. A pass that leaves the next stage pending wakes the controller itself instead of waiting for an unrelated tick.
+
+A stage spawn that fails after it reserved a launch consults the launch receipt before anything else. When the runtime host was unreachable or the account mutation lock was busy and the receipt has settled `failed` (the spawn layer's own retry-safe verdict), the engine claims that receipt for retry, retires the launch onto the attempt's `retiredLaunches`, and re-activates the same attempt on a bounded wall-clock wait with backoff: 30 seconds for a busy account, 10 minutes for an unreachable runtime host. While it waits the pipeline reads `stage spawn deferred: … ; retry at <time>`; exhaustion parks with the rounds, the seconds spent and the last failure. One wait keeps the largest budget any of its rounds asked for, so a busy-lock sighting a minute into a runtime-host outage does not end the host's ten minutes early, and every spawn call of the attempt, immediate handshake retries and retired launches included, consumes its own launch identity, counted before the call is made so that a call a restart interrupts keeps its identity away from the retry that follows. An attempt the engine before this count left waiting or mid-spawn resumes past every identity that engine could have spent: its booked rounds plus one activation's three calls. A receipt in any other state is a launch whose fate the engine cannot vouch for: nothing is re-dispatched, the attempt parks, and a receipt that completes after all is adopted by the next tick. A failed receipt that had staged a session identity for a read-write stage is not re-dispatched either, because the engine host may have edited the worktree before it was killed: the attempt parks naming `retry-stage`, whose reset runs first. A spawn a restart interrupted takes the same rule, with the budget starting at the recovering process's first sighting; a wait persisted from before the restart keeps its own start and its exhaustion still counts every round.
 
 Run stages use Viewer spawn receipts and conversation lineage. Stage zero descends from `src` when supplied. Later stages descend from the latest completed stage session. Each attempt persists its launch id, Viewer conversation id, transcript path, native session id, pane id, output, verdict, and timestamps. Pausing holds coordinator transitions while preserving the active session for inspection and resume.
 
@@ -95,7 +105,43 @@ Pipeline stages cannot create another pipeline. The stage-kind validator and the
 - `resume` — return to the saved pipeline phase and resume an embedded flow.
 - `retry-stage` — restore the last passed commit and start a fresh attempt.
 - `skip-stage` — record an operator skip and follow `next`.
-- `close` — close the pipeline and any embedded flow while retaining history, the worktree, and any live stage panes for inspection.
+- `close` — close the pipeline and any embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Viewer generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
+
+After a Viewer restart, startup adoption consults the pipeline record before re-hosting a structured conversation: a conversation whose stage attempt has already settled (passed, failed, parked or skipped) is not resumed on the strength of its unfinished-turn claim alone, because no controller would accept its verdict or advance it. Work owed to it — a held delivery, a pending operation, an orchestrator recovery — can still make it eligible, subject to the evidence fences below.
+
+
+A partial close retains the PID, process start identity and boot epoch of every
+captured survivor on the attempt. Authority or identity loss after termination
+starts preserves this evidence, including exceptions from authority or process
+probes. Later partial stops merge survivors across host
+generations; only a positive death observation removes an identity. A dead root
+or terminal transcript cannot settle a close while any recorded survivor remains
+alive or unverifiable. Retained identities provide evidence for refusing a close;
+they do not grant permission to signal a detached survivor.
+Every attempt's saved survivors are checked even when host deduplication or the
+teardown deadline skips its stop call. An unconfirmed receipt and host
+acknowledgement cannot clear that evidence.
+
+Startup defers pipeline conversations when their pipeline records cannot be read
+or an earlier termination has unresolved survivors. Pending work does not bypass
+this fence. Deferred rows retain their recovery evidence and are excluded from
+launch and skipped-host demotion. The startup pass still completes: the boot
+reads ready, every unrelated host is published, and pending-spawn recovery runs
+in the same pass unless a pending launch receipt is reserved for a fenced
+pipeline conversation, in which case the whole recovery waits with the rows.
+What startup repeats is the evidence read alone (the pipeline record and the
+survivor process probes), on a backoff from one second to thirty; the adoption
+pass runs again only when that evidence has moved, and a replacement becomes
+eligible only after the evidence permits it under the existing adoption rules.
+Startup reads this evidence after transcript refresh and holds the existing
+pipeline mutation lease through adoption, demotion and publication. A concurrent
+close either publishes its survivors before that read, or waits and checks the
+host that startup publishes.
+
+Retry, skip and subsequent pipeline ticks also check survivors on every retained
+attempt, including older generations, before resetting a worktree, advancing or
+creating another stage writer. Alive or unavailable identities refuse these
+actions with no reset or launch.
 
 When a park happened before the stage produced a verdict, `retry-stage` and `skip-stage` refuse with 409 while the attempt's pane still hosts a live agent — resetting the worktree under a mid-turn agent would let its strays land in the next stage commit. Wait for the agent to exit or kill the pane, then retry.
 

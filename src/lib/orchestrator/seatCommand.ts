@@ -3,10 +3,10 @@ import fs from "node:fs";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { defaultModelFor } from "@/lib/agent/models";
-import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
+import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
@@ -29,8 +29,9 @@ import {
   type HandoffDigestRequest,
   type HandoffParts,
 } from "./handoffDigest";
-import { orchestratorMandateForDelivery } from "./prompt";
+import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery, orchestratorMandateStale } from "./prompt";
 import {
+  activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
   failOrchestratorSeatIntent,
@@ -38,6 +39,7 @@ import {
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   type OrchestratorSeat,
+  type OrchestratorSeatTrigger,
 } from "./seats";
 
 /* The one confirm behind the board draft's Orchestrator role: DESIGNATE this
@@ -159,10 +161,13 @@ function resolveOrchestratorCwd(project: string, requested: unknown): string | n
 
 async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   const { executeSpawnRequest } = await import("@/lib/agent/spawnCommand");
-  /* An in-process call on the operator's behalf: the seat route has already
-     verified same-origin operator authority, so this presents the operator
-     spawn capability — the same lane the MCP server's spawn_agent uses. Only
-     `headers` and `json` are read by the spawn command. */
+  /* An in-process call the VIEWER makes, on its own authority: the designation
+     surfaces have already made their authority decision — the seat route by
+     refusing an agent, the rotation route by naming one (#1402) — so this
+     presents the operator spawn capability either way, the same lane the MCP
+     server's spawn_agent uses. Who triggered the designation travels on the
+     seat record; this spawn carries none of it. Only `headers` and `json` are
+     read by the spawn command. */
   const request = {
     headers: new Headers({
       host: "127.0.0.1",
@@ -244,7 +249,8 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     /* The seat spawn path always sends the intent's clientRequestId as the
        spawn clientAttemptId, so the durable receipt is found by it even when
        the intent never recorded a launchId before its request died. */
-    const receipt = agentRegistry().spawnReceiptForClientAttempt(clientRequestId);
+    const registry = agentRegistry();
+    const receipt = registry.spawnReceiptForClientAttempt(clientRequestId);
     if (!receipt || (launchId && receipt.launchId !== launchId)) return { kind: "unknown" };
     if (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted") {
       return { kind: "failed", error: receipt.error ?? receipt.rejection?.guidance ?? `spawn receipt is terminally ${receipt.state}` };
@@ -254,7 +260,9 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     return {
       kind: "settled",
       conversationId: receipt.conversationId,
-      path: receipt.artifactLifecycle === "materialized" ? receipt.artifactPath : null,
+      path: identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt)
+        ? receipt.artifactPath
+        : null,
       launchId: receipt.launchId,
       engine: receipt.engine,
       model: receipt.launchProfile.model,
@@ -447,6 +455,10 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
 export async function executeOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = productionSeatCommandDependencies,
+  /* Who triggered this designation, resolved from the REQUEST by the caller.
+     Deliberately not a `rawBody` field: the body is caller-supplied JSON, and
+     attribution that a caller can write is not attribution. */
+  triggeredBy: OrchestratorSeatTrigger | null = null,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
@@ -520,6 +532,7 @@ export async function executeOrchestratorSeatRequest(
       engine: target.engine ?? null,
       model: target.model ?? null,
       promptVersion,
+      triggeredBy,
       now: dependencies.now(),
     });
     if (begun.kind === "completed") {
@@ -620,6 +633,7 @@ export async function executeOrchestratorSeatRequest(
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
     promptVersion,
+    triggeredBy,
     now: dependencies.now(),
   });
   if (begun.kind === "completed") {
@@ -722,15 +736,64 @@ const HANDOFF_TASK_TEXT_CAP = 140;
 const HANDOFF_NOTES_CAP = 2_000;
 
 /**
+ * THE shared entry point for `POST /api/orchestrator/rotate` (#1402).
+ *
+ * The route is a Next module and may export only route fields, so the two steps
+ * that decide a rotation live here instead: resolve WHO is asking with the one
+ * rotation authority contract, and rotate. The `rotate_orchestrator` MCP tool
+ * posts to that route and holds no copy of either step, so the tool's answer is
+ * the route's answer by construction — for the actor it accepts and for every
+ * refusal the rotation itself makes.
+ *
+ * Cross-origin rejection stays in the route, ahead of this: it is the perimeter,
+ * and it is the only thing here that turns a caller away.
+ */
+export function handleOrchestratorRotationRequest(
+  request: Pick<NextRequest, "headers">,
+  rawBody: Record<string, unknown>,
+  dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+): Promise<SeatCommandResult> {
+  return executeOrchestratorRotation(rawBody, dependencies, rotationActor(request));
+}
+
+let seatCommandDependenciesForTests: SeatCommandDependencies | null = null;
+
+/**
+ * Tests only; `null` restores the production seams. Seamed here rather than in
+ * the route, because a route module may export only route fields.
+ *
+ * `POST /api/orchestrator/rotate` is the surface the rotation contract is about
+ * (#1402), so the regression drives the exported route itself over loopback —
+ * and a route takes no dependency argument. This is how that run reaches a
+ * rotation without spawning a process or delivering to a live host.
+ */
+export function setSeatCommandDependenciesForTests(dependencies: SeatCommandDependencies | null): void {
+  seatCommandDependenciesForTests = dependencies;
+}
+
+function activeSeatCommandDependencies(): SeatCommandDependencies {
+  return seatCommandDependenciesForTests ?? productionSeatCommandDependencies;
+}
+
+/** The caller's own seat epoch, when the caller IS a designated seat — which is
+    what tells a self-rotation apart from a rotation ordered from elsewhere. */
+function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
+  const seat = actor.conversationId
+    ? activeOrchestratorSeats().find((candidate) => candidate.conversationId === actor.conversationId)
+    : undefined;
+  return { kind: actor.kind, conversationId: actor.conversationId, seatEpoch: seat?.seatEpoch ?? null };
+}
+
+/**
  * Rotation (two-axis contract): hand the seat to a fresh successor.
  *
  * The handoff is BOUNDED and durable-state-based: the successor's launch
  * prompt carries the incumbent's core mandate, the predecessor's identity and
- * transcript path (the complete record of its decisions — reviewable whether
- * the incumbent is alive or dead, which matters because a dead incumbent is a
- * common reason to rotate), the project's open board tasks, and any caller
- * notes. Designation switches atomically with the successor's activation; the
- * predecessor loses MANAGER-LEVEL authority only — its session, host, card and
+ * exact bounded message-read call (available whether the incumbent is alive or
+ * dead, which matters because a dead incumbent is a common reason to rotate),
+ * the project's open board tasks, and any caller notes. Designation switches
+ * atomically with the successor's activation; the predecessor loses
+ * MANAGER-LEVEL authority only — its session, host, card and
  * ordinary Viewer access are untouched (axis 1) — and both cards stay linked
  * by the bidirectional lineage the seat store records.
  *
@@ -745,7 +808,13 @@ const HANDOFF_NOTES_CAP = 2_000;
 export async function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = productionSeatCommandDependencies,
+  /* WHO ordered this rotation. Never a refusal — rotation bans nobody — and
+     never read off `rawBody`, so nothing a caller writes can claim to be
+     someone else. Null is an in-process caller that named nobody, and records
+     unknown provenance; the operator is never credited by default. */
+  actor: ViewerActor | null = null,
 ): Promise<SeatCommandResult> {
+  const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
   const project = canonicalOrchestratorProject(namedProject);
@@ -772,9 +841,7 @@ export async function executeOrchestratorRotation(
   const handoff: HandoffParts = {
     header: [
       `You are replacing orchestrator conversation ${incumbent.conversationId} for project ${project}. Its manager authority is revoked; its session and card remain on the board, linked to yours.`,
-      predecessor?.path ?? incumbent.path
-        ? `Your predecessor's full transcript — decisions, blockers, in-flight work — is at: ${predecessor?.path ?? incumbent.path}. Review its recent turns before acting.`
-        : "Your predecessor's transcript path is not recorded; reconstruct state from the board before acting.",
+      `Your predecessor's recent turns — decisions, blockers, in-flight work — are one call away: conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${incumbent.conversationId}","conversationId":"${incumbent.conversationId}","roles":["user","assistant"],"limit":40}). Records are newest first; pass the returned cursor with a fresh clientRequestId for each older page. Read them before acting, and never open the transcript file. If the call reports that the conversation has no transcript, reconstruct state from the board.`,
     ],
     tasks: tasks.length
       ? `Open board tasks for this project:\n${tasks.map((task) => `- [${task.status}] ${task.text.slice(0, HANDOFF_TASK_TEXT_CAP)} (${task.id})`).join("\n")}`
@@ -782,13 +849,28 @@ export async function executeOrchestratorRotation(
     notes: notes || null,
   };
 
+  /* The successor's core mandate is whatever the caller sent, else the
+     incumbent's. The recorded version follows the TEXT (#1452): a rotation
+     onto the built-in default is the current version whatever the incumbent
+     ran on — otherwise a v3 seat rotated onto v13 text would still read v3.
+     Text that is neither the default nor the incumbent's own is the caller's
+     edit; over a STALE incumbent it records no version, the spawn rule for an
+     edited mandate — inheriting v3 would flag a seat running edited v13 rules
+     as stale and hand the next rotation's default prefill its edit to drop.
+     A seat on the current version keeps its version on an override. */
+  const base = text(rawBody.mandate) || incumbent.mandate;
+  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT
+    ? ORCHESTRATOR_PROMPT_VERSION
+    : base !== incumbent.mandate && orchestratorMandateStale(incumbent.promptVersion)
+      ? null
+      : incumbent.promptVersion;
   /* Awaited ONLY when there is something to summarize. A rotation with nothing
      to compact must reach its durable `begin` with no await point, which is
      what serializes it against a concurrent designation for the same project. */
   const composition = composeRotationMandate({
     project,
     clientRequestId,
-    base: text(rawBody.mandate) || incumbent.mandate,
+    base,
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
@@ -811,9 +893,9 @@ export async function executeOrchestratorRotation(
   const current = orchestratorSeatFor(project).active;
   if (!current || current.conversationId !== incumbent.conversationId || current.seatEpoch !== incumbent.seatEpoch) {
     const conflict = incumbentChangedResult(project, incumbent.seatEpoch, current);
-    return { status: conflict.status, body: { ...conflict.body, rotatedFrom } };
+    return { status: conflict.status, body: { ...conflict.body, rotatedFrom, triggeredBy } };
   }
-  if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, rotatedFrom } };
+  if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, rotatedFrom, triggeredBy } };
 
   const outcome = await executeOrchestratorSeatRequest({
     project,
@@ -826,9 +908,13 @@ export async function executeOrchestratorRotation(
        BEFORE the seat request's own reconciliation; this is what that request
        re-checks after it, which is the last read before the durable begin. */
     expectedIncumbentSeatEpoch: incumbent.seatEpoch,
-    promptVersion: incumbent.promptVersion,
-    ...(rawBody.engine !== undefined ? { engine: rawBody.engine } : {}),
-    ...(rawBody.model !== undefined ? { model: rawBody.model } : {}),
+    promptVersion,
+    // Omitted runtime settings continue the incumbent. An explicit engine
+    // switch uses the role validator to resolve its model.
+    ...(rawBody.engine !== undefined ? { engine: rawBody.engine } : incumbent.engine ? { engine: incumbent.engine } : {}),
+    ...(rawBody.model !== undefined ? { model: rawBody.model }
+      : (rawBody.engine === undefined || rawBody.engine === incumbent.engine) && incumbent.model
+        ? { model: incumbent.model } : {}),
     ...(rawBody.effort !== undefined ? { effort: rawBody.effort } : {}),
     ...(rawBody.fast !== undefined ? { fast: rawBody.fast } : {}),
     /* Issue #903: a rotation without an explicit cwd continues in the
@@ -841,15 +927,41 @@ export async function executeOrchestratorRotation(
         ? { cwd: predecessor.cwd }
         : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),
-  }, dependencies);
+  }, dependencies, triggeredBy);
   return {
     status: outcome.status,
     body: {
       ...outcome.body,
       rotatedFrom,
+      /* Who ordered it, on the answer as well as on the durable record, so the
+         caller reads back the attribution its rotation was recorded under. */
+      triggeredBy: attributedTrigger(outcome.body, triggeredBy),
       ...(composed.handoff ? { handoff: composed.handoff } : {}),
     },
   };
+}
+
+/**
+ * THE ANSWER REPORTS WHAT THE RECORD HOLDS (#1402).
+ *
+ * Every outcome that reached a seat carries that seat, and the seat's own
+ * `triggeredBy` was written by the request that created the intent. So an
+ * idempotent replay — a lost response retried, whichever actor holds the key —
+ * answers with the actor that ORDERED the rotation. The replaying caller's own
+ * identity is a fact about the retry, and writing it over the attribution would
+ * make the answer contradict the durable record it is reporting.
+ *
+ * When no seat was reached, the request was refused before anything was
+ * recorded; there the answer names the actor that asked, and there is no record
+ * for it to disagree with.
+ */
+function attributedTrigger(
+  body: Record<string, unknown>,
+  requested: OrchestratorSeatTrigger | null,
+): OrchestratorSeatTrigger | null {
+  const seat = body.seat;
+  if (!seat || typeof seat !== "object" || Array.isArray(seat)) return requested;
+  return (seat as OrchestratorSeat).triggeredBy ?? null;
 }
 
 type RotationMandate =
@@ -890,7 +1002,7 @@ function composeRotationMandate(
   }
   const split = splitMandate(input.base);
   /* First rotation: no prior handoffs to compact, so no summarizer run — the
-     fresh handoff already names the predecessor's transcript. */
+     fresh handoff already names the predecessor and its bounded message read. */
   if (split.history === null && split.handoffs.length === 0) {
     return renderRotationMandate(input, split.core, null, "none", null);
   }

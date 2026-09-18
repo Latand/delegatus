@@ -1,3 +1,4 @@
+import { filesReadSummary } from "@/lib/filesReadSummary";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,17 +11,16 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { bridgeAsksForSeats } from "@/lib/bridge/service";
 import { pinnedIdentityEntries } from "@/lib/scanner/pinRideAlong";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
+import { conversationLineageMarkers } from "@/lib/agent/lineageMarkers";
 import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
-  supersedenceChainTail,
   type AgentRegistryEntry,
 } from "@/lib/agent/registry";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
 import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
 import { repositoryForProjectRoot } from "@/lib/flows/git";
-import { loadFlows } from "@/lib/flows/store";
 import { reviewOutcomeFor } from "@/lib/flows/reviewOutcome";
 import { overlayPromptDisplayTitles, projectDisplayName } from "@/lib/displayNames";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
@@ -28,27 +28,23 @@ import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromRepositoryRoot, UNRESOLVED_PROJECT, UNRESOLVED_PROJECT_NAME } from "@/lib/projects/identity";
 import { projectRestoredFlows } from "@/lib/flows/visibility";
 import { reconcileEmbeddedReviewFlows } from "@/lib/pipelines/engine";
-import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { filterPipelinesForFileScan } from "@/lib/pipelines/visibility";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
-import { loadTasks } from "@/lib/tasks/store";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
-import { loadWorkflows } from "@/lib/workflows/store";
-import { filterWorkflowsForFileScan } from "@/lib/workflows/visibility";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { projectRateLimitReadModel } from "@/lib/rateLimit";
 import { readAuthorshipEvidence } from "@/lib/reaperAuthorship";
+import { projectStructuredFileLiveness } from "@/lib/runtime/livenessProjection";
 import { overlayLineageProjectAffinity } from "@/lib/session/projectAffinity";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlayRoleSessionTitles } from "@/lib/session/roleTitles";
 import { overlaySessionTitles, registryProjectionForSnapshot } from "@/lib/session/titleProjection";
-import { tmuxEndpointHealth } from "@/lib/tmux";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
-import type { FilesResponse, ProjectCatalogEntry } from "@/lib/types";
+import type { FilesResponse, ProjectCatalogEntry, StuckDelivery } from "@/lib/types";
+import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
   listFilesWithProjectCatalog: (
@@ -230,6 +226,7 @@ export function consolidateProjectCatalogByRepository(
 }
 
 export async function buildFilesResponse(request: Request, dependencies: FilesRouteDependencies): Promise<NextResponse> {
+  const routeDependencies = filesResponseDependencies();
   const timings: string[] = [];
   let timingMark = performance.now();
   let traceMark = timingMark;
@@ -394,6 +391,18 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     }
     return round;
   };
+  const owedDeliveries = new Map<string, StuckDelivery>();
+  for (const delivery of Object.values(registrySnapshot.heldDeliveries)) {
+    if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
+    const conversationId = conversationLookup.canonicalConversationId(delivery.conversationId);
+    const current = owedDeliveries.get(conversationId);
+    if (current && current.since <= delivery.createdAt) continue;
+    owedDeliveries.set(conversationId, {
+      since: delivery.createdAt,
+      attempts: delivery.attempts,
+      state: delivery.state,
+    });
+  }
   for (const file of files) {
     if (file.engine !== "claude" && file.engine !== "codex") continue;
     if (file.spawn) continue;
@@ -404,8 +413,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const latest = conversation.generations.at(-1);
     file.conversationId = conversation.id;
     if (generationIndex >= 0) file.generation = generationIndex + 1;
-    if (generation && latest && generation.path !== latest.path) file.migratedTo = latest.path;
-    if (!generation && latest && conversation.continuityPaths.includes(file.path)) file.migratedTo = latest.path;
+    const lineage = conversationLineageMarkers(registrySnapshot, conversationLookup, conversation, file.path);
+    if (lineage.migratedTo) file.migratedTo = lineage.migratedTo;
     if (latest?.path === file.path && conversation.generations.length > 1) {
       const predecessor = conversation.generations.at(-2);
       file.predecessorPath = predecessor?.path;
@@ -431,27 +440,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
          with no materialized successor generation the card keeps today's
          dead-host rendering instead of hiding behind a dangling link. */
       if (conversation.supersededBy) {
-        const successorId = conversationLookup.canonicalConversationId(conversation.supersededBy.conversationId);
-        const successorGeneration = successorId !== conversation.id
-          ? registrySnapshot.conversations[successorId]?.generations.at(-1)
-          : undefined;
-        if (successorGeneration) {
-          /* Primary navigation resolves the live chain END (A→B→C opens C)
-             while the immediate edge stays the round history. A tail without a
-             materialized generation falls back to the immediate successor so
-             the affordance never points at a dangling round. */
-          const tailId = supersedenceChainTail(registrySnapshot, conversation.id);
-          const tailGeneration = tailId !== successorId
-            ? registrySnapshot.conversations[tailId]?.generations.at(-1)
-            : successorGeneration;
-          file.supersededBy = {
-            conversationId: successorId,
-            path: successorGeneration.path,
-            at: conversation.supersededBy.at,
-            reason: conversation.supersededBy.reason,
-            tailConversationId: tailGeneration ? tailId : successorId,
-            tailPath: tailGeneration ? tailGeneration.path : successorGeneration.path,
-          };
+        /* `conversationLineageMarkers` names the successor only once it has a
+           generation, and resolves the live chain end for navigation. */
+        if (lineage.supersededBy) {
+          file.supersededBy = lineage.supersededBy;
           file.activity = "idle";
           file.activityReason = "superseded";
           file.proc = "killed";
@@ -553,6 +545,13 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
         }
       }
     }
+    /* The reservation follows the logical message across explicit retry, so
+       the live card keeps the same attention identity and admission clock.
+       Historical/superseded generations never raise the entry. */
+    if (latest?.path === file.path && !conversation.supersededBy) {
+      const owed = owedDeliveries.get(conversation.id);
+      if (owed) file.stuckDelivery = owed;
+    }
     if (conversation.migration && conversation.migration.phase !== "committed") {
       const intent = registrySnapshot.migrationIntents[conversation.migration.intentId];
       const source = conversation.generations.at(-1);
@@ -570,6 +569,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       };
     }
   }
+  await projectStructuredFileLiveness(files, registry, registrySnapshot);
+  traceStep("file-turn-liveness");
   traceStep("file-registry-overlay");
   markTiming("files-registry");
   /* Custom session titles (issue #33) are the last word on `title`. The shared
@@ -593,14 +594,14 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      with no such lineage are untouched. */
   overlayLineageProjectAffinity(files);
   markTiming("files-project-affinity");
-  const storedFlows = loadFlows();
+  const storedFlows = routeDependencies.loadFlows();
   markTiming("files-flow-store");
   const flows = projectRestoredFlows(storedFlows, files, {
     pinnedPaths: visibilityPinnedPaths,
     memberships: registrySnapshot.memberships,
   });
   markTiming("files-flow-restore");
-  const storedTasks = loadTasks();
+  const storedTasks = routeDependencies.loadTasks();
   markTiming("files-task-store");
   /* Human-authorship pin for the board's worker-class auto-collapse (issue
      #112): the reaper's sticky evidence (PR #125) marks any transcript that
@@ -697,7 +698,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       ? conversationLookup.canonicalConversationId(conversationId as `conversation_${string}`)
       : conversationId,
   );
-  let workflows = filterWorkflowsForFileScan(loadWorkflows(), files);
+  let workflows = routeDependencies.filterWorkflowsForFileScan(routeDependencies.loadWorkflows(), files);
   /* The pipelines store fails closed on malformed or future-schema state
      (both viewer instances share one config dir, so skew is a normal
      condition) — that must degrade to "pipelines unavailable", never take
@@ -710,9 +711,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        an overlay against the same flow read above, so the deck and its parent
        share one request-level generation; the durable claim/sync persists on
        the controller reconcile pass instead of the request path. */
-    const loaded = loadPipelinesForProjection();
+    const loaded = routeDependencies.loadPipelinesForProjection();
     reconcileEmbeddedReviewFlows(loaded, storedFlows);
-    pipelines = filterPipelinesForFileScan(loaded, files, {
+    pipelines = routeDependencies.filterPipelinesForFileScan(loaded, files, {
       pinnedPaths: visibilityPinnedPaths,
       memberships: registrySnapshot.memberships,
     });
@@ -831,6 +832,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const registryHealth = {
     backendMode: registryDiagnostics.backendMode,
     revision: registryDiagnostics.revision,
+    mirrorRevision: registryDiagnostics.mirrorRevision,
     transactionCount: registryDiagnostics.transactionCount,
     writerWaitP95Ms: registryDiagnostics.writerWaitP95Ms,
     transactionP95Ms: registryDiagnostics.transactionP95Ms,
@@ -864,6 +866,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const crownedProjects = [...new Set(
     curation.crowned.map((project) => remapProject(resolveCatalogAlias(project, projectAliases.aliases))),
   )];
+  const summary = new URL(request.url).searchParams.get("view") === "summary"
+    ? filesReadSummary(projected.flows, pipelines) : null;
   const body = JSON.stringify({
     files: projected.files,
     ...(responsePinOverlayPaths.size ? { pinOverlayPaths: [...responsePinOverlayPaths] } : {}),
@@ -872,11 +876,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     projectDisplayNames,
     ...(crownedProjects.length ? { crownedProjects } : {}),
     ...(Object.keys(projectCwds).length ? { projectCwds } : {}),
-    flows: projected.flows,
-    pipelines,
+    flows: summary?.flows ?? projected.flows,
+    pipelines: summary?.pipelines ?? pipelines,
+    ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     tasks: tasks.tasks,
-    systemHealth: { tmux: tmuxEndpointHealth(), registry: registryHealth },
+    systemHealth: { tmux: routeDependencies.tmuxEndpointHealth(), registry: registryHealth },
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),
     ...(pipelinesError ? { pipelinesError } : {}),

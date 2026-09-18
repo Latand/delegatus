@@ -7,12 +7,16 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { BranchGroup } from "@/components/projectModel";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { MobileScreen } from "@/components/mobile/mobileNav";
 
 /*
- * Issue #419 — chat-first viewport. With a conversation focused, the docked
- * pipelines collapse into ONE summary row; the bottom sheet lists them, folding
- * completed pipelines behind a single disclosure. Opening/closing the map never
- * remounts the focused pane.
+ * Issue #419 — chat-first viewport, as mobile v2 lanes 3 and 10 leave it. The
+ * conversation screen owns no chrome of its own: no strip, no pane header, no
+ * inline pipeline rail, no dock sheet. The pipelines are ONE row in the
+ * conversation's `⋯` menu (README §4.2, P2-9), and the row PUSHES a screen:
+ * the stage conversation's own pipeline, else the pipelines list. Opening and
+ * closing a sheet never remounts the focused pane — a sheet is over the
+ * screen, never instead of it (§3.3).
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
@@ -27,6 +31,7 @@ mock.module("@/hooks/useRuntime", () => ({
 }));
 
 const { MobileFocusView } = await import("@/components/mobile/MobileFocusView");
+const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
 
 const dom = new Window({ url: "http://localhost/" });
 const G = globalThis as Record<string, unknown>;
@@ -63,7 +68,7 @@ afterAll(async () => {
 });
 
 let roots: Root[] = [];
-beforeEach(() => { dom.document.body.replaceChildren(); roots = []; });
+beforeEach(() => { dom.document.body.replaceChildren(); roots = []; getMobileNav().home(); });
 afterEach(async () => { for (const r of roots) flushSync(() => r.unmount()); roots = []; await settle(); dom.sessionStorage.clear(); });
 
 function mount(node: React.ReactElement): Root {
@@ -98,55 +103,118 @@ function entry(overrides: Partial<FileEntry> & { path: string }): FileEntry {
   };
 }
 
-function view() {
+function view({ surface = pipelines, empty = false }: { surface?: Pipeline[]; empty?: boolean } = {}) {
   const conversation = entry({ path: "/session", title: "Main session", activity: "live", mtime: 9_000 });
   const group: BranchGroup = { key: conversation.path, columns: [{ file: conversation, tasks: [] }], returnable: [], finished: [], smt: conversation.mtime, orphanTask: false };
   return (
     <MobileFocusView
-      project="demo" groups={[group]} manual={[]} files={[conversation]} flows={[]}
-      pipelines={pipelines} surfacePipelines={pipelines} workerStacks={[{ key: "stack::pipe:p-run", kind: "pipeline", id: "p-run", items: [] }]} tasks={[]} drafts={[]}
+      project="demo" groups={empty ? [] : [group]} manual={[]} files={empty ? [] : [conversation]} flows={[]}
+      pipelines={surface} surfacePipelines={surface} tasks={[]} drafts={[]}
       loaded focus={null} onSelect={() => {}} onClose={() => {}} onDraftClose={() => {}} onDraftSpawned={() => {}}
     />
   );
 }
 
-test("a focused conversation reserves ZERO bottom rows: pipelines ride a compact top-strip trigger (#419)", async () => {
+/** Open the conversation's `⋯` and return the sheet it put on screen. */
+function openMenu(): HTMLElement {
+  const more = dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement;
+  expect(more).not.toBeNull();
+  flushSync(() => more.click());
+  return dom.document.querySelector('[data-mobile2-sheet="menu"]') as unknown as HTMLElement;
+}
+
+/** Tap the menu's pipeline row. The row PUSHES a screen (P2-9), so what comes
+    back is the navigation stack's top. */
+async function tapPipelineRow(): Promise<MobileScreen> {
+  const row = openMenu().querySelector('[data-testid="mobile-menu-pipeline"]') as unknown as HTMLButtonElement;
+  expect(row).not.toBeNull();
+  flushSync(() => row.click());
+  await settle();
+  return topScreen(getMobileNav().getState());
+}
+
+test("a focused conversation reserves ZERO rows for the pipelines: they are the menu's first row (#419, README \u00a74.2)", async () => {
   roots.push(mount(view()));
   await settle();
 
   const shell = dom.document.querySelector('[data-testid="mobile-chat-shell"]')!;
-  const summary = shell.querySelector('[data-testid="mobile-pipeline-summary"]') as unknown as HTMLElement;
-  expect(summary).not.toBeNull();
-  /* One trigger, never a row per pipeline, and no dock rail mounted inline. */
-  expect(dom.document.querySelectorAll('[data-testid="mobile-pipeline-summary"]').length).toBe(1);
-  expect(dom.document.querySelector('[data-testid="mobile-pipeline-dock"]')).toBeNull();
-
-  /* It is a compact icon trigger, NOT a persistent full-width bottom row. */
-  expect(summary.tagName).toBe("BUTTON");
-  expect(summary.className).toContain("min-w-11");
-  expect(summary.className).not.toContain("w-full");
-
-  /* And it sits in the top strip — ahead of the transcript pane in DOM order —
-     so nothing steals height below the chat. */
-  const pane = shell.querySelector("textarea") as unknown as Node;
-  expect(summary.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-  /* The full count summary is preserved for screen readers on the label. */
-  expect(summary.getAttribute("aria-label")).toContain("3 pipelines");
-  expect(summary.getAttribute("aria-label")).toContain("1 active");
-  expect(summary.getAttribute("aria-label")).toContain("2 done");
-
-  /* The focused chat mounts no bottom-shelf row of its own either. */
+  /* Nothing about a pipeline is on the screen itself — no rail, no summary
+     trigger in a strip, no bottom shelf. The strip that used to carry the
+     trigger is gone with the rest of the conversation screen's chrome. */
+  expect(shell.querySelector('[data-testid="mobile-pipeline-dock"]')).toBeNull();
+  expect(shell.querySelector('[data-testid="mobile-pipeline-summary"]')).toBeNull();
   expect(shell.querySelector('[data-testid="mobile-bottom-shelf"]')).toBeNull();
+
+  /* The reach is one labelled row, first in the menu, ahead of every identity
+     action — and it is a 44 px row like every other (\u00a72 rule 7). */
+  const sheet = openMenu();
+  const row = sheet.querySelector('[data-testid="mobile-menu-pipeline"]') as unknown as HTMLElement;
+  expect(row).not.toBeNull();
+  expect(row.className).toContain("min-h-11");
+  expect(row.textContent).toContain("3 pipelines");
+  const rows = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((node) => node.getAttribute("data-mobile2-menu-row"));
+  expect(rows[0]).toBe("pipeline");
 });
 
-test("the top-strip pipelines trigger opens the sheet with the full rails (#419)", async () => {
+test("the menu's pipeline row pushes the pipelines list; nothing of the retired dock sheet mounts (P2-9, lane 10)", async () => {
   roots.push(mount(view()));
   await settle();
-  const summary = dom.document.querySelector('[data-testid="mobile-pipeline-summary"]') as unknown as HTMLButtonElement;
-  flushSync(() => summary.click());
+  expect(await tapPipelineRow()).toEqual({ kind: "pipelines" });
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-sheet"]')).toBeNull();
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-dock"]')).toBeNull();
+  expect(dom.document.querySelector('[data-mobile2-sheet]')).toBeNull();
+});
+
+test("on a stage conversation the row names its stage and pushes that pipeline (P2-9, §4.2)", async () => {
+  /* The focused conversation ran the running pipeline's first stage. */
+  const staged = {
+    ...pipe("p-run", "running"),
+    runs: [{ stageId: "plan", attempts: [{ n: 1, state: "running", agentPath: "/session", flowId: null }] }],
+    cursor: { stageId: "plan", state: "running", input: null, activatedBy: null },
+  } as unknown as Pipeline;
+  roots.push(mount(view({ surface: [staged, pipe("p-done1", "completed")] })));
   await settle();
-  expect(dom.document.querySelector('[data-testid="mobile-pipeline-sheet"]')).not.toBeNull();
+  const row = openMenu().querySelector('[data-testid="mobile-menu-pipeline"]') as unknown as HTMLButtonElement;
+  expect(row.textContent).toContain("Task p-run");
+  expect(row.textContent).toContain("stage 1/2");
+  flushSync(() => row.click());
+  await settle();
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "pipeline", id: "p-run" });
+});
+
+test("the conversation screen mounts no pane header at 390px: the bar's title cell is the identity (\u00a73.4)", async () => {
+  roots.push(mount(view()));
+  await settle();
+
+  /* Five to six 44 px controls on one 390 px line left the title one to four
+     characters (2026-08 audit finding 4). The header does not exist here now;
+     the bar carries the title on one line and the meta line under it. */
+  expect(dom.document.querySelector('[data-testid="mobile-focused-pane"] header')).toBeNull();
+  const title = dom.document.querySelector("[data-mobile2-chat-title]") as HTMLElement | null;
+  expect(title).not.toBeNull();
+  expect(title!.querySelector("[data-mobile2-title-text]")?.textContent).toContain("Main session");
+  expect(title!.querySelector("[data-mobile2-chat-state]")).not.toBeNull();
+});
+
+test("with nothing to show the leaf says so and mounts no dock: a provisioning pipeline is the board's row and screen, not this leaf's surface (lane 10)", async () => {
+  roots.push(mount(view({ surface: [pipe("p-new", "provisioning")], empty: true })));
+  await settle();
+  const shell = dom.document.querySelector('[data-testid="mobile-chat-shell"]')!;
+  expect(shell.textContent).toContain("No conversations yet");
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-dock"]')).toBeNull();
+  expect(dom.document.querySelector('[aria-label="Pipeline stages"]')).toBeNull();
+});
+
+test("the focus shell stamps the chat-first transcript budget onto the DOM it governs (#419)", async () => {
+  roots.push(mount(view()));
+  await settle();
+
+  const shell = dom.document.querySelector('[data-testid="mobile-chat-shell"]')!;
+  /* The transcript's guaranteed viewport share travels with the shell root, and
+     the root keeps the #353 horizontal-overflow clip. */
+  expect(Number(shell.getAttribute("data-chat-min-share"))).toBeGreaterThanOrEqual(0.6);
+  expect(shell.className).toContain("overflow-x-clip");
+  expect(shell.className).toContain("max-w-[100dvw]");
 });
 
 test("the focused chat is one 100dvh-bounded shell whose pane owns the remaining height (#440)", async () => {
@@ -170,73 +238,23 @@ test("the focused chat is one 100dvh-bounded shell whose pane owns the remaining
   expect(transcript!.className).toContain("flex-1");
 });
 
-test("the 390px agent header uses compact phone spacing above the transcript (#440)", async () => {
-  roots.push(mount(view()));
-  await settle();
-
-  const header = dom.document.querySelector('[data-testid="mobile-focused-pane"] header') as HTMLElement | null;
-  expect(header).not.toBeNull();
-  expect(header!.className).toContain("gap-y-0.5");
-  expect(header!.className).toContain("px-2");
-  expect(header!.className).toContain("py-1");
-});
-
-test("the sheet folds completed pipelines behind one reversible disclosure (#419)", async () => {
-  roots.push(mount(view()));
-  await settle();
-
-  const summary = dom.document.querySelector('[data-testid="mobile-pipeline-summary"]') as unknown as HTMLButtonElement;
-  flushSync(() => summary.click());
-  await settle();
-  const sheet = dom.document.querySelector('[data-testid="mobile-pipeline-sheet"]')!;
-
-  /* The one ongoing pipeline is listed directly; the two completed ones hide
-     behind a single "2 completed" disclosure until it is opened. */
-  const docksBefore = sheet.querySelectorAll('[data-testid="mobile-pipeline-dock"]');
-  expect(docksBefore.length).toBe(1);
-  const group = sheet.querySelector('[data-testid="mobile-pipeline-completed-group"]')!;
-  expect(group.textContent).toContain("2 completed");
-
-  const toggle = sheet.querySelector('[data-testid="mobile-pipeline-completed-toggle"]') as unknown as HTMLButtonElement;
-  flushSync(() => toggle.click());
-  await settle();
-  expect(sheet.querySelectorAll('[data-testid="mobile-pipeline-dock"]').length).toBe(3);
-
-  /* Reversible. */
-  flushSync(() => toggle.click());
-  await settle();
-  expect(sheet.querySelectorAll('[data-testid="mobile-pipeline-dock"]').length).toBe(1);
-});
-
-test("the focus shell stamps the chat-first transcript budget onto the DOM it governs (#419)", async () => {
-  roots.push(mount(view()));
-  await settle();
-
-  const shell = dom.document.querySelector('[data-testid="mobile-chat-shell"]')!;
-  /* The transcript's guaranteed viewport share travels with the shell root, and
-     the root keeps the #353 horizontal-overflow clip. */
-  expect(Number(shell.getAttribute("data-chat-min-share"))).toBeGreaterThanOrEqual(0.6);
-  expect(shell.className).toContain("overflow-x-clip");
-  expect(shell.className).toContain("max-w-[100dvw]");
-});
-
-test("opening and closing the map never remounts the focused pane", async () => {
+test("opening and closing a sheet never remounts the focused pane (\u00a73.3)", async () => {
   roots.push(mount(view()));
   await settle();
 
   const paneBefore = dom.document.querySelector("textarea");
   expect(paneBefore).not.toBeNull();
 
-  const openBtn = dom.document.querySelector('button[aria-label="Open the project map"]') as unknown as HTMLButtonElement;
-  flushSync(() => openBtn.click());
+  openMenu();
   await settle();
-  expect(dom.document.querySelector('[aria-label="Close the map"]')).not.toBeNull();
+  expect(dom.document.querySelector('[data-mobile2-sheet="menu"]')).not.toBeNull();
 
-  const closeBtn = dom.document.querySelector('[aria-label="Close the map"]') as unknown as HTMLButtonElement;
-  flushSync(() => closeBtn.click());
+  const close = dom.document.querySelector("[data-mobile2-close]") as unknown as HTMLButtonElement;
+  flushSync(() => close.click());
   await settle();
+  expect(dom.document.querySelector('[data-mobile2-sheet="menu"]')).toBeNull();
 
   const paneAfter = dom.document.querySelector("textarea");
-  /* Same node instance — the pane stayed mounted under the sibling overlay. */
+  /* Same node instance \u2014 the screen stayed mounted under the sheet. */
   expect(paneAfter).toBe(paneBefore);
 });

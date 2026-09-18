@@ -66,6 +66,77 @@ describe("readSession", () => {
     expect(result.traces[0]?.name).toBe("turn_complete");
   });
 
+  test("excludes Codex token_count usage envelopes from traces", () => {
+    const pathname = writeJsonl("codex-token-count.jsonl", [
+      { type: "event_msg", timestamp: "t1", payload: { type: "token_count", info: { total_tokens: 128 } } },
+      { type: "event_msg", timestamp: "t2", payload: { type: "turn_complete" } },
+    ]);
+    const result = readSession(pathname, "codex");
+    expect(result.traces.map((item) => item.name)).toEqual(["turn_complete"]);
+  });
+
+  test("keeps legacy Codex reasoning events and recognizes agent reasoning events", () => {
+    const pathname = writeJsonl("codex-reasoning.jsonl", [
+      { type: "event_msg", timestamp: "t1", payload: { type: "reasoning", text: "legacy reasoning" } },
+      { type: "event_msg", timestamp: "t2", payload: { type: "agent_reasoning", text: "current reasoning" } },
+      { type: "response_item", timestamp: "t3", payload: { type: "reasoning", summary: [{ type: "summary_text", text: "response reasoning" }] } },
+    ]);
+    const result = readSession(pathname, "codex");
+    expect(result.reasoning.map((item) => item.text)).toEqual(["legacy reasoning", "current reasoning", "response reasoning"]);
+    expect(result.traces).toEqual([]);
+  });
+
+  test("normalizes Codex 0.151 ThreadItems without serialized item traces", () => {
+    const fixture = path.join(import.meta.dir, "../../components/feed/fixtures/codex-thread-items-0.151.jsonl");
+    const result = readSession(fixture, "codex");
+
+    expect(result.messages.map((item) => item.text)).toEqual(["Check the widget.", "The widget is ready."]);
+    expect(result.reasoning.map((item) => item.text)).toEqual(["Need a focused check.\nInspect the parser seam."]);
+    expect(result.tools.map((item) => item.name)).toEqual([
+      "FileChange",
+      "fileChange",
+      "commandExecution",
+      "functionCallOutput",
+      "mcpToolCall",
+      "dynamicToolCall",
+      "collabAgentToolCall",
+      "webSearch",
+      "imageView",
+      "imageGeneration",
+    ]);
+    expect(result.traces.map((item) => item.name)).toEqual([
+      "hookPrompt",
+      "plan",
+      "subAgentActivity",
+      "sleep",
+      "enteredReviewMode",
+      "exitedReviewMode",
+      "contextCompaction",
+    ]);
+    expect(result.tools.find((item) => item.name === "dynamicToolCall")?.text).toContain("Result: 6");
+    expect([...result.tools, ...result.traces].some((item) => item.text.includes("unified_diff") || item.text.includes("item_completed"))).toBe(false);
+  });
+
+  test("normalizes mixed item_completed envelope and legacy records without accounting noise", () => {
+    const fixture = path.join(import.meta.dir, "../../components/feed/fixtures/codex-item-completed-envelope.jsonl");
+    const result = readSession(fixture, "codex");
+
+    expect(result.messages.map((item) => item.text)).toEqual(["Envelope answer.", "Envelope request.", "Legacy answer."]);
+    expect(result.messages.map((item) => item.ts)).toEqual([
+      new Date(1_700_000_004_000).toISOString(),
+      new Date(1_700_000_005_000).toISOString(),
+      "2023-11-14T22:13:27.000Z",
+    ]);
+    expect(result.reasoning).toEqual([]);
+    expect(result.tools.map((item) => item.name)).toEqual(["CommandExecution", "McpToolCall", "Extension"]);
+    expect(result.tools[0]?.text).toContain("bun test src/widget.test.ts");
+    expect(result.tools[0]?.text).toContain("2 tests passed");
+    expect(result.tools[0]?.text).toContain("warning: fixture warning");
+    expect(result.tools[1]?.text).toContain("Widget found");
+    expect(result.tools[2]?.text).toContain("workspace · search · widget");
+    expect(result.traces).toEqual([]);
+  });
+
   test("reads modern Codex response-item text and stops authorship scanning at the first user record", () => {
     const pathname = path.join(SANDBOX, "codex-modern-input-text.jsonl");
     const firstRows = [

@@ -207,6 +207,8 @@ export interface ClaudeStreamBrokerHostOptions {
   mcpServers?: string[];
   mcpStatePath?: string;
   readOnly?: boolean;
+  /** Confine tools and network to Claude's engine-owned restricted boundary. */
+  restricted?: boolean;
   binary?: string;
   model?: string;
   effort?: string;
@@ -245,6 +247,9 @@ const CHILD_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  /* The re-hosted Viewer MCP launcher resolves the current release and the
+     runtime host's stable listener from these non-secret inputs. */
+  "LLV_STATE_DIR", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT",
 ] as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1_000;
@@ -547,6 +552,7 @@ function defaultTranscriptUsers(cwd: string, sessionId: string, projectsRoot?: s
 
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
+  readonly supportsSteer = false;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;
@@ -693,6 +699,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       "--include-partial-messages", "--replay-user-messages",
       "--permission-prompt-tool", "stdio",
       "--permission-mode", effectiveClaudePermissionMode(options),
+      ...(options.restricted ? ["--restricted"] : []),
     ];
     const disallowedTools = [
       ...(!options.allowSubagents ? NATIVE_MULTI_AGENT_TOOLS : []),
@@ -828,7 +835,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     });
     const timer = setTimeout(() => {
       if (this.pendingDeliveries.get(entry.id)?.promise !== promise) return;
-      this.fail(new Error("Claude delivery confirmation timed out; outcome is uncertain"));
+      // A missing replay echo says nothing about the incumbent turn's liveness.
+      // Keep the original ledger entry and transport for late canonical evidence.
+      // Retain the rejected promise too: another call with this id must not
+      // write the same input again while its original replay echo is pending.
+      rejectDelivery(new Error("Claude delivery confirmation timed out; outcome is uncertain"));
     }, this.requestTimeoutMs);
     const pending: PendingDelivery = {
       promise,

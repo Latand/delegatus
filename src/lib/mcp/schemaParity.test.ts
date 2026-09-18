@@ -293,6 +293,32 @@ test("get_conversation listTools publishes every bounded tail target", async () 
   });
 });
 
+test("conversation_messages publishes identity, filters, clamps, and paging on the first probe", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    const tool = listed.tools.find((candidate) => candidate.name === "conversation_messages");
+    const properties = tool?.inputSchema.properties ?? {};
+
+    for (const target of ["conversationId", "selectedContext", "transcriptPath"]) {
+      expect(tool?.description).toContain(target);
+      expect(properties).toHaveProperty(target);
+    }
+    for (const kind of ["message", "reasoning", "tool_call", "tool_result", "trace"]) {
+      expect(tool?.description).toContain(kind);
+    }
+    for (const role of ["user", "assistant", "system", "tool"]) {
+      expect(tool?.description).toContain(role);
+    }
+    expect(tool?.description).toContain("limit clamps to 1..200 (default 20)");
+    expect(tool?.description).toContain("maxChars clamps to 1..16000 (default 4000)");
+    expect(tool?.description).toContain("next-older page");
+    expect(tool?.description).toContain("hasMore");
+    expect(tool?.description).toContain("fresh clientRequestId");
+    expect((properties.cursor as { description?: string }).description).toContain("next-older page");
+    expect((properties.cursor as { description?: string }).description).toContain("fresh clientRequestId");
+  });
+});
+
 test("conversation_action publishes full-generation archive outcomes and the 100-target bound", async () => {
   let calls = 0;
   await withProtocolClient(inertBindings({
@@ -357,6 +383,11 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     const tool = listed.tools.find((candidate) => candidate.name === "search_transcripts");
 
     expect(tool?.description).toContain("message bodies");
+    /* #1428 — the description names the use case and the read that follows a
+       hit, so a seat discovers the pairing from the tool list alone. */
+    expect(tool?.description).toContain("has this been solved before?");
+    expect(tool?.description).toContain("conversation_messages");
+    expect(tool?.description).toContain("byteOffset");
     expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["clientRequestId", "query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
@@ -612,7 +643,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "effort", "engine", "id", "kind", "model", "next", "onFail", "prompt", "role",
+      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
@@ -626,6 +657,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       ["onFail", "may not define one"],
       ["model", "inherit the role default"],
       ["access", "always read-only"],
+      ["sandbox", "Defaults to full host access"],
+      ["outputs", "controller records only these paths"],
+      /* #1279: the account a stage may name, and the refusal the project's
+         binding answers with when it names one the project does not allow. */
+      ["account", "project allows that account"],
     ] as const) {
       expect(stage?.[field]?.description).toContain(expected);
     }
@@ -637,6 +673,9 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("always read-only");
     expect(tool?.description).toContain("Codex");
+    expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
+    expect(stage?.access?.description).toContain("does not select the sandbox");
+    expect(stage?.sandbox?.description).toContain("independent from access");
     expect(tool?.description).toContain("every violated constraint");
     expect(tool?.description).toContain("normalized to the shared Claude transcript store");
   });
@@ -650,9 +689,10 @@ test("create_pipeline admits the stage shapes the engine accepts", () => {
     { id: "build", kind: "run", "prompt": "Implement." },
     { id: "build", kind: "run", "prompt": "Implement.", next: null, onFail: null, role: { roleId: "builder" } },
     {
-      id: "review-1", kind: "review-loop", "prompt": "Review.", next: null,
-      role: { roleId: "reviewer", params: { diffSource: "branch", rounds: 3 } },
-      engine: "codex", model: null, effort: null, access: "read-only",
+      id: "audit", kind: "run", "prompt": "Audit.", next: null,
+      role: { roleId: "architect", params: { mode: "architecture-audit" } },
+      access: "read-only",
+      sandbox: "restricted", outputs: ["reports/audit.md"],
     },
     { id: "build", kind: "run", "prompt": "Implement.", next: "review-1", onFail: { to: "build", maxRounds: 3 }, engine: "claude", model: "opus", effort: "high" },
     /* The engine trims before it checks, so padding it accepts must not be
@@ -739,4 +779,201 @@ test("request_attention admits every target shape the attention record accepts",
   const refused = schema.safeParse({ clientRequestId: "target-shape", target: { kind: "elsewhere" }, reason: "Look." });
   expect(refused.success).toBe(false);
   expect(JSON.stringify(refused.error?.issues)).toContain("conversation");
+});
+
+/* ── ORIGINAL-KEY RECOVERY (#1490) ─────────────────────────────────────── */
+
+import { RECOVERY_CONTRACT_DESCRIPTION, type McpRecoverableTool } from "./server";
+
+test("spawn_agent and send_message publish recoveryOnly and the recovery contract, and the flag never enters the digest", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    for (const toolName of ["spawn_agent", "send_message"] as const) {
+      const tool = listed.tools.find((candidate) => candidate.name === toolName)!;
+      const schema = tool.inputSchema as { properties: Record<string, { type?: string; description?: string }>; required?: string[] };
+      /* Captured before toMatchObject, which swaps the matched field for its matcher. */
+      const recoveryOnlyDescription = String(schema.properties.recoveryOnly?.description);
+      expect(schema.properties.recoveryOnly).toMatchObject({ type: "boolean", description: expect.stringContaining("never claim an absent key") });
+      expect(recoveryOnlyDescription).toContain("nothing is disclosed");
+      if (toolName === "spawn_agent") {
+        expect(String(schema.properties.project.description)).toContain("resolved server-side from cwd");
+      }
+      expect(schema.required ?? []).not.toContain("recoveryOnly");
+      expect(tool.description).toContain(RECOVERY_CONTRACT_DESCRIPTION);
+      for (const rule of [
+        "sent exactly once",
+        "`recoveryOnly: true` never claims an absent key",
+        "`idempotency_conflict`",
+        "refused without disclosure",
+        "`accepted`",
+        "`in-flight`",
+        "`settled`",
+        "`not-executed`",
+        "`unknown`",
+        "`retryable` never means a new key may be used",
+        "`message_receipt(operationId)` remains available",
+      ]) expect(tool.description).toContain(rule);
+    }
+    expect(listed.tools.find((candidate) => candidate.name === "message_receipt")).toBeDefined();
+  });
+
+  /* Over the protocol: the same logical call with and without the flag is one
+     call, answered once by dispatch and afterwards by recovery only. */
+  const bindingCalls: unknown[] = [];
+  const bindings = inertBindings({
+    send_message: async (args) => { bindingCalls.push(args); return { operationId: "op_parity" }; },
+  });
+  const tool: McpRecoverableTool = {
+    bind: () => ({ caller: { kind: "worker", conversationId: "conversation_parity", project: null }, target: { project: null, identity: "conversation_target" }, downstreamKey: "parity-1" }),
+    recover: async () => ({ outcome: "settled", evidence: "delivery-record", reason: null, ids: { operationId: "op_parity" }, facts: { state: "delivered" } }),
+  };
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore(), undefined, { recovery: { send_message: tool } }));
+  const client = new Client({ name: "schema-parity-recovery", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const args = { clientRequestId: "parity-1", conversationId: "conversation_target", text: "hold" };
+    const first = await client.callTool({ name: "send_message", arguments: { ...args, recoveryOnly: false } });
+    expect(first.structuredContent).toMatchObject({ ok: true, operationId: "op_parity", replayed: false });
+    const explicit = await client.callTool({ name: "send_message", arguments: { ...args, recoveryOnly: true } });
+    expect(explicit.structuredContent).toMatchObject({ ok: true, recovered: true, outcome: "settled", operationId: "op_parity", replayed: true });
+    const ordinary = await client.callTool({ name: "send_message", arguments: args });
+    expect(ordinary.structuredContent).toMatchObject({ ok: true, operationId: "op_parity", replayed: true });
+    expect(bindingCalls).toHaveLength(1);
+    const rejected = await client.callTool({ name: "send_message", arguments: { ...args, recoveryOnly: "yes" } });
+    expect(rejected.isError).toBe(true);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+
+test("task coordinates publish finite axes and retain pinned-update position semantics", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const listed = await client.listTools();
+    for (const name of ["create_task", "update_task"] as const) {
+      const tool = listed.tools.find(t => t.name === name)!;
+      const pos = tool.inputSchema.properties!.pos as { required: string[]; properties: Record<string, { type: string }> };
+      expect(pos.required.slice().sort()).toEqual(["x", "y"]);
+      expect(pos.properties.x.type).toBe("number");
+      expect(pos.properties.y.type).toBe("number");
+      expect(tool.inputSchema.required).not.toContain("pos");
+      /* update_task's taskId became optional with the first-action refinement
+         (#1586): `refine` defaults to the calling conversation's own pending
+         task; every other update still needs the id (enforced in the binding). */
+      expect(tool.inputSchema.required?.slice().sort()).toEqual(name === "create_task" ? ["clientRequestId", "project", "text"] : ["clientRequestId"]);
+      if (name === "update_task") {
+        const refine = (tool.inputSchema.properties as Record<string, { properties?: Record<string, { type?: string }> }> | undefined)?.refine;
+        expect(refine?.properties?.text?.type).toBe("string");
+      }
+      for (const invalid of [null, {}, { x: 1 }, { y: 2 }, { x: "1", y: 2 }, { x: Infinity, y: 0 }, { x: NaN, y: 0 }]) {
+        const args = { clientRequestId: "invalid-coordinate", project: "fixture-project", text: "task", taskId: "task-fixture", pos: invalid };
+        const parsed = TOOL_INPUT_SCHEMAS[name].safeParse(args);
+        expect(parsed.success).toBe(false);
+        expect(parsed.error?.issues.some(issue => issue.path[0] === "pos")).toBe(true);
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain("pos");
+        expect(result.structuredContent).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false });
+      }
+    }
+    expect(TOOL_INPUT_SCHEMAS.update_task.safeParse({ clientRequestId: "retain-position", taskId: "task-fixture", placement: "pinned", expectedProject: "fixture-project", expectedRevision: "opaque" }).success).toBe(true);
+  });
+});
+
+/* #1720 — membership is committed at the launch reservation from what the CALL
+   carried, and both binding fields worked only because these schemas pass extra
+   keys through: a caller reading the published tool contract could not find the
+   one field that keeps an outcome on one card. They are declared now, with the
+   consequence of omitting them in the description. */
+test("the launch tools publish the task binding fields agents must pass", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+
+    const pipeline = listed.tools.find((candidate) => candidate.name === "create_pipeline");
+    const taskIds = pipeline?.inputSchema.properties?.taskIds as { type?: string; items?: { type?: string }; description?: string } | undefined;
+    expect(taskIds?.type).toBe("array");
+    expect(taskIds?.items?.type).toBe("string");
+    /* Every stage launch re-reads the list, which is why it belongs in the
+       create call rather than after the pipeline is running. */
+    expect(taskIds?.description).toContain("EVERY stage launch");
+    expect(taskIds?.description).toContain("placeholder task of its own");
+    expect(taskIds?.description).toContain("existing task in the pipeline's project");
+    expect(taskIds?.description).toContain("link-task");
+    expect(pipeline?.inputSchema.required).not.toContain("taskIds");
+    expect(pipeline?.description).toContain("`taskIds` binds the pipeline to existing board tasks in the same call");
+
+    const spawn = listed.tools.find((candidate) => candidate.name === "spawn_agent");
+    const taskId = spawn?.inputSchema.properties?.taskId as { type?: string; description?: string } | undefined;
+    expect(taskId?.type).toBe("string");
+    expect(taskId?.description).toContain("an id naming no task refuses the launch before any agent starts");
+    /* The published contract must not promise the cross-project refusal that
+       only create_pipeline performs: a spawn's explicit target carries its own
+       project, so a single foreign id is admitted (membership.test.ts). */
+    expect(taskId?.description).toContain("taken as given and binds the agent to that project's card");
+    expect(taskId?.description).not.toContain("or a task in another project, refuses the launch");
+    expect(taskIds?.description).toContain("existing task in the pipeline's project");
+    /* The omission case depends on the parent the CALL names: this tool never
+       infers the caller as parent (spawnRecovery.integration.test.ts), so a
+       call naming no parent gets a placeholder card — a duplicate — and one
+       naming a parent joins that parent's card. */
+    expect(taskId?.description).toContain("this tool never infers one from the caller");
+    expect(taskId?.description).toContain("it is given a placeholder task of its own, which is a duplicate card");
+    expect(taskId?.description).not.toContain("lands on the manager's own seat card");
+    expect(spawn?.description).toContain("it is given a placeholder task of its own — a duplicate card");
+    /* A reviewer that names a parent joins that parent's card beside the
+       reviewed work's (membership.test.ts), so it is told to pass taskId too. */
+    expect(taskId?.description).toContain("so pass taskId on reviewer spawns too — an explicit id wins over inheritance");
+    expect(taskId?.description).not.toContain("needs nothing here");
+    expect(spawn?.inputSchema.required).not.toContain("taskId");
+    expect(spawn?.description).toContain("Pass `taskId` to admit the agent onto an existing board task");
+    /* create_pipeline keeps the placeholder wording, which is true of it. */
+    expect(taskIds?.description).toContain("placeholder task of its own");
+  });
+});
+
+/* Backwards compatibility: both fields reached the server through `.passthrough()`
+   before they were declared, so declaring them must not refuse a call that used
+   to be admitted. `create_pipeline` keeps its empty and whitespace entries,
+   which the engine validates and answers for with a named violation. A blank
+   `spawn_agent.taskId` is the one addition: nothing downstream refuses it — the
+   spawn route reads a blank id as absent, and the launch lands on the tasks of
+   whatever parent or reviewed conversation the call named, or on a fresh
+   placeholder card when it named none. The outcome's card records nothing
+   either way and the caller is told nothing, so the boundary is the only place
+   that can answer, and both launch tools now answer the same malformed id the
+   same way. */
+test("declaring the task binding fields refuses nothing the launch surfaces already accepted", () => {
+  const pipelineArgs = { clientRequestId: "binding-parity", task: "t", repoDir: "/repo", stages: [{ id: "build", kind: "run", "prompt": "Implement." }] };
+  for (const taskIds of [undefined, [], ["board-task-fixture"], ["board-task-fixture", "second-task-fixture"], [""], ["  "]]) {
+    const args = taskIds === undefined ? pipelineArgs : { ...pipelineArgs, taskIds };
+    const parsed = TOOL_INPUT_SCHEMAS.create_pipeline.safeParse(args);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as { taskIds?: unknown } | undefined)?.taskIds).toEqual(taskIds);
+  }
+
+  const spawnArgs = { clientRequestId: "binding-parity-spawn", cwd: "/repo", "prompt": "Implement.", title: "Fixture launch" };
+  for (const taskId of [undefined, "board-task-fixture"]) {
+    const args = taskId === undefined ? spawnArgs : { ...spawnArgs, taskId };
+    const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse(args);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as { taskId?: unknown } | undefined)?.taskId).toEqual(taskId);
+  }
+
+  /* A shape no launch surface could ever use is refused at the boundary now,
+     naming the field, instead of reaching the engine as an unread key. */
+  expect(TOOL_INPUT_SCHEMAS.create_pipeline.safeParse({ ...pipelineArgs, taskIds: "board-task-fixture" }).success).toBe(false);
+  expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: 7 }).success).toBe(false);
+
+  /* A blank spawn taskId is refused at the boundary, naming the field, because
+     the launch would read it as absent and admit the agent onto whatever the
+     call's parent or reviewed conversation holds — or onto a fresh placeholder
+     card when it names neither — while the outcome's card records nothing.
+     `create_pipeline` answers the same mistake from the engine. */
+  for (const blank of ["", "   "]) {
+    const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: blank });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((issue) => issue.path[0] === "taskId")).toBe(true);
+  }
 });

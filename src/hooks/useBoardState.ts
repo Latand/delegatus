@@ -100,7 +100,7 @@ export function isEmptyPrefs(prefs: BoardPrefs): boolean {
   return prefs.manual.length === 0 && prefs.hidden.length === 0 && prefs.expanded.length === 0 && prefs.favorites.length === 0
     && (prefs.foldedEngineChildIds?.length ?? 0) === 0 && (prefs.expandedEngineTrayParentIds?.length ?? 0) === 0
     && (prefs.idleCollapseMinutes === undefined ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES : prefs.idleCollapseMinutes) === DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES
-    && prefs.viewMode === null && !prefs.taskPanelOpen;
+    && prefs.viewMode === null && (prefs.desktopBoard ?? null) === null && !prefs.taskPanelOpen;
 }
 
 /** Worth seeding the server with: anything a user actually arranged. Empty
@@ -201,6 +201,13 @@ function notifySelection(project: string): void {
     through the store's own setters. */
 export function resetSelectionSessionsForTest(): void {
   selectionSessions.clear();
+}
+
+/** Make `paths` the project's selection, as an operator's gesture would. Test-only seam: the desktop Board has no
+    select mode yet (#1695), so the publication contract is exercised from a set made through the store itself. */
+export function seedSelectionSessionForTest(project: string, paths: readonly string[]): void {
+  selectionSessions.set(project, { paths: new Set(paths), armed: false });
+  notifySelection(project);
 }
 
 /**
@@ -1023,6 +1030,8 @@ export interface BoardState extends BoardSnapshot {
   close(path: string): void;
   restore(path: string, placement: "auto" | "manual" | "expanded"): void;
   setViewMode(viewMode: BoardViewMode): void;
+  /** The desktop face: kanban (#1695) or an explicit scheme, with the view it implies. */
+  setDesktopBoard(desktopBoard: "kanban" | "scheme" | null, viewMode?: BoardViewMode): void;
   setTaskPanelOpen(open: boolean): void;
   /* The canonical selection's writers (#771) — the same three every view uses.
      Live even while the durable board is unavailable: the selection is session
@@ -1065,6 +1074,17 @@ export function useBoardState(project: string | null): BoardState {
   const [bound, setBound] = useState<{ project: string | null; snapshot: BoardSnapshot }>(
     () => ({ project, snapshot: initialBoardSnapshot(project) }),
   );
+  /* A project switch re-tags DURING the render that changes `project` (#1432):
+     the session cache already holds the settled arrangement of every project
+     this tab visited, so a revisit paints its board in the same frame as the
+     rail click — no skeleton, no unmount of every card, no re-parse of every
+     feed. A project this tab has not loaded yet still starts unavailable and
+     holds the skeleton until its first GET lands, exactly as before; the
+     effect below then binds the store and replaces this first snapshot with
+     the live one. React allows this set-state-in-render for the component's
+     own state, and it costs one synchronous re-render before any child sees
+     the stale tag. */
+  if (bound.project !== project) setBound({ project, snapshot: initialBoardSnapshot(project) });
 
   useEffect(() => {
     if (typeof window === "undefined" || project === null) {
@@ -1098,6 +1118,9 @@ export function useBoardState(project: string | null): BoardState {
     },
     setViewMode(viewMode) {
       storeRef.current?.mutate([{ kind: "set-presentation", viewMode }]);
+    },
+    setDesktopBoard(desktopBoard, viewMode) {
+      storeRef.current?.mutate([{ kind: "set-presentation", desktopBoard, ...(viewMode === undefined ? {} : { viewMode }) }]);
     },
     setTaskPanelOpen(open) {
       storeRef.current?.mutate([{ kind: "set-presentation", taskPanelOpen: open }]);

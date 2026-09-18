@@ -19,6 +19,7 @@ import {
   latestAttempt,
   resolvePipelineMemberPaths,
   stageAttempts,
+  stageConfigurable,
   stageDockCompact,
   compactStageOpenTarget,
   compactPipelineOpenTarget,
@@ -1639,7 +1640,52 @@ describe("stage surface titles and settled rows (#658)", () => {
 
     const bare = pipeline({ stages, runs: [{ stageId: "integrate_v3_voice", attempts: [{ n: 1, state: "passed" } as never] }] });
     expect(stageOutcomeReason(fakeT, bare, buildStage)).toBe("pipelineChipState.passed");
-    /* Attemptless: the chip state itself, so the row is never blank. */
-    expect(stageOutcomeReason(fakeT, pipeline({ stages }), buildStage)).toBe("pipelineChipState.pending");
+    /* Attemptless: never blank, and never the badge's own word repeated (#1668). */
+    expect(stageOutcomeReason(fakeT, pipeline({ stages }), buildStage)).toBe("pipelineSlot.reasonNotStarted");
   });
+
+  /* #1668. A stage with no attempt used to explain itself with the single word
+     its own badge already showed — "pending" beside a `pending` chip — which
+     collapsed four different situations into one. Each of these says the stage
+     has NOT started, because none of them has; none of them may read as
+     progress or completion. */
+  test("a stage that never ran states what it is waiting for, never the badge's own word (#1668)", () => {
+    const later = stage("verify");
+    const stages = [buildStage, later];
+    const chain = (over: Partial<Pipeline>) => pipeline({ stages, ...over });
+
+    /* Queued behind the stage the cursor is on: named, with its position. */
+    const running = chain({ state: "running", cursor: { stageId: buildStage.id, state: "running", input: null, activatedBy: null } as never });
+    expect(stageOutcomeReason(fakeT, running, later))
+      .toBe(`pipelineSlot.reasonQueuedAfter:${JSON.stringify({ title: "roleCopy.builder.name", k: 1, n: 2 })}`);
+    /* The cursor stage itself is not waiting for anything — it is the work in
+       flight, and its live state is what the row must say. */
+    expect(stageOutcomeReason(fakeT, running, buildStage)).toBe("pipelineChipState.running");
+
+    /* Held, not merely later in the chain: these need the operator. */
+    expect(stageOutcomeReason(fakeT, chain({ state: "needs_decision" }), later)).toBe("pipelineSlot.reasonHeldDecision");
+    expect(stageOutcomeReason(fakeT, chain({ state: "paused", pausedState: "running" }), later)).toBe("pipelineSlot.reasonHeldPaused");
+    expect(stageOutcomeReason(fakeT, chain({ state: "draft" }), later)).toBe("pipelineSlot.reasonPlanned");
+
+    /* The chain is over and this stage has no attempt: it was never reached. */
+    for (const state of ["completed", "closed"] as const) {
+      expect(stageOutcomeReason(fakeT, chain({ state }), later)).toBe("pipelineSlot.reasonNeverRan");
+    }
+
+    /* A stage that DID run keeps reading from its own record, untouched. */
+    const ran = chain({ runs: [{ stageId: later.id, attempts: [{ n: 1, state: "passed", output: "green" } as never] }] });
+    expect(stageOutcomeReason(fakeT, ran, later)).toBe("green");
+  });
+});
+
+test("stageConfigurable: a stage is open to configuration only while it never ran and its pipeline is not over (mobile v2 lane 10)", () => {
+  const running = { state: "running", runs: [{ stageId: "build", attempts: [{ n: 1 }] }] } as unknown as Pipeline;
+  /* The engine snapshots a stage's config at its first attempt. */
+  expect(stageConfigurable(running, "review")).toBe(true);
+  expect(stageConfigurable(running, "build")).toBe(false);
+  /* A pipeline that is over has no stage left to change. */
+  expect(stageConfigurable({ ...running, state: "completed" } as Pipeline, "review")).toBe(false);
+  expect(stageConfigurable({ ...running, state: "closed" } as Pipeline, "review")).toBe(false);
+  /* A draft is all configuration. */
+  expect(stageConfigurable({ ...running, state: "draft", runs: [] } as unknown as Pipeline, "build")).toBe(true);
 });

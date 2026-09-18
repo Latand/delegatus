@@ -1,4 +1,7 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { Window } from "happy-dom";
 import { useLayoutEffect, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
@@ -7,6 +10,12 @@ import { createRoot } from "react-dom/client";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { setLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
+import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import {
+  ComposerAdmissionTimeoutError,
+  setComposerAdmissionTimingForTests,
+} from "./composerAdmissionDeadline";
+import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -35,23 +44,11 @@ let mobileViewport = false;
 });
 
 /* The local reconciliation window is a product-real 30s. These tests exercise
-   its EXPIRY, so the module is mocked to a few tens of milliseconds while every
-   reconciliation primitive stays the real implementation — the component reads
-   the window/poll constants and threads them through, so shrinking them here
-   drives the production code path. bun runs each test file in its own module
-   graph, so this override stays isolated from the 30s tests next door. */
-const actualDeadline = await import("./composerAdmissionDeadline");
-mock.module("./composerAdmissionDeadline", () => ({
-  ...actualDeadline,
-  COMPOSER_ADMISSION_DEADLINE_MS: 8,
-  COMPOSER_RECEIPT_RECONCILIATION_MS: 40,
-  COMPOSER_RECEIPT_POLL_INTERVAL_MS: 5,
-}));
-const { ComposerAdmissionTimeoutError } = actualDeadline;
-
+   its EXPIRY, so the lifecycle-owned timing seam shrinks it to a few tens of
+   milliseconds while every reconciliation primitive stays real. The seam is
+   cleared after every case, so neighboring files retain production timing. */
 /* A controllable durable-receipt stream stands in for the runtime bus (see the
    sibling reconciliation test for the rationale). */
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const receiptListeners = new Set<() => void>();
 let busReceipts: RuntimeReceipt[] = [];
 let refreshRuntimeImpl: () => Promise<boolean> = async () => false;
@@ -59,25 +56,84 @@ function publishReceipts(next: RuntimeReceipt[]): void {
   busReceipts = next;
   for (const listener of receiptListeners) listener();
 }
-mock.module("@/hooks/useRuntime", () => ({
-  ...actualRuntimeHooks,
-  useRuntimeSession: () => null,
-  refreshRuntime: () => refreshRuntimeImpl(),
-  useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
-    (listener) => {
-      receiptListeners.add(listener);
-      return () => receiptListeners.delete(listener);
-    },
-    () => busReceipts,
-    () => busReceipts,
-  ),
-}));
-afterAll(() => {
-  mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("./composerAdmissionDeadline", () => actualDeadline);
+import { TmuxComposer } from "./TmuxComposer";
+import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
+import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
+import type { RuntimeSessionView } from "@/hooks/useRuntime";
+
+/** A timeout is never replay authority. Prove no local effect, then deliver an
+ * affirmative pre-dispatch rejection before exercising immutable retry bytes. */
+async function confirmSafeRetry(conversationId: string, key: string): Promise<void> {
+  const before = readOutbox(conversationId).find(entry => entry.id === key)!;
+  expect(before.deliveryUncertain).toBe(true);
+  flushSync(() => retryOutbox(conversationId, key));
+  await sleep(0);
+  expect(readOutbox(conversationId).find(entry => entry.id === key)).toEqual(before);
+  flushSync(() => publishReceipts([{
+    operationId: `safe-${key}`, idempotencyKey: key, conversationId,
+    kind: "send", status: "failed", resend: "safe", reason: "pre-dispatch rejection",
+    text: before.text, at: new Date().toISOString(), revision: 1,
+  }]));
+  await sleep(0);
+  expect(readOutbox(conversationId).find(entry => entry.id === key)?.deliveryUncertain).toBeUndefined();
+}
+
+/* The journal's answer to the operation retry of an admitted message: a leaf
+   presented under the operation it replaces, as `/api/runtime/operations`
+   returns it. */
+function operationRetryResponse(conversationId: string, operationId: string): Response {
+  return {
+    ok: true,
+    status: 202,
+    json: async () => ({
+      operationId: `retry-leaf-${operationId}`,
+      receipt: {
+        operationId, idempotencyKey: `retry-key-${operationId}`, retryOfOperationId: operationId,
+        conversationId, kind: "send", status: "queued", at: new Date().toISOString(), revision: 2,
+      },
+    }),
+  } as Response;
+}
+
+/** The retained copy's original image bytes, read back from durable storage. */
+async function retainedImages(conversationId: string, key: string): Promise<string[] | undefined> {
+  return (await composerSubmissionPayloads.restore({ conversationId, key }))?.submission.images.map((image) => image.base64);
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !condition(); attempt += 1) await sleep(2);
+}
+
+/* Attachment submissions are kept in IndexedDB before they reach the wire. */
+const composerStorage = installComposerStorageForTests();
+afterAll(() => composerStorage.uninstall());
+
+beforeEach(() => {
+  setRuntimeUiEnabledForTests(false);
+  setComposerAdmissionTimingForTests({
+    admissionDeadlineMs: 8,
+    receiptReconciliationMs: 40,
+    receiptPollIntervalMs: 5,
+  });
+  setTmuxComposerRuntimeDependenciesForTests({
+    refreshRuntime: () => refreshRuntimeImpl(),
+    useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
+      (listener) => {
+        receiptListeners.add(listener);
+        return () => receiptListeners.delete(listener);
+      },
+      () => busReceipts,
+      () => busReceipts,
+    ),
+  });
 });
 
-const { TmuxComposer } = await import("./TmuxComposer");
+afterEach(() => {
+  composerStorage.reset();
+  setTmuxComposerRuntimeDependenciesForTests(null);
+  setComposerAdmissionTimingForTests(null);
+  setRuntimeUiEnabledForTests(null);
+});
 
 function IdentityCommitHarness({ file, onCommit }: { file: FileEntry; onCommit?: () => void }) {
   useLayoutEffect(() => {
@@ -172,18 +228,18 @@ test("late receipt-free legacy success settles live-pane and resume generations 
       await sleep(10);
       flushSync(() => textareaProps.onChange({ target: { value: later } }));
       await sleep(50);
-      expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(1);
+      expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
       for (let attempt = 0; attempt < 50 && sessionStorage.getItem(`llvPendingSend:${conversationId}`); attempt += 1) {
         await sleep(3);
       }
-      for (let attempt = 0; attempt < 50 && host.querySelectorAll('[data-receipt-status="uncertain"]').length; attempt += 1) {
+      for (let attempt = 0; attempt < 50 && host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]').length; attempt += 1) {
         await sleep(3);
       }
 
       expect(attempts).toEqual([{ key: attempts[0]!.key, text: original }]);
       expect(textarea.value).toBe(later);
       expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
-      expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(0);
+      expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(0);
       expect(submitButton(host).disabled).toBe(false);
     } finally {
       flushSync(() => root.unmount());
@@ -222,7 +278,7 @@ test("identity commit invalidates a delayed legacy success before passive cleanu
     await sleep(5);
     const form = (host.querySelector("textarea") as HTMLTextAreaElement).closest("form")!;
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    for (let attempt = 0; attempt < 50 && !host.querySelector('[data-receipt-status="uncertain"]'); attempt += 1) {
+    for (let attempt = 0; attempt < 50 && !host.querySelector('[data-operation^="composer-unconfirmed:"] > [role="status"]'); attempt += 1) {
       await sleep(3);
     }
     const pendingBefore = sessionStorage.getItem(`llvPendingSend:${originalId}`);
@@ -241,8 +297,8 @@ test("identity commit invalidates a delayed legacy success before passive cleanu
     ));
     await sleep(30);
 
-    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe(original);
-    expect(sessionStorage.getItem(`llvDraft:${successorId}`)).toBe(original);
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect(sessionStorage.getItem(`llvDraft:${successorId}`)).toBeNull();
     expect(sessionStorage.getItem(`llvPendingSend:${successorId}`)).not.toBeNull();
   } finally {
     flushSync(() => root.unmount());
@@ -279,7 +335,7 @@ test("unmount commit invalidates a delayed legacy success before passive cleanup
     await sleep(5);
     const form = (host.querySelector("textarea") as HTMLTextAreaElement).closest("form")!;
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    for (let attempt = 0; attempt < 50 && !host.querySelector('[data-receipt-status="uncertain"]'); attempt += 1) {
+    for (let attempt = 0; attempt < 50 && !host.querySelector('[data-operation^="composer-unconfirmed:"] > [role="status"]'); attempt += 1) {
       await sleep(3);
     }
     const pendingBefore = sessionStorage.getItem(`llvPendingSend:${conversationId}`);
@@ -301,7 +357,7 @@ test("unmount commit invalidates a delayed legacy success before passive cleanup
     const pendingAfter = JSON.parse(sessionStorage.getItem(`llvPendingSend:${conversationId}`) ?? "[]") as Array<{ key: string; text: string }>;
     expect(pendingAfter).toHaveLength(1);
     expect(pendingAfter[0]).toMatchObject({ text: prompt });
-    expect(sessionStorage.getItem(`llvDraft:${conversationId}`)).toBe(prompt);
+    expect(sessionStorage.getItem(`llvDraft:${conversationId}`)).toBeNull();
   } finally {
     flushSync(() => root.unmount());
     publishReceipts([]);
@@ -311,10 +367,10 @@ test("unmount commit invalidates a delayed legacy success before passive cleanup
   }
 });
 
-test("no receipt within the local window recovers the composer for an exactly-once same-key retry", async () => {
-  setLocale("en");
+test.each(["en", "uk"] as const)("expiry preserves the generation until affirmative rejection permits same-key retry (%s)", async (locale) => {
+  setLocale(locale);
   mobileViewport = false;
-  const conversationId = "conv-expiry-recover";
+  const conversationId = `conv-expiry-recover-${locale}`;
   const prompt = "confirm the deploy went out";
   const sentKeys: string[] = [];
   const sentRuntimes: { model?: string; effort?: string; fast?: boolean }[] = [];
@@ -335,14 +391,14 @@ test("no receipt within the local window recovers the composer for an exactly-on
         ok: true,
         structured: true,
         receipt: {
-          operationId: "op-expiry-retry",
+          operationId: `safe-${body.clientMessageId}`,
           idempotencyKey: body.clientMessageId,
           conversationId,
           kind: "send",
           status: "queued",
           text: prompt,
           at: "2026-07-20T09:00:00.000Z",
-          revision: 1,
+          revision: 2,
         },
       }),
     } as Response;
@@ -366,40 +422,36 @@ test("no receipt within the local window recovers the composer for an exactly-on
     /* The window expires with no receipt; the composer must NOT stay disabled. */
     await untilSendEnabled(host);
     expect(sentKeys).toHaveLength(1);
-    expect(textarea.value).toBe(prompt);
-    /* Accurate, recoverable wording for the expired-window state. */
-    expect(host.textContent).toContain(translate("en", "composer.deliveryUnconfirmed"));
+    expect(textarea.value).toBe("");
+    /* Assert the actual rendered instruction: re-submitting creates a new key. */
+    const guidance = host.querySelector('[data-testid="composer-status"]')?.textContent;
+    expect(guidance).toBe(locale === "en"
+      ? "Delivery couldn't be confirmed. Your message is preserved. Check its delivery status before trying again."
+      : "Не вдалося підтвердити доставку. Повідомлення збережено. Перевірте стан його доставки перед повторною спробою.");
+    expect(guidance).not.toMatch(/send again|same message key|надішліть ще раз|той самий ключ/i);
     /* One durable, honest receipt row for the preserved generation. */
-    expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
     expect(host.querySelector("[data-receipt-preview]")?.textContent).toBe(prompt);
     /* The reconciliation loop never actuates a second send on its own. */
     await sleep(60);
     expect(sentKeys).toHaveLength(1);
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toContain(sentKeys[0]!);
 
-    /* The operator explicitly retries: the ORIGINAL key replays idempotently. */
-    flushSync(() => {
-      const propsKey = Object.keys(textarea).find((key) => key.startsWith("__reactProps$"))!;
-      const props = (textarea as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!;
-      props.onChange({ target: { value: "" } });
-    });
-    flushSync(() => root.unmount());
-    root = createRoot(host);
-    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
-    await untilSendEnabled(host);
-    textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+    /* The operator explicitly retries the failed bubble: the ORIGINAL key
+       replays idempotently while the cleared composer remains available. */
+    const expired = readOutbox(conversationId).find((entry) => entry.text === prompt)!;
     localStorage.setItem(`llvAgentRuntime:${conversationId}:resume`, JSON.stringify({
       model: "gpt-5.6-sol",
       effort: "low",
       fast: true,
     }));
-    form = textarea.closest("form")!;
-    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await confirmSafeRetry(conversationId, expired.id);
+    flushSync(() => retryOutbox(conversationId, expired.id));
     await sleep(0);
     expect(sentKeys).toHaveLength(2);
     expect(sentKeys[1]).toBe(sentKeys[0]);
     expect(sentRuntimes[1]).toEqual(sentRuntimes[0]);
-    expect(textarea.value).toBe("");
+    expect(readOutbox(conversationId).find((entry) => entry.id === expired.id)?.state).toBe("delivering");
     expect(host.querySelectorAll('[data-receipt-status="queued"]')).toHaveLength(1);
   } finally {
     flushSync(() => root.unmount());
@@ -433,14 +485,14 @@ test("editing after expiry retries the immutable generation and preserves the la
         ok: true,
         structured: true,
         receipt: {
-          operationId: "op-expiry-edited-draft",
+          operationId: `safe-${body.clientMessageId}`,
           idempotencyKey: body.clientMessageId,
           conversationId,
           kind: "send",
           status: "queued",
           text: original,
-          at: "2026-07-20T09:00:30.000Z",
-          revision: 1,
+          at: new Date().toISOString(),
+          revision: 2,
         },
       }),
     } as Response;
@@ -462,7 +514,9 @@ test("editing after expiry retries the immutable generation and preserves the la
     await untilSendEnabled(host);
     flushSync(() => textareaProps.onChange({ target: { value: laterDraft } }));
 
-    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    const expired = readOutbox(conversationId).find((entry) => entry.text === original)!;
+    await confirmSafeRetry(conversationId, expired.id);
+    flushSync(() => retryOutbox(conversationId, expired.id));
     await sleep(0);
 
     expect(attempts).toHaveLength(2);
@@ -505,7 +559,7 @@ test("a late receipt after the window still settles the preserved generation wit
   try {
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
     await untilSendEnabled(host);
-    expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
 
     /* The durable admission finally lands, well after the local window closed. */
     flushSync(() => publishReceipts([{
@@ -522,9 +576,10 @@ test("a late receipt after the window still settles the preserved generation wit
 
     expect(textarea.value).toBe("");
     expect(sentKeys).toHaveLength(1);
-    /* The uncertain row is superseded — exactly one durable receipt remains. */
-    expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(0);
-    expect(host.querySelectorAll('[data-receipt-status="queued"]')).toHaveLength(1);
+    /* The original receipt replaces the local placeholder but arrival remains unknown. */
+    expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(1);
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBe(null);
   } finally {
     flushSync(() => root.unmount());
@@ -575,10 +630,12 @@ test("the recovered generation survives a remount and keeps its original key", a
     const form = textarea.closest("form")!;
     /* The composer accepts input again after the refresh. */
     expect(submitButton(host).disabled).toBe(false);
-    expect(textarea.value).toBe(prompt);
+    expect(textarea.value).toBe("");
 
     /* The explicit retry replays the ORIGINAL key across the remount. */
-    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    const expired = readOutbox(conversationId).find((entry) => entry.text === prompt)!;
+    await confirmSafeRetry(conversationId, expired.id);
+    flushSync(() => retryOutbox(conversationId, expired.id));
     await sleep(0);
     expect(sentKeys).toHaveLength(2);
     expect(sentKeys[1]).toBe(sentKeys[0]);
@@ -599,9 +656,15 @@ test("an image-bearing generation restores exact bytes across a remount on deskt
     const conversationId = `conv-expiry-image-remount-${width}`;
     const prompt = `restore the screenshot at ${width}`;
     const attempts: { key: string; images: string[] }[] = [];
+    const operationRetries: string[] = [];
     globalThis.fetch = (async (input, init) => {
       if (String(input) === "/api/tmux/targets") {
         return { ok: true, json: async () => ({ targets: { "0": null } }) } as Response;
+      }
+      const retried = /^\/api\/runtime\/operations\/(.+)$/.exec(String(input));
+      if (retried && init?.method === "POST") {
+        operationRetries.push(decodeURIComponent(retried[1]!));
+        return operationRetryResponse(conversationId, decodeURIComponent(retried[1]!));
       }
       if (String(input) !== "/api/tmux") throw new Error(`unexpected request: ${String(input)}`);
       const body = JSON.parse(String(init?.body)) as { clientMessageId: string; images?: { base64: string }[] };
@@ -620,7 +683,7 @@ test("an image-bearing generation restores exact bytes across a remount on deskt
             kind: "send",
             status: "queued",
             text: prompt,
-            at: "2026-07-20T09:01:30.000Z",
+            at: new Date().toISOString(),
             revision: 1,
           },
         }),
@@ -653,11 +716,12 @@ test("an image-bearing generation restores exact bytes across a remount on deskt
       expect(host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]')).toHaveLength(1);
 
       flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+      await until(() => attempts.length === 1);
       await untilSendEnabled(host);
       expect(attempts[0]?.images).toHaveLength(1);
+      expect(host.querySelectorAll('[data-testid="attachment-tile"]')).toHaveLength(0);
 
       flushSync(() => textareaProps.onChange({ target: { value: `later draft ${width}` } }));
-      flushSync(() => (host.querySelector('[data-testid="attachment-tile"] button') as HTMLButtonElement).click());
       textareaProps.onPaste({
         clipboardData: { items: [{ type: "image/png", getAsFile: () => new dom.File([`later-${width}`], `later-${width}.png`, { type: "image/png" }) }] },
         preventDefault() {},
@@ -677,12 +741,18 @@ test("an image-bearing generation restores exact bytes across a remount on deskt
       expect(host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]')).toHaveLength(1);
 
       textarea = host.querySelector("textarea") as HTMLTextAreaElement;
-      form = textarea.closest("form")!;
-      flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+      const expired = readOutbox(conversationId).find((entry) => entry.text === prompt)!;
+      await confirmSafeRetry(conversationId, expired.id);
+      /* A receipt names an admitted operation: its retry is the journal's
+         operation contract, from the retained recovery row after remount. */
+      await until(() => host.querySelector("[data-payload-retry]") !== null);
+      flushSync(() => (host.querySelector("[data-payload-retry]") as HTMLButtonElement).click());
+      await until(() => operationRetries.length === 1);
       await sleep(0);
 
-      expect(attempts).toHaveLength(2);
-      expect(attempts[1]).toEqual(attempts[0]);
+      expect(operationRetries).toEqual([`safe-${attempts[0]!.key}`]);
+      expect(attempts).toHaveLength(1);
+      expect(await retainedImages(conversationId, attempts[0]!.key)).toEqual(attempts[0]!.images);
       expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe(`later draft ${width}`);
       expect(host.querySelectorAll('[data-testid="attachment-tile"]')).toHaveLength(1);
       expect((host.querySelector('[data-testid="attachment-tile"] img') as HTMLImageElement).src).toBe(laterPreview);
@@ -729,8 +799,8 @@ test("typing after the window survives; a late admission clears only the sent pr
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
     await untilSendEnabled(host);
 
-    flushSync(() => textareaProps.onChange({ target: { value: `${prompt}\nand the metrics` } }));
-    expect(textarea.value).toBe(`${prompt}\nand the metrics`);
+    flushSync(() => textareaProps.onChange({ target: { value: "and the metrics" } }));
+    expect(textarea.value).toBe("and the metrics");
 
     flushSync(() => publishReceipts([{
       operationId: "op-expiry-typing",
@@ -739,7 +809,7 @@ test("typing after the window survives; a late admission clears only the sent pr
       kind: "send",
       status: "queued",
       text: prompt,
-      at: "2026-07-20T09:02:00.000Z",
+      at: new Date().toISOString(),
       revision: 1,
     }]));
     await sleep(0);
@@ -806,7 +876,7 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
   try {
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
     await untilSendEnabled(host);
-    expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
     expect(retries()).toHaveLength(0);
 
     flushSync(() => publishReceipts([{
@@ -816,6 +886,7 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
       kind: "send",
       status: "failed",
       reason: "dead-host",
+      resend: "safe",
       text: prompt,
       at: "2026-07-20T09:03:00.000Z",
       revision: 1,
@@ -823,16 +894,16 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
     await sleep(0);
 
     /* The failure supersedes the uncertain row and offers Retry; the composer
-       stays usable and the payload stays exact. */
+       stays usable while the receipt retains the exact payload. */
     expect(submitButton(host).disabled).toBe(false);
-    expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(0);
     expect(retries()).toHaveLength(1);
-    expect(textarea.value).toBe(prompt);
+    expect(textarea.value).toBe("");
     expect(sentKeys).toHaveLength(1);
 
-    flushSync(() => terminalTextareaProps.onChange({ target: { value: `${prompt}\nlater turn` } }));
+    flushSync(() => terminalTextareaProps.onChange({ target: { value: "later turn" } }));
     flushSync(() => (retries()[0] as HTMLButtonElement).click());
-    for (let attempt = 0; attempt < 50 && textarea.value !== "later turn"; attempt += 1) await sleep(2);
+    for (let attempt = 0; attempt < 50 && sessionStorage.getItem(`llvPendingSend:${conversationId}`); attempt += 1) await sleep(2);
     expect(textarea.value).toBe("later turn");
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
 
@@ -850,7 +921,7 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
   }
 });
 
-test("an incomplete quota snapshot stays fenced through remount until authoritative settlement", async () => {
+test("an incomplete quota snapshot is never replayed through remount and settles on its authoritative receipt", async () => {
   setLocale("en");
   for (const [width, mobile] of [[1440, false], [390, true]] as const) {
     mobileViewport = mobile;
@@ -885,9 +956,11 @@ test("an incomplete quota snapshot stays fenced through remount until authoritat
     const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
     const form = textarea.closest("form")!;
     try {
+      /* Only its metadata survived, so it is never sent again; a separately
+         authored draft is not held behind it. */
       await sleep(70);
-      expect(submitButton(host).disabled).toBe(true);
       expect(sent).toEqual([]);
+      expect(host.querySelector("[data-payload-incomplete]")).not.toBeNull();
 
       flushSync(() => publishReceipts([{
         operationId: `op-quota-${width}`,
@@ -904,7 +977,7 @@ test("an incomplete quota snapshot stays fenced through remount until authoritat
       expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
 
       flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-      await sleep(0);
+      await until(() => sent.length === 1);
       expect(sent).toHaveLength(1);
       expect(sent[0]?.text).toBe(later);
       expect(sent[0]?.key).not.toBe(`key-quota-${width}`);
@@ -928,9 +1001,15 @@ test("an edited image tray retries the immutable images and preserves later atta
     const prompt = `compare both shots at ${width}`;
     const sentKeys: string[] = [];
     const sentImages: string[][] = [];
+    const operationRetries: string[] = [];
     globalThis.fetch = (async (input, init) => {
       if (String(input) === "/api/tmux/targets") {
         return { ok: true, json: async () => ({ targets: { "0": null } }) } as Response;
+      }
+      const retried = /^\/api\/runtime\/operations\/(.+)$/.exec(String(input));
+      if (retried && init?.method === "POST") {
+        operationRetries.push(decodeURIComponent(retried[1]!));
+        return operationRetryResponse(conversationId, decodeURIComponent(retried[1]!));
       }
       if (String(input) !== "/api/tmux") throw new Error(`unexpected request: ${String(input)}`);
       const body = JSON.parse(String(init?.body)) as { clientMessageId: string; images?: { base64: string }[] };
@@ -944,14 +1023,14 @@ test("an edited image tray retries the immutable images and preserves later atta
           ok: true,
           structured: true,
           receipt: {
-            operationId: `op-expiry-images-${width}`,
+            operationId: `safe-${body.clientMessageId}`,
             idempotencyKey: body.clientMessageId,
             conversationId,
             kind: "send",
             status: "queued",
             text: prompt,
-            at: "2026-07-20T09:04:00.000Z",
-            revision: 1,
+            at: new Date().toISOString(),
+            revision: 2,
           },
         }),
       } as Response;
@@ -986,30 +1065,32 @@ test("an edited image tray retries the immutable images and preserves later atta
       await untilPreviews(2);
       const attached = previews();
       flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+      await until(() => sentImages.length === 1);
       await untilSendEnabled(host);
       expect(sentImages[0]).toHaveLength(2);
-      /* Both attachments stay through the window — nothing was admitted. */
-      expect(previews()).toEqual(attached);
-      expect(host.querySelectorAll('[data-receipt-status="uncertain"]')).toHaveLength(1);
+      /* Queue-first owns the submitted images; the editable tray clears for
+         the next generation even while admission remains unconfirmed. */
+      expect(previews()).toEqual([]);
+      expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
 
-      /* The operator edits the tray before retrying. The removed original and
-         newly-added image belong to UI state around the pending generation. */
-      const firstTile = host.querySelector('[data-testid="attachment-tile"]') as HTMLElement;
-      flushSync(() => (firstTile.querySelector("button") as HTMLButtonElement).click());
+      /* An image added after expiry belongs exclusively to the next draft. */
       pasteImage(`later-${width}`);
-      await untilPreviews(2);
+      await untilPreviews(1);
       const editedTray = previews();
       expect(editedTray).not.toEqual(attached);
 
-      /* The retry replays the same key with the original image bytes. */
-      flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+      /* The queue bubble's Retry asks the journal for the admitted operation's
+         next attempt; the original image bytes stay retained until it settles. */
+      const expired = readOutbox(conversationId).find((entry) => entry.text === prompt)!;
+      await confirmSafeRetry(conversationId, expired.id);
+      flushSync(() => retryOutbox(conversationId, expired.id));
+      await until(() => operationRetries.length === 1);
       await sleep(0);
-      expect(sentKeys).toHaveLength(2);
-      expect(sentKeys[1]).toBe(sentKeys[0]);
-      expect(sentImages[1]).toEqual(sentImages[0]);
-      /* Settlement removes the surviving original image by intake id. The
-         attachment added after expiry remains for the following generation. */
-      expect(previews()).toEqual([editedTray[1]]);
+      expect(operationRetries).toEqual([`safe-${sentKeys[0]}`]);
+      expect(sentKeys).toHaveLength(1);
+      expect(await retainedImages(conversationId, sentKeys[0]!)).toEqual(sentImages[0]);
+      /* The attachment added after expiry remains for the following generation. */
+      expect(previews()).toEqual(editedTray);
       expect(host.querySelectorAll('[data-receipt-status="queued"]')).toHaveLength(1);
       if (mobile) {
         expect(form.getAttribute("data-testid")).toBe("bounded-mobile-composer");
@@ -1025,4 +1106,165 @@ test("an edited image tray retries the immutable images and preserves later atta
     }
   }
   mobileViewport = false;
+});
+
+/* #1538 parks a structured send whose request left the browser without an
+   answer as `delivering` + `deliveryUncertain`. Such an entry used to keep the
+   serial dispatcher's fence, and nothing could ever take it back: a request
+   that died BEFORE admission has no operation, so no receipt can arrive to
+   settle it, and the local unconfirmed receipt re-projects the entry as
+   `delivering` for as long as its fate stays unknown. Every later message then
+   queued behind it forever and the conversation went mute.
+
+   The parked generation keeps everything that was true about it — its key, its
+   bytes and its unknown fate. A late admission is still possible, so it is
+   never replayed, never cancelled, never presented as delivered or failed, and
+   a genuine late receipt still settles it. What it no longer does is hold this
+   browser's wire. */
+test("a stranded uncertain structured send releases the queue, keeps its payload, and still settles on a late receipt", async () => {
+  setLocale("en");
+  mobileViewport = false;
+  const conversationId = "conv-stranded-uncertain";
+  const strandedKey = "op_stranded-uncertain";
+  const followUpKey = "op_follow-up";
+  const strandedText = "why was this never delivered";
+  const followUpText = "the message queued behind it";
+  const strandedImage = { base64: "aGk=", mime: "image/png" };
+  const sends: { key: string; text: string; images: number }[] = [];
+
+  const structuredView = {
+    session: {
+      conversationId,
+      hostKind: "codex-app-server",
+      host: "hosted",
+      capabilities: { imageInput: { supported: true } },
+      recentReceipts: [],
+    },
+    uiState: {},
+    attentions: [],
+    receipts: [],
+    legacy: false,
+    structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+
+  setTmuxComposerRuntimeDependenciesForTests({
+    refreshRuntime: () => refreshRuntimeImpl(),
+    useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
+      (listener) => {
+        receiptListeners.add(listener);
+        return () => receiptListeners.delete(listener);
+      },
+      () => busReceipts,
+      () => busReceipts,
+    ),
+    useAgentCapabilities: (candidate) => {
+      const options = { runtimeEnabled: true };
+      return {
+        caps: capabilitiesFor(candidate, structuredView, options),
+        runtime: structuredView,
+        structuredSession: structuredView,
+        runtimeEnabled: true,
+        attachMode: attachModeFor(candidate, structuredView, options),
+      };
+    },
+    sendRuntimeMessage: async (options) => {
+      sends.push({ key: options.idempotencyKey, text: options.text, images: options.images?.length ?? 0 });
+      const receipt: RuntimeReceipt = {
+        operationId: `operation-for-${options.idempotencyKey}`,
+        idempotencyKey: options.idempotencyKey,
+        conversationId,
+        kind: "send",
+        status: "delivered",
+        text: options.text,
+        at: new Date().toISOString(),
+        revision: 1,
+      } as RuntimeReceipt;
+      return { ok: true, receipt, operationId: receipt.operationId };
+    },
+  });
+  /* The structured seam is the ONLY way out of this composer. A legacy POST
+     under the parked key would be the exact replay this fix must not make. */
+  globalThis.fetch = (async (input) => {
+    if (String(input) === "/api/tmux/targets") {
+      return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    }
+    throw new Error(`unexpected request: ${String(input)}`);
+  }) as typeof fetch;
+  refreshRuntimeImpl = async () => false;
+
+  /* Exactly the restored browser state: an image-bearing generation parked
+     unknown — dispatched, no operation of its own, and NO `reconciling` marker
+     — with a later submission waiting behind it. */
+  sessionStorage.setItem(`llvOutbox:${conversationId}`, JSON.stringify([
+    { id: strandedKey, text: strandedText, images: 1, at: 1_000, echoBaseline: 0, state: "delivering", dispatchedAt: 1_001, deliveryUncertain: true },
+    { id: followUpKey, text: followUpText, images: 0, at: 2_000, echoBaseline: 0, state: "queued" },
+  ]));
+  /* The stored generation carries a VALID selected-context reference, exactly
+     as the real record does. Omitting it is not a smaller fixture: the reader
+     rejects an absent reference as an incomplete payload, which raises a
+     DIFFERENT fence (missing bytes) and would hide the defect under test. */
+  const strandedContext = {
+    version: 1, state: "none", capturedAt: "2026-09-08T13:45:23.104Z",
+    project: "repo-test", viewSessionId: "view-session-test", deviceId: "device-test", revision: 6,
+  };
+  const strandedGeneration = {
+    key: strandedKey, text: strandedText, images: [strandedImage],
+    runtimeCaptured: true, selectedContext: strandedContext,
+  };
+  sessionStorage.setItem(`llvPendingSend:${conversationId}`, JSON.stringify([strandedGeneration]));
+  resetOutboxForTests();
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    for (let attempt = 0; attempt < 100 && sends.length === 0; attempt += 1) await sleep(5);
+
+    /* The queue drains under the follow-up's OWN original key. */
+    expect(sends).toEqual([{ key: followUpKey, text: followUpText, images: 0 }]);
+
+    /* The parked original is never replayed and never claimed failed: its
+       payload, its image and its key are preserved, and its fate stays unknown
+       so a late admission can still be reported truthfully. */
+    const stranded = readOutbox(conversationId).find((entry) => entry.id === strandedKey)!;
+    expect(stranded.deliveryUncertain).toBe(true);
+    expect(stranded.text).toBe(strandedText);
+    expect(stranded.images).toBe(1);
+    /* The payload itself survives intact — key, bytes and captured context —
+       so the original stays recoverable through its own operation. (The record
+       also gains the unconfirmed-operation marker, which is bookkeeping for the
+       receipt stream rather than part of the payload.) */
+    const persisted = JSON.parse(sessionStorage.getItem(`llvPendingSend:${conversationId}`)!) as Record<string, unknown>[];
+    expect(persisted).toHaveLength(1);
+    for (const [field, value] of Object.entries(strandedGeneration)) {
+      expect(persisted[0]![field]).toEqual(value);
+    }
+    expect(persisted[0]!.payloadComplete).toBeUndefined();
+
+    /* A late authoritative receipt for the ORIGINAL key still settles it. */
+    flushSync(() => publishReceipts([{
+      operationId: "operation-original-stranded",
+      idempotencyKey: strandedKey,
+      conversationId,
+      kind: "send",
+      status: "delivered",
+      text: strandedText,
+      at: new Date().toISOString(),
+      revision: 2,
+    } as RuntimeReceipt]));
+    await sleep(10);
+    const settled = readOutbox(conversationId).find((entry) => entry.id === strandedKey)!;
+    expect(settled.state).toBe("delivered");
+    expect(settled.deliveryUncertain).toBeUndefined();
+    /* Settling it authoritatively still never puts it back on the wire. */
+    expect(sends.some((attempt) => attempt.key === strandedKey)).toBe(false);
+  } finally {
+    flushSync(() => root.unmount());
+    publishReceipts([]);
+    refreshRuntimeImpl = async () => false;
+    sessionStorage.clear();
+    resetOutboxForTests();
+    host.remove();
+  }
 });

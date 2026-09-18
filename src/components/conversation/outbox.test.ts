@@ -4,6 +4,8 @@ import { Window } from "happy-dom";
 import {
   adoptOutbox,
   cancelOutbox,
+  claimOutboxDispatch,
+  compactOutboxQueue,
   enqueueOutbox,
   markOutboxResponded,
   nextDispatch,
@@ -11,10 +13,14 @@ import {
   OUTBOX_DELIVERED_TTL_MS,
   OUTBOX_LIMIT,
   OUTBOX_MTIME_GRACE_MS,
+  outboxCanAdmit,
   outboxStateForReceiptStatus,
+  outboxReceiptPatch,
   publishTranscriptEchoes,
   readOutbox,
   resetOutboxForTests,
+  retireLaunchOutboxOnAdoption,
+  retryOutbox,
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
@@ -75,6 +81,24 @@ test("the dispatcher is serial: one delivering entry at a time, oldest first", (
 
   updateOutbox("conv", "k1", { state: "delivered", settledAt: Date.now() });
   expect(nextDispatch(readOutbox("conv"))?.id).toBe("k2");
+});
+
+test("a queued id can be claimed once per durable requeue", () => {
+  submit("conv", "k1", "one");
+  submit("conv", "k2", "two");
+
+  const firstClaim = claimOutboxDispatch("conv", "k1");
+  const firstClaimIdentity = firstClaim && { id: firstClaim.id, state: firstClaim.state };
+  expect(firstClaimIdentity).toEqual({ id: "k1", state: "delivering" });
+  expect(claimOutboxDispatch("conv", "k1")).toBeNull();
+  expect(claimOutboxDispatch("conv", "k2")).toBeNull();
+
+  updateOutbox("conv", "k1", { state: "failed" });
+  updateOutbox("conv", "k1", { state: "queued" });
+  const retryClaim = claimOutboxDispatch("conv", "k1");
+  const retryClaimIdentity = retryClaim && { id: retryClaim.id, state: retryClaim.state };
+  expect(retryClaimIdentity).toEqual({ id: "k1", state: "delivering" });
+  expect(claimOutboxDispatch("conv", "k1")).toBeNull();
 });
 
 test("cancel removes a queued or failed message but the model never removes a delivering one", () => {
@@ -597,12 +621,15 @@ test("issue 626: the unresolved-owner cap deterministically preserves the oldest
     });
   }
   for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+    /* Settled filler: compaction retires delivered history only (#1538), so the
+       rows that push older entries out are delivered. */
     enqueueOutbox(conversation, {
       id: `active-cap-filler-${index}`,
       text: `active cap filler ${index}`,
       images: 0,
       at: 10_000 + index,
     });
+    updateOutbox(conversation, `active-cap-filler-${index}`, { state: "delivered", settledAt: 10_000 + index });
   }
 
   enqueueOutbox(conversation, {
@@ -656,12 +683,15 @@ test("issue 626: the completed-owner cap deterministically preserves the newest 
     }]);
   }
   for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+    /* Settled filler: compaction retires delivered history only (#1538), so the
+       rows that push older entries out are delivered. */
     enqueueOutbox(conversation, {
       id: `completed-cap-filler-${index}`,
       text: `completed cap filler ${index}`,
       images: 0,
       at: 10_000 + index,
     });
+    updateOutbox(conversation, `completed-cap-filler-${index}`, { state: "delivered", settledAt: 10_000 + index });
   }
 
   publishTranscriptEchoes(conversation, Array.from({ length: 513 }, (_, index) => ({
@@ -854,12 +884,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
     expect(typeof readOutbox(provisional)[0]?.retiredEchoId).toBe("string");
 
     for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+      /* Settled filler: compaction retires delivered history only (#1538), so the
+         rows that push older entries out are delivered. */
       enqueueOutbox(provisional, {
         id: `terminal-launch-filler-${index}`,
         text: `terminal launch filler ${index}`,
         images: 0,
         at: 2_000 + index,
       });
+      updateOutbox(provisional, `terminal-launch-filler-${index}`, { state: "delivered", settledAt: 2_000 + index });
     }
     expect(readOutbox(provisional).some((entry) => entry.id === "launch_626_terminal")).toBe(false);
 
@@ -895,12 +928,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
     expect(visibleOutbox(readOutbox(provisional), echoes(), 1_101)).toEqual([]);
 
     for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+      /* Settled filler: compaction retires delivered history only (#1538), so the
+         rows that push older entries out are delivered. */
       enqueueOutbox(provisional, {
         id: `response-terminal-warm-${index}`,
         text: `response terminal warm ${index}`,
         images: 0,
         at: 2_000 + index,
       });
+      updateOutbox(provisional, `response-terminal-warm-${index}`, { state: "delivered", settledAt: 2_000 + index });
     }
     expect(readOutbox(provisional).some((entry) => entry.id === launchId)).toBe(false);
 
@@ -979,12 +1015,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
       expect(visibleOutbox(readOutbox(provisional), echoes(), Date.now())).toEqual([]);
 
       for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+        /* Settled filler: compaction retires delivered history only (#1538), so the
+           rows that push older entries out are delivered. */
         enqueueOutbox(provisional, {
           id: `ttl-terminal-warm-${index}`,
           text: `ttl terminal warm ${index}`,
           images: 0,
           at: 2_000 + index,
         });
+        updateOutbox(provisional, `ttl-terminal-warm-${index}`, { state: "delivered", settledAt: 2_000 + index });
       }
       expect(readOutbox(provisional).some((entry) => entry.id === launchId)).toBe(false);
 
@@ -1072,12 +1111,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
       /* Compaction evicts the delivered entry from the recent queue BEFORE the
          TTL elapses; its settlement survives only in the current-launch slot. */
       for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+        /* Settled filler: compaction retires delivered history only (#1538), so the
+           rows that push older entries out are delivered. */
         enqueueOutbox(provisional, {
           id: `ttl-reseed-warm-${index}`,
           text: `ttl reseed warm ${index}`,
           images: 0,
           at: 2_000 + index,
         });
+        updateOutbox(provisional, `ttl-reseed-warm-${index}`, { state: "delivered", settledAt: 2_000 + index });
       }
       expect(readOutbox(provisional).some((entry) => entry.id === launchId)).toBe(false);
 
@@ -1411,12 +1453,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
       text: "older terminal launch text",
     }]);
     for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+      /* Settled filler: compaction retires delivered history only (#1538), so the
+         rows that push older entries out are delivered. */
       enqueueOutbox(conversation, {
         id: `current-launch-filler-${index}`,
         text: `current launch filler ${index}`,
         images: 0,
         at: 2_000 + index,
       });
+      updateOutbox(conversation, `current-launch-filler-${index}`, { state: "delivered", settledAt: 2_000 + index });
     }
 
     seedLaunchOutbox(conversation, {
@@ -1526,12 +1571,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
         });
         retire("older-no-echo-launch", 1_100);
         for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+          /* Settled filler: compaction retires delivered history only (#1538), so the
+             rows that push older entries out are delivered. */
           enqueueOutbox(conversation, {
             id: `older-no-echo-filler-${reason}-${index}`,
             text: `older no-echo filler ${reason} ${index}`,
             images: 0,
             at: 2_000 + index,
           });
+          updateOutbox(conversation, `older-no-echo-filler-${reason}-${index}`, { state: "delivered", settledAt: 2_000 + index });
         }
 
         seedLaunchOutbox(conversation, {
@@ -1542,12 +1590,15 @@ describe("seedLaunchOutbox (P1#2)", () => {
         });
         retire("newer-no-echo-launch", 3_100);
         for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+          /* Settled filler: compaction retires delivered history only (#1538), so the
+             rows that push older entries out are delivered. */
           enqueueOutbox(conversation, {
             id: `newer-no-echo-filler-${reason}-${index}`,
             text: `newer no-echo filler ${reason} ${index}`,
             images: 0,
             at: 4_000 + index,
           });
+          updateOutbox(conversation, `newer-no-echo-filler-${reason}-${index}`, { state: "delivered", settledAt: 4_000 + index });
         }
 
         resetOutboxForTests();
@@ -1654,6 +1705,45 @@ describe("seedLaunchOutbox (P1#2)", () => {
        which retires the launch-owned bubble — one window, zero duplicate. */
     expect(visibleOutbox(refreshed, echoes(identical), 5_000)).toEqual([]);
   });
+
+  test("issue 617: live adoption hides a role launch while preserving its delayed scaffold echo for occurrence ordering", () => {
+    const scaffold = "You are a Builder in plain mode.";
+    const owner = { conversationId: "conversation_617", generation: 1 };
+    seedLaunchOutbox("conversation_617", {
+      id: "launch_617",
+      text: "",
+      images: 1,
+      at: 1_000,
+      echoText: scaffold,
+      owner,
+    });
+    retireLaunchOutboxOnAdoption("conversation_617", {
+      id: "launch_617",
+      adoptedAt: 2_000,
+      owner,
+    });
+    enqueueOutbox("conversation_617", {
+      id: "younger-identical",
+      text: scaffold,
+      images: 0,
+      at: 3_000,
+    });
+
+    publishTranscriptEchoes("conversation_617", [{
+      generation: "generation-live",
+      id: "launch-scaffold-row",
+      text: scaffold,
+    }]);
+
+    const queue = readOutbox("conversation_617");
+    expect(queue.find((entry) => entry.id === "launch_617")).toMatchObject({
+      state: "delivering",
+      adoptedAt: 2_000,
+      retiredEchoId: expect.any(String),
+    });
+    expect(visibleOutbox(queue, echoes(scaffold), 2_001, owner).map((entry) => entry.id))
+      .toEqual(["younger-identical"]);
+  });
 });
 
 describe("issue 653: pane ownership by durable conversation id", () => {
@@ -1732,7 +1822,7 @@ test("adoption moves a queue onto the materialized conversation identity idempot
   expect(readOutbox("conversation_live")).toHaveLength(1);
 });
 
-test("an image-bearing entry that could not survive a refresh is held for re-attachment, not sent blind", () => {
+test("an image-bearing entry claimed but never handed to the wire is held for re-attachment, not sent blind", () => {
   enqueueOutbox("conv", { id: "k1", text: "see screenshot", images: 2, at: Date.now() });
   updateOutbox("conv", "k1", { state: "delivering" });
   /* A refresh: module state is gone, only sessionStorage remains. */
@@ -1744,7 +1834,7 @@ test("an image-bearing entry that could not survive a refresh is held for re-att
   expect(nextDispatch(restored)).toBeNull();
 });
 
-test("a file-bearing entry is held for re-attachment too, not delivered without its document", () => {
+test("a file-bearing entry claimed but never handed to the wire is held for re-attachment too, not delivered without its document", () => {
   /* #1224: a document's bytes are memory-only for the same reason an image's
      are. An entry that carried one must not be replayed as bare text, and an
      attachment-only submission must not be cancelled out of the queue —
@@ -1758,11 +1848,272 @@ test("a file-bearing entry is held for re-attachment too, not delivered without 
   expect(nextDispatch(restored)).toBeNull();
 });
 
-test("a text-only delivering entry returns to the queue for replay after a refresh", () => {
+test("a text-only entry claimed but never handed to the wire returns to the queue for replay after a refresh", () => {
   submit("conv", "k1", "text only");
   updateOutbox("conv", "k1", { state: "delivering" });
   resetOutboxForTests();
   const restored = readOutbox("conv");
   expect(restored[0]!.state).toBe("queued");
   expect(nextDispatch(restored)?.id).toBe("k1");
+});
+
+
+describe("issue 1538: possible dispatch survives a refresh", () => {
+  const onWire = (images = 0, files = 0) => {
+    enqueueOutbox("conv", { id: "k1", text: "handed to the wire", images, ...(files ? { files } : {}), at: Date.now() });
+    updateOutbox("conv", "k1", { state: "delivering", dispatchedAt: Date.now() });
+    resetOutboxForTests();
+    return readOutbox("conv")[0]!;
+  };
+
+  test.each([[0, 0], [2, 0], [0, 1], [1, 1]])("an entry handed to the wire hydrates as unknown, never replayed or held (images=%i files=%i)", (images, files) => {
+    const restored = onWire(images, files);
+    expect(restored).toMatchObject({ id: "k1", text: "handed to the wire", images, state: "delivering", deliveryUncertain: true });
+    expect(restored.files ?? 0).toBe(files);
+    expect(restored.needsReattach).toBeUndefined();
+    /* The serial slot stays taken: nothing dispatches until the original settles. */
+    expect(nextDispatch(readOutbox("conv"))).toBeNull();
+    retryOutbox("conv", "k1");
+    cancelOutbox("conv", "k1");
+    expect(readOutbox("conv")[0]).toEqual(restored);
+  });
+
+  test("a genuinely unsent entry behind the possible dispatch keeps its queue place and cancel", () => {
+    enqueueOutbox("conv", { id: "k1", text: "handed to the wire", images: 0, at: 1_000 });
+    updateOutbox("conv", "k1", { state: "delivering", dispatchedAt: 1_001 });
+    enqueueOutbox("conv", { id: "k2", text: "still local", images: 0, at: 1_002 });
+    resetOutboxForTests();
+    expect(readOutbox("conv").map((entry) => [entry.id, entry.state])).toEqual([["k1", "delivering"], ["k2", "queued"]]);
+    /* k1 keeps its place, its key and its unknown fate — it is never replayed
+       and never presented as settled. What it does NOT keep is this browser's
+       wire fence. Holding it bounds nothing: a request that died before
+       admission has no operation, so no receipt can ever arrive to settle k1,
+       and every message the operator writes afterwards would queue behind it
+       for the rest of the conversation. k2 stays sendable. */
+    expect(nextDispatch(readOutbox("conv"))?.id).toBe("k2");
+    expect(readOutbox("conv")[0]).toMatchObject({ id: "k1", state: "delivering", deliveryUncertain: true });
+    updateOutbox("conv", "k1", outboxReceiptPatch(readOutbox("conv")[0]!, "delivered", { at: new Date(1_500).toISOString(), operationId: "operation-k1", idempotencyKey: "k1" }, 2_000)!);
+    /* A genuine late receipt still settles the original. */
+    expect(readOutbox("conv")[0]!.state).toBe("delivered");
+    expect(nextDispatch(readOutbox("conv"))?.id).toBe("k2");
+    cancelOutbox("conv", "k2");
+    expect(readOutbox("conv").some((entry) => entry.id === "k2")).toBe(false);
+  });
+
+  test("a claim takes the wire fence of an earlier attempt with it", () => {
+    enqueueOutbox("conv", { id: "k1", text: "second attempt", images: 0, at: Date.now() });
+    updateOutbox("conv", "k1", { state: "failed", dispatchedAt: Date.now(), error: "500" });
+    retryOutbox("conv", "k1");
+    const claimed = claimOutboxDispatch("conv", "k1")!;
+    expect(claimed.state).toBe("delivering");
+    expect(claimed.dispatchedAt).toBeUndefined();
+    /* Claimed but not yet on the wire when the refresh hit: replay is safe. */
+    resetOutboxForTests();
+    expect(readOutbox("conv")[0]).toMatchObject({ id: "k1", state: "queued" });
+    expect(readOutbox("conv")[0]!.deliveryUncertain).toBeUndefined();
+  });
+
+  test("a switch-held entry keeps its level-triggered release across a refresh", () => {
+    enqueueOutbox("conv", { id: "k1", text: "held for the successor", images: 0, at: Date.now() });
+    updateOutbox("conv", "k1", { state: "delivering", dispatchedAt: Date.now(), heldForSwitch: true });
+    resetOutboxForTests();
+    expect(readOutbox("conv")[0]).toMatchObject({ id: "k1", state: "queued", heldForSwitch: true });
+    expect(readOutbox("conv")[0]!.deliveryUncertain).toBeUndefined();
+  });
+});
+
+
+describe("authoritative receipt settlement", () => {
+  const origin = Date.parse("2026-01-01T00:00:00.000Z");
+  const terminalAt = origin + 40_000;
+  const now = origin + 120_000;
+  const receipt = { at: new Date(terminalAt).toISOString(), admittedAt: new Date(origin).toISOString() };
+  const entry: OutboxEntry = { id: "receipt-key", text: "Inspect queued work.", images: 0, at: origin, state: "delivering" };
+
+  test("terminal receipt time is stable across repeated, incomplete and stale projections", () => {
+    const patch = outboxReceiptPatch(entry, "delivered", receipt, now)!;
+    expect(patch).toMatchObject({ state: "delivered", settledAt: terminalAt, receiptSettlement: "known" });
+    const settled = { ...entry, ...patch };
+    for (const at of [receipt.at, "", new Date(now).toISOString()]) {
+      expect(outboxReceiptPatch(settled, "delivered", { at }, now + 60_000)).toBeNull();
+    }
+    for (const status of ["queued", "delivering", "uncertain", "pending", "failed"] as const) {
+      expect(outboxReceiptPatch(settled, status, receipt, now)).toBeNull();
+    }
+  });
+
+  test("unknown settlement survives persistence without using admission for retirement", () => {
+    enqueueOutbox("conv", entry);
+    updateOutbox("conv", entry.id, outboxReceiptPatch(entry, "delivered", { at: "" }, now)!);
+    resetOutboxForTests();
+    const restored = readOutbox("conv");
+    expect(restored[0]).toMatchObject({ state: "delivered", receiptSettlement: "unknown" });
+    expect(restored[0]?.settledAt).toBeUndefined();
+    expect(visibleOutbox(restored, echoes(), now + OUTBOX_DELIVERED_TTL_MS, null, now)).toHaveLength(1);
+    expect(visibleOutbox(restored, echoes(entry.text), now)).toHaveLength(0);
+    updateOutbox("conv", entry.id, outboxReceiptPatch(restored[0]!, "delivered", receipt, now)!);
+    resetOutboxForTests();
+    expect(readOutbox("conv")[0]?.settledAt).toBe(terminalAt);
+    expect(visibleOutbox(readOutbox("conv"), echoes(), now, null, origin + 60_000)).toHaveLength(0);
+  });
+
+  test("legacy persisted deliveries retain their old retirement contract", () => {
+    enqueueOutbox("conv", entry);
+    updateOutbox("conv", entry.id, { state: "delivered" });
+    resetOutboxForTests();
+    expect(visibleOutbox(readOutbox("conv"), echoes(), now, null, now)).toHaveLength(0);
+    // A fresh authoritative receipt also repairs a legacy browser-time stamp.
+    const old = { ...entry, state: "delivered" as const, settledAt: now };
+    expect(outboxReceiptPatch(old, "delivered", receipt, now)?.settledAt).toBe(terminalAt);
+  });
+
+  test("an exact scaffolded echo consumes only its own identical submission", () => {
+    const scaffold = "Context for this request.\n\nInspect queued work.";
+    const first = { ...entry, echoText: scaffold, ...outboxReceiptPatch(entry, "delivered", { at: "" }, now) };
+    const second = { ...entry, id: "next-key", echoText: scaffold, echoBaseline: 1 };
+    expect(visibleOutbox([first, second], echoes([scaffold, 1]), now)).toEqual([second]);
+  });
+
+  test.each(["queued", "delivering", "uncertain", "pending"] as const)("%s never establishes a delivery clock", (status) => {
+    const patch = outboxReceiptPatch(entry, status, receipt, now);
+    expect(patch?.settledAt).toBeUndefined();
+    expect(patch?.receiptSettlement).toBeUndefined();
+    expect(visibleOutbox([{ ...entry, ...patch }], echoes(), now + OUTBOX_DELIVERED_TTL_MS, null, now)).toHaveLength(1);
+  });
+});
+
+
+test("authoritative success overrides contradictory retry guidance and keeps its original clock", () => {
+  const at = 1_800_000_000_000;
+  const entry: OutboxEntry = { id: "key", text: "message", images: 0, at, state: "delivering", deliveryUncertain: true };
+  const receipt = { at: new Date(at + 100).toISOString(), resend: "verify-first" as const };
+  const patch = outboxReceiptPatch(entry, "delivered", receipt, at + 1000)!;
+  expect(patch.state).toBe("delivered");
+  expect(patch.deliveryUncertain).toBeUndefined();
+  expect(patch.settledAt).toBe(at + 100);
+  expect(outboxReceiptPatch({ ...entry, ...patch }, "uncertain", receipt, at + 2000)).toBeNull();
+});
+
+test.each(["failed", "rejected"] as const)("an unchanged safe %s cannot undo the operator's explicit same-key retry", (status) => {
+  const receipt = { operationId: "operation-safe", idempotencyKey: "key", conversationId: "conversation", kind: "send" as const, status, resend: "safe" as const, revision: 1, at: "2026-09-05T08:00:00.000Z" };
+  expect(outboxReceiptPatch({ state: "queued", deliveryReceipt: receipt }, status, receipt)).toBeNull();
+});
+
+
+test("validated safe evidence crosses revision domains only through its observed journal boundary", () => {
+  const unknown = { operationId: "original", idempotencyKey: "key", conversationId: "conversation", kind: "send" as const,
+    status: "failed" as const, resend: "verify-first" as const, revision: 4, at: "2026-09-05T08:00:00.000Z" };
+  const entry = { id: "key", state: "delivering" as const, deliveryUncertain: true as const, deliveryReceipt: unknown };
+  const safe = { ...unknown, revision: 1, resend: "safe" as const };
+  // An unmarked lower journal revision remains stale.
+  expect(outboxReceiptPatch(entry, "failed", safe)).toBeNull();
+  const observed = { ...safe, observedJournalRevision: 4, observationOrder: 1 };
+  const patch = outboxReceiptPatch(entry, "failed", observed)!;
+  expect(patch.state).toBe("failed");
+  expect(patch.deliveryUncertain).toBeUndefined();
+  expect(patch.deliveryReceipt?.revision).toBe(1);
+  expect(outboxReceiptPatch({ ...entry, ...patch }, "failed", unknown)).toBeNull();
+  expect(outboxReceiptPatch({ ...entry, ...patch }, "failed", { ...unknown, revision: 5 })?.deliveryUncertain).toBe(true);
+});
+
+describe("issue 1538: bounded compaction preserves unresolved operations", () => {
+  const unknownReceipt = {
+    operationId: "operation-original", idempotencyKey: "key-original", conversationId: "conversation_1538",
+    kind: "send" as const, status: "failed" as const, resend: "verify-first" as const, revision: 4,
+    at: "2026-09-05T08:00:01.000Z", admittedAt: "2026-09-05T08:00:00.000Z",
+    reason: "Dispatch began; arrival unverified",
+  };
+
+  test("settled history is compacted first, in order; unresolved rows keep identity and payload across restore", () => {
+    const conversation = "conversation_1538_mixed";
+    enqueueOutbox(conversation, { id: "key-original", text: "Check the release status", images: 0, at: 1_000 });
+    updateOutbox(conversation, "key-original", { state: "delivering", deliveryUncertain: true, deliveryReceipt: unknownReceipt });
+    // A textless image submission that never left the queue and an ordinary failed row are unresolved too.
+    enqueueOutbox(conversation, { id: "key-textless", text: "", images: 2, at: 1_001 });
+    enqueueOutbox(conversation, { id: "key-failed", text: "Check the release status", images: 0, at: 1_002 });
+    updateOutbox(conversation, "key-failed", { state: "failed", settledAt: 1_003, error: "500" });
+    // A discarded operation is absorbing history: it compacts like a delivered row.
+    enqueueOutbox(conversation, { id: "key-discarded", text: "discard me", images: 0, at: 1_004 });
+    updateOutbox(conversation, "key-discarded", { state: "failed", settledAt: 1_005,
+      deliveryReceipt: { ...unknownReceipt, operationId: "operation-discarded", idempotencyKey: "key-discarded", resend: "not-needed", reason: "delivery-discarded" } });
+    for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+      const id = `later-${index}`;
+      expect(enqueueOutbox(conversation, { id, text: `later ${index}`, images: 0, at: 2_000 + index })).not.toBeNull();
+      updateOutbox(conversation, id, { state: "delivered", settledAt: 2_500 + index });
+    }
+    const queue = readOutbox(conversation);
+    expect(queue).toHaveLength(OUTBOX_LIMIT);
+    expect(queue.slice(0, 3).map((entry) => entry.id)).toEqual(["key-original", "key-textless", "key-failed"]);
+    expect(queue.some((entry) => entry.id === "key-discarded")).toBe(false);
+    expect(queue.some((entry) => entry.id === "later-0")).toBe(false);
+    expect(queue.slice(3).map((entry) => entry.id)).toEqual(Array.from({ length: OUTBOX_LIMIT - 3 }, (_, index) => `later-${index + 3}`));
+
+    resetOutboxForTests();
+    const restored = readOutbox(conversation);
+    expect(restored.map((entry) => entry.id)).toEqual(queue.map((entry) => entry.id));
+    const original = restored.find((entry) => entry.id === "key-original")!;
+    expect(original).toMatchObject({ text: "Check the release status", images: 0, deliveryUncertain: true, state: "delivering" });
+    expect(original.deliveryReceipt).toEqual(unknownReceipt);
+    expect(restored.find((entry) => entry.id === "key-textless")).toMatchObject({ text: "", images: 2, state: "failed", needsReattach: true });
+  });
+
+  test("admission is refused while every slot is unresolved and resumes once one resolves", () => {
+    const conversation = "conversation_1538_exhausted";
+    for (let index = 0; index < OUTBOX_LIMIT; index += 1) {
+      expect(enqueueOutbox(conversation, { id: `pending-${index}`, text: `pending ${index}`, images: 0, at: 1_000 + index })).not.toBeNull();
+    }
+    updateOutbox(conversation, "pending-0", { state: "delivering", deliveryUncertain: true, deliveryReceipt: { ...unknownReceipt, idempotencyKey: "pending-0" } });
+    const before = readOutbox(conversation);
+    expect(outboxCanAdmit(before)).toBe(false);
+    expect(enqueueOutbox(conversation, { id: "refused", text: "one too many", images: 1, at: 5_000 })).toBeNull();
+    expect(readOutbox(conversation)).toBe(before);
+    expect(readOutbox(conversation).map((entry) => entry.id)).not.toContain("refused");
+    // Re-submitting an entry that already holds a slot is not a new admission.
+    expect(enqueueOutbox(conversation, { id: "pending-5", text: "pending 5", images: 0, at: 1_005 })).not.toBeNull();
+    expect(readOutbox(conversation)).toHaveLength(OUTBOX_LIMIT);
+
+    // Existing recovery still works at capacity, and settles a slot.
+    cancelOutbox(conversation, "pending-7");
+    expect(outboxCanAdmit(readOutbox(conversation))).toBe(true);
+    expect(enqueueOutbox(conversation, { id: "admitted-after-cancel", text: "fits now", images: 0, at: 5_001 })?.state).toBe("queued");
+    expect(outboxCanAdmit(readOutbox(conversation))).toBe(false);
+    updateOutbox(conversation, "pending-8", { state: "delivered", settledAt: 6_000 });
+    expect(outboxCanAdmit(readOutbox(conversation))).toBe(true);
+    expect(enqueueOutbox(conversation, { id: "admitted-after-delivery", text: "fits again", images: 0, at: 5_002 })).not.toBeNull();
+    const after = readOutbox(conversation);
+    expect(after).toHaveLength(OUTBOX_LIMIT);
+    expect(after.some((entry) => entry.id === "pending-8")).toBe(false);
+    expect(after[0]?.id).toBe("pending-0");
+    expect(after[0]?.deliveryReceipt?.operationId).toBe(unknownReceipt.operationId);
+  });
+
+  test("a persisted queue above the limit restores every unresolved row before the newest history", () => {
+    const conversation = "conversation_1538_persisted";
+    const entries: OutboxEntry[] = [
+      { id: "old-unknown", text: "Check the release status", images: 0, at: 100, state: "delivering", deliveryUncertain: true, deliveryReceipt: unknownReceipt },
+      { id: "old-held", text: "", images: 1, at: 101, state: "delivering", acceptedHeld: true, operationId: "operation-held" },
+      ...Array.from({ length: OUTBOX_LIMIT + 3 }, (_, index): OutboxEntry => ({
+        id: `delivered-${index}`, text: `delivered ${index}`, images: 0, at: 200 + index, state: "delivered", settledAt: 300 + index,
+      })),
+    ];
+    sessionStorage.setItem("llvOutbox:" + conversation, JSON.stringify(entries));
+    const restored = readOutbox(conversation);
+    expect(restored).toHaveLength(OUTBOX_LIMIT);
+    expect(restored.slice(0, 2).map((entry) => entry.id)).toEqual(["old-unknown", "old-held"]);
+    expect(restored[2]?.id).toBe("delivered-5");
+    expect(restored.at(-1)?.id).toBe(`delivered-${OUTBOX_LIMIT + 2}`);
+    expect(compactOutboxQueue(entries).evicted.map((entry) => entry.id)).toEqual(["delivered-0", "delivered-1", "delivered-2", "delivered-3", "delivered-4"]);
+  });
+});
+
+test("explicit original-operation fence survives hydration and blocks dispatch without receipt metadata", () => {
+  const card = "pending-fence";
+  sessionStorage.setItem(`llvOutbox:${card}`, JSON.stringify([
+    { id: "pending-key", text: "pending request", images: 0, at: Date.now(), state: "delivering", originalOperationOnly: true },
+  ]));
+  expect(readOutbox(card)[0]?.state).toBe("delivering");
+  updateOutbox(card, "pending-key", { state: "queued" });
+  expect(nextDispatch(readOutbox(card))).toBeNull();
+  expect(claimOutboxDispatch(card, "pending-key")).toBeNull();
+  expect(readOutbox(card)[0]?.state).toBe("queued");
 });

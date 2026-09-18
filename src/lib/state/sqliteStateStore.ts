@@ -515,11 +515,11 @@ export class SqliteStateCollection<T> {
   }
 
   snapshot(): T[] {
-    return this.loadReadonly().map(this.options.clone);
+    return this.loadReadonly().map((record) => this.options.clone(record));
   }
 
   snapshotForController(): T[] {
-    return this.loadControllerReadonly().map(this.options.clone);
+    return this.loadControllerReadonly().map((record) => this.options.clone(record));
   }
 
   get(rowKey: string): T | null {
@@ -529,6 +529,85 @@ export class SqliteStateCollection<T> {
     if (!row) return null;
     const decoded = this.decodeRow(row.value_json);
     return decoded === null ? null : this.options.clone(decoded);
+  }
+
+  /** Indexed keyset page. The caller owns the upper bound and continuation. */
+  keyRange(after: string, through: string, limit: number): T[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<Pick<CollectionRow, "value_json">, [string, string, string, number]>(`
+      SELECT value_json FROM state_rows
+      WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, through, limit).map((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      if (decoded === null) throw new Error("invalid bounded state row");
+      return this.options.clone(decoded);
+    });
+  }
+
+  /** A bounded read/modify/write transaction. No collection materialization.
+      Every read and mutation consumes the caller's finite row budget. */
+  boundedPatch<R>(limit: number, operation: (tx: {
+    get(key: string): T | null;
+    put(record: T): void;
+    delete(key: string): void;
+  }) => R): R {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state patch limit");
+    assertSqliteWriteAuthority(this.filename);
+    const lease = this.acquireLeaseSync();
+    try {
+      const db = connectDatabase(this.filename);
+      try {
+        const result = withImmediateTransaction(db, this.options.busyMessage, () => {
+          assertSqliteWriteAuthority(this.filename);
+          this.assertLease(db, lease);
+          const revision = this.collectionMeta(db)!.revision + 1;
+          let remaining = limit;
+          const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
+          const changed = new Map<string, "upsert" | "delete">();
+          const result = operation({
+            get: (key) => {
+              consume();
+              const row = db.query<{ value_json: string }, [string, string]>(
+                "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
+              ).get(this.options.collection, key);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json);
+              if (value === null) throw new Error("invalid bounded state row");
+              return this.options.clone(value);
+            },
+            put: (record) => {
+              consume();
+              this.validate(record);
+              const key = this.options.key(record);
+              db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+                VALUES (?,?,?,0,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
+                value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
+                .run(this.options.collection, key, JSON.stringify(record), revision, this.options.controllerActive?.(record) === false ? 0 : 1);
+              changed.set(key, "upsert");
+            },
+            delete: (key) => {
+              consume();
+              db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?").run(this.options.collection, key);
+              changed.set(key, "delete");
+            },
+          });
+          if (result instanceof Promise) throw new Error("bounded state patches must be synchronous");
+          // The callback and authority are checked inside the same commit boundary.
+          assertSqliteWriteAuthority(this.filename);
+          if (changed.size) {
+            for (const [key, kind] of changed) db.query(
+              "INSERT INTO state_changes(collection,revision,row_key,operation) VALUES (?,?,?,?)",
+            ).run(this.options.collection, revision, key, kind);
+            db.query("UPDATE state_collections SET revision = ? WHERE collection = ?").run(revision, this.options.collection);
+            this.pruneChanges(db, revision);
+          }
+          return result;
+        });
+        secureDatabaseFiles(this.filename);
+        this.invalidateAfterCommit();
+        return result;
+      } finally { db.close(); }
+    } finally { this.releaseLeaseSync(lease); }
   }
 
   loadReadonly(): readonly T[] {
@@ -605,12 +684,14 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  /** Move selected rows to another collection in one SQLite commit. */
-  moveMatchingTo(
+  /** Move selected rows to another collection in one SQLite commit. Lease
+      contention must yield: startup can hold the source lease while awaiting
+      an RPC on this same event loop. A synchronous wait starves its release. */
+  async moveMatchingTo(
     target: SqliteStateCollection<T>,
     predicate: (record: T) => boolean,
     options: { beforeCommit?: () => void } = {},
-  ): number {
+  ): Promise<number> {
     if (target === this || target.filename !== this.filename) {
       throw new Error("atomic state moves require two collections in one database");
     }
@@ -618,7 +699,7 @@ export class SqliteStateCollection<T> {
     const ordered = [this, target].sort((left, right) => left.options.collection.localeCompare(right.options.collection));
     const leases = new Map<SqliteStateCollection<T>, string>();
     try {
-      for (const collection of ordered) leases.set(collection, collection.acquireLeaseSync());
+      for (const collection of ordered) leases.set(collection, await collection.acquireLease());
       const db = connectDatabase(this.filename);
       try {
         const moved = withImmediateTransaction(db, this.options.busyMessage, () => {
@@ -699,7 +780,7 @@ export class SqliteStateCollection<T> {
     } finally {
       for (const collection of [...ordered].reverse()) {
         const lease = leases.get(collection);
-        if (lease) collection.releaseLeaseSync(lease);
+        if (lease) await collection.releaseLease(lease);
       }
     }
   }
@@ -775,6 +856,22 @@ export class SqliteStateCollection<T> {
         write(records, revision);
       });
       if (this.revision() === checkpointRevision) return checkpointRevision;
+    }
+    throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
+  }
+
+  async checkpointMirrorForDemotionAsync(write: (records: readonly T[], revision: number) => void, maxAttempts = 2): Promise<number> {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const lease = await this.acquireLease();
+      let revision: number;
+      try {
+        const records = this.snapshot();
+        revision = this.revision();
+        write(records, revision);
+      } finally {
+        await this.releaseLease(lease);
+      }
+      if (this.revision() === revision) return revision;
     }
     throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
   }

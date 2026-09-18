@@ -1,11 +1,16 @@
+import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import crypto from "node:crypto";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
+import { forEachStartupBatch } from "./startupWork";
+import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeSession } from "./contracts";
+import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
@@ -17,7 +22,14 @@ import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
 import { journalVerdict, sendIsSettled } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
+import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
+import { NATIVE_INJECT_CAPABILITY } from "./codexAppServerHost";
+import {
+  markStructuredDeliveryControllerReady,
+  markStructuredDeliveryControllerUnavailable,
+  type StructuredHostStartupPhase,
+} from "./startupStatus";
 
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
@@ -51,6 +63,8 @@ interface HostRegistration {
 const DELIVERY_DRAIN_COALESCE_MS = 25;
 const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 const TERMINAL_RECONCILIATION_PAGE_SIZE = 16;
+/** One socket frame's worth of acknowledgements (#1612). */
+const TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE = 128;
 const TERMINAL_RECONCILIATION_SETTLEMENT_BATCH_SIZE = 256;
 
 /* Next standalone can evaluate instrumentation and route handlers in separate
@@ -69,8 +83,9 @@ interface ControllerState {
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
-  completeActive: ((adopted: readonly StructuredDeliveryHost[]) => Promise<void>) | null;
+  completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void) => Promise<void>) | null;
   stopActive: () => void;
+  lastDrainError?: string | null;
   /* Distinguishes "this process hosts the controller and is between
      publications" from "this process never hosted one at all" (#1191). */
   everPublished?: boolean;
@@ -87,6 +102,7 @@ const state: ControllerState = controllerStore.__llvStructuredDeliveryController
   terminateActiveHost: null,
   completeActive: null,
   stopActive: () => {},
+  lastDrainError: null,
   everPublished: false,
 };
 
@@ -142,6 +158,7 @@ function retireStructuredDeliveryPublication(): void {
   state.terminateActiveHost = null;
   state.completeActive = null;
   setStructuredDeliveryKick(null);
+  markStructuredDeliveryControllerUnavailable();
 }
 
 function entryForHost(registry: AgentRegistry, adopted: StructuredDeliveryHost): AgentRegistryEntry | null {
@@ -163,11 +180,11 @@ function pendingAccountSwitch(registry: AgentRegistry, conversationId: string): 
 }
 
 function deliveryStateKey(state: HostState): string {
-  return JSON.stringify([state.status, state.activeTurnRef]);
+  return JSON.stringify([state.status, state.activeTurnRef, state.nativeQueueRevision]);
 }
 
 function hostProjectionKey(state: HostState): string {
-  return JSON.stringify([state.status, state.activeTurnRef, state.pendingAttention]);
+  return JSON.stringify([state.status, state.activeTurnRef, state.pendingAttention, state.activeFlags, state.diagnostics]);
 }
 
 export async function publishStructuredHostProjection(
@@ -220,6 +237,152 @@ async function yieldControllerTurn(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+interface TerminalDeliveryOutcome {
+  conversationId: `conversation_${string}`;
+  operationId: string;
+  state: "delivered" | "failed";
+  error: string | null;
+  disposition: NonNullable<Parameters<AgentRegistry["recordDeliveryOutcomeForOperation"]>[4]>;
+  /** The durable operation the journal answered for — the retry leaf, where a
+      retry created one. Its retention is what the acknowledgement releases. */
+  receiptOperationId: string;
+}
+
+/**
+ * The one reading of a runtime receipt as a durable delivery outcome.
+ *
+ * Every repair here goes through it — the startup sweep and the drain-time
+ * repair of a lost acknowledgement — so "what does this receipt settle, and
+ * against which reservation" has one answer rather than two that can drift.
+ * It proves nothing on its own: an open status, an absent receipt, a receipt
+ * naming a different conversation all return null, and the caller leaves the
+ * record exactly as it found it.
+ */
+function terminalDeliveryOutcome(
+  registry: AgentRegistry,
+  result: { operationId: string; receipt: { status: RuntimeOperationReceipt["status"]; reason?: string | null; conversationId: string; presentationOperationId?: string } },
+  /** The reservation this receipt is being read for. `conversationId` is the
+      target it must agree with, and null where the caller came from the receipt
+      rather than from a reservation — there the registry's own (conversation,
+      operation) keying is what refuses a row under another target. */
+  expected: { conversationId: `conversation_${string}` | null; operationId: string },
+): TerminalDeliveryOutcome | null {
+  /* The same classifier the receipt query reads the journal through: what a
+     status PROVES about a send is one question with one answer, and
+     `uncertain` — the send was handed to the engine and never answered for —
+     is the one whose disposition stops a later receipt from calling a resend
+     safe (#1131). */
+  const verdict = journalVerdict(result.receipt.status, result.receipt.reason);
+  if (!verdict) return null;
+  const receiptConversationId = result.receipt.conversationId;
+  if (!receiptConversationId.startsWith("conversation_")) return null;
+  const conversationId = receiptConversationId as `conversation_${string}`;
+  if (expected.conversationId
+    && registry.canonicalConversationId(conversationId) !== registry.canonicalConversationId(expected.conversationId)) {
+    console.error("[structured delivery] terminal receipt conversation mismatch", {
+      operationId: expected.operationId,
+      deliveryConversationId: expected.conversationId,
+      receiptConversationId,
+    });
+    return null;
+  }
+  return {
+    conversationId,
+    /* The identity the reservation was made under, never the retry leaf the
+       journal answered from: the delivery record is keyed on what the operator
+       submitted. */
+    operationId: result.receipt.presentationOperationId ?? expected.operationId,
+    state: verdict.state,
+    /* The journal's own words where it has them, and the settlement's
+       where the status IS the reason. */
+    error: verdict.disposition === "unverified" ? verdict.reason : result.receipt.reason ?? null,
+    disposition: verdict.disposition,
+    receiptOperationId: result.operationId,
+  };
+}
+
+/**
+ * Releases the journal's retention of receipts whose outcome now lives in the
+ * durable delivery record (#1612).
+ *
+ * Failure is the safe direction and is therefore swallowed: the receipt stays
+ * retained, which costs one row and repairs itself at the cap, whereas a throw
+ * here would abort a drain over evidence that has already been consumed. A
+ * runtime host from before this method answers "unsupported", which is the same
+ * no-op — the retention it never took needs no release.
+ */
+async function acknowledgeTerminalProjection(
+  client: RuntimeHostClient,
+  operationIds: readonly string[],
+): Promise<void> {
+  if (operationIds.length === 0 || typeof client.acknowledgeTerminalProjection !== "function") return;
+  try {
+    for (let offset = 0; offset < operationIds.length; offset += TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE) {
+      await client.acknowledgeTerminalProjection(operationIds.slice(offset, offset + TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE));
+    }
+  } catch (error) {
+    console.error("[structured delivery] terminal projection acknowledgement failed", {
+      operationIds: operationIds.length,
+      error,
+    });
+  }
+}
+
+/**
+ * Carries the outcome of ONE operation whose transition acknowledgement was
+ * lost into its durable delivery record (#1612).
+ *
+ * It re-reads the journal rather than trusting the transition the caller
+ * believed it wrote: the whole failure is that the caller does not know what
+ * landed. An unreadable status, a receipt that is not terminal, a receipt that
+ * names another conversation, and a reservation the registry no longer has all
+ * leave the record alone — and only the first of those is a reason to ask for
+ * another pass, because the others are answers rather than outages.
+ *
+ * Returns whether the fate was established, which is a different question from
+ * whether a reservation moved: an operation with no reservation left to settle
+ * is established and acknowledged, because nothing will ever project it.
+ */
+async function projectLostTerminalAcknowledgement(
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  operationId: string,
+): Promise<boolean> {
+  let result: Awaited<ReturnType<RuntimeHostClient["operationStatus"]>>;
+  try {
+    result = await client.operationStatus(operationId, { currentRetryLeaf: true });
+  } catch (error) {
+    console.error("[structured delivery] lost terminal acknowledgement could not be read", { operationId, error });
+    return false;
+  }
+  if (!result) {
+    /* The receipt is gone. Under this repair's own retention it cannot be gone
+       while a projection is owed, so this is a receipt that was already
+       projected, or one released past the retention cap. Absence proves
+       nothing about execution and settles nothing (#1612). */
+    return true;
+  }
+  const outcome = terminalDeliveryOutcome(registry, result, { conversationId: null, operationId });
+  if (!outcome) return true;
+  try {
+    registry.recordDeliveryOutcomeForOperation(
+      outcome.conversationId,
+      outcome.operationId,
+      outcome.state,
+      outcome.error,
+      outcome.disposition,
+    );
+  } catch (error) {
+    console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
+      operationId,
+      error,
+    });
+    return false;
+  }
+  await acknowledgeTerminalProjection(client, [outcome.receiptOperationId]);
+  return true;
+}
+
 async function reconcileTerminalDeliveries(
   registry: AgentRegistry,
   client: RuntimeHostClient,
@@ -228,9 +391,13 @@ async function reconcileTerminalDeliveries(
   const unsettledDeliveries = Object.values(registry.readOnlySnapshot().heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
-  const flushOutcomes = () => {
+  const pendingAcknowledgements: string[] = [];
+  const flushOutcomes = async () => {
     if (pendingOutcomes.length === 0) return;
     registry.recordDeliveryOutcomesForOperations(pendingOutcomes.splice(0));
+    /* Only after the settlement is durable: the journal's retention is what
+       stands in for it until then (#1612). */
+    await acknowledgeTerminalProjection(client, pendingAcknowledgements.splice(0));
   };
   for (let offset = 0; offset < unsettledDeliveries.length && isCurrent(); offset += TERMINAL_RECONCILIATION_PAGE_SIZE) {
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
@@ -238,34 +405,13 @@ async function reconcileTerminalDeliveries(
       try {
         const result = await client.operationStatus(delivery.command.operationId, { currentRetryLeaf: true });
         if (!result) return null;
-        /* The same classifier the receipt query reads the journal through:
-           what a status PROVES about a send is one question with one answer,
-           and `uncertain` — the send was handed to the engine and never
-           answered for — is the one whose disposition stops a later receipt
-           from calling a resend safe (#1131). */
-        const verdict = journalVerdict(result.receipt.status);
-        if (!verdict) return null;
-        const receiptConversationId = result.receipt.conversationId;
-        if (!receiptConversationId.startsWith("conversation_")
-          || registry.canonicalConversationId(receiptConversationId as `conversation_${string}`)
-            !== registry.canonicalConversationId(delivery.conversationId)) {
-          console.error("[structured delivery] terminal receipt conversation mismatch", {
-            operationId: delivery.command.operationId,
-            deliveryConversationId: delivery.conversationId,
-            receiptConversationId,
-          });
-          return null;
-        }
-        if (delivery.state === "failed" && verdict.state === "failed") return null;
-        return {
-          conversationId: receiptConversationId as `conversation_${string}`,
-          operationId: result.receipt.presentationOperationId ?? delivery.command.operationId,
-          state: verdict.state,
-          /* The journal's own words where it has them, and the settlement's
-             where the status IS the reason. */
-          error: verdict.disposition === "unverified" ? verdict.reason : result.receipt.reason ?? null,
-          disposition: verdict.disposition,
-        };
+        const outcome = terminalDeliveryOutcome(registry, result, {
+          conversationId: delivery.conversationId,
+          operationId: delivery.command.operationId,
+        });
+        if (!outcome) return null;
+        if (delivery.state === "failed" && outcome.state === "failed") return null;
+        return outcome;
       } catch (error) {
         /* Scoped to this one delivery on purpose (#1131): a status that could
            not be read contributes no outcome, so the row keeps the state it
@@ -280,24 +426,117 @@ async function reconcileTerminalDeliveries(
       }
     }))).filter((outcome): outcome is NonNullable<typeof outcome> => outcome !== null);
     if (!isCurrent()) return;
-    pendingOutcomes.push(...outcomes);
-    if (pendingOutcomes.length >= TERMINAL_RECONCILIATION_SETTLEMENT_BATCH_SIZE) flushOutcomes();
+    pendingOutcomes.push(...outcomes.map(({ receiptOperationId, ...outcome }) => outcome));
+    pendingAcknowledgements.push(...outcomes.map((outcome) => outcome.receiptOperationId));
+    if (pendingOutcomes.length >= TERMINAL_RECONCILIATION_SETTLEMENT_BATCH_SIZE) await flushOutcomes();
     await yieldControllerTurn();
   }
-  if (isCurrent()) flushOutcomes();
+  if (isCurrent()) await flushOutcomes();
+}
+
+type RegistrySessionProjection = Pick<RuntimeSession,
+  | "conversationId"
+  | "sessionKey"
+  | "hostKind"
+  | "host"
+  | "turn"
+  | "provenance"
+  | "accountId"
+  | "parentConversationId"
+  | "cwd"
+  | "artifactPath"
+  | "capabilities"
+  | "activeTurnId"> & { producerKind: string; entryUpdatedAt: string | null };
+
+/** The one runtime projection a conversation's current durable registry row
+    supports. A coexisting tmux host wins because it is also the transport
+    deliverability resolves; structured columns may remain during succession
+    as adapter metadata. The tmux host supplies the card's sole verdict. */
+function registrySessionProjection(
+  registry: AgentRegistry,
+  conversationId: string,
+): RegistrySessionProjection | null {
+  if (!conversationId.startsWith("conversation_")) return null;
+  const conversation = registry.conversation(conversationId as `conversation_${string}`);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return null;
+  const sessionKey = { engine: conversation.engine, sessionId: generation.id } as const;
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(sessionKey)] ?? null;
+  const legacy = entry?.host?.kind === "tmux";
+  const host = entry?.status === "dead"
+    ? "dead"
+    : legacy && entry?.status !== "unhosted"
+      ? "hosted"
+      : "unhosted";
+  const turn = entry?.status === "live" ? "running" : entry?.status === "idle" ? "idle" : "unknown";
+  const structuredKind = legacy ? null : entry?.structuredHost?.kind ?? null;
+  const hostKind = legacy ? "tmux-legacy" : structuredKind ?? "unhosted";
+  const provenance = structuredKind ? "structured" : "derived";
+  return {
+    conversationId,
+    sessionKey,
+    hostKind,
+    host,
+    turn,
+    provenance,
+    accountId: entry?.accountId ?? generation.accountId,
+    parentConversationId: generation.launchProfile.parentConversationId ?? null,
+    cwd: entry?.cwd ?? generation.launchProfile.cwd,
+    artifactPath: generation.path,
+    capabilities: {
+      steer: structuredKind === "codex-app-server",
+      structuredAttention: structuredKind !== null,
+      /* This projection is derived from the registry with no live host behind
+         it, so it has observed nothing about injection and says so (#1560). */
+      inject: false,
+      imageInput: runtimeImageCapability(sessionKey.engine, false),
+      runtimeSettings: runtimeSettingsCapability(sessionKey.engine),
+    },
+    activeTurnId: null,
+    producerKind: structuredKind ?? "structured-delivery-controller",
+    entryUpdatedAt: entry?.updatedAt ?? null,
+  };
 }
 
 async function publishHostState(
   client: RuntimeHostClient,
   registry: AgentRegistry,
   adopted: StructuredDeliveryHost,
-  state: HostState,
+  state: HostState | null,
   projectionKey?: string,
 ): Promise<void> {
   const entry = entryForHost(registry, adopted);
   if (!entry) return;
   const conversationId = conversationIdForEntry(registry, entry);
   if (!conversationId) return;
+  /* A generation can temporarily retain a structured adapter beside its
+     current tmux host during recovery or rollback. Delivery resolves that
+     durable row through the legacy host; its structured probe therefore has
+     no authority to publish a second liveness verdict for the same card. A
+     failed probe is environmental evidence about that adapter only. */
+  if (entry.host) {
+    const projection = registrySessionProjection(registry, conversationId);
+    if (!projection) return;
+    if (projection.turn === "idle" && pendingAccountSwitch(registry, conversationId)) requestAccountMigrationTick();
+    const { producerKind, entryUpdatedAt, ...payload } = projection;
+    await publishStructuredHostProjection(client, {
+      scope: { type: "session", id: conversationId },
+      kind: "session-status",
+      producer: {
+        kind: producerKind,
+        eventKey: `legacy-host:${sessionKeyId(entry.key)}:${entryUpdatedAt ?? "unknown"}`,
+      },
+      payload,
+    });
+    return;
+  }
+  if (!state) return;
+  /* #1629: the voice ledger's only authoritative retirement signal for a spoken
+     turn no tool call ever claimed. This listener already fires on every change
+     to the projected active turn, and it runs in the process that holds the
+     ledger, so the running-to-idle transition is observed rather than guessed
+     at from elapsed time. */
+  noteVoiceWorkBoundary(conversationId, state.activeTurnRef);
   const host = state.status === "dead" ? "dead" : state.status === "unhosted" ? "unhosted" : "hosted";
   const turn = state.activeTurnRef ? "running" : "idle";
   /* A host with no active turn is the turn-end evidence a pending account
@@ -332,19 +571,28 @@ async function publishHostState(
       turn,
       provenance: "structured",
       accountId: entry.accountId,
+      writerClaim: entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null,
       parentConversationId: entry.launchProfile?.parentConversationId ?? null,
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
       capabilities: {
         steer: adopted.key.engine === "codex",
+        nativeQueue: adopted.key.engine === "codex" && state.activeFlags.includes("native-queue"),
+        /* #1560: OBSERVED, never inferred. The flag comes from the running
+           executable's negotiated protocol, and a host that has not resolved it
+           advertises nothing — so the composer offers no injection action and
+           an admitted injection is refused, rather than either being delivered
+           as a steer. */
+        inject: adopted.key.engine === "codex" && state.activeFlags.includes(NATIVE_INJECT_CAPABILITY),
         structuredAttention: true,
         imageInput: runtimeImageCapability(
           adopted.key.engine,
           state.activeFlags.includes(STRUCTURED_IMAGE_CAPABILITY),
         ),
-        runtimeSettings: runtimeSettingsCapability(adopted.key.engine),
+        runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes("native-turn-profile")),
       },
       activeTurnId: state.activeTurnRef,
+      diagnostics: state.diagnostics,
     },
   });
 }
@@ -374,11 +622,50 @@ export async function bindStructuredDeliveryQueue(
   const retirePredecessor = state.stopActive;
   const registry = dependencies.registry ?? agentRegistry();
   const hosts = new Map<string, EngineHost>();
+  // Registration events can request a drain while startup is still seating
+  // the remaining hosts. Their original queued operations must wait for those
+  // seats instead of attempting competing recovery and terminalizing them.
+  let startupPending = dependencies.deferStartupWork === true;
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
+  const nativeReconciliations = new Map<string, Promise<void>>();
+  const nativeQueueExecutor = new NativeQueueExecutor({
+    client,
+    resolveHost: hostResolver(registry, hosts),
+    settled: (entry) => {
+      registry.recordDeliveryOutcomeForOperation(entry.conversationId as `conversation_${string}`, entry.entryId,
+        entry.state === "removed" ? "failed" : "delivered", entry.state === "removed" ? "delivery-discarded" : null);
+    },
+    binding: (conversationId) => {
+      const snapshot = registry.readOnlySnapshot();
+      const conversation = snapshot.conversations[conversationId];
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || conversation.engine !== "codex" || !generation) return null;
+      return { threadId: generation.id, accountId: generation.accountId };
+    },
+  });
   const queue = new StructuredDeliveryQueue(
     {
+      deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
+      reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
+      nativeQueueReconcile: async () => {
+        if (!client.nativeQueueRead) return;
+        const entries = registry.readOnlySnapshot().entries;
+        for (const [key, host] of hosts) {
+          if (!host.nativeQueue) continue;
+          const entry = entries[key];
+          const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
+          if (!conversationId || nativeReconciliations.has(conversationId)) continue;
+          // Canonical reads cannot hold up interrupt/answer or other sends.
+          const read = nativeQueueExecutor.reconcile(conversationId)
+            .then(pending => { if (pending) scheduleAutomaticRetry(); })
+            .catch(() => { scheduleAutomaticRetry(); })
+            .finally(() => { nativeReconciliations.delete(conversationId); });
+          nativeReconciliations.set(conversationId, read);
+        }
+      },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),
       status: async (operationId: string) => (await client.operationStatus(operationId))?.receipt ?? null,
       /* The durable delivery record's own fence (#1131): a send a receipt query
@@ -389,8 +676,34 @@ export async function bindStructuredDeliveryQueue(
          evidence a `delivering` row is compared against before it is called
          abandoned, so a send another live executor is actuating is left to it. */
       hostClaim: structuredHostClaim(registry),
+      /* The repair for a lost terminal acknowledgement (#1612). Reading the
+         journal is what settles it, so a socket that cannot answer settles
+         nothing and says so — the queue keeps the operation and asks again on
+         its next pass. */
+      projectTerminal: async (operationId) => {
+        if (stopped || state.activeQueue !== queue) return false;
+        return projectLostTerminalAcknowledgement(registry, client, operationId);
+      },
+      injectionBinding: (conversationId) => {
+        const conversation = registry.conversation(conversationId as `conversation_${string}`);
+        const generation = conversation?.generations.at(-1);
+        const claim = structuredHostClaim(registry)(conversationId);
+        if (!generation || !claim) return null;
+        return { threadId: generation.id, accountId: generation.accountId, writerClaim: claim };
+      },
       transition: async (operationId, status, details) => {
-        const result = await client.transitionOperation(operationId, status, details);
+        const terminal = status === "delivered" || status === "failed" || status === "uncertain";
+        /* Terminal transitions take out the journal's retention as they commit
+           (#1612): the registry write below rides on this call's ANSWER, and an
+           answer is the one part of it that can be lost while the outcome is
+           already durable. The receipt then has to outlive compaction until
+           this Viewer says the outcome reached the delivery record. */
+        const result = await client.transitionOperation(
+          operationId,
+          status,
+          details,
+          terminal ? { awaitProjection: true } : {},
+        );
         /* The three states a held delivery can settle into. `uncertain` — a
            send an executor actuated and could not answer for — settles the
            reservation HERE, at the moment the queue writes it, rather than
@@ -400,7 +713,7 @@ export async function bindStructuredDeliveryQueue(
            projection is keyed on `heldDeliveries`, which only a composer
            message ever creates, so a compact operation has no row here to
            settle (#862). */
-        if (status !== "delivered" && status !== "failed" && status !== "uncertain") return;
+        if (!terminal) return;
         const conversationId = result.receipt.conversationId;
         if (!conversationId?.startsWith("conversation_")) return;
         registry.recordDeliveryOutcomeForOperation(
@@ -414,6 +727,7 @@ export async function bindStructuredDeliveryQueue(
              own, so it carries none. */
           status === "uncertain" ? "unverified" : undefined,
         );
+        await acknowledgeTerminalProjection(client, [result.operationId]);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
           const launchId = operationId.slice("spawn_message_".length);
           const receipt = registry.readOnlySnapshot().receipts[launchId];
@@ -484,6 +798,10 @@ export async function bindStructuredDeliveryQueue(
       const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness ?? {});
       return liveness?.state === "severed" ? liveness.reason : null;
     },
+    (conversationId) => conversationId.startsWith("conversation_")
+      && branchSharesRootHost(registry, registry.conversation(conversationId as `conversation_${string}`))
+      ? BRANCH_SHARED_HOST_ERROR
+      : null,
   );
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
@@ -499,12 +817,17 @@ export async function bindStructuredDeliveryQueue(
     return true;
   };
   const drainWithRetry = async (afterAdmission = false): Promise<void> => {
+    if (stopped) return;
     try {
       if (afterAdmission) await queue.drainAfterAdmission();
       else await queue.drain();
       drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
     } catch (error) {
       if (stopped) return;
+      if (state.activeQueue === queue) {
+        const message = error instanceof Error ? error.message : String(error);
+        state.lastDrainError = (message.trim() || "structured delivery drain failed").slice(0, 240);
+      }
       const retryMs = drainBackoffMs;
       const retryScheduled = scheduleDrain(retryMs);
       if (retryScheduled) {
@@ -551,6 +874,20 @@ export async function bindStructuredDeliveryQueue(
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation) return unclaimed;
     if (sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== sessionKeyId(registration.key)) return unclaimed;
+    /* A current legacy host already answers the card's liveness. Publish it
+       directly; reading the coexisting structured adapter can only add a
+       failure about a transport the conversation is not using. */
+    if (entry.host) {
+      projectionRevision += 1;
+      await publishHostState(
+        client,
+        registry,
+        registration,
+        null,
+        `projection:${projectionEpoch}:${projectionRevision}`,
+      );
+      return { conversationId, published: true };
+    }
     /* The host's own state, kept as evidence like every other read in this
        path (#1131). Letting it throw was a conversion of the worst shape: the
        exception answered for the WHOLE loop below, so ONE host that could not
@@ -593,69 +930,30 @@ export async function bindStructuredDeliveryQueue(
     conversationId: string,
     current?: RuntimeSession,
   ): Promise<void> => {
-    const conversation = registry.conversation(conversationId as `conversation_${string}`);
-    const generation = conversation?.generations.at(-1);
-    if (!conversation || !generation) return;
-    const key = { engine: conversation.engine, sessionId: generation.id } as const;
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)] ?? null;
-    const legacy = entry?.host?.kind === "tmux";
-    const host = entry?.status === "dead"
-      ? "dead"
-      : legacy && entry?.status !== "unhosted"
-        ? "hosted"
-        : "unhosted";
-    const turn = entry?.status === "live" ? "running" : entry?.status === "idle" ? "idle" : "unknown";
-    const hostKind = entry?.structuredHost?.kind ?? (legacy ? "tmux-legacy" : "unhosted");
-    const provenance = entry?.structuredHost ? "structured" : "derived";
-    const accountId = entry?.accountId ?? generation.accountId;
-    const parentConversationId = generation.launchProfile.parentConversationId ?? null;
-    const cwd = entry?.cwd ?? generation.launchProfile.cwd;
+    const projection = registrySessionProjection(registry, conversationId);
+    if (!projection) return;
+    const { producerKind, entryUpdatedAt: _entryUpdatedAt, ...payload } = projection;
     if (current
-      && current.sessionKey.engine === key.engine
-      && current.sessionKey.sessionId === key.sessionId
-      && current.hostKind === hostKind
-      && current.host === (entry?.structuredHost && entry.status === "dead" ? "dead" : host)
-      && current.turn === turn
-      && current.provenance === provenance
-      && current.accountId === accountId
-      && current.parentConversationId === parentConversationId
-      && current.cwd === cwd
-      && current.artifactPath === generation.path
+      && current.sessionKey.engine === payload.sessionKey.engine
+      && current.sessionKey.sessionId === payload.sessionKey.sessionId
+      && current.hostKind === payload.hostKind
+      && current.host === payload.host
+      && current.turn === payload.turn
+      && current.provenance === payload.provenance
+      && current.accountId === payload.accountId
+      && current.parentConversationId === payload.parentConversationId
+      && current.cwd === payload.cwd
+      && current.artifactPath === payload.artifactPath
       && current.activeTurnId === null) return;
     projectionRevision += 1;
     await client.append({
       scope: { type: "session", id: conversationId },
       kind: "session-status",
       producer: {
-        kind: entry?.structuredHost?.kind ?? "structured-delivery-controller",
+        kind: producerKind,
         eventKey: `projection:${projectionEpoch}:${projectionRevision}`,
       },
-      payload: {
-        conversationId,
-        sessionKey: key,
-        hostKind,
-        host: entry?.structuredHost && entry.status === "dead" ? "dead" : host,
-        turn,
-        provenance,
-        accountId,
-        parentConversationId,
-        cwd,
-        artifactPath: generation.path,
-        capabilities: entry?.structuredHost
-          ? {
-              steer: entry.structuredHost.kind === "codex-app-server",
-              structuredAttention: true,
-              imageInput: runtimeImageCapability(key.engine, false),
-              runtimeSettings: runtimeSettingsCapability(key.engine),
-            }
-          : {
-              steer: false,
-              structuredAttention: false,
-              imageInput: runtimeImageCapability(key.engine, false),
-              runtimeSettings: runtimeSettingsCapability(key.engine),
-            },
-        activeTurnId: null,
-      },
+      payload,
     });
   };
   const refreshCurrentProjection = async (conversationId: string | null): Promise<void> => {
@@ -730,6 +1028,17 @@ export async function bindStructuredDeliveryQueue(
     if (ownsOperation && !await ownsOperation()) return async () => {};
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
+    const publicationEntry = entryForHost(registry, item);
+    /* A durable tmux host makes this adapter historical for the current
+       generation. Publish the legacy verdict without probing or registering
+       the adapter: an unreadable pane surface says nothing about host death,
+       and the structured queue must not route work through the stale adapter. */
+    if (publicationEntry?.host) {
+      const displaced = takeRegistration(key);
+      if (displaced) await detachRegistration(key, displaced);
+      await publishHostState(client, registry, item, null);
+      return async () => {};
+    }
     /* The same host under the same key either already holds a registration of
        this generation, with nothing left to do, or holds a carried-over seat
        this call is filling in. Any other host under that key is replaced. */
@@ -745,7 +1054,6 @@ export async function bindStructuredDeliveryQueue(
     const initialState = await item.host.health();
     if (abandoned()) return async () => {};
     if (ownsOperation && !await ownsOperation()) return async () => {};
-    const publicationEntry = entryForHost(registry, item);
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
@@ -975,7 +1283,7 @@ export async function bindStructuredDeliveryQueue(
     }
   };
   let completion = Promise.resolve();
-  const complete = (items: readonly StructuredDeliveryHost[]) => {
+  const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}) => {
     completion = completion.catch(() => {}).then(async () => {
       /* A generation that has been swapped out cannot register anything, but it
          must not answer "done" either: its caller would clear its retry set and
@@ -985,32 +1293,61 @@ export async function bindStructuredDeliveryQueue(
       if (stopped || state.activeQueue !== queue) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items);
+        await successor(items, progress, assertActive);
         return;
       }
+      /* A route-recovered structured launch can predate this controller and
+         leave its own `spawn` marker behind. Repair only exact, completed,
+         live rows while this publication is active; an unavailable/shutting
+         down controller never gets to mutate the registry. Do this before
+         registering hosts so even a registration-triggered drain sees the
+         repaired durable state. */
+      registry.repairCompletedStructuredSpawnMarkers();
+      progress?.("registering structured delivery hosts");
       for (const item of items) await register(item);
+      assertActive();
+      if (superseded()) {
+        const successor = state.completeActive;
+        if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
+        await successor(items, progress, assertActive);
+        return;
+      }
       const startupSnapshot = registry.readOnlySnapshot();
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
          that failed costs one redundant publish and authorises nothing
          (#1131). */
+      progress?.("reading fallback runtime snapshot");
       const runtimeSnapshot = typeof client.snapshot === "function"
         ? await client.snapshot().catch(() => null)
         : null;
       const runtimeSessions = new Map(
         (runtimeSnapshot?.sessions ?? []).map((session) => [session.conversationId, session]),
       );
-      for (const conversation of Object.values(startupSnapshot.conversations)) {
+      progress?.("publishing historical host fallbacks");
+      await forEachStartupBatch(Object.values(startupSnapshot.conversations), async (conversation) => {
+        assertActive();
+        if (superseded()) return;
         const generation = conversation.generations.at(-1);
-        if (!generation) continue;
+        if (!generation) return;
         const id = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-        if (registrations.has(id)) continue;
+        if (registrations.has(id)) return;
         const entry = startupSnapshot.entries[id];
-        if (!entry?.structuredHost && entry?.host?.kind !== "tmux") continue;
+        if (!entry?.structuredHost && entry?.host?.kind !== "tmux") return;
         await publishCurrentFallback(conversation.id, runtimeSessions.get(conversation.id));
+      }, assertActive);
+      if (superseded()) {
+        const successor = state.completeActive;
+        if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
+        await successor(items, progress, assertActive);
+        return;
       }
+      progress?.("reconciling terminal delivery receipts");
       await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue);
+      progress?.("draining startup delivery queue");
+      assertActive();
+      startupPending = false;
       await queue.drain();
     });
     return completion;
@@ -1021,6 +1358,7 @@ export async function bindStructuredDeliveryQueue(
      `state.activeQueue !== queue` and unwinds only its own timers, host
      subscriptions and event pumps — it cannot null the live publication. */
   retirePredecessor();
+  markStructuredDeliveryControllerReady();
   /* The carried-over hosts resolve from their seats already; this gives each one
      a registration in this generation. It runs whether or not startup work is
      deferred, because startup's own completion only covers the set it adopts,
@@ -1050,6 +1388,10 @@ export function structuredDeliveryHostForConversation(conversationId: string): E
   return hostResolver(state.activeRegistry, state.activeHosts)(conversationId);
 }
 
+export function structuredDeliveryLastError(conversationId: string): string | null {
+  return state.activeQueue?.lastTargetError(conversationId) ?? state.lastDrainError ?? null;
+}
+
 export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
@@ -1059,9 +1401,11 @@ export async function publishStructuredDeliveryHost(
 
 export async function completeStructuredDeliveryQueueStartup(
   adopted: readonly StructuredDeliveryHost[],
+  progress?: (phase: StructuredHostStartupPhase) => void,
+  assertActive?: () => void,
 ): Promise<void> {
   if (!state.completeActive) throw new StructuredDeliveryControllerUnavailableError();
-  await state.completeActive(adopted);
+  await state.completeActive(adopted, progress, assertActive);
 }
 
 export async function republishStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
@@ -1070,6 +1414,35 @@ export async function republishStructuredDeliveryHost(key: SessionKey): Promise<
 
 export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
   return await state.releaseActiveHost?.(key) ?? false;
+}
+
+/** Releases every engine host owned by this Viewer before release demotion.
+ *
+ * Structured engines run outside the Viewer container namespace, so exiting
+ * the Viewer does not end them. Release the process-scoped registrations while
+ * their transports and writer fences still exist; the promoted Viewer can then
+ * claim each durable row on its bounded startup retry. All releases begin in
+ * one turn so several slow engine shutdowns consume one grace window. */
+export async function releaseStructuredDeliveryHostsForDemotion(): Promise<void> {
+  const registrations = state.activeRegistrations?.() ?? [];
+  const release = state.releaseActiveHost;
+  if (!release || registrations.length === 0) return;
+  const registry = state.activeRegistry;
+  await Promise.all(registrations.map(async ({ key, host }) => {
+    const current = await host.health();
+    if ((current.status !== "active" && current.status !== "attention")
+      || current.pid === null
+      || current.processStartIdentity === null) return;
+    if (!registry?.markStructuredHostHandoff(
+      key,
+      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+  }));
+  const outcomes = await Promise.allSettled(registrations.map(({ key }) => release(key)));
+  const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `failed to release ${failures.length} structured host(s) during Viewer demotion`);
+  }
 }
 
 /**

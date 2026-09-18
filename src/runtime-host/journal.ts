@@ -1,3 +1,6 @@
+import { NativeQueueJournal } from "./nativeQueueJournal";
+import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
+import { parseRuntimeCommand } from "@/lib/runtime/commands";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 
@@ -6,12 +9,15 @@ import { Database } from "bun:sqlite";
 
 import {
   RUNTIME_SCHEMA_VERSION,
+  RUNTIME_DELIVERY_DISCARDED_REASON,
   assertRuntimeEvent,
   normalizeRuntimeEventInput,
   parseRuntimeScope,
   runtimePresentationReceipt,
   runtimeScopeKey,
   type RuntimeAttention,
+  type RuntimeDeliveryAction,
+  type RuntimeDeliveryActionClaim,
   type RuntimeEdge,
   type RuntimeEffect,
   type RuntimeEvent,
@@ -28,6 +34,7 @@ import {
   type RuntimeRetryOptions,
   type RuntimeSession,
   type RuntimeSnapshot,
+  type RuntimeTransitionOptions,
   type ViewerDeploymentOwner,
   type ViewerDeploymentReceipt,
   type ViewerDeploymentStatus,
@@ -49,11 +56,37 @@ import {
 import { parseStructuredImageRefs, structuredContent } from "@/lib/runtime/structuredContent";
 import { runtimeImageCapability } from "@/lib/runtime/runtimeImageStore";
 
+function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperationReceipt["nativeQueue"]> {
+  return { entryId: entry.entryId, nativeSubmissionId: entry.nativeSubmissionId, revision: entry.revision,
+    dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
+}
+
 export class RuntimeJournalFault extends Error {}
 
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** A spawn or kill may wait through a short host succession. After one
+    continuous hour with no runtime host and no current live registry
+    conversation, the maintenance sweep terminalizes the orphaned work so
+    every effect drain remains proportional to work that can still run. */
+export const RUNTIME_PENDING_EFFECT_STALE_MS = 60 * 60 * 1_000;
+
+/** How many terminal receipts may be held past the compaction anchor while
+    their projection is unacknowledged (#1612).
+ *
+ * A terminal receipt whose acknowledgement was lost is the ONLY remaining proof
+ * that its message was delivered, so compaction must not take it while the
+ * durable delivery record still needs it. That obligation cannot be unbounded:
+ * a Viewer that never acknowledges — one that crashed, one released before this
+ * protocol existed — would otherwise pin the operations table for ever. The
+ * cap is the bound, applied to the OLDEST retained receipts first, because the
+ * newest are the ones a live repair can still consume. Sized far above any
+ * realistic outstanding set: production carries single digits of unprojected
+ * terminal receipts at a time, and each row is a receipt, not a transcript. */
+export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
+
+export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
 type EventRow = {
   seq: number;
@@ -229,6 +262,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     attentionIds: strings(payload.attentionIds),
     recentReceipts: receipts(payload.recentReceipts),
     accountId: typeof payload.accountId === "string" ? payload.accountId : null,
+    ...(typeof payload.writerClaim === "string" || payload.writerClaim === null ? { writerClaim: payload.writerClaim } : {}),
     parentConversationId: typeof payload.parentConversationId === "string" ? payload.parentConversationId : null,
     flowId: typeof payload.flowId === "string" ? payload.flowId : null,
     workflowId: typeof payload.workflowId === "string" ? payload.workflowId : null,
@@ -237,10 +271,30 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     capabilities: {
       steer: capabilities.steer === true,
       structuredAttention: capabilities.structuredAttention === true,
+      nativeQueue: capabilities.nativeQueue === true,
+      /* #1560. Fail-closed like every other observed capability: a projection
+         that predates the field, or one whose publisher said nothing, reads as
+         no injection rather than as an unverified yes. */
+      inject: capabilities.inject === true,
+      ...(capabilities.runtimeSettings && typeof capabilities.runtimeSettings === "object" ? { runtimeSettings: {
+        perTurnModel: record(capabilities.runtimeSettings).perTurnModel === true,
+        perTurnEffort: record(capabilities.runtimeSettings).perTurnEffort === true,
+      } } : {}),
       imageInput: capabilities.imageInput && typeof capabilities.imageInput === "object"
         ? capabilities.imageInput as RuntimeSession["capabilities"]["imageInput"]
         : runtimeImageCapability(key.engine === "claude" ? "claude" : "codex", false),
     },
+    ...(payload.diagnostics && typeof payload.diagnostics === "object" ? { diagnostics: {
+      executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",
+      queueCapability: record(payload.diagnostics).queueCapability === "supported" ? "supported" as const
+        : record(payload.diagnostics).queueCapability === "unsupported" ? "unsupported" as const : "unknown" as const,
+      injectCapability: record(payload.diagnostics).injectCapability === "supported" ? "supported" as const
+        : record(payload.diagnostics).injectCapability === "unsupported" ? "unsupported" as const : "unknown" as const,
+      version: typeof record(payload.diagnostics).version === "string" ? String(record(payload.diagnostics).version).slice(0, 80) : null,
+      nativeQueue: record(payload.diagnostics).nativeQueue === true,
+      authRecovery: record(payload.diagnostics).authRecovery === "started" ? "started" as const
+        : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
+    } } : {}),
     activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
       ? payload.pendingReconfigure as RuntimeSession["pendingReconfigure"]
@@ -268,13 +322,16 @@ export interface RuntimeJournalOptions {
 
 export class RuntimeJournal {
   private readonly db: Database;
+  private readonly nativeQueue: NativeQueueJournal;
   private readonly maxEvents: number;
   private readonly now: () => number;
   private readonly structuredHosts: boolean;
   private readonly secretKey: Buffer;
   private readonly waiters = new Set<() => void>();
   private fault: string | null = null;
-  private snapshotCache: { changes: number; expiresAt: number | null; json: string } | null = null;
+  // Only the full and summary representations are retained. Targeted voice
+  // reads must not evict either hot representation or accumulate per-card JSON.
+  private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
   private receiptSweepCursor = 0;
 
   constructor(filename: string, options: RuntimeJournalOptions = {}) {
@@ -284,6 +341,7 @@ export class RuntimeJournal {
     this.structuredHosts = options.structuredHosts ?? structuredHostsEnabled();
     this.secretKey = loadSecretKey(filename);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL;");
+    this.nativeQueue = new NativeQueueJournal(this.db);
     if (filename !== ":memory:") {
       for (const candidate of [filename, `${filename}-wal`, `${filename}-shm`]) {
         if (fs.existsSync(candidate)) fs.chmodSync(candidate, 0o600);
@@ -311,8 +369,13 @@ export class RuntimeJournal {
       CREATE TABLE IF NOT EXISTS operations (
         operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
         request_hash TEXT NOT NULL, request_json TEXT NOT NULL,
-        receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL,
+        receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
         UNIQUE(conversation_id, idempotency_key)
+      );
+      CREATE TABLE IF NOT EXISTS delivery_operation_actions (
+        operation_id TEXT PRIMARY KEY,
+        winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
+        claimed_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS consumer_checkpoints (
         event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
@@ -327,6 +390,8 @@ export class RuntimeJournal {
         ON viewer_deployments(active) WHERE active = 1;
     `);
     this.migrateOperationIdempotencyScope();
+    this.migrateOperationOrphanedSince();
+    this.migrateOperationProjectionPending();
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
     for (const row of this.db.query<EventRow, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
@@ -397,6 +462,13 @@ export class RuntimeJournal {
       }
       const operationOwner = this.db.query<{ idempotency_key: string }, [string]>("SELECT idempotency_key FROM operations WHERE operation_id = ?").get(operationId);
       if (operationOwner) throw new RuntimeIdempotencyConflictError("operationId already belongs to another request");
+      /* #1664: a native entry outlives its add operation once that operation is
+         settled and compacted. The entry still owns the id, so a late replay of
+         the original request must not admit it again: that would reset the
+         entry and hand the executor a second native write of the same input. */
+      if (this.nativeQueue.retains(operationId)) {
+        throw new RuntimeIdempotencyConflictError("operationId belongs to a retained native queue entry whose operation was compacted");
+      }
       beforeAdmission?.();
       const retryParent = retryOfOperationId
         ? this.db.query<{ receipt_json: string }, [string]>(
@@ -407,19 +479,26 @@ export class RuntimeJournal {
         ? JSON.parse(retryParent.receipt_json) as RuntimeOperationReceipt
         : null;
       const receipt = this.operationReceipt(command, operationId, retryOfOperationId, parentReceipt);
+      const nativeCommand = this.nativeCommandAtAdmission(command, operationId);
+      if (nativeCommand && receipt.status !== "rejected") {
+        const entry = this.nativeQueue.admit(nativeCommand, operationId);
+        if (entry) receipt.nativeQueue = nativeQueueReceipt(entry);
+      }
       const effectPayload = command.kind === "answer"
         ? { ...command, operationId, resolution: this.encryptSecret(command.resolution) }
         : {
             ...command,
             operationId,
+            ...(command.kind === "inject" ? { binding: this.injectionBindingAtAdmission(command.conversationId) } : {}),
             ...(this.structuredHosts
               && (command.kind === "send" || command.kind === "steer")
               && typeof receipt.turnId === "string"
+              && command.turnId === undefined
               ? { turnId: receipt.turnId }
               : {}),
           };
       const effect = receipt.status === "pending" || receipt.status === "queued"
-        ? { id: `effect:${operationId}`, kind: `runtime.${command.kind}`, payload: effectPayload }
+        ? { id: `effect:${operationId}`, kind: nativeCommand ? "runtime.native-queue" : `runtime.${command.kind}`, payload: nativeCommand ? { ...nativeCommand } : effectPayload }
         : undefined;
       const event = this.appendInTransaction(normalizeRuntimeEventInput({
         scope: { type: "operation", id: operationId },
@@ -444,10 +523,154 @@ export class RuntimeJournal {
     }
   }
 
+  private nativeCommandAtAdmission(command: RuntimeOperationCommand, operationId: string): NativeQueueCommand | null {
+    if (command.kind === "native-queue") return { ...command, operationId };
+    if (command.kind !== "send" || command.policy !== "queue") return null;
+    const session = this.entity<RuntimeSession>("session", command.conversationId);
+    if (!session?.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
+    return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
+      idempotencyKey: command.idempotencyKey, binding: { threadId: session.sessionKey.sessionId, accountId: session.accountId },
+      text: command.text, images: command.images ?? [], contentDigest: command.contentDigest,
+      ...(command.runtime ? { runtime: command.runtime } : {}), ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+      ...(command.selectedContext ? { selectedContext: command.selectedContext } : {}), ...(command.origin ? { origin: command.origin } : {}) };
+  }
+
+  nativeQueueRead(conversationId: string): NativeQueueRecord[] {
+    this.assertHealthy();
+    return this.nativeQueue.read(conversationId);
+  }
+
+  nativeQueueTransition(operationId: string, transition: NativeQueueTransition): RuntimeOperationResult {
+    const original = this.operationResult(operationId);
+    const status = transition.phase === "prepared" || transition.phase === "withdrawn" ? "delivering"
+      : (transition.phase === "acknowledged" || transition.phase === "observed-queued") ? original?.receipt.kind === "send" ? "queued" : "applied"
+      : transition.phase === "proven" ? "delivered"
+      : transition.phase === "refused" || transition.phase === "removed" ? "failed" : "uncertain";
+    return this.transitionOperation(operationId, status,
+      transition.phase === "removed" ? { reason: RUNTIME_DELIVERY_DISCARDED_REASON }
+        : "reason" in transition ? { reason: transition.reason } : {},
+      transition.phase === "prepared" ? { fromStatuses: ["pending", "queued"] } : {}, transition);
+  }
+
+  /** Evidence-only settlement of an entry whose add operation compaction
+      already removed (#1664). It writes the entry and one native-queue-changed
+      event, and never an operation, receipt, effect or delivery action. An
+      entry whose operation still exists is refused here: that operation's
+      transition is the path that keeps its receipt truthful. */
+  nativeQueueSettleCompacted(request: NativeQueueCompactedProof): NativeQueueCompactedSettlement {
+    this.assertHealthy();
+    if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const operation = this.db.query<{ one: number }, [string]>("SELECT 1 AS one FROM operations WHERE operation_id = ?").get(request.entryId);
+      if (operation) throw new Error("native queue operation is retained; settle it through its operation");
+      const { entry, replayed } = this.nativeQueue.proveCompacted(request);
+      if (!replayed) {
+        this.appendInTransaction(normalizeRuntimeEventInput({
+          scope: { type: "session", id: entry.conversationId },
+          kind: "native-queue-changed",
+          producer: { kind: "runtime-effect", eventKey: `native-queue:${entry.entryId}:compacted-proof`, hostEpoch: Number(this.meta("host_epoch")) },
+          payload: { conversationId: entry.conversationId, threadId: entry.binding.threadId, entryId: entry.entryId, settledBy: "canonical-proof" },
+        }));
+      }
+      this.db.exec("COMMIT");
+      if (!replayed) {
+        this.compactIfNeeded();
+        this.notifyWaiters();
+      }
+      return { operation: "compacted", entry, replayed };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
+  }
+
   operationResult(operationId: string): RuntimeOperationResult | null {
     this.assertHealthy();
     const row = this.db.query<{ operation_id: string; receipt_json: string }, [string]>("SELECT operation_id, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
     return row ? { operationId: row.operation_id, receipt: JSON.parse(row.receipt_json) as RuntimeOperationReceipt, replayed: false } : null;
+  }
+
+  /** The journal owns operation identity, so this is the single durable
+      arbitration point shared by HTTP actions and low-level journal retries.
+      A repeated winner is an idempotent replay; the opposite action reads the
+      recorded winner and must stop before touching the registry or outbox. */
+  claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): RuntimeDeliveryActionClaim {
+    this.assertHealthy();
+    if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>(
+        "SELECT request_json, receipt_json FROM operations WHERE operation_id = ?",
+      ).get(operationId);
+      if (!row) throw new Error("runtime operation is unknown");
+      const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
+      const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+      if (this.nativeQueue.command(command, operationId)) throw new Error("native queue operation requires explicit native controls; retry is unavailable");
+      if (command.kind !== "send" && command.kind !== "steer") {
+        throw new Error(`runtime operation does not support ${action}`);
+      }
+      const recorded = this.recordedDeliveryActionInTransaction(operationId, receipt);
+      if (recorded) {
+        this.db.exec("COMMIT");
+        return recorded;
+      }
+      const actionStatuses: readonly RuntimeReceiptStatus[] = action === "retry"
+        ? ["pending", "queued", "failed", "uncertain", "rejected"]
+        : ["pending", "queued", "failed", "uncertain"];
+      if (!actionStatuses.includes(receipt.status)) {
+        throw new Error(`runtime delivery cannot ${action} after its outcome is resolved`);
+      }
+      const claimed = this.acquireDeliveryActionInTransaction(operationId, action, receipt);
+      this.db.exec("COMMIT");
+      return claimed;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
+  }
+
+  private recordedDeliveryActionInTransaction(
+    operationId: string,
+    receipt: RuntimeOperationReceipt,
+  ): RuntimeDeliveryActionClaim | null {
+    const row = this.db.query<{ winner: RuntimeDeliveryAction }, [string]>(
+      "SELECT winner FROM delivery_operation_actions WHERE operation_id = ?",
+    ).get(operationId);
+    if (row) return { operationId, winner: row.winner, replayed: true };
+    /* Existing databases can already contain the absorbing discarded receipt
+       from the earlier fix. Materialize its winner lazily so the new fence is
+       durable before any low-level retry is answered. */
+    if (receipt.status === "failed" && receipt.reason === RUNTIME_DELIVERY_DISCARDED_REASON) {
+      this.db.query(
+        "INSERT INTO delivery_operation_actions(operation_id, winner, claimed_at) VALUES (?, 'discard', ?)",
+      ).run(operationId, this.now());
+      return { operationId, winner: "discard", replayed: true };
+    }
+    return null;
+  }
+
+  private acquireDeliveryActionInTransaction(
+    operationId: string,
+    action: RuntimeDeliveryAction,
+    receipt: RuntimeOperationReceipt,
+  ): RuntimeDeliveryActionClaim {
+    const recorded = this.recordedDeliveryActionInTransaction(operationId, receipt);
+    if (recorded) return recorded;
+    this.db.query(
+      "INSERT INTO delivery_operation_actions(operation_id, winner, claimed_at) VALUES (?, ?, ?)",
+    ).run(operationId, action, this.now());
+    return { operationId, winner: action, replayed: false };
+  }
+
+  private deliveryActionConflict(
+    winner: RuntimeDeliveryAction,
+    attempted: RuntimeDeliveryAction,
+  ): Error {
+    const legacyDetail = winner === "discard" && attempted === "retry"
+      ? "; discarded runtime operations cannot retry"
+      : "";
+    return new Error(`runtime delivery ${winner} already won; ${attempted} refused${legacyDetail}`);
   }
 
   currentRetryResult(operationId: string): RuntimeOperationResult | null {
@@ -488,6 +711,8 @@ export class RuntimeJournal {
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
     details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason">> = {},
+    options: RuntimeTransitionOptions = {},
+    nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
     this.assertHealthy();
     this.db.exec("BEGIN IMMEDIATE");
@@ -495,21 +720,55 @@ export class RuntimeJournal {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
-      if (previous.status === status) {
-        this.db.exec("COMMIT");
-        return { operationId, receipt: previous, replayed: true };
-      }
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
+      const nativeCommand = this.nativeQueue.command(command, operationId);
+      let nativeEntry: NativeQueueRecord | null = null;
+      if (nativeTransition) {
+        if (!nativeCommand) throw new Error("operation is not a native queue mutation");
+        nativeEntry = this.nativeQueue.transition(nativeCommand, operationId, nativeTransition);
+      } else if (nativeCommand) {
+        throw new Error("native queue operations require their native transition and recovery path");
+      }
+      const discarding = (command.kind === "send" || command.kind === "steer")
+        && status === "failed"
+        && details.reason === RUNTIME_DELIVERY_DISCARDED_REASON;
+      if (discarding) {
+        const recorded = this.recordedDeliveryActionInTransaction(operationId, previous);
+        if (recorded?.winner === "retry") throw this.deliveryActionConflict("retry", "discard");
+        if (options.fromStatuses && !options.fromStatuses.includes(previous.status)) {
+          throw new Error("runtime operation moved before its transition");
+        }
+        const discardable = previous.status === "pending"
+          || previous.status === "queued"
+          || previous.status === "failed"
+          || previous.status === "uncertain";
+        if (!discardable) throw new Error("runtime delivery cannot discard after its outcome is resolved");
+        this.acquireDeliveryActionInTransaction(operationId, "discard", previous);
+        if (previous.status === "failed" && previous.reason === RUNTIME_DELIVERY_DISCARDED_REASON) {
+          this.db.exec("COMMIT");
+          return { operationId, receipt: previous, replayed: true };
+        }
+      } else {
+        if (options.fromStatuses && !options.fromStatuses.includes(previous.status)) {
+          throw new Error("runtime operation moved before its transition");
+        }
+        if (previous.status === status && !nativeTransition) {
+          this.db.exec("COMMIT");
+          return { operationId, receipt: previous, replayed: true };
+        }
+      }
       const queueing = status === "queued"
         && (previous.status === "delivering" || previous.status === "applying"
           || (this.structuredHosts && previous.status === "pending"));
       const beginning = (previous.status === "pending" || previous.status === "queued")
         && (status === "delivering" || (command.kind === "reconfigure" && status === "applying"));
-      const completing = (previous.status === "pending" || previous.status === "queued"
+      const completing = discarding || ((previous.status === "pending" || previous.status === "queued"
         || previous.status === "delivering" || previous.status === "applying")
-        && status !== "delivering" && status !== "applying" && status !== "queued";
-      if (!queueing && !beginning && !completing) throw new Error("runtime operation transition is invalid");
-      if ((status === "applying" || status === "applied") && command.kind !== "reconfigure") {
+        && status !== "delivering" && status !== "applying" && status !== "queued");
+      const nativeProgress = !!nativeCommand && nativeTransition
+        && (nativeTransition.phase === "proven" || nativeTransition.phase === "removed" || nativeTransition.phase === "observed-queued" || (previous.status === "delivering" && nativeTransition.phase === "withdrawn"));
+      if (!queueing && !beginning && !completing && !nativeProgress) throw new Error("runtime operation transition is invalid");
+      if ((status === "applying" || status === "applied") && command.kind !== "reconfigure" && command.kind !== "native-queue") {
         throw new Error("runtime operation transition is invalid");
       }
       const killBoundary = completing && command.kind === "kill" && status === "delivered"
@@ -532,9 +791,14 @@ export class RuntimeJournal {
             .run(stableJson({ ...payload, turnId: details.turnId }), `effect:${operationId}`);
         }
       }
+      const deliveredVersion = nativeTransition?.phase === "proven" && nativeEntry
+        ? nativeEntry.versions.find(version => version.revision === nativeEntry.dispatchedRevision) : null;
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(nativeEntry ? { nativeQueue: nativeQueueReceipt(nativeEntry) } : {}),
+        ...(deliveredVersion ? { text: deliveredVersion.text.slice(0, 240), imageCount: deliveredVersion.images.length,
+          turnId: nativeEntry!.proof!.turnId } : {}),
         status,
         reason: details.reason !== undefined ? details.reason : status === "queued" ? previous.reason : null,
         at: new Date(this.now()).toISOString(),
@@ -553,8 +817,15 @@ export class RuntimeJournal {
       const committed = { ...next, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committed, event.seq);
       if (completing) this.appendCompletionConsequences(command, committed, operationId);
-      this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ? WHERE operation_id = ?").run(stableJson(committed), event.seq, operationId);
-      if (completing) this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
+      /* The retention obligation is taken in the same transaction that commits
+         the outcome (#1612), because the failure it exists for is the answer to
+         THIS call never reaching its caller: a marker written afterwards, from
+         the caller, is lost by exactly the event it is meant to survive.
+         COALESCE, so a later transition can never silently release an
+         obligation an earlier one took. */
+      this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
+        .run(stableJson(committed), event.seq, completing && options.awaitProjection === true ? this.now() : null, operationId);
+      if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
       if (killBoundary) {
         this.db.query(`
           INSERT INTO outbox(id, kind, payload_json, event_seq, state)
@@ -598,10 +869,15 @@ export class RuntimeJournal {
       ).get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+      if (previous.status === "failed" && previous.reason === RUNTIME_DELIVERY_DISCARDED_REASON) {
+        const recorded = this.claimDeliveryAction(operationId, "retry");
+        throw this.deliveryActionConflict(recorded.winner, "retry");
+      }
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
       if (previous.status !== "failed" && previous.status !== "rejected") {
         throw new Error("only terminal failed runtime operations can start a new attempt");
       }
+      if (this.nativeQueue.command(command, operationId)) throw new Error("native queue operation requires explicit native controls; retry is unavailable");
       if (command.kind !== "send" && command.kind !== "steer") {
         throw new Error("runtime operation does not support retry");
       }
@@ -617,6 +893,8 @@ export class RuntimeJournal {
         if (retryRequestHash(replacementCommand) !== retryRequestHash(command)) {
           throw new RuntimeIdempotencyConflictError("terminal retry operation already belongs to another request");
         }
+        const recorded = this.claimDeliveryAction(operationId, "retry");
+        if (recorded.winner !== "retry") throw this.deliveryActionConflict(recorded.winner, "retry");
         return {
           operationId: replacementOperationId,
           receipt: JSON.parse(replacement.receipt_json) as RuntimeOperationReceipt,
@@ -651,6 +929,8 @@ export class RuntimeJournal {
             throw new Error("structured recovery ownership changed before retry admission");
           }
         }
+        const claimed = this.acquireDeliveryActionInTransaction(operationId, "retry", currentReceipt);
+        if (claimed.winner !== "retry") throw this.deliveryActionConflict(claimed.winner, "retry");
       });
     }
     this.db.exec("BEGIN IMMEDIATE");
@@ -661,8 +941,25 @@ export class RuntimeJournal {
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
-      if (previous.status !== "failed") throw new Error("only failed runtime operations can retry");
+      if (this.nativeQueue.command(command, operationId)) throw new Error("native queue operation does not support retry");
       if (command.kind !== "send" && command.kind !== "steer") throw new Error("runtime operation does not support retry");
+      const recorded = this.recordedDeliveryActionInTransaction(operationId, previous);
+      if (recorded?.winner === "discard") throw this.deliveryActionConflict("discard", "retry");
+      /* An explicit unknown-fate retry keeps the SAME operation and effect id
+         (#1226). Replaying the HTTP action after its response was lost finds
+         the already re-armed row and returns it without another transition. */
+      if (previous.status !== "pending"
+        && previous.status !== "queued"
+        && previous.status !== "failed"
+        && previous.status !== "uncertain") {
+        throw new Error("only failed or uncertain runtime operations can retry in place");
+      }
+      const claimed = recorded ?? this.acquireDeliveryActionInTransaction(operationId, "retry", previous);
+      if (claimed.winner !== "retry") throw this.deliveryActionConflict(claimed.winner, "retry");
+      if (previous.status === "pending" || previous.status === "queued") {
+        this.db.exec("COMMIT");
+        return { operationId, receipt: previous, replayed: true };
+      }
       const next: RuntimeOperationReceipt = {
         ...previous,
         status: "queued",
@@ -720,7 +1017,7 @@ export class RuntimeJournal {
     return this.snapshotAt(this.now());
   }
 
-  private snapshotAt(now: number): RuntimeSnapshot {
+  private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
       const snapshot: RuntimeSnapshot = {
@@ -730,7 +1027,7 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues().map((session) => ({
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => ({
           ...session,
           // Only a running turn has live text to resume. Re-normalizing here
           // also caps legacy rows to the 64 KiB UTF-8 tail; omittedChars is the
@@ -767,15 +1064,15 @@ export class RuntimeJournal {
       to remember to invalidate. The time expiry covers the only projection
       whose visibility changes without a write. serverTime inside the cached
       frame dates from the last rebuild; no consumer reads it. */
-  snapshotJson(): string {
+  snapshotJson(voiceBodiesFor?: readonly string[]): string {
+    const scope = JSON.stringify(voiceBodiesFor ?? null);
     const changes = this.totalChanges();
     const now = this.now();
-    if (this.snapshotCache?.changes === changes
-      && (this.snapshotCache.expiresAt === null || now < this.snapshotCache.expiresAt)) {
-      return this.snapshotCache.json;
-    }
-    const json = JSON.stringify(this.snapshotAt(now));
-    this.snapshotCache = { changes, expiresAt: this.snapshotEdgeExpiry(now), json };
+    const cached = this.snapshotCaches.get(scope);
+    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) return cached.json;
+    const json = JSON.stringify(this.snapshotAt(now, voiceBodiesFor));
+    if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
+      this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
     return json;
   }
 
@@ -1106,6 +1403,68 @@ export class RuntimeJournal {
     return cursor;
   }
 
+  /** Settle only old spawn/kill work whose two liveness authorities agree it
+      has no owner: the journal has no hosted/recovering session and the durable
+      agent registry is absent, marks the host dead, or marks the conversation
+      superseded. Pending sends and interrupts retain their existing unknown-
+      fate rules. */
+  settleStalePendingEffects(
+    registryConversations: ReadonlyMap<string, RuntimeRegistryConversationRetentionState>,
+    horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
+  ): { scanned: number; settled: number } {
+    this.assertHealthy();
+    const horizon = Math.max(1, horizonMs);
+    const rows = this.db.query<{
+      operation_id: string;
+      conversation_id: string;
+      receipt_json: string;
+      orphaned_since: number | null;
+    }, []>(`
+      SELECT operations.operation_id, operations.conversation_id, operations.receipt_json,
+        operations.orphaned_since
+      FROM operations
+      JOIN outbox ON outbox.id = 'effect:' || operations.operation_id
+      WHERE outbox.state = 'pending'
+        AND outbox.kind IN ('runtime.spawn', 'runtime.kill')
+        AND json_extract(operations.receipt_json, '$.status') IN ('pending', 'queued')
+      ORDER BY operations.event_seq
+    `).all();
+    let settled = 0;
+    const sampledAt = this.now();
+    for (const row of rows) {
+      try {
+        const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+        const session = this.entity<RuntimeSession>("session", row.conversation_id);
+        const registryState = registryConversations.get(row.conversation_id);
+        if (session?.host === "hosted" || session?.host === "recovering" || registryState === "current") {
+          if (row.orphaned_since !== null) {
+            this.db.query("UPDATE operations SET orphaned_since = NULL WHERE operation_id = ?")
+              .run(row.operation_id);
+          }
+          continue;
+        }
+        if (row.orphaned_since === null) {
+          this.db.query("UPDATE operations SET orphaned_since = ? WHERE operation_id = ?")
+            .run(sampledAt, row.operation_id);
+          continue;
+        }
+        if (sampledAt - row.orphaned_since < horizon) continue;
+        const ageMinutes = Math.ceil(horizon / 60_000);
+        let reason = `stale: ${receipt.kind} target has no runtime host and no agent registry record after ${ageMinutes} minutes`;
+        if (registryState === "superseded") {
+          reason = `stale: ${receipt.kind} target has no runtime host and its registry conversation is superseded after ${ageMinutes} minutes`;
+        } else if (registryState === "dead") {
+          reason = `stale: ${receipt.kind} target has no runtime host and its registry host is dead after ${ageMinutes} minutes`;
+        }
+        this.transitionOperation(row.operation_id, "failed", { reason });
+        settled += 1;
+      } catch (error) {
+        console.error(`[runtime journal] stale effect ${row.operation_id} could not be settled: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { scanned: rows.length, settled };
+  }
+
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
@@ -1114,7 +1473,21 @@ export class RuntimeJournal {
       : "state = 'pending'";
     const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
     const rows = this.db.query<{ id: string; kind: string; payload_json: string; event_seq: number }, Array<string | number>>(
-      `SELECT id, kind, payload_json, event_seq FROM outbox WHERE ${stateFilter}${kindFilter} AND event_seq > ? ORDER BY event_seq LIMIT ?`,
+      `SELECT id, kind, payload_json, event_seq
+       FROM outbox
+       WHERE ${stateFilter}${kindFilter}
+         AND event_seq > ?
+         AND (
+           id NOT LIKE 'effect:%'
+           OR NOT EXISTS (
+             SELECT 1
+             FROM operations
+             WHERE operations.operation_id = substr(outbox.id, 8)
+               AND json_extract(operations.receipt_json, '$.status') NOT IN ('pending', 'queued', 'delivering', 'applying')
+           )
+         )
+       ORDER BY event_seq
+       LIMIT ?`,
     ).all(...(kinds ?? []), afterEventSeq, limit);
     return rows.map((row) => {
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
@@ -1123,7 +1496,40 @@ export class RuntimeJournal {
     });
   }
 
-  compact(maxEvents = this.maxEvents): void {
+  /** Releases the retention taken by {@link transitionOperation} under
+      `awaitProjection`, for receipts whose outcome now lives in the durable
+      delivery record (#1612).
+   *
+   * Idempotent and self-limiting: an id with no obligation, an id compacted
+   * away, and an id acknowledged twice are all the same no-op, so a caller that
+   * cannot tell whether its previous acknowledgement arrived may simply send it
+   * again. It moves nothing else — not the receipt, not its status, not its
+   * time — so nothing about the delivery evidence depends on who called it. */
+  acknowledgeTerminalProjection(operationIds: readonly string[]): number {
+    this.assertHealthy();
+    if (operationIds.length === 0) return 0;
+    if (operationIds.length > RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT) {
+      throw new Error("runtime projection acknowledgement batch is too large");
+    }
+    if (operationIds.some((operationId) => typeof operationId !== "string" || !operationId)) {
+      throw new Error("runtime projection acknowledgement id is invalid");
+    }
+    return this.db.query(
+      `UPDATE operations SET projection_pending = NULL
+       WHERE projection_pending IS NOT NULL AND operation_id IN (${operationIds.map(() => "?").join(", ")})`,
+    ).run(...operationIds).changes;
+  }
+
+  /** The receipts compaction is holding for an unacknowledged projection, newest
+      first — the exact set the cap below is applied to. */
+  unprojectedTerminalOperationIds(limit = RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT): string[] {
+    this.assertHealthy();
+    return this.db.query<{ operation_id: string }, [number]>(
+      "SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?",
+    ).all(Math.max(0, limit)).map((row) => row.operation_id);
+  }
+
+  compact(maxEvents = this.maxEvents, unprojectedReceiptLimit = RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT): void {
     this.assertHealthy();
     const count = Number(this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM events").get()?.count ?? 0);
     if (count <= maxEvents) return;
@@ -1135,7 +1541,34 @@ export class RuntimeJournal {
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
       this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
-      this.db.query("DELETE FROM operations WHERE event_seq <= ? AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')").run(anchor.seq);
+      /* Three reasons an operation outlives the anchor: an effect still owed
+         execution, a native queue entry that is still answered through the
+         operation (#1664), and a terminal receipt still owed a projection
+         (#1612). Only the last is capped, and the cap keeps the NEWEST
+         obligations, so a Viewer that stopped acknowledging cannot pin the
+         table indefinitely while a live repair keeps the receipts it can
+         still consume. */
+      const released = Number(this.db.query<{ count: number }, [number, number]>(
+        `SELECT COUNT(*) AS count FROM operations
+         WHERE event_seq <= ? AND projection_pending IS NOT NULL
+           AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
+           AND operation_id NOT IN (
+             SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
+           )`,
+      ).get(anchor.seq, Math.max(0, unprojectedReceiptLimit))?.count ?? 0);
+      this.db.query(
+        `DELETE FROM operations
+         WHERE event_seq <= ?
+           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')
+           AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
+           AND operation_id NOT IN (
+             SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
+           )`,
+      ).run(anchor.seq, Math.max(0, unprojectedReceiptLimit));
+      if (released > 0) {
+        console.error(`[runtime journal] compaction released ${released} unacknowledged terminal receipt(s) over the ${unprojectedReceiptLimit} retention cap`);
+      }
+      this.db.exec("DELETE FROM delivery_operation_actions WHERE operation_id NOT IN (SELECT operation_id FROM operations)");
       this.db.query("DELETE FROM entities WHERE kind = 'operation' AND checkpoint_seq <= ?").run(anchor.seq);
       this.metaSet("anchor_seq", String(anchor.seq));
       this.metaSet("anchor_hash", anchor.hash);
@@ -1303,6 +1736,15 @@ export class RuntimeJournal {
       if (!command.text.trim() && !command.images?.length) throw new Error("message content is required");
       if (!command.contentDigest) throw new Error("message content digest is required");
     }
+    /* Injection carries text and only text, and the refusal is repeated here
+       because the journal is reachable from more than one admitting surface —
+       an image that slipped past a route must not become a durable operation
+       nobody can execute. */
+    if (command.kind === "inject") {
+      if (!command.text.trim()) throw new Error("injected context text is required");
+      if (!command.contentDigest) throw new Error("message content digest is required");
+      if (command.images?.length) throw new Error("injected context cannot carry images");
+    }
     if (command.kind === "answer" && !command.attentionId.trim()) throw new Error("attentionId is required");
     if ((command.kind === "kill" || command.kind === "compact" || (command.kind === "reconfigure" && command.sessionKey))
       && ((!command.sessionKey || (command.sessionKey.engine !== "codex" && command.sessionKey.engine !== "claude"))
@@ -1316,6 +1758,20 @@ export class RuntimeJournal {
   }
 
   private normalizeOperation(command: RuntimeOperationCommand): RuntimeOperationCommand {
+    if (command.kind === "native-queue") return parseRuntimeCommand("native-queue", command);
+    if (command.kind === "inject") {
+      const normalized = parseRuntimeCommand("inject", command);
+      /* The parser recomputes the digest from the text it accepted. Comparing
+         it to what the caller claimed is what binds one durable key to one
+         payload: without this, a replay under the same operation id could
+         arrive with different text and be admitted as if nothing changed. */
+      if (command.contentDigest
+        && normalized.kind === "inject"
+        && command.contentDigest !== normalized.contentDigest) {
+        throw new Error("message content digest mismatch");
+      }
+      return normalized;
+    }
     if (command.kind !== "send" && command.kind !== "steer" && command.kind !== "spawn") return command;
     const rawImages = command.images ?? [];
     const images = parseStructuredImageRefs(rawImages, 16);
@@ -1367,12 +1823,34 @@ export class RuntimeJournal {
     let reason: string | null = null;
     let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
     let queuePosition: number | null = null;
-    if (this.structuredHosts
+    if (command.kind === "native-queue") {
+      turnId = command.turnId ?? null;
+      if (!this.structuredHosts || !session || session.host !== "hosted") {
+        status = "rejected"; reason = "no-claim";
+      } else if (session.hostKind !== "codex-app-server" || !session.capabilities.nativeQueue) {
+        status = "rejected"; reason = "unsupported-capability";
+      } else if (session.sessionKey.sessionId !== command.binding.threadId || session.accountId !== command.binding.accountId) {
+        status = "rejected"; reason = "stale-generation";
+      } else if (command.turnId !== undefined && command.turnId !== session.activeTurnId) {
+        status = "rejected"; reason = "stale-turn";
+      } else {
+        status = "queued";
+      }
+    } else if (this.structuredHosts
       && command.kind === "send"
       && (session?.hostKind === "codex-app-server" || session?.hostKind === "claude-broker")) {
-      if (!session || session.host !== "hosted") {
+      if (command.policy === "queue" && session.hostKind === "codex-app-server"
+        && session.diagnostics?.queueCapability === "unknown") {
+        status = "rejected";
+        reason = "native-queue-capability-unknown";
+      } else if (!session || session.host !== "hosted") {
         status = "rejected";
         reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
+      /* A NAMED turn is the fence. An explicit `null` on an ordinary send has
+         always meant "no turn to fence against" — the native queue's own
+         commands are where it means "only while idle", and they are fenced in
+         their own branch above. Reading it as a fence here rejected sends the
+         Viewer has always delivered against a busy host. */
       } else if (command.turnId && command.turnId !== session.activeTurnId) {
         status = "rejected";
         reason = "stale-turn";
@@ -1380,6 +1858,34 @@ export class RuntimeJournal {
         status = "queued";
         queuePosition = this.queuedSendCount(command.conversationId) + 1;
         turnId = null;
+      }
+    /* #1560: native injection is admitted on its own terms and never on a
+       send's. It has no policy to interpret, it never becomes a native-queue
+       add, and its whole reason to exist is that it does not start or interrupt
+       a turn — so `running` is a perfectly good state to be admitted against,
+       which is the opposite of what the send branch below concludes. The
+       capability is required AT ADMISSION so the operator is refused now rather
+       than holding an operation that fails later, and there is deliberately no
+       degradation to steering: an engine that cannot inject says so. */
+    } else if (command.kind === "inject") {
+      if (!session || session.host !== "hosted") {
+        status = "rejected";
+        reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
+      } else if (!session.writerClaim) {
+        status = "rejected";
+        reason = "stale-generation";
+      } else if (!session.capabilities.inject) {
+        status = "rejected";
+        reason = "unsupported-injection";
+      /* Unlike an ordinary send, an explicit `null` here IS a fence: it is the
+         caller saying "only into an idle thread", which is the one way to ask
+         for the history placement and be sure of getting it. */
+      } else if (command.turnId !== undefined && command.turnId !== session.activeTurnId) {
+        status = "rejected";
+        reason = "stale-turn";
+      } else {
+        status = "queued";
+        turnId = session.activeTurnId;
       }
     } else if (command.kind === "send" || command.kind === "steer") {
       if (!session || session.host !== "hosted") {
@@ -1484,7 +1990,14 @@ export class RuntimeJournal {
       turnId,
       queuePosition,
       reason,
-      text: command.kind === "send" || command.kind === "steer" ? command.text.slice(0, 240) : null,
+      /* #1560: an injection carries the operator's own words, so its receipt
+         carries them too. Without this every inject receipt has `text: null`,
+         and the composer surfaces that render a receipt all require text — so a
+         failed, refused or unverified injection would be invisible, which is
+         exactly the outcome this operation exists to report honestly. */
+      text: command.kind === "send" || command.kind === "steer" || command.kind === "inject"
+        ? command.text.slice(0, 240)
+        : null,
       ...(command.kind === "send" || command.kind === "steer" ? { imageCount: command.images?.length ?? 0 } : {}),
       ...((command.kind === "send" || command.kind === "steer") && command.runtime ? { runtime: command.runtime } : {}),
       at: admittedAt,
@@ -1495,6 +2008,12 @@ export class RuntimeJournal {
       admittedAt,
       revision,
     };
+  }
+
+  private injectionBindingAtAdmission(conversationId: string) {
+    const session = this.entity<RuntimeSession>("session", conversationId);
+    if (!session?.writerClaim) return null;
+    return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
   }
 
   private queuedSendCount(conversationId: string): number {
@@ -1873,6 +2392,7 @@ export class RuntimeJournal {
         unowned: payload.unowned === true,
         createdAt: typeof payload.createdAt === "string" ? payload.createdAt : event.recorded_at,
         request: record(payload.request),
+        isBlocking: !(record(record(payload.request).protocol).method === "item/tool/requestUserInput" && payload.isBlocking === false),
         ...(typeof payload.autoResolutionMs === "number" || payload.autoResolutionMs === null ? { autoResolutionMs: payload.autoResolutionMs } : {}),
         ...(typeof payload.turnId === "string" || payload.turnId === null ? { turnId: payload.turnId } : {}),
       };
@@ -1962,9 +2482,18 @@ export class RuntimeJournal {
     return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => JSON.parse(row.state_json) as T);
   }
 
-  private snapshotSessionValues(): RuntimeSession[] {
-    const active = this.db.query<{ state_json: string }, [string, string, string]>(`
-      SELECT state_json
+  private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
+    // SQLite removes the heavy bodies before they cross into JS. The original
+    // entity, receipts, tombstones and full snapshot API remain unchanged.
+    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN id = ? THEN state_json ELSE json_set(state_json,
+      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
+        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
+          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
+        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
+      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
+    const selected = voiceBodiesFor?.[0] ?? "";
+    const active = this.db.query<{ state_json: string }, (string | number)[]>(`
+      SELECT ${projection}
       FROM entities
       WHERE kind = ?
         AND (
@@ -1972,15 +2501,15 @@ export class RuntimeJournal {
           OR json_extract(state_json, '$.host') NOT IN (?, ?)
         )
       ORDER BY id
-    `).all("session", "dead", "unhosted");
-    const inactive = this.db.query<{ state_json: string }, [string, string, string, number]>(`
-      SELECT state_json
+    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted");
+    const inactive = this.db.query<{ state_json: string }, (string | number)[]>(`
+      SELECT ${projection}
       FROM entities
       WHERE kind = ?
         AND json_extract(state_json, '$.host') IN (?, ?)
       ORDER BY checkpoint_seq DESC, id DESC
       LIMIT ?
-    `).all("session", "dead", "unhosted", RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
+    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted", RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
     return [...active, ...inactive]
       .map((row) => JSON.parse(row.state_json) as RuntimeSession)
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
@@ -2107,7 +2636,7 @@ export class RuntimeJournal {
 
   private verify(): void {
     try {
-      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "consumer_checkpoints", "viewer_deployments"]) {
+      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "viewer_deployments"]) {
         const check = this.db.query<{ quick_check: string }, []>(`PRAGMA quick_check(${table})`).get();
         if (check?.quick_check !== "ok") throw new RuntimeJournalFault(`runtime journal SQLite check failed: ${table}`);
       }
@@ -2144,7 +2673,7 @@ export class RuntimeJournal {
         CREATE TABLE IF NOT EXISTS operations (
           operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
           request_hash TEXT NOT NULL, request_json TEXT NOT NULL,
-          receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL,
+          receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
           UNIQUE(conversation_id, idempotency_key)
         );
       `);
@@ -2182,6 +2711,19 @@ export class RuntimeJournal {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
+  }
+
+  private migrateOperationOrphanedSince(): void {
+    const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(operations)").all().map((row) => row.name));
+    if (!columns.has("orphaned_since")) this.db.exec("ALTER TABLE operations ADD COLUMN orphaned_since INTEGER");
+  }
+
+  /** #1612. Null on every existing row, which reads as "owed nothing": a
+      journal written before this column keeps exactly its previous retention,
+      and only transitions that ask for projection retention set it. */
+  private migrateOperationProjectionPending(): void {
+    const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(operations)").all().map((row) => row.name));
+    if (!columns.has("projection_pending")) this.db.exec("ALTER TABLE operations ADD COLUMN projection_pending INTEGER");
   }
 
   private migrateLegacyEvents(): void {

@@ -25,7 +25,7 @@ import {
   optimisticReorderStage,
   patchPipeline,
   reviewLoopChainValid,
-  stageAttempts,
+  stageConfigurable,
   stageChipLabel,
   stageChipState,
   stagePaneTitle,
@@ -76,11 +76,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
   const draft = pipeline.state === "draft";
   /* Only a stage that has never run can be re-configured — the engine snapshots
      a stage's config at its first attempt (same guard as the builder panel). */
-  const editable =
-    interactive &&
-    stageAttempts(pipeline, stage.id).length === 0 &&
-    pipeline.state !== "completed" &&
-    pipeline.state !== "closed";
+  const editable = interactive && stageConfigurable(pipeline, stage.id);
 
   const effectiveModel = stage.effectiveRole.model ?? "";
   const effectiveEffort = stage.effectiveRole.effort ?? "";
@@ -137,7 +133,8 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
   const changeEngine = (next: FlowEngine) => {
     if (next === engine) return;
     /* Switching the engine invalidates the model and can invalidate the effort
-       tier; clearing the pins hands both back to the engine/role defaults. */
+       tier; model:null leaves the CLI model unresolved. Keep only the base
+       engine tiers, matching resolvePipelineRole for an explicit null model. */
     const keepEffort = Boolean(runtime.effort && isEngineEffort(next, runtime.effort));
     setEngine(next);
     setRuntime((current) => ({ ...current, model: "", effort: keepEffort ? current.effort : "" }));

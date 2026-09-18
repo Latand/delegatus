@@ -1,12 +1,58 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AgentRegistry } from "@/lib/agent/registry";
 import type { CodexAccount } from "@/lib/accounts/codex";
 
-import { QuotaController, type QuotaProbePort } from "./quotaController";
+import type { QuotaProbePort } from "./quotaController";
+
+const QUOTA_SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-suite-"));
+const PREVIOUS_STATE = process.env.LLV_STATE_DIR;
+process.env.LLV_STATE_DIR = path.join(QUOTA_SANDBOX, "state");
+
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+const { QuotaController } = await import("./quotaController");
+
+afterAll(() => {
+  if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = PREVIOUS_STATE;
+  fs.rmSync(QUOTA_SANDBOX, { recursive: true, force: true });
+});
+
+test("quota probes wait behind account deletion mutations", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-fence-"));
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const account: CodexAccount = { id: "managed", label: "Managed", kind: "managed", home: "/homes/managed", sessionsDir: "/homes/managed/sessions", authPresent: true, loginPane: null, createdAt: 1 };
+    let probes = 0;
+    const controller = new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      async probe(engine, candidate, now) {
+        probes += 1;
+        return { engine, accountId: candidate.id, authenticated: true, authCheckedAt: now, limits: null, provenance: { source: "live", reason: null, staleSince: null }, observedAt: now };
+      },
+    });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = new Promise<void>((resolve) => { entered = resolve; });
+    const holder = withAccountMutationLockAsync(async () => { entered(); await held; });
+    await acquired;
+
+    const tick = controller.tick("codex");
+    await Bun.sleep(10);
+    expect(probes).toBe(0);
+    release();
+    await holder;
+    await tick;
+    expect(probes).toBe(1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("quota visibility remains fresh when automatic balancing is disabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-"));
@@ -210,6 +256,42 @@ test("a failed home records a closed code while the controller sweeps later home
     expect(visited.sort()).toEqual(["default", "managed"]);
     expect(registry.snapshot().quotaObservations.codex.default?.provenance.reason).toBe("quota-probe-failed");
     expect(JSON.stringify(registry.snapshot())).not.toContain("secret");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the controller records the probe's reset credits and carries them through a failed tick (#1373)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-reset-credits-"));
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const account: CodexAccount = { id: "credited", label: "Account A", kind: "managed", home: "/homes/credited", sessionsDir: "/homes/credited/sessions", authPresent: true, loginPane: null, createdAt: 1 };
+    let fail = false;
+    const controller = new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      async probe(engine, candidate, now) {
+        if (fail) throw new Error("offline");
+        return {
+          engine,
+          accountId: candidate.id,
+          authenticated: true,
+          authCheckedAt: now,
+          limits: { session: null, weekly: { usedPercent: 100, resetsAt: Math.floor(now / 1000) + 86_400, windowMinutes: 10_080 }, plan: "pro", capturedAt: Math.floor(now / 1000) },
+          provenance: { source: "live", reason: null, staleSince: null },
+          observedAt: now,
+          resetCredits: { availableCount: 1, expiresAt: Math.floor(now / 1000) + 20 * 86_400 },
+        };
+      },
+    }, "boot-reset-credits");
+    await controller.tick("codex");
+    expect(registry.quotaObservations("codex")[0]).toMatchObject({ accountId: "credited", resetCredits: { availableCount: 1 } });
+
+    fail = true;
+    await controller.tick("codex");
+    const carried = registry.quotaObservations("codex")[0]!;
+    expect(carried.provenance.source).toBe("cache");
+    expect(carried.resetCredits).toMatchObject({ availableCount: 1 });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

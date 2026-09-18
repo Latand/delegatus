@@ -1,30 +1,24 @@
 import fs from "node:fs";
+import path from "node:path";
+import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 import {
   emptySeatTickState,
+  SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickOutstandingWake,
   type SeatTickProjectState,
   type SeatTickPullRequestGap,
+  type SeatTickRetiredWake,
   type SeatTickSourceGap,
   type SeatTickWakeCommit,
   type SeatTickWakeReasonKind,
 } from "./types";
 
-/**
- * The seat tick's durable row per project (issue #1245).
- *
- * A timer that happened to be running is never the source of truth. Everything
- * that decides what a check does — when the last check and the last DELIVERED
- * wake were, what was stalled at the previous check, which lifecycle events the
- * seat has actually been told about, whether the last wake changed anything —
- * lives here, so a Viewer restart, a deploy or a rotation resumes from the
- * stamps rather than from a process's memory.
- */
+/** The legacy decoder and the public tick-state API. The original JSON is
+ * retained; bounded, versioned migration makes SQLite accounting authoritative. */
 
 /**
  * Version 2 changes one field's meaning: `eventsThrough` may be null, and null
@@ -50,9 +44,8 @@ function isoOrNull(value: unknown): string | null {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 }
 
-/** The commit a landing will apply. A row missing it is a row from before the
-    plan was recorded, and a wake whose landing cannot be credited correctly is
-    better forgotten than credited wrongly — so the whole record drops. */
+/** Decode the frozen landing plan. Migration retains a gap when an
+    outstanding record has no usable plan, preventing a replacement send. */
 function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
@@ -64,8 +57,19 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
     fingerprint: raw.fingerprint.slice(0, 200),
     eventsThrough: raw.eventsThrough,
+    /* A plan written before the harvest existed names no child, and a landing
+       credited from it harvests nothing — the safe direction. */
+    children: conversationIds(raw.children),
   };
 }
+
+/** Legacy identities have a bounded length; positive evidence is never
+    truncated by list size. Migration stores acknowledgments as separate rows. */
+function conversationIds(value: unknown): string[] {
+  return (Array.isArray(value) ? value : [])
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0 && entry.length <= 200);
+}
+
 
 /**
  * The cursor a row starts the next check from.
@@ -88,8 +92,8 @@ function eventsThrough(raw: Record<string, unknown>, legacy: boolean): number | 
 function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  const clientMessageId = typeof raw.clientMessageId === "string" ? raw.clientMessageId.slice(0, 300) : "";
-  const conversationId = typeof raw.conversationId === "string" ? raw.conversationId.slice(0, 200) : "";
+  const clientMessageId = typeof raw.clientMessageId === "string" ? raw.clientMessageId : "";
+  const conversationId = typeof raw.conversationId === "string" ? raw.conversationId : "";
   const seatEpoch = raw.seatEpoch;
   const commit = normalizeWakeCommit(raw.commit);
   if (!clientMessageId || !conversationId || !commit || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return null;
@@ -97,9 +101,45 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
     clientMessageId,
     conversationId,
     seatEpoch,
-    operationId: typeof raw.operationId === "string" && raw.operationId ? raw.operationId.slice(0, 200) : null,
+    operationId: typeof raw.operationId === "string" && raw.operationId ? raw.operationId : null,
     commit,
+    ...(typeof raw.text === "string" ? { text: raw.text } : {}),
+    ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
   };
+}
+
+/**
+ * Attempts a superseded seat left behind (#1594).
+ *
+ * Absent on every legacy row, and absent reads as none — a row written before
+ * the slot existed had nowhere to put one. An entry missing its proof is
+ * dropped rather than half-trusted: the superseding seat is the whole warrant
+ * for the fence having been released, and an entry that cannot say which seat
+ * that was is not evidence of anything. Dropping it costs nothing the journal
+ * has not already recorded, and the bound is applied here so a row that grew
+ * past it elsewhere is read back inside it.
+ *
+ * Note what is deliberately absent: {@link SeatTickAccounting.migrateLegacy}
+ * refuses to complete when normalization drops a legacy row's outstanding
+ * attempt, so an obligation is never lost to a silent decode. There is no
+ * counterpart here because no legacy file can carry this field — it postdates
+ * the JSON writer, and every write now goes through accounting. A legacy writer
+ * that ever reappears has to bring that guard with it, or the drop above stops
+ * being free.
+ */
+function normalizeRetiredWakes(value: unknown): SeatTickRetiredWake[] {
+  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const raw = entry as Record<string, unknown>;
+    const wake = normalizeOutstandingWake(raw.wake);
+    const retiredAt = isoOrNull(raw.retiredAt);
+    const by = raw.supersededBy as Record<string, unknown> | undefined;
+    if (!wake || !retiredAt || !by || typeof by !== "object") return [];
+    const conversationId = typeof by.conversationId === "string" ? by.conversationId : "";
+    const seatEpoch = by.seatEpoch;
+    if (!conversationId || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return [];
+    return [{ wake, retiredAt, supersededBy: { conversationId, seatEpoch } }];
+  }).slice(0, SEAT_TICK_RETIRED_WAKE_LIMIT);
 }
 
 const PULL_REQUEST_GAPS: SeatTickPullRequestGap[] = ["timed-out", "command-failed", "malformed-output", "lanes-unreadable"];
@@ -124,6 +164,15 @@ function normalizeSourceGap(value: unknown): SeatTickSourceGap | null {
   if (!gap || !since || !lastAttemptAt) return null;
   if (typeof attempts !== "number" || !Number.isInteger(attempts) || attempts < 1) return null;
   return { gap, since, lastAttemptAt, attempts, reported: raw.reported === true };
+}
+
+/** The released-attempt marker (#1672), or null for a row from before it. */
+function normalizeReleasedWake(value: unknown): SeatTickProjectState["releasedWake"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const clientMessageId = typeof raw.clientMessageId === "string" && raw.clientMessageId.length > 0 && raw.clientMessageId.length <= 1_000 ? raw.clientMessageId : null;
+  const releasedAt = isoOrNull(raw.releasedAt);
+  return clientMessageId && releasedAt ? { clientMessageId, releasedAt } : null;
 }
 
 function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
@@ -152,7 +201,15 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     lastWakeFingerprint: typeof raw.lastWakeFingerprint === "string" ? raw.lastWakeFingerprint.slice(0, 200) : null,
     eventsThrough: eventsThrough(raw, legacy),
     outstandingWake: normalizeOutstandingWake(raw.outstandingWake),
+    retiredWakes: normalizeRetiredWakes(raw.retiredWakes),
+    releasedWake: normalizeReleasedWake(raw.releasedWake),
     pullRequestGap: normalizeSourceGap(raw.pullRequestGap),
+    /* No legacy row ever carried a children run: the source and its row are
+       both #1465, and the SQLite store is the only place they have lived. */
+    childrenGap: null,
+    /* Absent on every row from before #1465, and absent reads as empty: a
+       project's children are all owed until a delivered wake names them. */
+    harvestedChildren: conversationIds(raw.harvestedChildren),
   };
 }
 
@@ -193,11 +250,19 @@ function readFile(filePath: string): SeatTickStateFile {
  * - The outstanding wake, which is a payload the runtime is still holding for
  *   the PREDECESSOR. It survives so the successor's first check is what takes
  *   it back; dropping it here would leave it addressed to a seat nothing is
- *   watching any more.
+ *   watching any more. Its retired siblings (#1594) survive for exactly that
+ *   reason and no other: they no longer fence anything, and the only thing
+ *   still asking their holders what became of them is this project's check.
  * - The run of failures of an evidence source (#1298), which is a fact about
  *   `gh` and the machine it runs on. A rotation does not fix a missing
  *   credential, so clearing it here would re-report the same outage to the
- *   board and put the read back on the five-minute retry it had outgrown.
+ *   board and put the read back on the five-minute retry it had outgrown. The
+ *   children source's run (#1465) is the same kind of fact about the registry
+ *   and the ledgers, and survives for the same reason.
+ * - The harvest cursor (#1465), for the same reason as the event cursor: it
+ *   records which finished children the PROJECT was already told about, and
+ *   re-announcing every one of them to a successor would bury the child that
+ *   finished after it sat down.
  */
 export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: number | null): SeatTickProjectState {
   if (row.seatEpoch === seatEpoch) return row;
@@ -208,23 +273,54 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     lastWakeAt: row.lastWakeAt,
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
+    retiredWakes: row.retiredWakes ?? [],
+    releasedWake: row.releasedWake ?? null,
     pullRequestGap: row.pullRequestGap,
+    childrenGap: row.childrenGap,
+    harvestedChildren: row.harvestedChildren,
+    accounting: row.accounting,
   };
 }
 
+function accountingFilename(filePath: string): string {
+  return filePath === seatTickStatePath() ? path.join(path.dirname(filePath), "state.sqlite") : `${filePath}.sqlite`;
+}
+
+function accountingFor(project: string, filePath: string): SeatTickAccounting {
+  const accounting = new SeatTickAccounting(accountingFilename(filePath), project);
+  accounting.migrateLegacy(filePath, (raw, version) => normalizeRow(raw, version !== 2));
+  return accounting;
+}
+
 export function readSeatTickState(project: string, filePath = seatTickStatePath()): SeatTickProjectState {
+  return accountingFor(project, filePath).readState();
+}
+
+/**
+ * The row as it stands, for a reader that must leave the store as it found it
+ * (#1672). {@link readSeatTickState} is a check's read: it imports a legacy
+ * row and mints the project's accounting row when there is none, which is
+ * right for the tick and wrong for a diagnostic surface that can be asked
+ * about any name. This answers from the accounting row when one exists, from
+ * the legacy file when only that has the project, and empty otherwise — and
+ * writes no row in any of the three cases.
+ */
+export function peekSeatTickState(project: string, filePath = seatTickStatePath()): SeatTickProjectState {
+  const accounting = new SeatTickAccounting(accountingFilename(filePath), project);
+  if (accounting.row()) return accounting.readState();
   return readFile(filePath).projects[project] ?? emptySeatTickState();
 }
 
 export function readSeatTickStateFile(filePath = seatTickStatePath()): Record<string, SeatTickProjectState> {
-  return readFile(filePath).projects;
+  for (const project of Object.keys(readFile(filePath).projects)) accountingFor(project, filePath);
+  const filename = accountingFilename(filePath);
+  const accounting = new SeatTickAccounting(filename, "");
+  return Object.fromEntries(accounting.collection.snapshot().flatMap((row) => row.kind === "project"
+    ? [[row.project, { ...row.state, accounting: { filename, revision: row.revision, gap: row.gap } }]] : []));
 }
 
-/** Serialized read-modify-write of one project's row; other projects' rows are
-    re-read inside the transaction so two projects' checks cannot clobber. */
+/** Conditional project write. The legacy JSON is retained byte-for-byte. */
 export function writeSeatTickState(project: string, row: SeatTickProjectState, filePath = seatTickStatePath()): void {
-  withFileTransactionSync(filePath, "seat tick state is busy", () => {
-    const file = readFile(filePath);
-    writeJsonDurably(filePath, { version: SEAT_TICK_STATE_VERSION, projects: { ...file.projects, [project]: row } });
-  });
+  const accounting = accountingFor(project, filePath);
+  accounting.writeState(row.accounting ? row : { ...row, accounting: accounting.readState().accounting });
 }

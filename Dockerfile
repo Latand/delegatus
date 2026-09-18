@@ -5,6 +5,9 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm install -g bun@1.4.0
 COPY package.json bun.lock ./
+# Vendored dependency patches (`patchedDependencies` in package.json). The
+# install fails when a patch file the lockfile names is absent.
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 
 FROM node:22.16.0-bookworm-slim AS build
@@ -226,6 +229,7 @@ COPY --from=build /app/scripts/whisper_transcribe.py ./scripts/whisper_transcrib
 # dies with start_failed (#1081).
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
+COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
 COPY --from=build /app/node_modules ./node_modules
 
 # Permission gate: the compose service runs this image as a non-root user

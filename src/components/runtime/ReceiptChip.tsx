@@ -5,16 +5,28 @@ import { Clock3 } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
+import { describeReceiptFailure } from "./deliveryNotice";
 import { deliveryWaitText, type DeliveryWait } from "./deliveryWait";
 import { humanReceiptReasonKey, receiptIsTerminal, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
 
 /** Human sentence for a rejected/failed reason: a mapped sentence for a known
-    code, else the sanitized reason printed verbatim behind a "not delivered:"
-    prefix — never the raw `rejected: dead-host` stream (design §7). */
+    code, else the sanitized reason's terse cause behind a "not delivered:"
+    prefix — never the raw `rejected: dead-host` stream (design §7), and never
+    the whole sentence with its remediation in a chip (#1362): that lives in
+    the notice's expanded detail and on hover ({@link humanReasonFull}). */
 export function humanReason(t: TFunction, reason: string | null | undefined): string {
   const key = humanReceiptReasonKey(reason);
   if (key) return t(key);
-  return reason ? t("receipt.human.verbatim", { reason }) : t("composer.receiptFailed");
+  const { cause } = describeReceiptFailure(t, reason);
+  return cause ? t("receipt.human.verbatim", { reason: cause }) : t("composer.receiptFailed");
+}
+
+/** The whole sentence {@link humanReason} shortened, for hover — or null when
+    nothing was shortened. */
+export function humanReasonFull(t: TFunction, reason: string | null | undefined): string | null {
+  if (humanReceiptReasonKey(reason)) return null;
+  const { cause, full } = describeReceiptFailure(t, reason);
+  return full && full !== cause ? t("receipt.human.verbatim", { reason: full }) : null;
 }
 
 /** Badge tone per receipt status. Text carries the meaning; color reinforces. */
@@ -45,8 +57,10 @@ export interface ReceiptChipProps {
       Absent for a settled receipt, whose own status carries the meaning. */
   wait?: DeliveryWait | null;
   actionsDisabled?: boolean;
-  /** Retry reuses the same idempotency key — never a second send. */
+  /** Retry preserves the delivery's durable dedup identity. */
   onRetry?: () => void;
+  /** Terminalize an unconfirmed delivery and retire its durable effect. */
+  onDiscard?: () => void;
   /** Edit-and-resend mints a fresh key. */
   onEdit?: () => void;
 }
@@ -54,16 +68,17 @@ export interface ReceiptChipProps {
 /**
  * Inline command receipt shown on the message it belongs to. Durable and
  * journaled, so it survives a reload. `rejected`/`failed` expose the reason
- * verbatim and are announced politely; both offer Retry (same key) and Edit
- * (new key).
+ * verbatim and are announced politely. Recoverable failures offer Retry and
+ * Edit; an operator-discarded receipt stays terminal.
  */
-export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onRetry, onEdit }: ReceiptChipProps) {
+export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onRetry, onEdit, onDiscard }: ReceiptChipProps) {
   const { t } = useLocale();
   const failed = receipt.status === "rejected" || receipt.status === "failed";
   /* Issue #1213: a delivery unconfirmed past the bound is terminal here even
      though the receipt is not — the composer stops claiming it is moving and
      says it did not arrive, instead of spinning with no end. */
   const uncertain = wait?.phase === "uncertain";
+  const discarded = receipt.reason === "delivery-discarded";
   /* Nothing is moving in any of these: the message is parked behind a turn,
      parked with nothing to hand it to, parked for a reason this surface cannot
      name, or never confirmed as accepted at all. */
@@ -73,24 +88,33 @@ export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onR
     || wait?.phase === "awaiting-handover"
     || wait?.phase === "unconfirmed-admission";
   const waitText = wait ? deliveryWaitText(t, wait, receipt.queuePosition) : null;
+  const label = waitText ?? runtimeReceiptStatusText(t, receipt);
+  const fullLabel = failed ? humanReasonFull(t, receipt.reason) : null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5 text-[11px] font-semibold" data-operation={receipt.operationId}>
+    <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-[11px] font-semibold" data-operation={receipt.operationId}>
+      {/* A failure chip says the terse cause (#1362) and can still run long
+          on a phone: it shrinks to its line and ends in an ellipsis instead of
+          clipping mid-word, and the whole sentence rides on hover. Moving
+          states keep their fixed chip. */}
       <Badge
         tone={uncertain || wait?.phase === "awaiting-host"
           ? "danger"
           : parked
             ? "warning"
             : tone(receipt.status)}
+        shrinkable={failed}
+        {...(failed ? { title: fullLabel ?? label } : {})}
         data-receipt-status={receipt.status}
         {...(wait ? { "data-receipt-wait": wait.phase } : {})}
         {...(failed || uncertain ? { role: "status", "aria-live": "polite" as const } : {})}
       >
         {parked ? <Clock3 className="mr-1 h-3 w-3" aria-hidden /> : null}
-        {waitText ?? runtimeReceiptStatusText(t, receipt)}
+        {failed ? <span className="min-w-0 truncate">{label}</span> : label}
       </Badge>
-      {failed && onRetry ? (
+      {(failed || uncertain) && !discarded && onRetry ? (
         <button
           type="button"
+          {...(uncertain ? { "data-receipt-uncertain-retry": "true" } : {})}
           disabled={actionsDisabled}
           className="min-h-11 rounded-full border border-border bg-canvas px-3 py-0.5 text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-0 sm:px-2"
           onClick={onRetry}
@@ -98,7 +122,18 @@ export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onR
           {t("runtime.receipt.retry")}
         </button>
       ) : null}
-      {failed && onEdit ? (
+      {onDiscard ? (
+        <button
+          type="button"
+          data-receipt-discard
+          disabled={actionsDisabled}
+          className="min-h-11 rounded-full border border-border bg-canvas px-3 py-0.5 text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-0 sm:px-2"
+          onClick={onDiscard}
+        >
+          {t("runtime.receipt.discard")}
+        </button>
+      ) : null}
+      {failed && !discarded && onEdit ? (
         <button
           type="button"
           disabled={actionsDisabled}

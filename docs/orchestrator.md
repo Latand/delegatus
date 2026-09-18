@@ -130,16 +130,34 @@ recorded compactions, a transcript past 8 MB, and a host that is gone each add
 a reason of their own.
 
 Press **Rotate**, and the draft opens prefilled with the incumbent's own
-parameters. The successor receives the mandate plus a handoff the server
-composes: the predecessor's identity and transcript path, the project's open
-board tasks, your notes, and one compact **Rotation history** section standing
-in for every earlier handoff — so a seat that has rotated a dozen times costs
-exactly what a fresh one costs. The predecessor keeps its conversation, its
-card and ordinary Viewer access; only its manager authority moves. Both cards
-stay linked, and the successor's header links back.
+parameters. The mandate box starts from the current built-in default when the
+incumbent's mandate is based on an older version, and the summary line says
+so — **Keep the incumbent's mandate** carries its text forward instead. A seat
+already on the current version, or on your own rules, keeps its text. The seat
+row flags a stale seat the same way (`mandate v3, default v13`), and
+`rotate_orchestrator` defaults identically, with `keepIncumbentMandate: true`
+as the explicit carry-forward. The successor receives the mandate plus a
+handoff the server composes: the predecessor's identity and exact `conversation_messages` call,
+the project's open board tasks, your notes, and one compact **Rotation history**
+section standing in for every earlier handoff — so a seat that has rotated a
+dozen times costs exactly what a fresh one costs. The predecessor keeps its
+conversation, its card and ordinary Viewer access; only its manager authority
+moves. Both cards stay linked, and the successor's header links back.
 
 Nothing rotates by itself. Crossing the threshold changes what the dock says
 and nothing else.
+
+The dock button is one way in; `rotate_orchestrator` is another. It performs
+the same rotation from any session — including the seat rotating itself, when
+you say so from a phone and the dock is out of reach — because the tool and
+`POST /api/orchestrator/rotate` share one authority contract: whatever actor
+reaches one reaches the other. What replaces a prohibition is a name. Every
+rotation records who triggered it — operator or agent, the triggering
+conversation, and the seat epoch it held — on the successor's designation and
+on the predecessor's revocation, so the lineage `get_orchestrator` reports
+carries both which seat replaced which and on whose word. Retrying the same
+idempotency key replays that record verbatim, so the name it answers with is
+always the one the rotation was recorded under, whoever sends the retry.
 
 The mandate itself lands in the feed as a single folded **Mandate** card with
 the delivery's line count, and a rotation handoff as its second section — so an

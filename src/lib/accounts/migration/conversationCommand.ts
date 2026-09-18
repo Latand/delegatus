@@ -1,9 +1,20 @@
 import { agentRegistry } from "@/lib/agent/registry";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { chooseReseatTarget } from "@/lib/accounts/reseat";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import {
+  AccountProjectBindingsUnreadableError,
+  allowedAccountIdsForProject,
+  projectAccountRefusalDetail,
+} from "@/lib/accounts/projectBindings";
+import { chooseProjectReseatTarget } from "@/lib/accounts/reseat";
+import { headCwd } from "@/lib/agent/transcript";
 
-import { advanceConversationMigration, drainHeldDeliveries } from "./coordinator";
+import { runtimeHostClient } from "@/lib/runtime/client";
+import type { RuntimeOperationResult } from "@/lib/runtime/contracts";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
+
+import { advanceConversationMigration, drainHeldDeliveries, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
 import { authorizeCodexForkRetry, RegisteredSuccessorProvider } from "./provider";
 import type { SuccessorProviderPort, ViewerConversationId } from "./contracts";
@@ -13,6 +24,8 @@ export type ConversationMigrationCommand = {
   action: string;
   expectedRevision?: number;
   path?: string;
+  /** `withdraw`: the queued reconfigure operation to withdraw. */
+  operationId?: unknown;
 };
 
 export type ConversationMigrationCommandResult = {
@@ -24,6 +37,33 @@ export interface ConversationMigrationCommandDependencies {
   registry?: typeof agentRegistry;
   provider?: () => SuccessorProviderPort;
   authorizeForkRetry?: typeof authorizeCodexForkRetry;
+  deliveryPort?: HeldDeliveryPort;
+  /** The runtime journal's record of an operation; `unreadable` when the host could not be asked. */
+  operationStatus?: (operationId: string) => Promise<RuntimeOperationResult | null | "unreadable">;
+  /** Wakes the structured delivery queue so a cancelled reconfigure settles now. */
+  kick?: () => void | Promise<void>;
+}
+
+/* Receipt statuses after which an operation is settled in the journal. */
+const SETTLED_OPERATION_STATUSES = new Set(["turn-started", "steered", "delivered", "applied", "interrupted", "answered", "rejected", "failed", "uncertain"]);
+
+async function readRuntimeOperation(operationId: string): Promise<RuntimeOperationResult | null | "unreadable"> {
+  const client = runtimeHostClient();
+  if (!client) return "unreadable";
+  try {
+    return await client.operationStatus(operationId);
+  } catch {
+    return "unreadable";
+  }
+}
+
+/** Work after a committed write: its failure is left to the next queue or migration pass. */
+async function settleAfterCommit(work: () => unknown): Promise<void> {
+  try {
+    await work();
+  } catch {
+    // The committed answer stands.
+  }
 }
 
 const deliveryPort = createMigrationDeliveryPort();
@@ -58,10 +98,50 @@ export async function applyConversationMigration(
       return { status: 200, body: { reseat: "already-migrating", phase: conversation.migration.phase, conversation } };
     }
     const accounts = conversation.engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
-    const target = chooseReseatTarget(source.accountId, registry.quotaObservations(conversation.engine), accounts);
-    if (!target) {
+    /* #1279: a reseat is a selection for this conversation's project's work, so
+       it obeys the project's binding like every launch does. An unbound project
+       answers null here and every branch below is what it always was; a bound
+       project whose allowed accounts all lack headroom is REPORTED rather than
+       reseated onto the idle account it forbids. */
+    const project = conversationProjectKey(conversation.projectOwnership, source.launchProfile, {
+      /* Same reason as the reconfigure seam: an adopted conversation has an
+         empty profile, and its transcript head still names the cwd it runs in. */
+      cwd: headCwd(source.path),
+    });
+    /* A record that cannot be read is this contract's own refusal, not an
+       unhandled failure: the reseat has queued nothing, and the operator is
+       told which record to repair. */
+    let allowedAccountIds: string[] | null;
+    try {
+      allowedAccountIds = allowedAccountIdsForProject(project, conversation.engine);
+    } catch (error) {
+      if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
+      return { status: 409, body: { error: error.message, project } };
+    }
+    const selection = chooseProjectReseatTarget(
+      source.accountId,
+      registry.quotaObservations(conversation.engine),
+      accounts,
+      allowedAccountIds,
+    );
+    if (selection.kind === "none") {
       return { status: 409, body: { error: "no healthy account with fresh quota headroom is available" } };
     }
+    if (selection.kind === "fenced") {
+      return {
+        status: 409,
+        body: {
+          error: projectAccountRefusalDetail(
+            { kind: "exhausted", resetsAt: null, allowedAccountIds: selection.allowedAccountIds },
+            conversation.engine,
+            project ?? "",
+          ),
+          project,
+          allowedAccountIds: selection.allowedAccountIds,
+        },
+      };
+    }
+    const target = selection.target;
     const requested = registry.requestConversationReseat(conversationId, target.accountId);
     let final = requested;
     if (requested.migration) {
@@ -84,14 +164,82 @@ export async function applyConversationMigration(
     };
   }
 
+  if (command.action === "withdraw") {
+    /* #1705: a switch the queue has not claimed. Never accepted without the operation, and never touches a migration. */
+    if (typeof command.operationId !== "string" || !command.operationId.trim()) {
+      return { status: 400, body: { error: "operationId must be a non-empty string" } };
+    }
+    const operationId = command.operationId.trim();
+    const registry = registryForCommand();
+    const conversation = registry.conversation(conversationId);
+    if (!conversation) return { status: 404, body: { error: "viewer conversation is unknown" } };
+    const read = await (dependencies.operationStatus ?? readRuntimeOperation)(operationId);
+    if (read === "unreadable") {
+      return { status: 503, body: { error: "the runtime host could not be read; nothing was withdrawn", code: "RUNTIME_UNREADABLE" } };
+    }
+    if (!read
+      || read.receipt.kind !== "reconfigure"
+      || registry.canonicalConversationId(read.receipt.conversationId as ViewerConversationId) !== conversation.id) {
+      return { status: 404, body: { error: "reconfigure operation is unknown for this conversation", code: "OPERATION_UNKNOWN" } };
+    }
+    if (SETTLED_OPERATION_STATUSES.has(read.receipt.status)) {
+      /* The same withdrawal again, after the queue failed the operation it withdrew: the switch is cancelled. */
+      if (registry.reconfigureCancelled(conversationId, operationId)) {
+        return { status: 200, body: { withdraw: "replayed", conversation: registry.conversation(conversationId) } };
+      }
+      return { status: 409, body: { error: "the reconfigure has already settled", code: "SWITCH_SETTLED", status: read.receipt.status } };
+    }
+    const withdrawal = registry.withdrawConversationReconfigure(conversationId, operationId);
+    if (withdrawal.kind === "claimed") {
+      /* The revision to cancel by exists only once this switch's own migration does. */
+      const owned = withdrawal.conversation.reconfigure?.operationId === operationId
+        && registry.reconfigureOwnedCancellableSwitch(conversationId);
+      return {
+        status: 409,
+        body: {
+          error: "the queue has already claimed this switch; cancel it with the migration's revision",
+          code: "SWITCH_CLAIMED",
+          expectedRevision: owned ? withdrawal.conversation.migration?.revision ?? null : null,
+        },
+      };
+    }
+    if (withdrawal.kind === "settled") {
+      return { status: 409, body: { error: "the reconfigure has already settled", code: "SWITCH_SETTLED" } };
+    }
+    /* The withdrawal is durable; the queue notices it on its next pass even if this kick fails. */
+    await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
+    return { status: 200, body: { withdraw: withdrawal.kind, conversation: withdrawal.conversation } };
+  }
+
   if (!Number.isInteger(command.expectedRevision) || (command.expectedRevision as number) < 0) {
     return { status: 400, body: { error: "expectedRevision must be a non-negative integer" } };
+  }
+  if (command.action === "cancel"
+    || (command.action === "rollback" && registryForCommand().reconfigureOwnedCancellableSwitch(conversationId))) {
+    /* #1705: a claimed switch, guarded by revision and phase. A rollback of a reconfigure-owned switch still
+       waiting for its turn is this cancel, so the queue cannot request the switch again. */
+    const registry = registryForCommand();
+    let cancelled;
+    try {
+      cancelled = registry.cancelConversationSwitch(conversationId, command.expectedRevision as number);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("revision")) return { status: 409, body: { error: "migration revision is stale", code: "MIGRATION_STALE" } };
+      if (message.includes("started")) return { status: 409, body: { error: "the switch has already started", code: "SWITCH_STARTED" } };
+      if (message.includes("no longer pending")) return { status: 409, body: { error: "the switch is no longer pending", code: "SWITCH_NOT_PENDING" } };
+      return { status: 404, body: { error: "conversation has no switch to cancel" } };
+    }
+    /* The cancel is committed. Kicking the queue and delivering what it re-armed are follow-ups: a failure
+       there leaves them to the next pass, and never turns the cancel into a refusal. */
+    await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
+    await settleAfterCommit(() => drainHeldDeliveries(cancelled.conversation.id, dependencies.deliveryPort ?? deliveryPort, registry));
+    return { status: 200, body: { cancel: cancelled.kind, conversation: cancelled.conversation } };
   }
   if (command.action === "rollback") {
     try {
       const registry = registryForCommand();
       const conversation = registry.rollbackConversationMigration(conversationId, command.expectedRevision);
-      await drainHeldDeliveries(conversation.id, deliveryPort, registry);
+      await drainHeldDeliveries(conversation.id, dependencies.deliveryPort ?? deliveryPort, registry);
       return { status: 200, body: conversation as unknown as Record<string, unknown> };
     } catch (error) {
       const conflict = error instanceof Error && error.message.includes("revision");

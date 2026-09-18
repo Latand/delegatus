@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { isEngineEffort } from "@/lib/agent/efforts";
+import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { agentRegistry } from "@/lib/agent/registry";
 import { headCwd } from "@/lib/agent/transcript";
@@ -68,7 +68,9 @@ function roleOverrideFromRequest(
     if ("error" in validation) return validation;
     next.model = validation.model;
   }
-  if (next.effort && !isEngineEffort(next.engine, next.effort)) return { error: "invalid reviewer role override" };
+  const model = next.model;
+  const scale = effortScale(next.engine, model)!;
+  if (next.effort && !scale.includes(next.effort)) return { error: `effort for ${model ?? next.engine} must be one of: ${scale.join(", ")}` };
   return { role: next };
 }
 
@@ -134,6 +136,9 @@ export async function createFlowFromRequest(req: CreateFlowRequest, entries: Fil
   const normalizedSpec = normalizeFlowSpec(req.spec);
   if (!normalizedSpec.ok) {
     return { error: "spec must be a string", status: 400 };
+  }
+  if (req.reviewerSandbox !== undefined && req.reviewerSandbox !== "full" && req.reviewerSandbox !== "restricted") {
+    return { error: "reviewerSandbox must be full or restricted", status: 400 };
   }
   let targetSha: string | null = null;
   const headRef = req.headRef?.trim() ?? null;
@@ -213,11 +218,13 @@ export async function createFlowFromRequest(req: CreateFlowRequest, entries: Fil
     reviewerFallback: roles.reviewer.engine === "codex" ? configuredReviewerFallback() : null,
     baseRef: base.sha,
     headRef,
+    ...(headRef && req.requireRemoteHead === true ? { requireRemoteHead: true } : {}),
     targetSha,
     ...(normalizedSpec.spec ? { spec: normalizedSpec.spec } : {}),
     baseMode,
     mode: req.mode === "manual" ? "manual" : "auto",
     reviewerMode: req.reviewerMode === "pane" ? "pane" : "headless",
+    ...(req.reviewerSandbox === "restricted" ? { reviewerSandbox: "restricted" as const } : {}),
     roundLimit: Number.isInteger(req.roundLimit) && req.roundLimit > 0 ? Math.min(req.roundLimit, 50) : 5,
     state: "waiting_ready",
     pausedState: null,
@@ -394,6 +401,7 @@ export function patchFlow(
   req: PatchFlowRequest,
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
 ): { flow?: Flow; error?: string; status?: number } {
+  if (req.action === "agent-decision") return { error: "agent decisions require the authenticated MCP owner contract", status: 403 };
   const flows = loadFlows();
   const flow = flows.find((item) => item.id === id);
   if (!flow) return { error: "flow not found", status: 404 };

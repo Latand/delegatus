@@ -1,12 +1,62 @@
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation } from "./store";
+import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+test.each([false, true])("archive enabled=%s lets the same event loop settle startup admission before moving rows", async (enabled) => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-archive-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  const timeline: string[] = [];
+  let entered!: () => void;
+  const admissionEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const pipeline = buildPipeline({ id: "aaaa0001", task: "Archive settled history", project: "viewer", repoDir: sandbox,
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-6-astra", effort: "high", access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z" });
+  pipeline.state = "closed";
+  pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+  pipeline.cursor = null;
+  try {
+    savePipelines([pipeline]);
+    const start = performance.now();
+    const startup = withPipelineStartupAdmission(async (available) => {
+      expect(available).toBe(true);
+      timeline.push("admission-entered");
+      entered();
+      await Bun.sleep(100);
+      timeline.push("callback-settled");
+      expect(loadPipelines().map((row) => row.id)).toEqual([pipeline.id]);
+      expect(loadArchivedPipelines()).toEqual([]);
+    });
+    await admissionEntered;
+    // This is the real hourly sweep invoked by FlowPipelineController, on
+    // the same event loop as the timer/RPC continuation startup is awaiting.
+    const archive = enabled ? archiveSettledPipelines(Date.parse("2026-08-05T12:00:00.000Z"), {
+      beforeCommit: () => { timeline.push("archive-commit"); },
+    }).then((moved) => ({ moved, error: null }), (error) => ({ moved: null, error: String(error) })) : Promise.resolve({ moved: 0, error: null });
+    await startup;
+    const result = await archive;
+    const elapsedMs = performance.now() - start;
+    console.log(JSON.stringify({ archiveContention: { enabled, elapsedMs, timerDelayMs: Math.max(0, elapsedMs - 100), timeline, result } }));
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(result).toEqual({ moved: enabled ? 1 : 0, error: null });
+    expect(timeline).toEqual(enabled ? ["admission-entered", "callback-settled", "archive-commit"] : ["admission-entered", "callback-settled"]);
+    const db = new Database(path.join(sandbox, "state.sqlite"), { readonly: true });
+    try { expect(db.query("SELECT count(*) AS n FROM state_leases").get()).toEqual({ n: 0 }); }
+    finally { db.close(); }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 45_000);
 
 async function waitForFile(filename: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -16,13 +66,13 @@ async function waitForFile(filename: string): Promise<void> {
   }
 }
 
-test("pipelines round-trip through a schema-versioned state file", () => {
+test.each(["max", "ultra"])("Astra %s pipelines persist creation and stage edits", (effort) => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipelines-store-"));
   process.env.LLV_STATE_DIR = sandbox;
   try {
     const stages: PipelineStage[] = [
-      { id: "build", kind: "run" as const, role: { roleId: "builder" }, engine: "codex" as const, prompt: "build", next: "review", effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: "builder" } },
+      { id: "build", kind: "run" as const, role: { roleId: "builder" }, engine: "codex" as const, prompt: "build", next: "review", effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-6-astra", effort, access: "read-write", promptScaffold: "builder" } },
       { id: "review", kind: "review-loop" as const, role: { roleId: "reviewer" }, engine: "codex" as const, prompt: "review", next: null, effectiveRole: { roleId: "reviewer", engine: "codex", model: "gpt-5.6-sol", effort: "xhigh", access: "read-only", promptScaffold: "reviewer" } },
     ];
     const pipeline = buildPipeline({
@@ -41,6 +91,9 @@ test("pipelines round-trip through a schema-versioned state file", () => {
     savePipelines([pipeline]);
     checkpointPipelineRollbackMirrorsForDemotion();
     expect(JSON.parse(fs.readFileSync(path.join(sandbox, "pipelines.json"), "utf8"))).toMatchObject({ schemaVersion: PIPELINES_SCHEMA_VERSION });
+    expect(loadPipelines()).toEqual([pipeline]);
+    pipeline.stages[0]!.effectiveRole.effort = effort === "max" ? "ultra" : "max";
+    savePipelines([pipeline]);
     expect(loadPipelines()).toEqual([pipeline]);
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
@@ -202,6 +255,55 @@ test("current production records without verdict recovery metadata load and roun
     expect(loaded[0]!.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
     savePipelines(loaded);
     expect(loadPipelines()).toEqual(loaded);
+  });
+});
+
+test("a settled legacy terminal reap protects the attempts it already inspected", () => {
+  sandboxed((sandbox) => {
+    const pipeline = buildPipeline({
+      id: "oldreap1",
+      task: "task",
+      project: "viewer",
+      repoDir: "/repo",
+      stages: v3Stages(),
+      srcPath: null,
+      srcConversationId: null,
+      now: "2026-07-31T00:00:00.000Z",
+    });
+    pipeline.state = "completed";
+    pipeline.cursor = null;
+    pipeline.closedAt = "2026-07-31T00:20:00.000Z";
+    pipeline.runs[0]!.attempts.push({
+      n: 1,
+      state: "passed",
+      effectiveRole: { ...v3Role },
+      launchId: "launch-old-reap",
+      conversationId: "conversation_old_reap",
+      sessionId: "session-old-reap",
+      agentPath: "/codex/old-reap.jsonl",
+      paneId: null,
+      flowId: null,
+      startedAt: "2026-07-31T00:00:00.000Z",
+      completedAt: "2026-07-31T00:10:00.000Z",
+      input: null,
+      activatedBy: null,
+      output: "done",
+      verdict: { status: "pass" },
+      error: null,
+    });
+    const legacy = JSON.parse(JSON.stringify(pipeline)) as Record<string, unknown>;
+    legacy.terminalReap = {
+      rounds: 1,
+      stopped: 1,
+      lastAt: "2026-07-31T00:20:00.000Z",
+      settledAt: "2026-07-31T00:20:00.000Z",
+    };
+    fs.writeFileSync(path.join(sandbox, "pipelines.json"), JSON.stringify({
+      schemaVersion: PIPELINES_SCHEMA_VERSION,
+      pipelines: [legacy],
+    }), "utf8");
+
+    expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["build:1"]);
   });
 });
 
@@ -502,4 +604,90 @@ test("pipeline archival rolls back failures and publishes one cross-collection s
     else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
+});
+
+
+test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despite warm caches and preserves corrupt rows", async (collection) => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-evidence-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  let db: Database | undefined;
+  try {
+    const pipeline = buildPipeline({
+      id: "aaaa0001", task: "startup evidence", project: "viewer", repoDir: "/repo",
+      stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z",
+    });
+    pipeline.state = "closed";
+    pipeline.closedAt = pipeline.createdAt;
+    pipeline.cursor = null;
+    savePipelines([pipeline]);
+    if (collection === "pipelines_archive") await archiveSettledPipelines(Date.parse("2026-08-05T00:00:00.000Z"));
+    expect(loadPipelinesForStartup()).toHaveLength(1);
+    loadPipelines();
+    db = new Database(path.join(sandbox, "state.sqlite"));
+    const read = () => db!.query("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?").get(collection, pipeline.id) as { value_json: string };
+    const original = read().value_json;
+    for (const corrupt of ["{broken", JSON.stringify({ ...pipeline, runs: null })]) {
+      db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
+      expect(() => loadPipelinesForStartup()).toThrow();
+      expect(read().value_json).toBe(corrupt);
+      db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
+      expect(loadPipelinesForStartup()).toHaveLength(1);
+    }
+    if (collection === "pipelines_archive") {
+      db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);
+      expect(loadArchivedPipelines()).toEqual([]);
+      expect(read().value_json).toBe("{broken");
+    } else {
+      db.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive',?,?,?,?,0)").run(pipeline.id, original, 0, 1);
+      expect(() => loadPipelinesForStartup()).toThrow("contradictory identities");
+      expect(read().value_json).toBe(original);
+    }
+  } finally {
+    db?.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+
+test.each(["pipelines.json", "pipelines-archive.json"])("startup preserves malformed legacy %s evidence before migration", async (filename) => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-legacy-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  const archive = path.join(sandbox, filename);
+  try {
+    expect(loadPipelinesForStartup()).toEqual([]); // ENOENT is valid empty evidence.
+    for (const corrupt of ["null", "false", "[]", "{broken", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [{}] })]) {
+      fs.writeFileSync(archive, corrupt);
+      expect(await withPipelineStartupAdmission(async (available) => available)).toBeFalse();
+      expect(fs.readFileSync(archive, "utf8")).toBe(corrupt);
+      expect(fs.existsSync(path.join(sandbox, "state.sqlite"))).toBeFalse();
+    }
+    fs.renameSync(archive, `${archive}.saved`);
+    fs.mkdirSync(archive); // A read error is not absence.
+    expect(await withPipelineStartupAdmission(async (available) => available)).toBeFalse();
+    expect(fs.statSync(archive).isDirectory()).toBeTrue();
+    expect(fs.existsSync(path.join(sandbox, "state.sqlite"))).toBeFalse();
+    fs.renameSync(archive, `${archive}.unreadable`);
+    fs.writeFileSync(archive, JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [] }));
+    expect(await withPipelineStartupAdmission(async (available) => available)).toBeTrue();
+    expect(loadPipelinesForStartup()).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+
+test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s reads retain null-as-empty compatibility", (filename) => {
+  sandboxed((sandbox) => {
+    fs.writeFileSync(path.join(sandbox, filename), "null");
+    expect(() => loadPipelinesForStartup()).toThrow("must be an object");
+    expect(filename === "pipelines.json" ? loadPipelines() : loadArchivedPipelines()).toEqual([]);
+    expect(fs.readFileSync(path.join(sandbox, filename), "utf8")).toBe("null");
+  });
 });

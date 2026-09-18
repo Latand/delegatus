@@ -5,6 +5,7 @@ import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { engineBadgeFor } from "@/components/utils";
 import { useLocale } from "@/lib/i18n";
+import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
 
 import type { LaunchAccountCatalog } from "@/components/draft/AgentLaunchControls";
@@ -30,12 +31,18 @@ export function IncumbentHeader({
   file,
   catalog,
   predecessorConversationId,
+  promptVersion,
   rotating,
   opening,
   onRotate,
+  inline = false,
 }: {
   /** The status read, once it has answered. */
   incumbent: OrchestratorIncumbent | null;
+  /** The default version the seat's mandate is based on, null for bespoke
+      rules. Shown only when it is behind the current default (#1452), the
+      same reading `get_orchestrator` gives an agent. */
+  promptVersion: number | null;
   /** The seat conversation as the board knows it — engine, model and context
       are on the card already, so the row is populated on the first paint
       instead of waiting out the slower status poll. */
@@ -47,6 +54,9 @@ export function IncumbentHeader({
       draft below opens PREFILLED rather than on the generic defaults. */
   opening: boolean;
   onRotate: () => void;
+  /** One row inside a header that already names the seat (the kanban seat,
+      #1695): no band of its own, and the predecessor link rides the row. */
+  inline?: boolean;
 }) {
   const { t } = useLocale();
   const designated = incumbent?.designated ? incumbent : null;
@@ -63,10 +73,10 @@ export function IncumbentHeader({
   return (
     <div
       data-orchestrator-incumbent
-      className="flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"
+      className={inline ? "flex min-w-0 flex-1 items-center gap-2" : "flex shrink-0 flex-col gap-1 border-b border-border bg-sunken px-3 py-1.5"}
       aria-label={t("orchPanel.incumbentAria")}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <div className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}>
         {badge ? <Badge style={badge.style}>{badge.label}</Badge> : null}
         {model ? (
           /* A product name, so sans (design system §1.1 mono rule) — the tier
@@ -85,6 +95,15 @@ export function IncumbentHeader({
           </Badge>
         ) : null}
         <ContextMeter context={context} />
+        {orchestratorMandateStale(promptVersion) ? (
+          <span
+            data-orchestrator-mandate-version={String(promptVersion)}
+            className="shrink-0 text-caption font-semibold text-warning"
+            title={t("orchPanel.mandateStaleTitle", { version: promptVersion, current: ORCHESTRATOR_PROMPT_VERSION })}
+          >
+            {t("orchPanel.mandateStale", { version: promptVersion, current: ORCHESTRATOR_PROMPT_VERSION })}
+          </span>
+        ) : null}
         <button
           type="button"
           data-orchestrator-rotate
@@ -115,8 +134,10 @@ export function IncumbentHeader({
 }
 
 /** The board's own context read, in the status route's shape — what the header
-    shows until the slower status poll answers with the server's reading. */
-function boardContext(file: FileEntry | null): IncumbentContext | null {
+    shows until the slower status poll answers with the server's reading.
+    Exported for the phone's seat identity (issue #1347), which reads the same
+    fallback so both surfaces show one number for one seat. */
+export function boardContext(file: FileEntry | null): IncumbentContext | null {
   const ctx = file?.ctx;
   if (!ctx) return null;
   return {
@@ -135,6 +156,11 @@ function boardContext(file: FileEntry | null): IncumbentContext | null {
  *
  * An inferred number is marked «~» and says why in its own tooltip — a guess
  * must never be readable as a provider-reported count.
+ *
+ * The DESKTOP's meter, and only the desktop's: it fills with what is USED,
+ * which is the dock's own reading. The phone fills every meter with what
+ * REMAINS (mobile v2 §5), so the seat sheet there renders `MobileMeter`
+ * instead — one semantic per surface, stated rather than shared by accident.
  */
 function ContextMeter({ context }: { context: IncumbentContext | null }) {
   const { t } = useLocale();

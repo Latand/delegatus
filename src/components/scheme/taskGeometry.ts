@@ -9,7 +9,7 @@ export type { SchemeRect } from "./layout";
 
 /** A task that owns a board position — `unplaced` tasks are filtered out before
     any geometry runs, so every card the board draws is a `PlacedTask`. */
-export type PlacedTask = BoardTask & { pos: { x: number; y: number } };
+export type PlacedTask = BoardTask & { displayScale?: number; pos: { x: number; y: number } };
 
 /** True for tasks the board should render (pinned with a usable position). */
 export function isPlacedTask(task: BoardTask): task is PlacedTask {
@@ -146,8 +146,15 @@ export function taskBoxHeight(task: Pick<BoardTask, "text" | "assignments" | "so
 }
 
 /** World-space box of a task card, including its action-row reservation. */
-export function taskRect(task: Pick<PlacedTask, "pos" | "text" | "assignments" | "source">, expanded = false): SchemeRect {
-  return { x: task.pos.x, y: task.pos.y, w: TASK_W, h: taskBoxHeight(task, expanded) };
+/** Task-board summaries cap assignment rows; complete history stays reachable. */
+export function displayedTaskHeight(task: Pick<PlacedTask, "text" | "assignments" | "source" | "displayScale">, expanded = false): number {
+  if (!task.displayScale || task.assignments.length <= 3) return taskBoxHeight(task, expanded);
+  return taskBoxHeight({...task,assignments:task.assignments.slice(0,3)},expanded)+28;
+}
+
+export function taskRect(task: Pick<PlacedTask, "pos" | "text" | "assignments" | "source" | "displayScale">, expanded = false): SchemeRect {
+  const scale = task.displayScale ?? 1;
+  return { x: task.pos.x, y: task.pos.y, w: TASK_W * scale, h: displayedTaskHeight(task, expanded) * scale };
 }
 
 export function rectCenter(rect: SchemeRect): { x: number; y: number } {
@@ -635,6 +642,37 @@ function detourRoute(
  * Pure and deterministic — depends only on the endpoints, the lane, and the
  * obstacle rects.
  */
+/**
+ * Points along a routed path, in path order — the polyline a `routeTaskEdge`
+ * / detour `d` string draws, sampled densely enough to place something ON the
+ * connector (the review hub) without the DOM. Reads the three commands those
+ * routers emit (`M`, `L`, `C`); anything else ends the walk.
+ */
+export function sampleRoute(d: string, perSegment = 16): { x: number; y: number }[] {
+  const points: { x: number; y: number }[] = [];
+  const tokens = d.match(/[MLCZ]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? [];
+  let index = 0;
+  let cursor = { x: 0, y: 0 };
+  const num = () => Number(tokens[index++]);
+  while (index < tokens.length) {
+    const command = tokens[index++];
+    if (command === "M" || command === "L") {
+      const next = { x: num(), y: num() };
+      if (command === "M") points.push(next);
+      else for (let i = 1; i <= perSegment; i += 1) points.push({ x: cursor.x + (next.x - cursor.x) * (i / perSegment), y: cursor.y + (next.y - cursor.y) * (i / perSegment) });
+      cursor = next;
+    } else if (command === "C") {
+      const c1x = num(), c1y = num(), c2x = num(), c2y = num(), x = num(), y = num();
+      for (let i = 1; i <= perSegment; i += 1) {
+        const t = i / perSegment;
+        points.push({ x: cubicAt(t, cursor.x, c1x, c2x, x), y: cubicAt(t, cursor.y, c1y, c2y, y) });
+      }
+      cursor = { x, y };
+    } else break;
+  }
+  return points;
+}
+
 export function routeTaskEdge(
   edge: { x1: number; y1: number; x2: number; y2: number },
   obstacles: readonly SchemeRect[],
@@ -700,7 +738,10 @@ export interface TaskEdgeObstacle extends SchemeRect {
 }
 
 function rectOwnsEndpoint(rect: SchemeRect, edge: Pick<TaskEdgeGeom, "x1" | "y1" | "x2" | "y2">): boolean {
-  const inside = (x: number, y: number) => x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+  // Rect anchors and inverse-zoom footprints can differ by one floating-point
+  // rounding step. The endpoint still belongs to that displayed boundary.
+  const epsilon = 1e-6;
+  const inside = (x: number, y: number) => x >= rect.x - epsilon && x <= rect.x + rect.w + epsilon && y >= rect.y - epsilon && y <= rect.y + rect.h + epsilon;
   return inside(edge.x1, edge.y1) || inside(edge.x2, edge.y2);
 }
 

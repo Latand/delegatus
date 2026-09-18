@@ -14,7 +14,7 @@
  * session view mirroring exactly what the bus projects for a Viewer-launched
  * conversation (spawnOrigin: "viewer" + a hosted structured session).
  */
-import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -24,6 +24,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
+import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 const dom = new Window();
 installActEnv();
@@ -93,47 +94,24 @@ const VIEWS: Record<string, RuntimeSessionView> = {
   "conv-499-claude": structuredView("conv-499-claude", "claude-broker", "claude"),
 };
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const realUseRuntime = actualRuntimeHooks.useRuntime;
-const realUseRuntimeSession = actualRuntimeHooks.useRuntimeSession;
-const realUseRuntimeReceiptsForArtifact = actualRuntimeHooks.useRuntimeReceiptsForArtifact;
 let refreshCalls = 0;
-/* Armed only while THIS file's tests run: bun's mock.module registry reaches
-   files loaded later, so the authoritative-plane override must disarm in
-   afterAll or it would flip surfaces across the rest of the branch. */
-let runtimePlaneAuthoritative = true;
-mock.module("@/hooks/useRuntime", () => ({
-  ...actualRuntimeHooks,
-  /* The runtime plane is authoritative in every scenario here, exactly as in
-     production with the runtime UI flag on: a conversation the bus does not
-     carry resolves to the fail-safe `unresolved` surface, never legacy tmux. */
-  useRuntime: () => {
-    const real = realUseRuntime();
-    return runtimePlaneAuthoritative ? { ...real, enabled: true } : real;
-  },
-  useRuntimeSession: (conversationId: string | null) => {
-    const real = realUseRuntimeSession(conversationId);
-    return (conversationId && VIEWS[conversationId]) || real;
-  },
-  useRuntimeReceiptsForArtifact: (path: string | null, conversationId?: string | null) => {
-    const real = realUseRuntimeReceiptsForArtifact(path, conversationId);
-    return conversationId && VIEWS[conversationId] ? [] : real;
-  },
-  refreshRuntime: () => {
-    refreshCalls += 1;
-    return Promise.resolve(true);
-  },
-}));
-afterAll(() => {
-  runtimePlaneAuthoritative = false;
-  mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-});
-
-const { TmuxComposer } = await import("./TmuxComposer");
+import { TmuxComposer } from "./TmuxComposer";
 
 const realFetch = globalThis.fetch;
 
+beforeEach(() => {
+  installTmuxComposerRuntimeForTests({
+    useRuntimeView: (file) => file.conversationId ? VIEWS[file.conversationId] ?? null : null,
+    runtimeEnabled: true,
+    refreshRuntime: async () => {
+      refreshCalls += 1;
+      return true;
+    },
+  });
+});
+
 afterEach(() => {
+  resetTmuxComposerRuntimeForTests();
   setLocale("en");
   mobile = false;
   refreshCalls = 0;
@@ -212,25 +190,28 @@ test("typing non-empty text enables Send in the same synchronous flush on a live
 });
 
 test.each(["codex", "claude"] as const)(
-  "the %s Viewer-launched conversation exposes the pill on the phone without any disclosure",
+  "the %s Viewer-launched conversation carries the model chip INSIDE the composer box",
   async (engine) => {
     mobile = true;
     quietWire();
     const { host, root } = await renderInto(
       <TmuxComposer file={viewerLaunchedFile(engine, `conv-499-${engine}`)} />,
     );
-    /* The pill is on screen immediately — no options toggle press required. */
+    /* The chip is on screen immediately — no options toggle press required
+       (#499) — and since mobile v2 (#1439 §2 rule 8) it is a cell of the box's
+       tools row rather than a 44 px row stacked beneath the box. */
     const pill = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
     expect(pill).toBeTruthy();
-    const row = pill.closest('[data-testid="composer-runtime-row"]')!;
-    expect(row).toBeTruthy();
-    expect(row.className).toContain("min-h-11");
-    /* And it opens the mobile sheet with the model/reasoning sections. */
+    const tools = pill.closest("[data-mobile2-tools]")!;
+    expect(tools).toBeTruthy();
+    expect(tools.closest("[data-mobile2-composer]")).toBeTruthy();
+    expect(host.querySelector('[data-testid="composer-runtime-row"]')).toBeNull();
+    /* And it opens the «Next message» sheet with the model/reasoning sections. */
     await act(async () => {
       pill.click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(host.querySelector("[data-runtime-sheet]")).toBeTruthy();
+    expect(host.querySelector('[data-mobile2-sheet="model"]')).toBeTruthy();
     flushSync(() => root.unmount());
   },
 );

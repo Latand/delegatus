@@ -206,12 +206,15 @@ afterEach(() => {
 /** `/api/files` serves `filesByPin` keyed by the request's `path` param
     (`""` = the unpinned global scope); `/api/board` is a real in-memory board
     so the focus request can actually place its card. Everything else 404s. */
-function stubFetch(filesByPin: (pin: string) => FileEntry[]) {
+function stubFetch(filesByPin: (pin: string) => FileEntry[], delayByPin?: (pin: string) => number) {
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     requestLog.push(url);
     if (url.startsWith("/api/files")) {
       const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";
+      /* A per-scope delay models a pinned fetch slower than the global one. */
+      const delay = delayByPin?.(pin) ?? 0;
+      if (delay > 0) await Bun.sleep(delay);
       return new Response(
         JSON.stringify({ files: filesByPin(pin), projectCatalog }),
         { headers: { "content-type": "application/json" } },
@@ -322,6 +325,18 @@ async function findAndSelect(host: HTMLElement, query: string): Promise<void> {
   });
 }
 
+/** The conversation open on the desktop Board (#1695): a reader showing its transcript, on its card or in the
+    Board's window. What a link, a search or a catalog row must end on. */
+const openOnBoard = (host: HTMLElement, path: string): Element | null => {
+  const board = host.querySelector("[data-kanban-board]");
+  return board
+    ? Array.from(board.querySelectorAll("[data-kanban-reader]")).find((reader) => reader.matches(`[data-link-path="${path}"]`) || reader.querySelector(`[data-link-path="${path}"]`) !== null) ?? null
+    : null;
+};
+/** The conversation drawn on the Board at all: its tile, or its open reader. */
+const onBoard = (host: HTMLElement, path: string): Element | null =>
+  host.querySelector(`[data-kanban-board] [data-member="${path}"]`) ?? openOnBoard(host, path);
+
 test("a search selection opens the conversation even when the tab already sits on its hash", async () => {
   /* The defect this pins (#1054 review, HIGH): the palette navigated by
      assigning `location.hash`, and assigning an UNCHANGED hash fires no
@@ -346,13 +361,13 @@ test("a search selection opens the conversation even when the tab already sits o
   const hash = `#f=${encodeURIComponent(PATH_ONLY_PATH)}`;
   dom.location.hash = hash;
   const host = await mountViewer();
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${PATH_ONLY_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, PATH_ONLY_PATH) !== null)).toBe(true);
 
   /* The transcript ages out of the feed. The card goes with it; the hash does
      not — no navigation happened, so there is nothing to change it. */
   inFeed = false;
   await refreshFeed();
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${PATH_ONLY_PATH}"]`) === null)).toBe(true);
+  expect(await waitFor(() => onBoard(host, PATH_ONLY_PATH) === null)).toBe(true);
   expect(dom.location.hash).toBe(hash);
 
   /* Now the operator searches for what they sent and picks that conversation —
@@ -362,7 +377,7 @@ test("a search selection opens the conversation even when the tab already sits o
 
   /* It opens on the board, the standard surface with its composer, and the
      palette is gone. */
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${PATH_ONLY_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, PATH_ONLY_PATH) !== null)).toBe(true);
   expect(document.querySelector("[data-global-search]")).toBeNull();
   expect(dom.location.hash).toBe(hash);
 });
@@ -391,7 +406,7 @@ test("a saved «Список» preference does not swallow a search selection �
 
   /* The conversation is on the standard surface, with the composer that makes
      "continue" possible. */
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${PATH_ONLY_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, PATH_ONLY_PATH) !== null)).toBe(true);
   expect(await waitFor(() => host.querySelector("textarea") !== null)).toBe(true);
   expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
   expect(document.querySelector("[data-global-search]")).toBeNull();
@@ -408,7 +423,7 @@ test("#c= to a conversation whose only present generation is an archived predece
   const host = await mountViewer();
 
   /* The conversation's project is selected and its card materializes. */
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
   expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
   /* The canonical link survives resolution. */
   expect(dom.location.hash).toBe(`#c=${encodeURIComponent(CONVERSATION_ID)}`);
@@ -425,7 +440,7 @@ test("#c= resolution OPENS the conversation and never navigates in a loop", asyn
   /* The loop oracle is conditioned on a SUCCESSFUL open: on the defective base
      the card never materializes and this assertion REDs. The first version of
      this test ignored the waitFor result and green-lit the base. */
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
   /* The canonical link survives resolution untouched — the observed prod
      symptom retyped the same URL four times; here the resolver may retype the
      entry it stands on at most a bounded number of times, all replaces. */
@@ -441,7 +456,7 @@ test("#c= from a tab standing on another project switches to the target's projec
 
   const host = await mountViewer();
 
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
   expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
   expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
   await expectNavigationQuiescence();
@@ -453,7 +468,7 @@ test("#c= whose row arrives only via the pinned fetch keeps its pin after resolv
 
   const host = await mountViewer();
 
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
   expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
   await act(async () => { await Bun.sleep(200); });
   /* The scope transition after resolution serves an EMPTY placeholder before
@@ -463,9 +478,44 @@ test("#c= whose row arrives only via the pinned fetch keeps its pin after resolv
   const filesRequests = requestLog.filter((url) => url.startsWith("/api/files"));
   expect(filesRequests.length).toBeGreaterThan(0);
   expect(filesRequests[filesRequests.length - 1]).toContain("path=");
-  expect(host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`)).not.toBeNull();
+  expect(openOnBoard(host, TARGET_PATH)).not.toBeNull();
   await expectNavigationQuiescence();
 });
+
+/** Mirrors `STALE_FOCUS_REPLAY_MS` in Viewer.tsx. */
+const STALE_DEADLINE_MS = 8_000;
+
+test("the not-found deadline waits for the pinned scope's own payload; a stand-in from another scope does not start it", async () => {
+  /* A warm tab: the global scope has already answered when the hash changes
+     (a pasted link, the palette, Back/Forward), so the pinned scope is served
+     by the last-known stand-in at once (#1432). The pinned fetch, the only one
+     that can carry the target, outlasts the deadline. The stand-in carries
+     `loaded` and says nothing about the target, so it must not start the
+     clock: with the clock started on it, a slow pinned fetch was reported
+     stale before it could answer, and the row it finally carried was dropped. */
+  stubFetch(
+    (pin) => (pin === CONVERSATION_ID || pin === TARGET_PATH ? [otherRow, targetRow] : [otherRow]),
+    (pin) => (pin === CONVERSATION_ID ? STALE_DEADLINE_MS + 600 : 0),
+  );
+  const filesRequests = () => requestLog.filter((url) => url.startsWith("/api/files"));
+
+  const host = await mountViewer();
+  expect(filesRequests().some((url) => !url.includes("path="))).toBe(true);
+
+  await act(async () => { dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`; });
+  expect(await waitFor(() => filesRequests().some((url) => url.includes("path=")))).toBe(true);
+
+  /* Past the deadline as measured from the stand-in: no notice, still pending. */
+  await act(async () => { await Bun.sleep(STALE_DEADLINE_MS + 300); });
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  expect(onBoard(host, TARGET_PATH)).toBeNull();
+
+  /* The pinned payload lands and the link resolves. */
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null, 3_000)).toBe(true);
+  expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
+  expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+  await expectNavigationQuiescence();
+}, 20_000);
 
 test("legacy #f= to an archived predecessor transcript opens it the same way", async () => {
   dom.location.hash = `#f=${encodeURIComponent(TARGET_PATH)}`;
@@ -476,7 +526,7 @@ test("legacy #f= to an archived predecessor transcript opens it the same way", a
 
   const host = await mountViewer();
 
-  expect(await waitFor(() => host.querySelector(`[data-scheme-node="${TARGET_PATH}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
   expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
   await expectNavigationQuiescence();
 });

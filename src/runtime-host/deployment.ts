@@ -14,6 +14,7 @@ import type {
   ViewerMcpRuntimePublicationEvidence,
   ViewerMcpRuntimeReconciliation,
   ViewerReleaseIdentity,
+  ViewerRuntimeHostHandoffEvidence,
 } from "@/lib/runtime/contracts";
 import { RuntimeIdempotencyConflictError } from "@/lib/runtime/contracts";
 
@@ -35,6 +36,7 @@ export interface RuntimeHostHandoffContext {
 }
 
 export interface ViewerDeploymentAdapter {
+  servingProgress?(): string | null;
   /** Durably stages the candidate image as the successor runtime-host
       generation: a dockerd-owned successor container waiting on the singleton
       fence, the service image tag repointed, the release record written, and
@@ -43,6 +45,9 @@ export interface ViewerDeploymentAdapter {
       stops the predecessor and never signals Viewer containers or engine
       hosts — the predecessor's own graceful exit afterwards is the handoff. */
   stageRuntimeHostSuccessor(candidate: ViewerReleaseIdentity): Promise<void>;
+  /** Runs outside the runtime-host process and returns the successor's
+      durable startup phases plus a matching framed-protocol response. */
+  verifyRuntimeHostSuccessor(candidate: ViewerReleaseIdentity): Promise<ViewerRuntimeHostHandoffEvidence>;
   reconcile(): Promise<void>;
   resolveRevision(revision: string): Promise<string>;
   buildCandidate(deploymentId: string, revision: string): Promise<ViewerReleaseIdentity>;
@@ -52,7 +57,7 @@ export interface ViewerDeploymentAdapter {
   reconcileMcpRuntime(revision: string): Promise<ViewerMcpRuntimeReconciliation | null>;
   verifyCandidate(candidate: ViewerReleaseIdentity): Promise<ViewerHealthEvidence>;
   promote(candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence>;
-  verifyPromoted(candidate: ViewerReleaseIdentity): Promise<ViewerHealthEvidence>;
+  verifyPromoted(candidate: ViewerReleaseIdentity, signal?: AbortSignal): Promise<ViewerHealthEvidence>;
   rollback(
     previous: ViewerReleaseIdentity,
     candidate: ViewerReleaseIdentity,
@@ -72,8 +77,9 @@ export interface ViewerDeploymentCoordinatorOptions {
       successor process can execute the deployed revision. */
   hostGeneration?: () => RuntimeHostGeneration;
   /** Observes a staged successor handoff. Invoked only after the terminal
-      succeeded deployment AND after the successor staging is durable — never
-      as a same-image self-restart, which would boot the stale image again. */
+      successor staging is durable, while the deployment remains active in
+      `host-handoff`. The successor generation owns terminal success after it
+      has acquired the fence and proved that it is serving. */
   onHostHandoff?: (context: RuntimeHostHandoffContext) => void;
   /** #1216: the deployment's own narration. Three deployments in a row left
       no trace of whether a runtime-host successor was even attempted, because
@@ -117,7 +123,10 @@ function mcpRuntimeStatusWithHealth(status: ViewerDeploymentStatus, evidence: Vi
   return evidence.mcpRuntime ? { ...runtime, health: [...runtime.health, evidence.mcpRuntime] } : runtime;
 }
 
+const SERVING_CANCELLED = "serving verification cancelled by operator";
+
 export class ViewerDeploymentCoordinator {
+  private readonly servingWaits = new Map<string, AbortController>();
   private readonly tasks = new Map<string, Promise<void>>();
   private admissionQueue: Promise<void> = Promise.resolve();
   private readonly defaultRevision: string;
@@ -143,6 +152,21 @@ export class ViewerDeploymentCoordinator {
 
   async requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> {
     return this.runAdmissionExclusive(() => this.admit(request));
+  }
+
+  cancelViewerDeployment(deploymentId: string): ViewerDeploymentStatus | null {
+    const status = this.journal.viewerDeployment(deploymentId);
+    if (!status) return null;
+    if (status.error === SERVING_CANCELLED) return status;
+    const wait = this.servingWaits.get(deploymentId);
+    if (status.phase !== "post-promotion-health" || status.terminal || !wait) {
+      throw new Error("deployment is not waiting for serving readiness");
+    }
+    // Persist intent before interrupting the probe. Recovery honors the same
+    // intent after reconciling the old adapter; rollback still owns cleanup.
+    const cancelled = this.journal.updateViewerDeployment(deploymentId, { error: SERVING_CANCELLED });
+    wait.abort(new Error(SERVING_CANCELLED));
+    return cancelled;
   }
 
   private async admit(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> {
@@ -189,7 +213,10 @@ export class ViewerDeploymentCoordinator {
   }
 
   readViewerDeployment(deploymentId: string): ViewerDeploymentStatus | null {
-    return this.journal.viewerDeployment(deploymentId);
+    const status = this.journal.viewerDeployment(deploymentId);
+    if (!status || status.terminal || status.phase !== "post-promotion-health") return status;
+    const servingProgress = this.adapter.servingProgress?.();
+    return servingProgress ? { ...status, servingProgress } : status;
   }
 
   recordMcpRuntimeReconciliation(reconciliation: ViewerMcpRuntimeReconciliation): ViewerDeploymentStatus | null {
@@ -250,8 +277,8 @@ export class ViewerDeploymentCoordinator {
       After the blue-green promotion is healthy, a generation
       mismatch stages the freshly built candidate image as the successor
       runtime-host release. The deployment remains active in its durable
-      host-handoff phase until staging succeeds. Only then does it become
-      terminal and signal the predecessor to release the singleton fence. */
+      host-handoff phase through predecessor exit. The successor writes
+      terminal success after acquiring the fence and proving readiness. */
   private async stageDriftedHostSuccessor(status: ViewerDeploymentStatus): Promise<RuntimeHostHandoffContext | null> {
     const trace = (line: string) => this.log(`[viewer deployment] ${status.deploymentId} host-handoff ${line}`);
     if (!this.hostGeneration || !status.candidate) {
@@ -354,7 +381,16 @@ export class ViewerDeploymentCoordinator {
         }
         if (status.phase === "post-promotion-health") {
           if (!status.candidate) throw new Error("candidate identity is missing");
-          const evidence = await this.adapter.verifyPromoted(status.candidate);
+          if (status.error === SERVING_CANCELLED) throw new Error(SERVING_CANCELLED);
+          const wait = new AbortController();
+          this.servingWaits.set(status.deploymentId, wait);
+          let evidence: ViewerHealthEvidence;
+          try {
+            evidence = await this.adapter.verifyPromoted(status.candidate, wait.signal);
+            wait.signal.throwIfAborted();
+          } finally {
+            this.servingWaits.delete(status.deploymentId);
+          }
           const health = [...status.health, evidence];
           if (evidence.ok) {
             if (!status.previous) throw new Error("previous release identity is missing");
@@ -378,12 +414,27 @@ export class ViewerDeploymentCoordinator {
         if (status.phase === "host-handoff") {
           if (!status.candidate) throw new Error("candidate identity is missing");
           const handoff = await this.stageDriftedHostSuccessor(status);
+          if (handoff) {
+            /* #1268: this process is the predecessor. Its callback drains the
+               listener, releases the singleton fence and exits, so any
+               terminal write here necessarily precedes the hand-over it
+               claims. Leave the durable phase active for the successor's
+               coordinator recovery; only a generation that matches the
+               candidate can reach the success write below. */
+            this.onHostHandoff?.(handoff);
+            return;
+          }
+          /* The adapter's framed probe is the completion authority. A local
+             generation hint decides whether this process must stage and
+             release a successor. Completion still requires durable startup
+             evidence from the generation that actually owns the listener. */
+          const runtimeHostHandoff = await this.adapter.verifyRuntimeHostSuccessor(status.candidate);
           status = this.journal.updateViewerDeployment(status.deploymentId, {
             error: null,
             phase: "succeeded",
             terminal: true,
+            runtimeHostHandoff,
           });
-          if (handoff) this.onHostHandoff?.(handoff);
           continue;
         }
         if (status.phase === "rolling-back") {
@@ -405,11 +456,14 @@ export class ViewerDeploymentCoordinator {
       const message = safeError(error);
       const latest = this.journal.viewerDeployment(status.deploymentId) ?? status;
       if (latest.phase === "host-handoff") {
-        this.log(`[viewer deployment] ${latest.deploymentId} host-handoff failed and stays retryable: ${message}`);
+        /* The Viewer has already published, so this failure records the split
+           loudly and releases deployment admission. Retaining an active row
+           here cannot repair the handoff and blocks every later deployment. */
+        this.log(`[viewer deployment] ${latest.deploymentId} host-handoff failed: ${message}`);
         this.journal.updateViewerDeployment(latest.deploymentId, {
           error: message,
-          phase: "host-handoff",
-          terminal: false,
+          phase: "failed",
+          terminal: true,
         });
         return;
       }

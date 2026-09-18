@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,14 +10,25 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { recordBridgeDirectiveAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { createManualProject, setProjectCrown } from "@/lib/projects/curation";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
+import { archivedTranscriptPaths } from "@/lib/scanner";
 import { globalCache } from "@/lib/scanner/caches";
 import { describe as describeTranscript, projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
-import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
+import { readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { createFilesClientCache } from "@/hooks/useFiles";
 import { beginLegacySpawnFixture, beginLegacySpawnReceiptFixture, withLegacySpawnFixtureTitles } from "@/lib/agent/registryTestFixtures";
+import {
+  cachedFileScan,
+  completedFileScan,
+  currentFileScan,
+  fileScanCacheStatus,
+  resetFilesRouteCacheForTests,
+  setFileScanRunnerForTests,
+} from "@/lib/scanner/scanCache";
+import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
 let scanOptions: unknown;
@@ -33,7 +44,7 @@ let hydrateScannedFiles: (files: FileEntry[], options: unknown) => FileEntry[] =
 let registryRoot = "";
 let tmuxHealth: unknown = { status: "healthy" };
 let stateDir = "";
-const previousState = process.env.LLV_STATE_DIR;
+let previousState: string | undefined;
 
 function resetFilesProjectionCacheForTests(): void {
   const store = globalThis as typeof globalThis & {
@@ -49,6 +60,7 @@ function resetFilesProjectionCacheForTests(): void {
 }
 
 beforeEach(() => {
+  previousState = process.env.LLV_STATE_DIR;
   registryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-route-"));
   // Sandbox the title store so the integration test's writeSessionTitle never
   // touches the real ~/.config/agent-log-viewer state.
@@ -71,12 +83,23 @@ beforeEach(() => {
   flowsStore = () => [];
   pipelinesStore = () => [];
   pipelineVisibility = () => [];
-  pipelineMutationCalls = 0;
+  setFileScanRunnerForTests(filesRouteScanRunner);
+  setFilesResponseDependenciesForTests({
+    loadFlows: () => flowsStore() as never,
+    loadPipelinesForProjection: () => pipelinesStore() as never,
+    filterPipelinesForFileScan: (pipelines: readonly Pipeline[]) => pipelineVisibility([...pipelines]) as Pipeline[],
+    loadTasks: () => boardTasksStore() as never,
+    loadWorkflows: () => [],
+    filterWorkflowsForFileScan: () => [],
+    tmuxEndpointHealth: () => tmuxHealth as never,
+  });
   replaceConversationCatalog([]);
   resetPresenceForTest();
 });
 
 afterEach(() => {
+  setFileScanRunnerForTests(null);
+  setFilesResponseDependenciesForTests(null);
   setAgentRegistryForTests(null);
   resetPresenceForTest();
   replaceConversationCatalog([]);
@@ -87,83 +110,41 @@ afterEach(() => {
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
-/* `mock.module` is process-global and outlives this file. Capture the real
-   namespaces first and restore them in afterAll so the stubs stay local. */
-const MOCKED_MODULES = [
-  "@/lib/scanner",
-  "@/lib/flows/store",
-  "@/lib/pipelines/store",
-  "@/lib/pipelines/visibility",
-  "@/lib/tasks/store",
-  "@/lib/workflows/store",
-  "@/lib/workflows/visibility",
-  "@/lib/tmux",
-] as const;
-const realModules = new Map<string, unknown>(
-  await Promise.all(MOCKED_MODULES.map(async (name) => [name, { ...(await import(name)) }] as const)),
-);
-
-mock.module("@/lib/scanner", () => ({
-  listFiles: async () => [],
-  listFilesWithProjectCatalog: async (project: string | undefined, options: unknown) => {
-    scans += 1;
-    scanProjects.push(project);
-    scanOptions = options;
-    const files = hydrateScannedFiles(scanFileResults.shift() ?? scannedFiles, options);
-    const resourceSnapshot = { files, projectCatalog: scannedProjectCatalog, complete: true };
-    (options as { onResourceSnapshot?: (snapshot: typeof resourceSnapshot) => void }).onResourceSnapshot?.(resourceSnapshot);
-    const gate = scanGates.shift();
-    const signal = (options as { signal?: AbortSignal }).signal;
-    if (gate && signal) {
-      await new Promise<void>((resolve, reject) => {
-        const onAbort = () => {
-          scanAborts += 1;
-          signal.removeEventListener("abort", onAbort);
-          reject(new DOMException("scan cancelled", "AbortError"));
-        };
-        signal.addEventListener("abort", onAbort, { once: true });
-        gate.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-      });
-    } else {
-      await gate;
-    }
-    const pinOverlayPaths = scanPinOverlayResults.shift();
-    const complete = scanCompleteResults.shift();
-    return { files, projectCatalog: scannedProjectCatalog, ...(pinOverlayPaths ? { pinOverlayPaths } : {}), complete: complete ?? true };
-  },
-}));
+const filesRouteScanRunner: NonNullable<Parameters<typeof setFileScanRunnerForTests>[0]> = async (intent, options, signal) => {
+  const optionsWithSignal = {
+    ...options,
+    persist: intent.persist,
+    ...(intent.fresh ? { fresh: true } : {}),
+    signal,
+  };
+  scans += 1;
+  scanProjects.push(undefined);
+  scanOptions = optionsWithSignal;
+  const files = hydrateScannedFiles(scanFileResults.shift() ?? scannedFiles, optionsWithSignal);
+  const resourceSnapshot = { files, projectCatalog: scannedProjectCatalog, complete: true };
+  (optionsWithSignal as { onResourceSnapshot?: (snapshot: typeof resourceSnapshot) => void }).onResourceSnapshot?.(resourceSnapshot);
+  const gate = scanGates.shift();
+  if (gate && signal) {
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        scanAborts += 1;
+        signal.removeEventListener("abort", onAbort);
+        reject(new DOMException("scan cancelled", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      gate.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  } else {
+    await gate;
+  }
+  const pinOverlayPaths = scanPinOverlayResults.shift();
+  const complete = scanCompleteResults.shift();
+  return { files, projectCatalog: scannedProjectCatalog, ...(pinOverlayPaths ? { pinOverlayPaths } : {}), complete: complete ?? true };
+};
 let pipelinesStore: () => unknown[] = () => [];
 let flowsStore: () => unknown[] = () => [];
 let pipelineVisibility: (pipelines: unknown[]) => unknown[] = () => [];
-let pipelineMutationCalls = 0;
-mock.module("@/lib/flows/store", () => ({ loadFlows: () => flowsStore() }));
-mock.module("@/lib/pipelines/store", () => ({
-  loadPipelines: () => pipelinesStore(),
-  loadPipelinesForProjection: () => pipelinesStore(),
-  withPipelineMutation: (...args: unknown[]) => {
-    pipelineMutationCalls += 1;
-    const real = realModules.get("@/lib/pipelines/store") as { withPipelineMutation: (...call: unknown[]) => unknown };
-    return real.withPipelineMutation(...args);
-  },
-}));
-mock.module("@/lib/pipelines/visibility", () => ({ filterPipelinesForFileScan: (pipelines: unknown[]) => pipelineVisibility(pipelines) }));
 let boardTasksStore: () => unknown[] = () => [];
-mock.module("@/lib/tasks/store", () => ({
-  loadTasks: () => boardTasksStore(),
-  mutateTasks: () => { throw new Error("files route attempted a task mutation"); },
-}));
-mock.module("@/lib/workflows/store", () => ({ loadWorkflows: () => [] }));
-mock.module("@/lib/workflows/visibility", () => ({ filterWorkflowsForFileScan: () => [] }));
-mock.module("@/lib/tmux", () => ({
-  ...(realModules.get("@/lib/tmux") as Record<string, unknown>),
-  tmuxEndpointHealth: () => tmuxHealth,
-}));
-
-afterAll(() => {
-  for (const [name, real] of realModules) mock.module(name, () => real as Record<string, unknown>);
-});
-
-const { cachedFileScan, completedFileScan, currentFileScan, fileScanCacheStatus, resetFilesRouteCacheForTests } = await import("@/lib/scanner/scanCache");
 const { fileScanCoordinatorStatus } = await import("@/lib/scanner/scanCoordinator");
 const { postSnapshot } = await import("@/app/api/agent/snapshot/handler");
 const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presenceStore");
@@ -441,12 +422,31 @@ test("repeated files reads reuse the pure read snapshot and retain ETag behavior
   expect(first.headers.get("server-timing")).toMatch(/files-role-titles;dur=\d+(?:\.\d+)?/);
 });
 
+test("SQLite health exposes authoritative and mirror revisions without conditional-response churn", async () => {
+  scannedFiles = [];
+  const registry = new AgentRegistry(path.join(registryRoot, "sqlite-health.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+  });
+  setAgentRegistryForTests(registry);
+
+  const first = await GET(new Request("http://127.0.0.1/api/files"));
+  const body = await first.json() as {
+    systemHealth: { registry: { revision: number; mirrorRevision: number } };
+  };
+  const etag = first.headers.get("etag");
+  const second = await GET(new Request("http://127.0.0.1/api/files", {
+    headers: { "if-none-match": etag! },
+  }));
+
+  expect(body.systemHealth.registry.revision).toBe(registry.storageDiagnostics().revision!);
+  expect(body.systemHealth.registry.mirrorRevision).toBe(body.systemHealth.registry.revision);
+  expect(second.status).toBe(304);
+  expect(second.headers.get("x-llv-files-projection-cache")).toBe("hit");
+});
+
 test("a cross-process SQLite pipeline commit invalidates a warm files projection", async () => {
   scannedFiles = [];
-  const real = realModules.get("@/lib/pipelines/store") as {
-    savePipelines: (pipelines: Pipeline[]) => void;
-  };
-  real.savePipelines([]);
+  savePipelines([]);
   pipelinesStore = () => readStateCollectionRows(path.join(stateDir, "state.sqlite"), "pipelines") ?? [];
   pipelineVisibility = (pipelines) => pipelines;
   const first = await GET(new Request("http://127.0.0.1/api/files"));
@@ -630,6 +630,25 @@ test("issue 798: a files GET reads the registry once, threads it to titles, and 
   const registry = agentRegistry();
   const conversation = registry.ensureConversation("codex", sessionPath, null);
   scannedFiles = [file(sessionPath)];
+  const pipeline = buildPipeline({
+    id: "read7980",
+    task: "read-only files projection",
+    project: "viewer",
+    repoDir: "/repo",
+    stages: [],
+    srcPath: null,
+    srcConversationId: null,
+    now: "2026-07-31T00:00:00.000Z",
+    state: "draft",
+  });
+  savePipelines([pipeline]);
+  pipelinesStore = () => readStateCollectionRows(path.join(stateDir, "state.sqlite"), "pipelines") ?? [];
+  pipelineVisibility = (pipelines) => pipelines;
+  const pipelineDatabase = path.join(stateDir, "state.sqlite");
+  const pipelinesBefore = readStateCollectionRows(pipelineDatabase, "pipelines");
+  const pipelineRevisionBefore = readStateCollectionRevision(pipelineDatabase, "pipelines");
+  expect(pipelinesBefore).toEqual([pipeline]);
+  expect(pipelineRevisionBefore).not.toBeNull();
   const target = registry as unknown as { readOnlySnapshot: AgentRegistry["readOnlySnapshot"] };
   const realReadOnlySnapshot = target.readOnlySnapshot.bind(registry);
   let registryReads = 0;
@@ -645,7 +664,10 @@ test("issue 798: a files GET reads the registry once, threads it to titles, and 
     /* The single read-only snapshot is threaded to every projection consumer
        (title overlay included); a second read here is the #798 regression. */
     expect(registryReads).toBe(1);
-    expect(pipelineMutationCalls).toBe(0);
+    /* A files projection is read-only. Rows catch changed content; the SQLite
+       revision catches any committed pipeline-store mutation during GET. */
+    expect(readStateCollectionRows(pipelineDatabase, "pipelines")).toEqual(pipelinesBefore);
+    expect(readStateCollectionRevision(pipelineDatabase, "pipelines")).toBe(pipelineRevisionBefore);
   } finally {
     target.readOnlySnapshot = realReadOnlySnapshot;
   }
@@ -776,7 +798,7 @@ test("a restart serves the persisted completed snapshot while revalidating", asy
   };
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: persistedSnapshot,
   }));
   resetFilesRouteCacheForTests();
@@ -796,7 +818,7 @@ test("a restart serves the persisted completed snapshot while revalidating", asy
 test("the pipeline controller warm-starts from the persisted completed snapshot while revalidating", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: {
       files: [file("/sessions/persisted-controller.jsonl")],
       projectCatalog: [],
@@ -823,7 +845,7 @@ test("the pipeline controller warm-starts from the persisted completed snapshot 
 test("a current scan joins restart revalidation before publishing transcript metadata", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: {
       files: [file("/sessions/persisted-resource.jsonl")],
       projectCatalog: [],
@@ -1265,7 +1287,7 @@ test("a fresh resource snapshot replaces stale process and pane observations bef
 test("a client automatically converges from a persisted restart snapshot to its completed generation", async () => {
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: {
       files: [file("/sessions/persisted-client.jsonl")],
       projectCatalog: [],
@@ -1303,7 +1325,7 @@ test("a restart hydrates a persisted 7700-row snapshot within two seconds", asyn
   const files = Array.from({ length: 7_700 }, (_, index) => file(`/sessions/persisted-${index}.jsonl`));
   fs.writeFileSync(path.join(stateDir, "files-scan-snapshot.json"), JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: { files, projectCatalog: [], complete: true },
   }));
   resetFilesRouteCacheForTests();
@@ -1327,7 +1349,7 @@ test("a corrupt completed snapshot falls back to a cold scan and repairs persist
   expect(scans).toBe(1);
   const persisted = JSON.parse(fs.readFileSync(path.join(stateDir, "files-scan-snapshot.json"), "utf8"));
   expect(persisted.version).toBe(1);
-  expect(persisted.schemaVersion).toBe(10);
+  expect(persisted.schemaVersion).toBe(11);
 });
 
 test("repeated first-ever incomplete scans stay unpublished until recovery", async () => {
@@ -1392,7 +1414,7 @@ test("snapshot publication failures preserve the canonical file, clean temps, st
   const snapshotPath = path.join(stateDir, "files-scan-snapshot.json");
   const canonical = JSON.stringify({
     version: 1,
-    schemaVersion: 10,
+    schemaVersion: 11,
     snapshot: {
       files: [file("/sessions/canonical.jsonl")],
       projectCatalog: [],
@@ -2689,9 +2711,7 @@ test("a relocated Claude worktree transcript remains the readable parent card", 
   expect(relocated.continuityPaths).toContain(oldParentPath);
   expect(relocated.continuityPaths).not.toContain(newParentPath);
   expect(registry.canonicalPath(oldParentPath)).toBe(newParentPath);
-  const archived = (realModules.get("@/lib/scanner") as {
-    archivedTranscriptPaths(): ReadonlySet<string>;
-  }).archivedTranscriptPaths();
+  const archived = archivedTranscriptPaths();
   expect(archived.has(newParentPath)).toBe(false);
   expect(archived.has(oldParentPath)).toBe(true);
 
@@ -3389,4 +3409,17 @@ test("issue 1168: a seat rekeyed since it filed keeps one identity — the ask r
   recordBridgeDirectiveAnswer(filed!.seq, { project: "repo", seatConversationId: seat.id }, registrySeatIdentity);
   const answered = await (await GET(new Request("http://127.0.0.1/api/files"))).json() as { files: FileEntry[] };
   expect(answered.files.find((entry) => entry.path === seatPath)?.bridgeAsk).toBeUndefined();
+});
+
+
+test("full and summary files representations never share ETags or cached bodies", async () => {
+  scannedFiles = [];
+  const full = await GET(new Request("http://localhost/api/files"));
+  const fullTag = full.headers.get("etag")!;
+  const summary = await GET(new Request("http://localhost/api/files?view=summary", { headers: { "if-none-match": fullTag } }));
+  expect(summary.status).toBe(200);
+  expect(summary.headers.get("etag")).not.toBe(fullTag);
+  expect((await summary.json()).readProjection).toBe("board-summary");
+  const fullAgain = await GET(new Request("http://localhost/api/files"));
+  expect((await fullAgain.json()).readProjection).toBeUndefined();
 });

@@ -14,7 +14,7 @@
  * Mirrors the mock-wire pattern of TmuxComposer.sendReadiness.dom.test.tsx
  * with the session's host axis flipped to `dead`.
  */
-import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -24,6 +24,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
+import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 const dom = new Window();
 installActEnv();
@@ -70,7 +71,7 @@ function deadStructuredView(conversationId: string): RuntimeSessionView {
       parentConversationId: null,
       flowId: null,
       workflowId: null,
-      cwd: "/home/user/projects/viewer",
+      cwd: "viewer",
       artifactPath: null,
       capabilities: {
         steer: true,
@@ -92,37 +93,20 @@ const VIEWS: Record<string, RuntimeSessionView> = {
   "conv-499-dead": deadStructuredView("conv-499-dead"),
 };
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const realUseRuntime = actualRuntimeHooks.useRuntime;
-const realUseRuntimeSession = actualRuntimeHooks.useRuntimeSession;
-const realUseRuntimeReceiptsForArtifact = actualRuntimeHooks.useRuntimeReceiptsForArtifact;
-let runtimePlaneAuthoritative = true;
-mock.module("@/hooks/useRuntime", () => ({
-  ...actualRuntimeHooks,
-  useRuntime: () => {
-    const real = realUseRuntime();
-    return runtimePlaneAuthoritative ? { ...real, enabled: true } : real;
-  },
-  useRuntimeSession: (conversationId: string | null) => {
-    const real = realUseRuntimeSession(conversationId);
-    return (conversationId && VIEWS[conversationId]) || real;
-  },
-  useRuntimeReceiptsForArtifact: (path: string | null, conversationId?: string | null) => {
-    const real = realUseRuntimeReceiptsForArtifact(path, conversationId);
-    return conversationId && VIEWS[conversationId] ? [] : real;
-  },
-  refreshRuntime: () => Promise.resolve(true),
-}));
-afterAll(() => {
-  runtimePlaneAuthoritative = false;
-  mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-});
-
-const { TmuxComposer } = await import("./TmuxComposer");
+import { TmuxComposer } from "./TmuxComposer";
 
 const realFetch = globalThis.fetch;
 
+beforeEach(() => {
+  installTmuxComposerRuntimeForTests({
+    useRuntimeView: (file) => file.conversationId ? VIEWS[file.conversationId] ?? null : null,
+    runtimeEnabled: true,
+    refreshRuntime: async () => true,
+  });
+});
+
 afterEach(() => {
+  resetTmuxComposerRuntimeForTests();
   setLocale("en");
   mobile = false;
   globalThis.fetch = realFetch;
@@ -145,8 +129,9 @@ function deadViewerFile(): FileEntry {
     mtime: 1,
     size: 1,
     activity: "idle",
-    proc: "running",
+    proc: null,
     pid: null,
+    lastTurn: { startedAt: 1_000, endedAt: 2_000 },
     conversationId: "conv-499-dead",
     spawnOrigin: "viewer",
     model: "gpt-5.6-sol",
@@ -217,3 +202,23 @@ test.each(["en", "uk"] as const)(
     flushSync(() => root.unmount());
   },
 );
+
+
+test("a hoisted superseded composer blocks Send without pane-supplied guards", async () => {
+  quietWire();
+  const prior = VIEWS["conv-499-dead"];
+
+  let mounted: Awaited<ReturnType<typeof renderInto>> | undefined;
+  try {
+    mounted = await renderInto(<TmuxComposer file={{ ...deadViewerFile(), supersededBy: { conversationId: "conversation_successor", path: null, at: "2026-09-08T07:00:00Z", reason: "replaced" } }} />);
+    const textarea = mounted.host.querySelector("textarea") as HTMLTextAreaElement;
+    const propsKey = Object.keys(textarea).find(key => key.startsWith("__reactProps$"))!;
+    const props = (textarea as unknown as Record<string, { onChange: (e: unknown) => void }>)[propsKey]!;
+    await act(async () => props.onChange({ target: { value: "Retain this draft" } }));
+    const send = mounted.host.querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(send.disabled || send.getAttribute("aria-disabled") === "true").toBe(true);
+  } finally {
+    if (mounted) await act(async () => mounted!.root.unmount());
+    VIEWS["conv-499-dead"] = prior;
+  }
+});

@@ -8,6 +8,7 @@ import type { BranchGroup } from "@/components/projectModel";
 import type { FileEntry } from "@/lib/types";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { MobileScreen } from "@/components/mobile/mobileNav";
 
 /*
  * Issue #325 — 390px coverage: a direct one-shot review group must surface on
@@ -30,6 +31,7 @@ mock.module("@/hooks/useRuntime", () => ({
 
 const { MobileFocusView } = await import("@/components/mobile/MobileFocusView");
 const { directReviewFlows } = await import("@/components/flows/directReviewGroups");
+const { getMobileNav, topScreen } = await import("@/components/mobile/mobileNav");
 
 const dom = new Window({ url: "http://localhost/" });
 const G = globalThis as Record<string, unknown>;
@@ -98,7 +100,35 @@ function entry(overrides: Partial<FileEntry> & { path: string }): FileEntry {
   };
 }
 
-test("a direct review group rides the phone strip as a round deck with accessible verdict history (#325)", async () => {
+/** Mobile v2 lane 3: the chip strip is gone. Everything the strip could pin
+    is a switcher row now — the review-round decks among them, named for the
+    work they review — so this is the phone's route to a deck. */
+function openDeck(): void {
+  const cell = dom.document.querySelector('[data-mobile2-open="switch"]') as unknown as HTMLButtonElement;
+  expect(cell).not.toBeNull();
+  flushSync(() => cell.click());
+  const row = [...dom.document.querySelectorAll('[data-mobile2-sheet="switch"] [data-mobile2-go="chat"]')]
+    .find((node) => (node.textContent ?? "").includes("Review · ")) as unknown as HTMLButtonElement | undefined;
+  expect(row).toBeDefined();
+  flushSync(() => row!.click());
+}
+
+/** The pipeline plan: the conversation menu's first row PUSHES the pipeline
+    screen (mobile v2 lane 7, P2-9) — the dock sheet and its rail are retired
+    (lane 10). What comes back is the navigation stack's top. */
+async function tapPipelineRow(): Promise<MobileScreen> {
+  getMobileNav().home();
+  const more = dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement;
+  flushSync(() => more.click());
+  const row = dom.document.querySelector('[data-testid="mobile-menu-pipeline"]') as unknown as HTMLButtonElement;
+  expect(row).not.toBeNull();
+  flushSync(() => row.click());
+  await settle();
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-sheet"]')).toBeNull();
+  return topScreen(getMobileNav().getState());
+}
+
+test("a direct review group rides the phone switcher as a round deck with accessible verdict history (#325)", async () => {
   const builder = entry({ path: "/builder", title: "Builder session", conversationId: "conversation-builder", activity: "live", mtime: 9_000 });
   const done = entry({
     path: "/reviewer-1",
@@ -139,7 +169,6 @@ test("a direct review group rides the phone strip as a round deck with accessibl
         reviewGroups={reviewGroups}
         pipelines={[]}
         surfacePipelines={[]}
-        workerStacks={[]}
         tasks={[]}
         drafts={[]}
         loaded
@@ -153,12 +182,8 @@ test("a direct review group rides the phone strip as a round deck with accessibl
   );
   await settle();
 
-  /* The switch strip carries a deck chip for the direct group. */
-  const chips = [...dom.document.querySelectorAll("button")] as unknown as HTMLButtonElement[];
-  const deckChip = chips.find((chip) => chip.textContent?.trim().startsWith("R"));
-  expect(deckChip).toBeDefined();
-
-  flushSync(() => deckChip!.click());
+  /* The switcher carries a row for the direct group's deck. */
+  openDeck();
   await settle();
 
   /* The terminal round parks as a compact history spine: a real button (so the
@@ -216,7 +241,6 @@ test("a terminal direct group rides the phone as a tappable collapsed verdict ch
         reviewGroups={reviewGroups}
         pipelines={[]}
         surfacePipelines={[]}
-        workerStacks={[]}
         tasks={[]}
         drafts={[]}
         loaded
@@ -230,11 +254,8 @@ test("a terminal direct group rides the phone as a tappable collapsed verdict ch
   );
   await settle();
 
-  /* The terminal group still rides the switch strip (board presence). */
-  const chips = [...dom.document.querySelectorAll("button")] as unknown as HTMLButtonElement[];
-  const deckChip = chips.find((chip) => chip.textContent?.trim().startsWith("R"));
-  expect(deckChip).toBeDefined();
-  flushSync(() => deckChip!.click());
+  /* The terminal group still has board presence: a switcher row. */
+  openDeck();
   await settle();
 
   /* Collapsed by default after the final verdict: one chip carrying the
@@ -258,7 +279,7 @@ test("a terminal direct group rides the phone as a tappable collapsed verdict ch
   expect(banner).toBeDefined();
 });
 
-test("an active pipeline-owned review keeps prior same-round bindings in the compact mobile rail (#353)", async () => {
+test("an active pipeline-owned review names its stage in the menu row, and the row pushes its pipeline — where the round's other transcripts are rows (#353, lane 10)", async () => {
   const builder = entry({ path: "/pipeline-builder", title: "Pipeline builder", conversationId: "conversation-builder", activity: "live", mtime: 9_000 });
   const membership = (slot: string) => ({
     kind: "flow" as const,
@@ -309,50 +330,35 @@ test("an active pipeline-owned review keeps prior same-round bindings in the com
   roots.push(mount(
     <MobileFocusView
       project="demo" groups={[group]} manual={[]} files={[builder, priorReviewer, reviewer]} flows={[flow]} pipelines={[pipeline]}
-      surfacePipelines={[pipeline]} workerStacks={[]} tasks={[]} drafts={[]} loaded focus={null}
+      surfacePipelines={[pipeline]} tasks={[]} drafts={[]} loaded focus={null}
       onSelect={(file) => { selected.path = file.path; }} onClose={() => {}} onDraftClose={() => {}} onDraftSpawned={() => {}}
     />,
   ));
   await settle();
 
   expect(dom.document.querySelector("[data-review-deck-collapse]")).toBeNull();
-  /* Chat-first (#419): the dock lives behind the one-row summary now. */
-  const pipelineSummary = dom.document.querySelector('[data-testid="mobile-pipeline-summary"]') as unknown as HTMLButtonElement | null;
-  expect(pipelineSummary).not.toBeNull();
-  const focusRow = dom.document.querySelector('[data-testid="mobile-pipeline-focus-row"]');
-  expect(focusRow).not.toBeNull();
-  const focusLabels = [...focusRow!.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"));
-  expect(focusLabels.some((label) => label?.startsWith("Previous stage"))).toBe(false);
-  expect(focusLabels.some((label) => /^Next stage .+, state .+$/.test(label ?? ""))).toBe(true);
-  const deckChip = [...dom.document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "R Flow");
-  expect(deckChip).toBeUndefined();
+  /* Mobile v2 lane 3: the conversation screen carries no pipeline chrome — no
+     hop chips, no summary trigger. The stage the conversation belongs to names
+     itself in the bar's meta line, and the plan is the menu's first row. */
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-summary"]')).toBeNull();
+  expect(dom.document.querySelector('[data-testid="mobile-pipeline-focus-row"]')).toBeNull();
+  /* The stage this conversation ran names itself in the menu's first row — the
+     ONE pipeline reach on this screen (P2-9). The bar's meta line adds
+     `stage k/n` only while the conversation IS the stage the pipeline is on. */
+  const more = dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement;
+  flushSync(() => more.click());
+  expect(dom.document.querySelector('[data-testid="mobile-menu-pipeline"]')?.textContent).toContain("stage ");
+  flushSync(() => (dom.document.querySelector("[data-mobile2-close]") as unknown as HTMLButtonElement).click());
 
-  /* Open the sheet, then expand the dock (#156/#419); the full rail — and its
-     verdict/round history — stays reachable behind the two disclosures. */
-  flushSync(() => pipelineSummary!.click());
-  await settle();
-  const dock = dom.document.querySelector('[data-testid="mobile-pipeline-sheet"] [data-testid="mobile-pipeline-dock"]');
-  expect(dock).not.toBeNull();
-  const summary = dock!.querySelector('[data-testid="mobile-pipeline-dock-summary"]') as unknown as HTMLButtonElement;
-  flushSync(() => summary.click());
-  await settle();
-  const history = ([...dock!.querySelectorAll("button")] as unknown as HTMLButtonElement[])
-    .filter((button) => button.getAttribute("aria-label")?.startsWith("Open verdict for stage"))
-    .at(-1);
-  expect(history).toBeDefined();
-  expect(history!.className).toContain("min-w-11");
-  flushSync(() => (history as HTMLButtonElement).click());
-  await settle();
-
-  const priorTranscript = dom.document.querySelector('button[aria-label="Open review transcript 1"]') as unknown as HTMLButtonElement | null;
-  expect(priorTranscript).not.toBeNull();
-  expect(priorTranscript!.className).toContain("min-h-11");
-  expect(priorTranscript!.className).toContain("min-w-11");
-  flushSync(() => priorTranscript!.click());
-  expect(selected.path).toBe(priorReviewer.path);
+  /* The row pushes THIS pipeline's screen. The round's other reviewer
+     transcript — what the retired rail's verdict history listed — is a row
+     under the review stage there (`MobilePipelineScreen.dom`); nothing on the
+     conversation screen opens a transcript behind the operator's back. */
+  expect(await tapPipelineRow()).toEqual({ kind: "pipeline", id: pipeline.id });
+  expect(selected.path).toBeNull();
 });
 
-test("an active retry opens prior transcript history from the mobile focus row (#353)", async () => {
+test("an active retry's menu row pushes its pipeline, where the earlier attempt is a row (#353, lane 10)", async () => {
   const prior = entry({ path: "/pipeline-retry-1", title: "Pipeline retry 1", mtime: 9_000 });
   const current = entry({ path: "/pipeline-retry-2", title: "Pipeline retry 2", activity: "live", mtime: 10_000 });
   const pipeline = {
@@ -370,22 +376,71 @@ test("an active retry opens prior transcript history from the mobile focus row (
   roots.push(mount(
     <MobileFocusView
       project="demo" groups={[group]} manual={[]} files={[prior, current]} flows={[]} pipelines={[pipeline]}
-      surfacePipelines={[pipeline]} workerStacks={[]} tasks={[]} drafts={[]} loaded focus={null}
+      surfacePipelines={[pipeline]} tasks={[]} drafts={[]} loaded focus={null}
       onSelect={(file) => { selected.path = file.path; }} onClose={() => {}} onDraftClose={() => {}} onDraftSpawned={() => {}}
     />,
   ));
   await settle();
 
-  const focusRow = dom.document.querySelector('[data-testid="mobile-pipeline-focus-row"]');
-  const history = focusRow?.querySelector('button[aria-haspopup="dialog"]') as unknown as HTMLButtonElement | null;
-  expect(history?.disabled).toBe(false);
-  flushSync(() => history!.click());
+  /* The stage the conversation is on names itself in the menu row; the row
+     pushes the pipeline screen, and the earlier attempt's transcript is a row
+     under the stage there (`MobilePipelineScreen.dom`). */
+  const more = dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement;
+  flushSync(() => more.click());
+  expect(dom.document.querySelector('[data-testid="mobile-menu-pipeline"]')?.textContent).toContain("Retry on mobile");
+  flushSync(() => (dom.document.querySelector("[data-mobile2-close]") as unknown as HTMLButtonElement).click());
+  expect(await tapPipelineRow()).toEqual({ kind: "pipeline", id: pipeline.id });
+  expect(selected.path).toBeNull();
+});
+
+test("a focused deck keeps the switcher on the bar and the swipe that walks it (#1439 lane 3)", async () => {
+  /* Mobile v2 lane 3: the bar's title cell IS the switcher, and a deck is one
+     of the rows it lists. Reading that cell off the focused FILE — which a deck
+     has none of — turned every deck into a dead end: the cell showed the
+     project's name, opened the project switcher, and the swipe refused to
+     move, so the gesture that reached the deck could not leave it. */
+  const builder = entry({ path: "/builder", title: "Builder session", conversationId: "conversation-builder", activity: "live", mtime: 9_000 });
+  const reviewer = entry({
+    path: "/reviewer-1",
+    parent: "/builder",
+    conversationId: "conversation-r1",
+    mtime: 2_000,
+    activity: "live",
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation-builder", reviewsConversationId: "conversation-builder", memberships: [] },
+  });
+  const files = [builder, reviewer];
+  const reviewGroups = directReviewFlows({ files, flows: [], tasks: [] });
+  const group: BranchGroup = { key: builder.path, columns: [{ file: builder, tasks: [] }], returnable: [], finished: [], smt: builder.mtime, orphanTask: false };
+
+  roots.push(mount(
+    <MobileFocusView
+      project="demo" groups={[group]} manual={[]} files={files} flows={[]} reviewGroups={reviewGroups}
+      pipelines={[]} surfacePipelines={[]} tasks={[]} drafts={[]} loaded focus={null}
+      onSelect={() => {}} onClose={() => {}} onDraftClose={() => {}} onDraftSpawned={() => {}}
+    />,
+  ));
   await settle();
 
-  const priorTranscript = dom.document.querySelector('button[aria-label="Open transcript for attempt 1"]') as unknown as HTMLButtonElement | null;
-  expect(priorTranscript).not.toBeNull();
-  expect(priorTranscript!.className).toContain("min-h-11");
-  expect(priorTranscript!.className).toContain("min-w-11");
-  flushSync(() => priorTranscript!.click());
-  expect(selected.path).toBe(prior.path);
+  openDeck();
+  await settle();
+
+  /* The cell is still the switcher, and it names the deck exactly as the row
+     that opened it does. */
+  const cell = dom.document.querySelector('[data-mobile2-open="switch"]') as unknown as HTMLButtonElement | null;
+  expect(cell).not.toBeNull();
+  expect(dom.document.querySelector("[data-mobile2-title-text]")?.textContent).toContain("Review · Builder session");
+  /* And the screen is a conversation screen, not the board underneath it. */
+  expect(dom.document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen")).toBe("chat");
+
+  /* The swipe walks the same order: one step back leaves the deck for the work
+     it reviews instead of doing nothing at all. */
+  const bar = dom.document.querySelector("[data-mobile2-bar]") as unknown as HTMLElement;
+  const start = new dom.Event("touchstart", { bubbles: true });
+  Object.assign(start, { touches: [{ clientX: 200, clientY: 20 }] });
+  const end = new dom.Event("touchend", { bubbles: true });
+  Object.assign(end, { touches: [], changedTouches: [{ clientX: 320, clientY: 22 }] });
+  flushSync(() => { bar.dispatchEvent(start as unknown as Event); });
+  flushSync(() => { bar.dispatchEvent(end as unknown as Event); });
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-title-text]")?.textContent).toBe("Builder session");
 });

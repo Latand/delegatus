@@ -1,4 +1,7 @@
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
+import { pipelineStageSandbox } from "./stageSandbox";
+
+const RELAY_PLACEHOLDER = "{{prev.output}}";
 
 function replaceAll(source: string, token: string, value: string): string {
   return source.split(token).join(value);
@@ -11,12 +14,27 @@ export function renderStagePrompt(
   previousOutput: string,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
-  body = replaceAll(body, "{{prev.output}}", previousOutput);
+  body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
   let roleScaffold = role.promptScaffold ? replaceAll(role.promptScaffold, "{{task}}", pipeline.task) : null;
-  if (roleScaffold) roleScaffold = replaceAll(roleScaffold, "{{prev.output}}", previousOutput);
+  if (roleScaffold) roleScaffold = replaceAll(roleScaffold, RELAY_PLACEHOLDER, previousOutput);
+  /* The controller persists the predecessor's output on the attempt whether or
+     not the author placed the placeholder (#1678): a prompt that never names it
+     used to render nothing, and the stage truthfully reported a missing input.
+     A prompt or scaffold that places the relay keeps sole control of where. */
+  const relayPlaced = stage.prompt.includes(RELAY_PLACEHOLDER) || (role.promptScaffold?.includes(RELAY_PLACEHOLDER) ?? false);
+  const relayed = previousOutput.trim();
+  const relaySection = !relayPlaced && relayed
+    ? ["", "Previous stage output (relayed by the controller; the prompt above did not place {{prev.output}}):", relayed]
+    : [];
+  const declaredOutputs = stage.outputs?.length ? stage.outputs.map((output) => `\`${output}\``).join(", ") : null;
   const access = role.access === "read-only"
-    ? "Access: read-only. Inspect and validate freely. Avoid edits, staging, commits, pushes, and other repository mutations."
+    ? declaredOutputs
+      ? `Access: read-only. Inspect and validate freely. You may write only these declared worktree outputs: ${declaredOutputs}. Do not commit, stage, push, edit any other repository path, or mutate production.`
+      : "Access: read-only. Inspect and validate freely. Do not edit, stage, commit, push, or otherwise mutate the repository or production."
     : "Access: read-write. Work only inside this pipeline's dedicated worktree and commit-ready scope.";
+  const hostAccess = pipelineStageSandbox(stage) === "restricted"
+    ? "Host access: restricted. This stage runs inside the engine sandbox."
+    : "Host access: full. Network, SSH, GitHub CLI, and the pipeline worktree are available.";
   const roleContext = role.roleId
     ? [
         `Role preset: ${role.roleId} (${role.engine}${role.model ? `/${role.model}` : ""}${role.effort ? `, ${role.effort}` : ""}).`,
@@ -25,6 +43,7 @@ export function renderStagePrompt(
     : [];
   return [
     body.trim(),
+    ...relaySection,
     "",
     "Pinned task:",
     pipeline.task,
@@ -34,6 +53,7 @@ export function renderStagePrompt(
     "",
     ...roleContext,
     access,
+    hostAccess,
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
     "Finish the completed turn with one fenced JSON object as the final block. This block is the only completion authority:",

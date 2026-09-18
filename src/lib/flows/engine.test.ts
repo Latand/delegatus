@@ -23,6 +23,7 @@ let releaseRelayDeliveries: Array<() => void> = [];
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-engine-test-"));
 const { captureReviewHead, newRound, tickFlow, tickFlows, persistTickFlows, flowTickBase, reviewerLaunchPersisted, abandonLaunch, adoptSyntheticLaunchTakeover, recordHeadlessLaunch, relayFixOrPark, reserveReviewerSpawn, sendToImplementer, setRelayDeliveryForTest } = await import("./engine");
 const { loadFlows, outputPathFor, saveFlows, stderrPathFor, stdoutPathFor } = await import("./store");
+const tasksStore = await import("@/lib/tasks/store");
 
 afterAll(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
@@ -108,7 +109,7 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
     expect(spawnSync("git", ["commit", "-am", "repair"], { cwd: directory }).status).toBe(0);
     const repairSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: directory, encoding: "utf8" }).stdout.trim();
     const flow = {
-      cwd: directory, headRef: "main", roles: {
+      cwd: directory, headRef: "main", requireRemoteHead: true, roles: {
         implementer: { engine: "codex", model: null, effort: "high" },
         reviewer: { engine: "codex", model: null, effort: "xhigh" },
       }, rounds: [],
@@ -116,6 +117,39 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
 
     expect(() => captureReviewHead(flow, newRound(flow, "marker", null)))
       .toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a pipeline flow that does not publish captures its clean local head without reading any remote (#1692)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-internal-head-"));
+  const directory = path.join(root, "worktree");
+  fs.mkdirSync(directory);
+  try {
+    expect(spawnSync("git", ["init", "-b", "main"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["config", "user.email", "flow@example.com"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["config", "user.name", "Flow Test"], { cwd: directory }).status).toBe(0);
+    /* An origin nobody can reach: any read of it fails. */
+    expect(spawnSync("git", ["remote", "add", "origin", path.join(root, "missing-origin.git")], { cwd: directory }).status).toBe(0);
+    fs.writeFileSync(path.join(directory, "work.txt"), "reviewed\n");
+    expect(spawnSync("git", ["add", "work.txt"], { cwd: directory }).status).toBe(0);
+    expect(spawnSync("git", ["commit", "-m", "reviewed"], { cwd: directory }).status).toBe(0);
+    const headSha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: directory, encoding: "utf8" }).stdout.trim();
+    const flow = {
+      cwd: directory, headRef: "main", roles: {
+        implementer: { engine: "codex", model: null, effort: "high" },
+        reviewer: { engine: "codex", model: null, effort: "xhigh" },
+      }, rounds: [],
+    } as unknown as Flow;
+
+    const internal = newRound(flow, "marker", null);
+    expect(captureReviewHead(flow, internal)).toBe(headSha);
+    expect(internal.reviewHeadSha).toBe(headSha);
+
+    const publishing = { ...flow, requireRemoteHead: true } as Flow;
+    expect(() => captureReviewHead(publishing, newRound(publishing, "marker", null)))
+      .toThrow("review remote head is unavailable before launch: origin/main");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -612,6 +646,71 @@ test("headless review retries once after an exit without a verdict, then parks o
   const parked = loadFlows()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("reviewer verdict was unparseable");
+});
+
+test("a headless Claude reviewer's bold approval settles the round without an automatic retry (#1682)", async () => {
+  const startedAt = new Date().toISOString();
+  const cwd = "/repo";
+  const implementer = writeCodexEntry("bold-verdict-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f130"].join("-"), cwd }, Date.now() / 1_000);
+  const flow: Flow = {
+    id: "flow-bold-verdict",
+    template: "implement-review-loop",
+    project: "repo",
+    cwd,
+    implementerPath: implementer.path,
+    roles: {
+      implementer: { engine: "claude", model: null, effort: "high" },
+      reviewer: { engine: "claude", model: "haiku", effort: null },
+    },
+    reviewerFallback: null,
+    baseRef: "base",
+    baseMode: "head",
+    mode: "manual",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "reviewing",
+    pausedState: null,
+    stateDetail: null,
+    rounds: [{
+      n: 1,
+      reviewerPath: null,
+      reviewerRole: { engine: "claude", model: "haiku", effort: null },
+      accountId: "default",
+      attemptedAccounts: ["claude:default"],
+      autoRetryCount: 0,
+      sessionId: null,
+      reviewerPid: 999_999_999,
+      reviewerPane: null,
+      findingsPath: null,
+      triggeredBy: "marker",
+      readyNote: null,
+      verdict: null,
+      findingsCount: null,
+      startedAt,
+      spawnStartedAt: startedAt,
+      relayStartedAt: null,
+      reviewedAt: null,
+      relayedAt: null,
+      error: null,
+    }],
+    createdAt: startedAt,
+    closedAt: null,
+  };
+  /* A headless Claude reviewer's final output is its plain-text stdout; this
+     is the second staging reviewer's output that consumed flow 26d5fbcd's
+     retry and then parked it as unparseable. */
+  const review = fs.readFileSync(path.join(import.meta.dir, "fixtures", "haiku-review-bold-verdict-b.md"), "utf8");
+  fs.mkdirSync(path.dirname(stdoutPathFor(flow.id, 1)), { recursive: true });
+  fs.writeFileSync(stdoutPathFor(flow.id, 1), `${review}\n`);
+  saveFlows([flow]);
+
+  await tickFlows([implementer]);
+  const settled = loadFlows()[0]!;
+  expect(settled.stateDetail ?? "").not.toContain("retrying automatically");
+  expect(settled).toMatchObject({
+    state: "relay_pending",
+    rounds: [{ verdict: "APPROVE", findingsCount: 0, autoRetryCount: 0, error: null }],
+  });
 });
 
 test("headless review recovers the rollout verdict before consuming an automatic retry", async () => {
@@ -2740,4 +2839,132 @@ test("a conversation with no structured host falls through to the legacy transcr
   })).rejects.toThrow("implementer session cannot be resumed");
 
   expect(structuredAttempted).toBe(false);
+});
+
+/**
+ * #1279 at the reviewer seam. A review round's account is one the Viewer picks
+ * — the flow's own record names it, no operator gesture does — so the project's
+ * pool binds it, and the two failures below are the ones that must never end in
+ * a launch: an account the pool forbids, and a record that cannot say what the
+ * pool is. Account and project names are invented.
+ */
+function bindingRecordPath(): string {
+  return path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json");
+}
+
+function reviewerBindingFlow(id: string, accountId: string): Flow {
+  return raceFlow({
+    id,
+    project: "project-atlas",
+    implementerPath: `/${id}-implementer.jsonl`,
+    state: "spawning",
+    reviewerMode: "pane",
+    rounds: [{
+      n: 1, reviewerPath: null, reviewerRole: { engine: "codex", model: null, effort: "xhigh" },
+      accountId, attemptedAccounts: [], autoRetryCount: 0, sessionId: null,
+      reviewerPid: null, reviewerIdentity: null, reviewerPane: null, findingsPath: null,
+      triggeredBy: "button", readyNote: null, reviewHeadSha: null, verdict: null,
+      findingsCount: null, startedAt: "2026-08-30T00:00:00Z", spawnStartedAt: null,
+      relayStartedAt: null, relayDelivery: null, reviewedAt: null, terminalAt: null,
+      relayedAt: null, error: null,
+    }],
+  });
+}
+
+test("#1279: a reviewer account the project's pool forbids parks the flow instead of launching", async () => {
+  const flow = reviewerBindingFlow("flow-reviewer-forbidden", "acct-outsider");
+  saveFlows([flow]);
+  fs.writeFileSync(bindingRecordPath(), JSON.stringify({
+    schemaVersion: 1,
+    bindings: [{
+      engine: "codex",
+      accountId: "acct-reserved",
+      project: "project-atlas",
+      createdAt: "2026-08-30T00:00:00.000Z",
+    }],
+  }), "utf8");
+
+  try {
+    await tickFlows([{ path: flow.implementerPath } as FileEntry]);
+    const after = loadFlows().find((record) => record.id === flow.id)!;
+    expect(after.state).toBe("needs_decision");
+    /* The reason names the account, the project and the pool, so the operator
+       can act on it without opening the record. */
+    expect(after.stateDetail).toContain("acct-outsider");
+    expect(after.stateDetail).toContain("project-atlas");
+    expect(after.stateDetail).toContain("acct-reserved");
+    /* Nothing was launched: no pane handle, no spawn stamp. */
+    expect(after.rounds[0]!.spawnStartedAt ?? null).toBeNull();
+    expect(after.rounds[0]!.reviewerPane ?? null).toBeNull();
+  } finally {
+    fs.rmSync(bindingRecordPath(), { force: true });
+  }
+});
+
+test("#1279: a binding record the reviewer launch cannot read parks the flow rather than picking freely", async () => {
+  const flow = reviewerBindingFlow("flow-reviewer-unreadable", "default");
+  saveFlows([flow]);
+  fs.writeFileSync(bindingRecordPath(), '{"schemaVersion":1,"bindings":[{"engine":"codex"', "utf8");
+
+  try {
+    await tickFlows([{ path: flow.implementerPath } as FileEntry]);
+    const after = loadFlows().find((record) => record.id === flow.id)!;
+    expect(after.state).toBe("needs_decision");
+    expect(after.stateDetail).toContain("account-project-bindings.json");
+    expect(after.rounds[0]!.spawnStartedAt ?? null).toBeNull();
+  } finally {
+    fs.rmSync(bindingRecordPath(), { force: true });
+  }
+});
+
+
+test("completed fix uses durable evidence despite a stale busy scanner projection", async () => {
+  const entry = writeCodexEntry("completed-fix-stale.jsonl", {}, Date.now() / 1000);
+  fs.appendFileSync(entry.path, JSON.stringify({ type: "event_msg", timestamp: "2026-09-08T09:33:00.198Z", payload: { type: "task_complete", last_agent_message: "REVIEW_READY: repaired" } }) + "\n");
+  entry.size = fs.statSync(entry.path).size;
+  entry.activity = "live";
+  const flow = raceFlow({ implementerPath: entry.path, state: "fixing", createdAt: "2026-09-08T09:00:00Z", rounds: [] });
+  await tickFlow(flow, [entry], new Map([[entry.path, entry]]), () => {});
+  expect(flow.state).toBe("spawning");
+});
+
+test("a flow reviewer joins the task its implementer holds; an implementer without one gets a flow fallback binding both (#1586)", () => {
+  const { loadTasks, saveTasks } = tasksStore;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "review-membership-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const implementer = registry.ensureConversation("codex", "/sessions/membership-implementer.jsonl", "terra");
+  saveTasks([{
+    id: "implementer-task",
+    project: "viewer",
+    status: "assigned",
+    text: "Ship reviewer membership",
+    placement: "unplaced",
+    assignments: [{ path: "/sessions/membership-implementer.jsonl", conversationId: implementer.id, panePid: null, state: "delivered", error: null, at: "2026-09-09T12:00:00.000Z" }],
+    createdAt: "2026-09-09T12:00:00.000Z",
+    updatedAt: "2026-09-09T12:00:00.000Z",
+  }]);
+  const flow = {
+    id: "flow-membership",
+    project: "viewer",
+    cwd: "/repo",
+    spec: "Ship reviewer membership",
+    implementerPath: "/sessions/membership-implementer.jsonl",
+    implementerConversationId: implementer.id,
+    roles: { reviewer: { engine: "codex", model: null, effort: "xhigh" } },
+    rounds: [],
+  } as unknown as Flow;
+  const round = newRound(flow, "button", null);
+  const begun = reserveReviewerSpawn(flow, round, flow.roles.reviewer, "terra", registry);
+  expect(begun.kind).toBe("created");
+  expect(loadTasks().map((task) => task.id)).toEqual(["implementer-task"]);
+  expect(loadTasks()[0]!.assignments.map((assignment) => [assignment.conversationId, assignment.state])).toEqual([[implementer.id, "delivered"], [begun.receipt.conversationId, "linked"]]);
+
+  const legacy = registry.ensureConversation("codex", "/sessions/legacy-implementer.jsonl", "terra");
+  const legacyFlow = { ...flow, id: "flow-legacy", implementerPath: "/sessions/legacy-implementer.jsonl", implementerConversationId: legacy.id, rounds: [] } as unknown as Flow;
+  const legacyRound = newRound(legacyFlow, "button", null);
+  const fallback = reserveReviewerSpawn(legacyFlow, legacyRound, legacyFlow.roles.reviewer, "terra", registry);
+  const tasks = loadTasks();
+  expect(tasks.length).toBe(2);
+  const created = tasks.find((task) => task.id !== "implementer-task")!;
+  expect(created.origin).toEqual({ kind: "flow", key: "flow-legacy", refinement: "pending" });
+  expect(created.assignments.map((assignment) => assignment.conversationId).sort()).toEqual([fallback.receipt.conversationId, legacy.id].sort());
 });

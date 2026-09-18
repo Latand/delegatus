@@ -190,7 +190,10 @@ export type SeatTickWakeReasonKind =
   /** A board task the operator assigned that nothing has started. */
   | "unstarted-task"
   /** The wake interval elapsed while work is open — "roughly hourly". */
-  | "interval";
+  | "interval"
+  /** A standalone child the seat spawned reached a terminal outcome nobody has
+      harvested (#1465): its result is the seat's next obligation, once. */
+  | "child-terminal";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -198,6 +201,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "stalled",
   "unstarted-task",
   "interval",
+  "child-terminal",
 ];
 
 export interface SeatTickWakeReason {
@@ -208,7 +212,8 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request";
+  outcomeId?: string;
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child";
   id: string;
   label: string;
 }
@@ -262,10 +267,10 @@ export type SeatTickVerdict =
 export interface SeatTickEvidenceGap {
   /** Which evidence is missing. A stable token: it names the card the standing
       failure is reported under, so two outages of one source are one card. */
-  source: "pull-requests";
+  source: "pull-requests" | "children";
   /** The class of the failure, as the source itself reported it. Machine
       token, because the journal line carrying it is published. */
-  gap: SeatTickPullRequestGap;
+  gap: SeatTickPullRequestGap | SeatTickChildrenGap;
   /** What the seat loses while it stands, in one publication-safe clause. */
   detail: string;
 }
@@ -288,7 +293,7 @@ export interface SeatTickEvidenceGap {
  */
 export interface SeatTickSourceGap {
   /** The class of the newest failure in the run. */
-  gap: SeatTickPullRequestGap;
+  gap: SeatTickPullRequestGap | SeatTickChildrenGap;
   /** The first failure in it — what "how long has this been broken" reads. */
   since: string;
   /** The newest attempt, which is what the retry window is measured from. */
@@ -435,6 +440,84 @@ export type SeatTickPullRequestGap =
   | "malformed-output"
   | "lanes-unreadable";
 
+/**
+ * Why a check could not fully account for the seat's spawned children (#1465).
+ *
+ * One token per condition, because they call for different hands. Each is a
+ * standing run like the pull-request source's: the gather keeps
+ * {@link SeatTickProjectState.childrenGap} for it, and a run that outlives the
+ * wake interval is put on the board once.
+ *
+ * - `registry-unreadable`: the registry read itself failed.
+ * - `children-unindexed`: the registry backend has no indexed lineage
+ *   projection (a JSON-mode registry), so children cannot be paged at all.
+ * - `migration-pending` / `migration-blocked`: the SQLite accounting has not
+ *   finished importing the legacy JSON row, or cannot — a blocked migration
+ *   refuses every prepare, so nothing is woken until the legacy file is fixed.
+ * - `discovery-incomplete`: an owner's lineage page or the seat file's
+ *   revocations could not be read to the end this check.
+ * - `ledger-gap`: a child's event ledger was replaced, torn, malformed or
+ *   skipped a sequence; the outcomes read around it stand.
+ * - `ledger-pending`: a child the running projection saw leave its running
+ *   state whose ledger the poll queue has not reached yet, so its outcome is
+ *   owed but not yet known.
+ * - `child-departed`: a child the accounting tracks no longer projects under
+ *   this seat and project.
+ * - `child-unplaced`: a child the registry cannot place — no conversation
+ *   record, or a turn it never observed with no host behind it.
+ */
+export type SeatTickChildrenGap =
+  | "registry-unreadable"
+  | "children-unindexed"
+  | "migration-pending"
+  | "migration-blocked"
+  | "discovery-incomplete"
+  | "ledger-gap"
+  | "ledger-pending"
+  | "child-departed"
+  | "child-unplaced";
+
+export const SEAT_TICK_CHILDREN_GAPS: readonly SeatTickChildrenGap[] = [
+  "registry-unreadable",
+  "children-unindexed",
+  "migration-blocked",
+  "migration-pending",
+  "discovery-incomplete",
+  "ledger-gap",
+  "child-departed",
+  "child-unplaced",
+  "ledger-pending",
+];
+
+/**
+ * One standalone child the seat spawned (#1465), projected from the durable
+ * registry alone: the lineage edge, the launch receipt, the conversation's own
+ * turn record and its host entries. No transcript is opened for it.
+ *
+ * `running` is a child with live host evidence — open work, and agenda enough
+ * for the interval wake. `terminal` is a child whose outcome is the seat's to
+ * harvest: it finished (`finished`) or its launch failed (`failed`). `unknown`
+ * is a child the registry cannot place — no conversation record, or a turn it
+ * never observed with no host behind it — and it is neither open work nor
+ * harvestable: an unknown is kept unknown, never counted as completed.
+ */
+export interface SeatTickChildInput {
+  conversationId: string;
+  /** Immutable completed-turn identity, independent of conversation reuse. */
+  outcomeId?: string;
+  /** Bounded, already redacted by the source. */
+  title: string;
+  status: "running" | "terminal" | "unknown";
+  outcome: "finished" | "failed" | null;
+  /** When the terminal outcome was recorded, for ordering the harvest oldest
+      first. Null while the child is not terminal. */
+  terminalAt: string | null;
+  /** The liveness plane's verdict for a running child's open turn, asked only
+      when the registry says the turn is open. Null is no verdict, never a
+      stall. */
+  activity: SeatTickActivity | null;
+}
+
 /** A durable log line the Viewer already writes: a deploy outcome, the host
     retirement report, a seat whose own turn stopped progressing. */
 export interface SeatTickSignalInput {
@@ -485,6 +568,9 @@ export interface SeatTickWakeCommit {
   reasons: SeatTickWakeReasonKind[];
   fingerprint: string;
   eventsThrough: number;
+  /** Terminal children this wake names (#1465). A landing records them as
+      harvested; a wake that never lands leaves them owed. */
+  children: string[];
 }
 
 /**
@@ -514,10 +600,60 @@ export interface SeatTickOutstandingWake {
       account migration hold, or a legacy send that never reached a host. */
   operationId: string | null;
   commit: SeatTickWakeCommit;
+  /** Exact prepared payload, persisted before transport. */
+  text?: string;
+  /** When the attempt was prepared, or first observed outstanding by a check
+      that found no instant on it (#1465). The attention bound is measured from
+      here: an attempt still unresolved one wake interval later is put on the
+      board. It ends nothing — an unresolved attempt keeps its identity. */
+  preparedAt?: string;
+  /** Durable admission token for the one controller allowed inside transport.
+      A returned refusal can be released on fenced absence. Active or legacy
+      attempts cannot: a caller may still reserve the original key. */
+  dispatch?: { token: string; state: "active" | "refused" | "returned" };
 }
 
-/** The durable row per project, `state/seat-tick.json`. */
+/**
+ * A prepared attempt the project's seat has outlived (#1594).
+ *
+ * The fence an outstanding attempt puts on the next wake exists so that two
+ * wakes are never in flight to ONE seat. Once the project's seat has been
+ * superseded — a different conversation, at a strictly higher epoch — that
+ * reason is spent: the kept attempt is addressed to a conversation that is no
+ * longer the seat, and two wakes to two different seats are not a duplicate.
+ * Before this existed, an attempt whose holder could never answer better than
+ * `uncertain` withheld every later wake for the project for as long as the row
+ * lived, which is a tick that has silently stopped.
+ *
+ * So the obligation is moved rather than ended. Everything that made it an
+ * obligation travels with it — its key, its payload, its landing plan, its
+ * dispatch record — and every check still asks its holder what became of it,
+ * still tries to take it back while the holder has it, and still carries the
+ * wait on the board. Two things it can no longer do: fence the successor's
+ * wake, and credit anything. A landing observed here landed on a seat the
+ * project has replaced, so no stamp moves, no cursor moves and no child is
+ * acknowledged on it — every obligation it named is still owed, and the
+ * successor's own wake is what carries it.
+ */
+export interface SeatTickRetiredWake {
+  /** The attempt exactly as the row held it, key and payload unchanged. */
+  wake: SeatTickOutstandingWake;
+  /** When the check that proved the supersession moved it here. */
+  retiredAt: string;
+  /** The seat whose existence is the proof. Recorded because "the fence was
+      released" is a claim, and this is the evidence behind it. */
+  supersededBy: { conversationId: string; seatEpoch: number };
+}
+
+/** Retired attempts one project's row may carry (#1594). Reached only by a
+    project that rotates its seat faster than its holders settle, and a row at
+    the bound refuses further retirement — keeping the fence, which is the
+    behaviour that stands today — rather than discarding an obligation. */
+export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
+
+/** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
   lastWakeAt: string | null;
@@ -566,9 +702,32 @@ export interface SeatTickProjectState {
       addressed to. Survives a rotation precisely so the successor's first check
       can revoke what is still waiting for the predecessor. */
   outstandingWake: SeatTickOutstandingWake | null;
+  /** Attempts a superseded seat left behind (#1594). They fence nothing and
+      credit nothing; they are still asked after, still taken back where that
+      is still possible, and still carried on the board. */
+  retiredWakes: SeatTickRetiredWake[];
+  /**
+   * The last attempt a check released as proven never executed (#1672), or
+   * null. Its key is bound in the runtime journal to the operation the journal
+   * refused, and the delivery layer re-arms it under that same operation, so
+   * a wake raised again under the same key can only replay the refusal — once
+   * per check, for ever. The wake raised in its place therefore carries this
+   * key folded into its own identity, which is a new key to the journal and a
+   * new reservation to the record. Cleared by the landing that ends it; a
+   * wake that never lands keeps replaying under the new key, as any unlanded
+   * wake does.
+   */
+  releasedWake: { clientMessageId: string; releasedAt: string } | null;
   /** The pull-request source's unbroken run of failures (#1298), or null while
       it is answering. Cleared by an answer and by nothing else. */
   pullRequestGap: SeatTickSourceGap | null;
+  /** The children source's unbroken run of failures (#1465), kept exactly as
+      {@link SeatTickProjectState.pullRequestGap} is: cleared by a check that
+      accounted for every child, and by nothing else. */
+  childrenGap: SeatTickSourceGap | null;
+  /** Legacy conversation-only acknowledgment evidence. The v3 store imports
+      it into separate rows and keeps this transient compatibility field empty. */
+  harvestedChildren: string[];
 }
 
 export interface SeatTickCheckInput {
@@ -602,6 +761,17 @@ export interface SeatTickCheckInput {
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
   signals: readonly SeatTickSignalInput[];
+  /** The seat's own standalone children (#1465), bounded and project-scoped,
+      with already-harvested terminal ones removed. Empty when the seat spawned
+      nothing, and empty when the registry could not be read — the field below
+      says which. */
+  children: readonly SeatTickChildInput[];
+  /** Set when the children could not be fully accounted for. Read exactly like
+      {@link SeatTickCheckInput.pullRequestsUnavailable}: the reasons resting on
+      it are withheld, every other reason still wakes, and with nothing else
+      owed the check ends `error` rather than quiet. The token names which
+      condition stands (#1465); when several do, the most severe is carried. */
+  childrenUnavailable: SeatTickChildrenGap | null;
   /**
    * Digest of everything a wake could change, in two parts separated by a dot:
    * the evidence every check reads, then the pull-request evidence.
@@ -628,7 +798,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved";
   detail: string;
   /**
    * Whether the condition still holds.
@@ -686,14 +856,22 @@ export interface SeatTickDecision {
    * the next check raises the same card again.
    */
   reportedSourceGap?: SeatTickSourceGap | null;
+  /** The same row for the children source (#1465), written by the controller
+      once its card is on the board. */
+  reportedChildrenGap?: SeatTickSourceGap | null;
 }
 
-/** What one check recorded. Four kinds are journal-only: `refused` is a sweep
-    or a second clock refused for want of authority, and the other three are
+/** What one check recorded. Five kinds are journal-only: `refused` is a sweep
+    or a second clock refused for want of authority, and the other four are
     what became of a retained wake — it was taken back from a seat that had
     already been replaced (`revoked`), the layer holding it delivered it after
-    all (`landed`), or that layer settled it without ever delivering it
-    (`dropped`). */
+    all (`landed`), that layer settled it having PROVED it never delivered it
+    (`dropped`), or it ended the send without proving arrival either way
+    (`uncertain`, #1465): the attempt is kept under its original key, nothing
+    it carried is acknowledged, no wake replaces it, and the board carries the
+    wait. `retired` is the sixth (#1594): the seat the attempt was addressed to
+    has been superseded, so the attempt stops fencing the successor's wake and
+    goes on being reconciled as an obligation of the seat that is gone. */
 export type SeatTickVerdictKind =
   | SeatTickVerdict["kind"]
   /** A check that threw outright, which the decision never gets to see. The
@@ -703,7 +881,9 @@ export type SeatTickVerdictKind =
   | "refused"
   | "revoked"
   | "landed"
-  | "dropped";
+  | "dropped"
+  | "uncertain"
+  | "retired";
 
 /**
  * One audited check. Like {@link MonitorRunRecord} it carries no transcript
@@ -740,6 +920,10 @@ export function emptySeatTickState(): SeatTickProjectState {
     lastWakeFingerprint: null,
     eventsThrough: null,
     outstandingWake: null,
+    retiredWakes: [],
+    releasedWake: null,
     pullRequestGap: null,
+    childrenGap: null,
+    harvestedChildren: [],
   };
 }

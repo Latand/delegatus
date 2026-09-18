@@ -1,7 +1,20 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import { RUNNING_PAGE, RUNNING_ROTATE, SeatTickAccounting, type AccountingChild, type AccountingOwner, type TicketPosition } from "./seatTickAccounting";
+import { OUTCOME_LIMIT, readChildLedger } from "./seatTickChildLedger";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import {
+  agentRegistry,
+  readOnlyConversationLookupFromSnapshot,
+  SPAWN_STARTING_ADMISSION_LEASE_MS,
+  type AgentRegistryEntry,
+  type RegistryFile,
+  type SeatChildrenPage,
+  type SpawnLineageEdge,
+  type SpawnReceipt,
+} from "@/lib/agent/registry";
+import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -10,7 +23,22 @@ import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/sto
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
+import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment } from "@/lib/runtime/deploymentLedger";
+import {
+  journalVerdict,
+  resolveOriginalSend,
+  resolveSendReceipt,
+  sendReceiptFor,
+  SEND_UNVERIFIED_REASON,
+  type OriginalSendBinding,
+  type OriginalSendEvidence,
+  type SendReceipt,
+  type SendReceiptState,
+  type SendResendGuidance,
+} from "@/lib/runtime/sendSettlement";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -29,8 +57,11 @@ import {
 import { effectiveSeatTickSettings, readSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
 import type { PipelineSummary, TaskSummary } from "./viewerApi";
 import {
+  SEAT_TICK_CHILDREN_GAPS,
   type SeatTickActivity,
   type SeatTickCheckInput,
+  type SeatTickChildInput,
+  type SeatTickChildrenGap,
   type SeatTickEventInput,
   type SeatTickOutstandingWake,
   type SeatTickPipelineInput,
@@ -67,6 +98,8 @@ const PULL_REQUEST_LIMIT = 60;
 const PULL_REQUEST_TITLE_LIMIT = 120;
 /** Liveness rows one project's check asks for. */
 const LIVENESS_LIMIT = 60;
+/** Bounded child title carried into a wake item. */
+const CHILD_TITLE_LIMIT = 120;
 
 /**
  * What became of a wake the delivery layer accepted and kept.
@@ -77,8 +110,23 @@ const LIVENESS_LIMIT = 60;
  * holder settled it without ever delivering it, so the next check may raise it
  * again; `unknown` means the holder could not be asked, which is not evidence
  * of anything and leaves the wake outstanding.
+ *
+ * `uncertain` (#1465) is the answer the holder gives when it ENDED the send
+ * without proving arrival either way — a host that took the message and died,
+ * a settlement deadline that passed with no journal to ask. It is not a drop:
+ * the seat may have the message, so raising it again under a new key could
+ * wake the seat twice. And it is not a landing: nothing the wake carried may
+ * be acknowledged on it. The controller keeps it under its original key and
+ * puts it on the board.
+ *
+ * `absent` (#1465) is the record AFFIRMING it holds nothing under the key, for
+ * a send that was never given an operation to ask about: the layer refused
+ * before reserving anything. It is not proof of loss, so it settles nothing —
+ * but it is what licenses the controller to re-dispatch the frozen payload
+ * under the same key, which the layer's per-key reservation keeps from ever
+ * producing a second copy. Absence beside an operation id is `unknown`.
  */
-export type SeatTickWakeState = "retained" | "landed" | "dropped" | "unknown";
+export type SeatTickWakeState = "retained" | "landed" | "dropped" | "unknown" | "uncertain" | "absent";
 
 /**
  * What taking a retained wake back achieved.
@@ -106,23 +154,197 @@ function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state
   return found ? { id: found.id, state: found.state } : null;
 }
 
+/** The runtime journal's receipt for one operation, as far as the tick reads
+    it: the status the drain left it in, and the reason written beside it. */
+export interface SeatTickJournalReceipt {
+  status: RuntimeReceiptStatus;
+  reason: string | null;
+}
+
 /**
- * The runtime host's own verdict on the operation carrying this wake.
- *
- * `currentRetryLeaf` follows a retried send to the operation that is actually
- * live, because a retry leaves the parent terminal and the leaf is the one the
- * drain will deliver. An operation the host has never heard of is one nothing
- * will deliver, which is a drop rather than an unknown.
+ * What the tick knows about a wake beside its verdict, kept so the verdict can
+ * be argued with: which operation the delivery record holds under the wake's
+ * key, what that record says of it, and what the runtime journal answered when
+ * it was asked. A wake that has been fenced for two days is only as useful as
+ * the evidence someone can check against it.
  */
-export async function runtimeWakeState(operationId: string, client: RuntimeHostClient): Promise<SeatTickWakeState> {
+export interface SeatTickWakeEvidence {
+  /** The operation the record holds under the key, or the one the wake itself
+      names. Null when neither names one. */
+  operationId: string | null;
+  /** The durable delivery record's own answer, when it holds one. */
+  record: { state: SendReceiptState; reason: string | null; resend: SendResendGuidance | null; settledAt: string | null } | null;
+  /** The runtime journal's receipt when it was asked; `no-record` when it was
+      asked and holds nothing under the operation; `unreachable` when the ask
+      itself failed; `unasked` when nothing called for asking it. */
+  journal: SeatTickJournalReceipt | "no-record" | "unreachable" | "unasked";
+  /** What this read wrote onto the delivery record from the journal's own
+      terminal verdict: `lost` settles the old reservation as proven never
+      executed, `delivered` records the arrival the record never learned of,
+      and `refused` is a record that could not take the verdict — compacted
+      to its owner row, or absorbing — so the release rests on the journal
+      alone. The wake raised in a released attempt's place is a new message
+      to both layers either way (#1672). Absent when nothing was written. */
+  recorded?: "delivered" | "lost" | "refused";
+}
+
+/** A holder's answer with the evidence it rests on. A bare
+    {@link SeatTickWakeState} is the same answer with no evidence to show. */
+export interface SeatTickWakeObservation {
+  state: SeatTickWakeState;
+  evidence: SeatTickWakeEvidence | null;
+}
+
+/** One operation's receipt off the runtime journal, following a retried send
+    to the leaf the drain actually holds. Null is the journal holding no record
+    under the id. Throws when the host cannot be asked. */
+export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  if (!current) return "dropped";
-  const status = current.receipt.status;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+}
+
+/**
+ * What one journal receipt proves about the wake.
+ *
+ * An operation the host has no record of is `unknown` (#1465), never a drop:
+ * absence is an observation about the journal, and a journal that was rotated,
+ * replaced or never reached is not proof that nothing was delivered. The
+ * durable delivery record is what proves a loss, and {@link wakeStateFromRecord}
+ * asks it first. `interrupted` and the terminal-but-unverified `uncertain` are
+ * exactly that — a send ended without proof either way.
+ *
+ * `failed` and `rejected` are the journal's own proof of non-execution: the
+ * delivery queue writes them only where the send never reached the engine,
+ * and writes `uncertain` wherever it may have. One `failed` is not that proof
+ * — the settlement writes it, carrying its unverified reason, on a runtime
+ * host too old to accept the word `uncertain` — so it reads as the unverified
+ * ending it is.
+ */
+export function journalWakeState(receipt: SeatTickJournalReceipt | null): SeatTickWakeState {
+  if (!receipt) return "unknown";
+  const status = receipt.status;
   if (RUNTIME_QUEUED.has(status) || RUNTIME_IN_FLIGHT.has(status)) return "retained";
   if (RUNTIME_LANDED.has(status)) return "landed";
-  /* `failed`, `interrupted` and the terminal-but-unverified `uncertain`. None
-     of them is evidence the seat was woken, so none of them advances a stamp. */
-  return "dropped";
+  if (status === "failed" && receipt.reason === SEND_UNVERIFIED_REASON) return "uncertain";
+  if (status === "failed" || status === "rejected") return "dropped";
+  return "uncertain";
+}
+
+/** The runtime host's own verdict on the operation carrying this wake: the
+    receipt, classified. */
+export async function runtimeWakeState(operationId: string, client: RuntimeHostClient): Promise<SeatTickWakeState> {
+  return journalWakeState(await journalReceipt(operationId, client));
+}
+
+/** The send a journal verdict is written back onto. */
+export interface WakeRecordTarget {
+  conversationId: string;
+  operationId: string;
+  /** The reservation's own id while the record still holds it; null once it
+      has been compacted down to the owner row, which nothing can re-arm. */
+  deliveryId: string | null;
+}
+
+export interface WakeRecordPorts {
+  lookup: (binding: OriginalSendBinding) => Promise<OriginalSendEvidence>;
+  /** Ends an in-flight send of the tick's own, or reports it still in flight.
+      Absent, the read is inert: an in-flight send is reported retained and
+      nothing is ended — the shape a diagnostic read takes. */
+  settle?: (operationId: string) => Promise<SendReceipt | null>;
+  /** The runtime journal's receipt under an operation id, or null when it
+      holds none. May throw when the host cannot be asked. */
+  journal: (operationId: string) => Promise<SeatTickJournalReceipt | null>;
+  /** Writes the journal's own terminal verdict onto a record the settlement
+      ended without one, and answers with the record as it then reads — or
+      null when nothing could be written. Absent, the read is inert and the
+      journal's verdict is reported as what it proves. */
+  settleFromJournal?: (target: WakeRecordTarget, receipt: SeatTickJournalReceipt) => Promise<SendReceipt | null>;
+}
+
+/**
+ * What the durable delivery record says became of the wake, read under the
+ * idempotency key the tick itself bound before the send (#1465, on the #1490
+ * contract).
+ *
+ * The record is asked before any journal: a reservation that the settlement
+ * ended is the answer whatever the journal remembers, and the resend guidance
+ * it carries is the only thing that distinguishes a PROVEN loss (`safe`, the
+ * fenced disposition) from a send that merely could not be verified
+ * (`verify-first`). A send still in flight is ended by the settlement itself
+ * — this operation is the tick's own, so the tick is the caller entitled to
+ * end it — and that answer is classified the same way; inside the settlement
+ * window it comes back unchanged, which is `retained`.
+ *
+ * A record ended WITHOUT proof is not the last word either. The settlement
+ * writes `unverified` from whatever it could see at its deadline — a journal
+ * with no record yet, a host it could not reach, an executor already in
+ * flight — and the tick recorded the send without any operation handle, so
+ * until now nothing ever asked the journal about the operation the record
+ * names. It is asked here, and only its own terminal verdicts count
+ * ({@link journalWakeState}): `delivered` credits the wake, `rejected` and a
+ * genuine `failed` release it, and everything else — `uncertain`, an open
+ * status, no record, an unreachable host — leaves the record's answer
+ * standing. Absence and silence are never read as non-execution.
+ *
+ * Absence under the key is not a loss either. A wake the record never held
+ * but the runtime queued (a legacy row, a mirror that was compacted) is asked
+ * of the runtime; with nothing to ask, the answer is `absent` and the wake
+ * stays outstanding under its key.
+ */
+export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: WakeRecordPorts): Promise<SeatTickWakeObservation> {
+  const asked = async (operationId: string): Promise<SeatTickJournalReceipt | "no-record" | "unreachable"> => {
+    try {
+      return (await ports.journal(operationId)) ?? "no-record";
+    } catch {
+      return "unreachable";
+    }
+  };
+  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
+  if (evidence.kind === "absent") {
+    if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
+    const journal = await asked(wake.operationId);
+    const state = typeof journal === "string" ? "unknown" : journalWakeState(journal);
+    return { state, evidence: { operationId: wake.operationId, record: null, journal } };
+  }
+  if (evidence.kind !== "found") return { state: "unknown", evidence: { operationId: wake.operationId, record: null, journal: "unasked" } };
+  const withRecord = (receipt: SendReceipt, journal: SeatTickWakeEvidence["journal"]): SeatTickWakeEvidence => ({
+    operationId: evidence.operationId,
+    record: { state: receipt.state, reason: receipt.reason, resend: receipt.resend, settledAt: receipt.settledAt },
+    journal,
+  });
+  if (!evidence.current.readable) return { state: "unknown", evidence: withRecord(evidence.receipt, "unreachable") };
+  let current = evidence.current.value;
+  if (current.state === "in-flight") {
+    if (!ports.settle) return { state: "retained", evidence: withRecord(current, "unasked") };
+    const settled = await ports.settle(evidence.operationId);
+    if (!settled) return { state: "unknown", evidence: withRecord(current, "unasked") };
+    if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
+    current = settled;
+  }
+  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  /* `safe` is the fenced, proven non-delivery and the only failure the record
+     alone can license raising the wake again on. */
+  if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
+  const journal = await asked(evidence.operationId);
+  if (typeof journal === "string") return { state: "uncertain", evidence: withRecord(current, journal) };
+  const proven = journalWakeState(journal);
+  if (proven !== "landed" && proven !== "dropped") {
+    return { state: proven === "unknown" ? "uncertain" : proven, evidence: withRecord(current, journal) };
+  }
+  if (!ports.settleFromJournal) return { state: proven, evidence: withRecord(current, journal) };
+  /* The journal's verdict goes onto the record before it is acted on, so the
+     record and the journal stop disagreeing about a send whose fate the
+     journal has decided. The release does not depend on the write taking:
+     the wake raised in a released attempt's place is a new message under a
+     new key (#1672), so a record that cannot take the verdict — compacted to
+     its owner row, or absorbing — changes nothing about it. It is said on the
+     evidence, and the journal's own proof is what the release rests on. */
+  const written = await ports.settleFromJournal({ conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId }, journal);
+  if (proven === "landed") {
+    return { state: "landed", evidence: { ...withRecord(written ?? current, journal), ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+  }
+  if (written?.resend === "safe") return { state: "dropped", evidence: { ...withRecord(written, journal), recorded: "lost" } };
+  return { state: "dropped", evidence: { ...withRecord(written ?? current, journal), recorded: "refused" } };
 }
 
 /**
@@ -145,10 +367,11 @@ export async function withdrawRuntimeWake(
   client: RuntimeHostClient,
 ): Promise<SeatTickWithdrawal> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  if (!current) return "withdrawn";
+  if (!current) return "unknown";
   const status = current.receipt.status;
   if (RUNTIME_LANDED.has(status) || RUNTIME_IN_FLIGHT.has(status)) return "too-late";
-  if (!RUNTIME_QUEUED.has(status)) return "withdrawn";
+  if (status === "failed" || status === "rejected") return "withdrawn";
+  if (!RUNTIME_QUEUED.has(status)) return "unknown";
   try {
     const settled = await client.transitionOperation(current.operationId, "failed", { reason });
     return settled.receipt.status === "failed" ? "withdrawn" : "too-late";
@@ -196,12 +419,69 @@ export interface SeatTickSources {
       the two facts this reason must never confuse. */
   openPullRequests: (options: { cwd: string; limit: number }) => Promise<OpenPullRequestsResult>;
   /** Whether the layer holding a retained wake still has it, and whether the
-      seat ever got it. The tick's stamps move on this answer and nothing else. */
-  wakeState: (wake: SeatTickOutstandingWake) => Promise<SeatTickWakeState>;
+      seat ever got it. The tick's stamps move on this answer and nothing else.
+      The production answer carries its evidence; a bare state is the same
+      answer with none to show. */
+  wakeState: (wake: SeatTickOutstandingWake) => Promise<SeatTickWakeState | SeatTickWakeObservation>;
+  /** The durable delivery record under a key the tick bound before a send
+      (#1465), for the send whose outcome never came back at all. Read-only.
+      Absent means the production lookup over the process registry. */
+  originalSend?: (binding: OriginalSendBinding) => Promise<OriginalSendEvidence>;
   /** Take a retained wake back from that same layer, before it can reach a seat
       that has been replaced. The reason is stored where the payload is. */
   withdrawWake: (wake: SeatTickOutstandingWake, reason: string) => Promise<SeatTickWithdrawal>;
   now: () => number;
+}
+
+/**
+ * The production ports behind {@link wakeStateFromRecord}: the durable delivery
+ * record, the tick's own settlement, and the runtime journal over the host
+ * socket. `end: false` leaves the settlement out, which makes the read inert —
+ * what a diagnostic surface may do, and what a check may not.
+ */
+export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
+  return {
+    lookup: (binding) => resolveOriginalSend(binding),
+    ...(options.end ? { settle: (operationId: string) => resolveSendReceipt(operationId), settleFromJournal: (target, receipt) => settleRecordFromJournal(agentRegistry(), target, receipt) } : {}),
+    journal: async (operationId) => {
+      const client = runtimeHostClient();
+      if (!client) throw new Error("runtime host socket is unavailable");
+      return journalReceipt(operationId, client);
+    },
+  };
+}
+
+/**
+ * The journal's terminal verdict, written onto the delivery record the way the
+ * settlement and the controller's startup reconcile write it — through the
+ * repository's one classifier of what a status proves — and only where it
+ * proves something: an unverified verdict adds nothing to a record that
+ * already says so. A `delivered` is projected under the operation, which the
+ * record accepts over a failed reservation; a `lost` goes onto the reservation
+ * itself, because that is the row the same-key replay re-arms from, and a
+ * reservation already compacted away cannot be re-armed at all.
+ */
+export async function settleRecordFromJournal(
+  registry: ReturnType<typeof agentRegistry>,
+  target: WakeRecordTarget,
+  receipt: SeatTickJournalReceipt,
+): Promise<SendReceipt | null> {
+  const verdict = journalVerdict(receipt.status, receipt.reason);
+  /* Only what {@link journalWakeState} would act on: the settlement's own
+     unverified `failed` classifies as lost here and is not one. */
+  if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
+  try {
+    if (verdict.state === "delivered") {
+      registry.recordDeliveryOutcomeForOperation(target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered");
+    } else if (target.deliveryId) {
+      registry.recordDeliveryOutcome(target.deliveryId, "failed", receipt.reason ?? verdict.reason, "lost");
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -237,17 +517,8 @@ export function defaultSeatTickSources(): SeatTickSources {
        host — the registry row beside it is a mirror, and settling a mirror stops
        nothing. A send parked behind an account migration never reached a host at
        all, and there the registry reservation IS the retention. */
-    wakeState: async (wake) => {
-      if (wake.operationId) {
-        const client = runtimeHostClient();
-        return client ? runtimeWakeState(wake.operationId, client) : "unknown";
-      }
-      const delivery = registryDeliveryFor(wake);
-      if (!delivery) return "unknown";
-      if (delivery.state === "delivered") return "landed";
-      if (delivery.state === "failed") return "dropped";
-      return "retained";
-    },
+    wakeState: async (wake) => wakeStateFromRecord(wake, wakeRecordPorts({ end: true })),
+    originalSend: (binding) => resolveOriginalSend(binding),
     withdrawWake: async (wake, reason) => {
       if (wake.operationId) {
         const client = runtimeHostClient();
@@ -256,12 +527,9 @@ export function defaultSeatTickSources(): SeatTickSources {
       const delivery = registryDeliveryFor(wake);
       if (!delivery) return "unknown";
       if (delivery.state === "delivered") return "too-late";
-      if (delivery.state === "failed") return "withdrawn";
+      if (delivery.state !== "held") return "unknown";
       agentRegistry().terminalizeHeldDelivery(delivery.id, reason);
-      /* An attempt whose journal outcome is unknown may already have been
-         written to the engine; terminalizing stops another attempt, and the
-         honest report is still that the seat may have it. */
-      return delivery.state === "delivery-uncertain" ? "too-late" : "withdrawn";
+      return "withdrawn";
     },
     now: () => Date.now(),
   };
@@ -370,7 +638,7 @@ async function laneActivity(project: string, policy: SeatTickPolicy, sources: Se
 async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatTickSources): Promise<SeatTickSeatInput | null> {
   const seat = sources.seatFor(project).active;
   if (!seat?.conversationId) return null;
-  const conversation = sources.registry().conversation(seat.conversationId as `conversation_${string}`);
+  const conversation = sources.registry().seatTickConversation(seat.conversationId);
   const turn = conversation?.turn.state ?? "unknown";
   let activity: SeatTickActivity | null = null;
   if (turn === "busy") {
@@ -467,12 +735,19 @@ export function repoDirForProject(
 function changeFingerprint(
   pipelines: readonly SeatTickPipelineInput[],
   tasks: readonly SeatTickTaskInput[],
+  children: readonly SeatTickChildInput[],
   pullRequests: readonly SeatTickPullRequestInput[],
   pullRequestsUnavailable: SeatTickPullRequestGap | null,
 ): string {
+  /* A child's status and outcome instant decide two wake reasons (#1465), so
+     they are in the half the guard reads: a child finishing, or a harvested one
+     leaving the projection, is the movement that resets the guard. A source
+     that could not be read contributes nothing here — the children list is
+     empty then, and the gap beside it keeps the check from concluding quiet. */
   const board = [
     ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}`),
     ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}`),
+    ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
   ].sort();
   /* The set of unmerged pull requests, for the same reason the card's movement
      instant is in the half above: it decides a wake reason, so a guard keyed on
@@ -655,7 +930,7 @@ async function unmergedPullRequests(context: {
      a gap outliving its question. */
   const standing = context.gap;
   if (standing?.gap === "lanes-unreadable" && !seatTickSourceRetryDue(standing, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], unavailable: standing.gap, gap: standing };
+    return { pullRequests: [], unavailable: standing.gap as SeatTickPullRequestGap, gap: standing };
   }
 
   let archived: readonly Pipeline[];
@@ -687,7 +962,7 @@ async function unmergedPullRequests(context: {
      refuse a quiet the evidence allows. Everything between the gates and here is
      a local read; the subprocess below is the only thing THIS gate saves. */
   if (context.gap && !seatTickSourceRetryDue(context.gap, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], unavailable: context.gap.gap, gap: context.gap };
+    return { pullRequests: [], unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap };
   }
 
   let result: OpenPullRequestsResult;
@@ -724,6 +999,362 @@ async function unmergedPullRequests(context: {
      said. This is the only thing that clears the row, which is what makes the
      next outage a fresh run with its own report. */
   return { pullRequests: found.sort((left, right) => left.number - right.number), unavailable: null, gap: null };
+}
+
+
+/* Standalone child discovery uses indexed lineage pages. Persistent FIFO
+ * tickets poll proven child generations and retain owed outcomes until landing.
+ * Running activity and terminal ledger evidence are separate projections. */
+
+const LIVE_CHILD_RECEIPT_STATES: ReadonlySet<SpawnReceipt["state"]> = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+const LIVE_CHILD_HOST_STATES: ReadonlySet<AgentRegistryEntry["status"]> = new Set(["starting", "live", "idle", "handoff"]);
+const CONTAINER_MEMBERSHIPS: ReadonlySet<string> = new Set(["pipeline", "flow", "orchestrator"]);
+/** Ledger bytes one check reads across all of a seat's children, and the most
+    one child's visit takes of it. Sized to real ledgers (#1465): measured on
+    one machine they run to a median of 0.7 MB, a p99 of 13 MB and a maximum of
+    80 MB, and grow by some hundreds of megabytes a day across every host. One
+    visit reads a p99 ledger whole, so a child's terminal record is reached in
+    the check that follows it rather than hours later, and a check every five
+    minutes with this budget reads an order of magnitude more than the day's
+    growth. The line-framed reader takes tens of milliseconds for the lot. */
+export const TICK_LEDGER_BYTES = 32 * 1024 * 1024;
+const CHILD_LEDGER_BYTES = 16 * 1024 * 1024;
+/** FIFO visits per check, sharing the sixty-row projection budget with
+    discovery and ready outcomes. Cold tickets retain reserved visits while
+    running transitions and new terminal children receive priority. */
+export const POLL_VISITS = 40;
+/** Lineage edges one discovery page reads. */
+const DISCOVERY_PAGE = 20;
+
+/** The registry entries that could be hosting this child, by every session key
+    the records tie to it. */
+function childHostEntries(file: RegistryFile, edge: SpawnLineageEdge, receipt: SpawnReceipt | null, transcriptKey: SessionKey | null): AgentRegistryEntry[] {
+  const keys = [receipt?.key, edge.childSessionKey, transcriptKey].filter((key): key is SessionKey => Boolean(key));
+  return [...new Set(keys.map(sessionKeyId))].flatMap((key) => (file.entries[key] ? [file.entries[key]!] : []));
+}
+
+/** Whether anything is still running this child: a host entry in a live state,
+    or a launch receipt the spawn path has not finished with. A `starting`
+    receipt past its admission lease is a launch that never got anywhere, and
+    is no evidence of a host. */
+function childHosted(receipt: SpawnReceipt | null, entries: readonly AgentRegistryEntry[], now: number): boolean {
+  if (entries.some((entry) => LIVE_CHILD_HOST_STATES.has(entry.status))) return true;
+  if (!receipt || !LIVE_CHILD_RECEIPT_STATES.has(receipt.state)) return false;
+  if (receipt.state !== "starting") return true;
+  const createdAt = Date.parse(receipt.createdAt);
+  return Number.isFinite(createdAt) && now - createdAt <= SPAWN_STARTING_ADMISSION_LEASE_MS;
+}
+
+interface ProjectedChild {
+  input: SeatTickChildInput;
+  /** The registry's turn record, for deciding whether to ask the liveness plane. */
+  turn: "busy" | "idle" | "terminal" | "unknown";
+  hosted: boolean;
+  createdAt: string;
+}
+
+/** One child, classified from the snapshot alone. Null for a child that is
+    not this seat's to see. */
+function projectChild(
+  file: RegistryFile,
+  lookup: ReturnType<typeof readOnlyConversationLookupFromSnapshot>,
+  edge: SpawnLineageEdge,
+  project: string,
+  now: number,
+): ProjectedChild | null {
+  if (edge.source !== "viewer-spawn") return null;
+  const childId = lookup.canonicalConversationId(edge.childConversationId);
+  if ((file.memberships[childId] ?? []).some((membership) => CONTAINER_MEMBERSHIPS.has(membership.kind))) return null;
+  const receipt = edge.evidence.launchId ? file.receipts[edge.evidence.launchId] ?? null : null;
+  const conversation = lookup.conversation(childId);
+  const generation = conversation?.generations.at(-1) ?? null;
+  const transcriptKey = conversation && generation ? sessionKeyFromTranscript(conversation.engine, generation.path) : null;
+  const entries = childHostEntries(file, edge, receipt, transcriptKey);
+  const attributed = resolveProjectAttribution({
+    projectOwnership: conversation?.projectOwnership ?? null,
+    cwd: receipt?.cwd ?? entries[0]?.cwd ?? null,
+    launchProfileProject: receipt?.launchProfile.project ?? generation?.launchProfile.project ?? null,
+  }).project;
+  if (!attributed || canonicalOrchestratorProject(attributed) !== project) return null;
+
+  const title = redactBounded(
+    receipt?.launchProfile.title ?? generation?.launchProfile.title ?? edge.role ?? "spawned child",
+    CHILD_TITLE_LIMIT,
+  );
+  const hosted = childHosted(receipt, entries, now);
+  const turn = conversation?.turn.state ?? "unknown";
+  const base = { conversationId: childId, title, activity: null };
+  const createdAt = edge.createdAt;
+  /* A launch that failed or conflicted before it ran: terminal, outcome
+     failed. The receipt is the whole record of it. */
+  if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) {
+    return { input: { ...base, status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
+  }
+  if (!conversation) return { input: { ...base, status: "unknown", outcome: null, terminalAt: null }, turn, hosted, createdAt };
+  if (turn === "terminal") {
+    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: conversation.turn.terminalAt ?? conversation.turn.observedAt ?? conversation.updatedAt }, turn, hosted, createdAt };
+  }
+  if (hosted) return { input: { ...base, status: "running", outcome: null, terminalAt: null }, turn, hosted, createdAt };
+  /* No host anywhere. A settled turn with nothing running it is a worker that
+     finished and whose host was released — the seat's to harvest. An OPEN turn
+     with nothing running it is a stall the registry can see on its own, and
+     it is reported as such, never as finished. A turn the registry never
+     observed is unknown, and stays unknown. */
+  if (turn === "idle") {
+    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: conversation.turn.observedAt ?? conversation.updatedAt }, turn, hosted, createdAt };
+  }
+  if (turn === "busy") {
+    return {
+      input: { ...base, status: "running", outcome: null, terminalAt: null, activity: { lifecycle: "gone", reason: "host_gone_turn_open", turnState: "busy" } },
+      turn,
+      hosted,
+      createdAt,
+    };
+  }
+  return { input: { ...base, status: "unknown", outcome: null, terminalAt: null }, turn, hosted, createdAt };
+}
+
+interface ChildEvidence {
+  children: SeatTickChildInput[];
+  unavailable: SeatTickChildrenGap | null;
+}
+
+/** The one token a check carries when several conditions stand: the first in
+    {@link SEAT_TICK_CHILDREN_GAPS}, which is ordered most severe first. */
+function worstChildrenGap(gaps: ReadonlySet<SeatTickChildrenGap>): SeatTickChildrenGap | null {
+  return SEAT_TICK_CHILDREN_GAPS.find((gap) => gaps.has(gap)) ?? null;
+}
+
+/** The token a blocked or unfinished accounting import stands under. */
+function accountingGap(gap: string | null): SeatTickChildrenGap | null {
+  if (gap === null) return null;
+  return gap === "legacy-migration-pending" ? "migration-pending" : "migration-blocked";
+}
+
+/**
+ * The seat's spawned children (#1465): discovered through indexed lineage
+ * pages, polled through FIFO tickets, their terminal outcomes read from their
+ * event ledgers and retained as owed rows until a landed wake names them.
+ *
+ * Four bounded passes keep new arrivals separate from historical work:
+ *
+ * - **Discovery.** The active seat's next page of {@link DISCOVERY_PAGE}
+ *   edges, in insertion order past a durable anchor, on EVERY check — so a new
+ *   worker is known one check after its edge exists whether the seat has
+ *   four children or four hundred, and however many predecessors the seat
+ *   file has retired before it. Bootstrap keeps a separate cursor for every
+ *   older edge. A predecessor takes a turn when the discovery budget allows. A child discovery already finds terminal enters the poll queue at
+ *   its head, so its ledger is read this check.
+ * - **Running.** The first {@link RUNNING_PAGE} running tickets are observed,
+ *   with a liveness read for a hosted open turn, and the first
+ *   {@link RUNNING_ROTATE} move to the tail — so consecutive checks overlap and
+ *   a stall on the thirteenth child is seen twice in a row like a stall on the
+ *   first. A child seen settling — its turn no longer open, its host gone, or
+ *   the child gone from the seat — is polled right here, ahead of the queue
+ *   and with the ledger budget still whole: the moment its outcome is owed is
+ *   the moment its ledger is read.
+ * - **Poll.** Up to {@link POLL_VISITS} tickets, with eight cold visits reserved, are
+ *   re-projected and their ledgers read within {@link TICK_LEDGER_BYTES}, then
+ *   re-queued — at the tail once read to the end, at the head when the budget
+ *   cut the read, so the next check resumes it first. Every child is reached
+ *   in turn; none is ever skipped for being past a page bound.
+ * - **Ready.** Owed outcomes are handed to the decision in ready order.
+ *
+ * What a check could not account for leaves as a token, never as silence:
+ * each condition has its own name in {@link SeatTickChildrenGap}, and the
+ * check carries the most severe one that stands.
+ */
+async function childWork(
+  project: string,
+  seat: SeatTickSeatInput | null,
+  state: SeatTickProjectState,
+  policy: SeatTickPolicy,
+  sources: SeatTickSources,
+): Promise<ChildEvidence> {
+  if (!seat) return { children: [], unavailable: null };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable" };
+  const accounting = new SeatTickAccounting(state.accounting.filename, project);
+  const registry = sources.registry();
+  const now = sources.now();
+  const gaps = new Set<SeatTickChildrenGap>();
+  const migration = accountingGap(state.accounting.gap);
+  if (migration) gaps.add(migration);
+  const children: SeatTickChildInput[] = [];
+  const classify = (page: SeatChildrenPage, id: string) => {
+    const edge = page.file.lineageEdges[id];
+    if (!edge) return null;
+    return projectChild(page.file, readOnlyConversationLookupFromSnapshot(page.file), edge, project, now);
+  };
+  const pages = new Map<string, SeatChildrenPage>();
+  let projectedRows = 0;
+  const seatChildren = (...args: Parameters<typeof registry.pageSeatChildren>) => {
+    const [owner, , limit, keys] = args;
+    const cached = keys?.length === 1 ? pages.get(`${owner}/${keys[0]}`) : null;
+    if (cached) return cached;
+    if (projectedRows + limit > 60) { gaps.add("ledger-pending"); return null; }
+    const page = registry.pageSeatChildren(...args);
+    projectedRows += page?.keys.length ?? 0;
+    for (const id of page?.keys ?? []) pages.set(`${owner}/${id}`, page!);
+    if (!page) { gaps.add("children-unindexed"); return null; }
+    return page;
+  };
+  let bytesLeft = TICK_LEDGER_BYTES;
+  const coldVisits: AccountingChild[] = [];
+
+  /** One owner's next discovery page. */
+  const discover = (owner: AccountingOwner): boolean => {
+    const page = seatChildren(owner.conversationId, owner.after, DISCOVERY_PAGE);
+    if (!page) return false;
+    const discoveries = [page];
+    let bootstrap = owner.bootstrap;
+    let after = page.after;
+    if (!owner.after && !owner.bootstrap && !page.complete) {
+      // Capture the tail independently; the unread history keeps its own cursor.
+      bootstrap = { after: page.after };
+      after = page.latest ?? page.after;
+    } else if (bootstrap && projectedRows <= 20) {
+      const history = seatChildren(owner.conversationId, bootstrap.after, DISCOVERY_PAGE);
+      if (history) {
+        discoveries.push(history);
+        bootstrap = history.complete ? undefined : { after: history.after };
+      }
+    }
+    const discovered: { child: AccountingChild; position: TicketPosition }[] = [];
+    for (const discoveredPage of discoveries) for (const id of discoveredPage.keys) {
+      const edge = discoveredPage.file.lineageEdges[id];
+      const child = classify(discoveredPage, id);
+      if (child && edge?.evidence.launchId) discovered.push({
+        child: accounting.child(id, owner.conversationId, edge.evidence.launchId, child.input),
+        position: child.input.status === "terminal" ? "head" : "tail",
+      });
+    }
+    accounting.discovery({ ...owner, after: page.evidenceGap ? owner.after : after, bootstrap }, discovered);
+    if (bootstrap || discoveries.some((value) => value.evidenceGap || !value.complete)) gaps.add("discovery-incomplete");
+    return true;
+  };
+
+  /** One child's poll, from a page already read: re-projected, its ledger
+      read from its cursor within what is left of the check's budget, and its
+      ticket re-queued. A settled child whose read the budget cut is an
+      outcome owed and not yet known, and the check says so. */
+  const poll = (child: AccountingChild, page: SeatChildrenPage, projected: ProjectedChild | null): void => {
+    const previousInput = child.input;
+    const previousGeneration = child.generationIndex;
+    const edge = page.file.lineageEdges[child.rowKey];
+    if (!projected || !edge || edge.parentConversationId !== child.owner || edge.evidence.launchId !== child.launchId) {
+      accounting.ingest({ ...child, input: { ...child.input, status: "unknown", outcome: null } }, null, []);
+      gaps.add("child-departed");
+      return;
+    }
+    child.input = projected.input;
+    if (child.input.status === "unknown") { children.push(child.input); gaps.add("child-unplaced"); }
+    const lookup = readOnlyConversationLookupFromSnapshot(page.file);
+    const conversation = lookup.conversation(edge.childConversationId);
+    const generations = conversation?.generations ?? [];
+    const generation = generations[child.generationIndex % Math.max(1, generations.length)];
+    const receipt = page.file.receipts[child.launchId];
+    // A failed receipt after materialization cannot establish pre-execution failure.
+    const failure = receipt?.state === "failed" && receipt.key === null && receipt.artifactPath === null && generations.length === 0;
+    if (!generation) { accounting.ingest(child, null, [], failure); return; }
+    const source = accounting.source(child, conversation!.engine, generation.id);
+    const previousCursor = source.cursor;
+    const budget = Math.min(bytesLeft, CHILD_LEDGER_BYTES);
+    const read = readChildLedger(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`), source.cursor, budget);
+    source.cursor = read.cursor;
+    if (read.cursor.atEnd && read.cursor.activeTurn === null && read.cursor.settledThrough > 0
+      && (projected.turn === "idle" || projected.turn === "terminal")) {
+      child.input = { ...child.input, status: "terminal", outcome: "finished" };
+    }
+    bytesLeft -= read.bytes;
+    if (source.cursor.gap !== null) gaps.add("ledger-gap");
+    child.generationIndex = (child.generationIndex + 1) % generations.length;
+    /* A read the budget stopped short of the end resumes first next check. */
+    const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
+    if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
+      && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
+      && JSON.stringify(previousInput) === JSON.stringify(child.input)) coldVisits.push(child);
+    else accounting.ingest(child, source, read.outcomes, false, cut ? "head" : "tail");
+    if (cut && projected.turn !== "busy") gaps.add("ledger-pending");
+  };
+
+  try {
+    const active = accounting.owner(seat.conversationId, seat.seatEpoch);
+    if (accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project)) {
+      gaps.add("discovery-incomplete");
+    }
+    if (discover(active)) {
+      /* The active owner's ticket just moved to the tail, so the head of the
+         owner queue is the predecessor whose turn it is — unless the active
+         seat is the only owner there is. */
+      const ticket = accounting.page("owner-poll", 1)[0];
+      if (projectedRows <= 20 && ticket?.kind === "owner-poll") {
+        const owner = accounting.get(ticket.target);
+        if (!owner || owner.kind !== "owner") throw new Error("missing owner provenance");
+        const migrated = owner.pollKey ? owner : accounting.owner(owner.conversationId, owner.epoch);
+        if (migrated.pollKey !== ticket.key) accounting.drop(ticket);
+        else if (migrated.key !== active.key) discover(migrated);
+      }
+    }
+    const observedRunning = new Set<string>();
+    const running = accounting.page("running", RUNNING_PAGE);
+    for (const ticket of running) {
+      if (ticket.kind !== "running") continue;
+      const child = accounting.get(ticket.target);
+      if (!child || child.kind !== "child") throw new Error("missing running child");
+      const page = seatChildren(child.owner, null, 1, [child.rowKey]);
+      if (!page) break;
+      const projected = classify(page, child.rowKey);
+      /* A child whose turn has settled, whose host is gone, or that left the
+         seat: its outcome is owed the moment its ledger is read, so it is read
+         now. What the budget cannot reach goes to the head of the poll queue,
+         and until it is read the check may not call the board quiet. */
+      if (!projected || projected.input.status !== "running" || projected.turn === "idle" || projected.turn === "terminal") {
+        if (bytesLeft > 0) poll(child, page, projected);
+        else { accounting.promote(child); gaps.add("ledger-pending"); }
+        if (!projected || projected.input.status !== "running") continue;
+        /* Still hosted with a settled turn and nothing new in its ledger: a
+           worker idling at its prompt, which is open work like any other. */
+        if (child.input.status !== "running") continue;
+      }
+      let input = projected.input;
+      if (projected.turn === "busy" && projected.hosted) {
+        try { input = { ...input, activity: activityOf((await sources.liveness({ conversationId: input.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 }))[0]) }; }
+        catch { input = { ...input, activity: null }; }
+      }
+      children.push(input);
+      observedRunning.add(child.key);
+    }
+    accounting.rotateRunning(running.slice(0, RUNNING_ROTATE));
+    for (const ticket of accounting.pollPage(POLL_VISITS)) {
+      if (bytesLeft <= 0) break;
+      if (ticket.kind !== "poll") throw new Error("invalid poll ticket");
+      let child = accounting.get(ticket.target);
+      if (!child || child.kind !== "child") throw new Error("missing child provenance");
+      child = accounting.adoptPoll(child, ticket.key);
+      if (child.pollKey !== ticket.key) { accounting.drop(ticket); continue; }
+      // Keep twenty uncached projections available for ready outcomes.
+      if (projectedRows >= 40 && !pages.has(`${child.owner}/${child.rowKey}`)) break;
+      const page = seatChildren(child.owner, null, 1, [child.rowKey]);
+      if (!page) break;
+      const projected = classify(page, child.rowKey);
+      poll(child, page, projected);
+      // A cold child re-instructed since its last poll contributes immediately.
+      if (child.input.status === "running" && !observedRunning.has(child.key)) {
+        children.push(child.input);
+        observedRunning.add(child.key);
+      }
+    }
+    accounting.rotateCold(coldVisits);
+    for (const outcome of accounting.ready(20)) {
+      const child = accounting.get(outcome.child);
+      if (!child || child.kind !== "child") throw new Error("missing ready child");
+      const page = seatChildren(child.owner, null, 1, [child.rowKey]);
+      if (!page) break;
+      if (!classify(page, child.rowKey) || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { accounting.defer(outcome); gaps.add("child-departed"); continue; }
+      children.push(outcome.input);
+    }
+  } catch { gaps.add("registry-unreadable"); }
+  return { children, unavailable: worstChildrenGap(gaps) };
 }
 
 export async function gatherSeatTickInput(
@@ -768,6 +1399,15 @@ export async function gatherSeatTickInput(
      made about the wrong pipeline. */
   const openPipelineIds = new Set(sources.pipelines().filter(isOpen).map((pipeline) => pipeline.id));
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
+  const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
+  /* The children source's run of failures (#1465), kept exactly as the
+     pull-request source's: advanced by a check that could not account for
+     every child, cleared by one that could, and reported once by the decision
+     when it has outlived the wake interval. A project with no seat asked
+     nothing, and leaves the run as it stands. */
+  const childrenGap = !seat ? state.childrenGap
+    : childrenUnavailable ? seatTickSourceGapAfterFailure(state.childrenGap, childrenUnavailable, new Date(now).toISOString()) : null;
+  const harvestedChildren = state.harvestedChildren;
   const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
@@ -793,7 +1433,9 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     signals: signals(canonical, seat, sources),
-    changeFingerprint: changeFingerprint(pipelines, tasks, pullRequests, pullRequestsUnavailable),
+    children,
+    childrenUnavailable,
+    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.
@@ -801,7 +1443,7 @@ export async function gatherSeatTickInput(
        is what attempted the read, so the gather is what records what became of
        it, and the decision reads that row to know whether this is the outage
        worth putting on the board. */
-    state: { ...state, eventsThrough: cursor, pullRequestGap },
+    state: { ...state, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
     policy,
     settings,
   };

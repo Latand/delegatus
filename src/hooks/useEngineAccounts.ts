@@ -104,13 +104,23 @@ export type AccountLimitWindow = { usedPercent: number; resetsAt: number | null;
 /** Per-account quota detail surfaced in the Accounts panel (issue #40): the
     session and weekly windows with reset times, plus how fresh the read is.
     Every capacity chip is reconciled from these windows. */
+/** The flagship tier's weekly window (issue #1358): a weekly window that also
+    names the tier the provider meters it for (`opus` for `seven_day_opus`). */
+export type AccountTierLimitWindow = AccountLimitWindow & { tier: string };
+
 export type AccountLimits = {
   freshness: "fresh" | "stale";
   session: AccountLimitWindow | null;
   weekly: AccountLimitWindow | null;
+  /** Present only when the account reports a distinct flagship weekly bucket. */
+  flagship?: AccountTierLimitWindow | null;
   /** ISO timestamp of the read these numbers come from, when the route sent one. */
   checkedAt?: string | null;
 };
+
+/** Usage-limit reset credits an account holds (issue #1373). `expiresAt` is
+    the soonest expiry among them in Unix seconds, or null. */
+export type AccountResetCredits = { availableCount: number; expiresAt: number | null };
 
 export type AccountAuthHealth = "authenticated" | "signed_out" | "unknown" | "error";
 
@@ -121,6 +131,8 @@ export type AccountOption = {
   kind?: "legacy" | "managed";
   authPresent: boolean;
   authHealth?: AccountAuthHealth;
+  /** Public subscription tier reported by the account read. */
+  plan?: string | null;
   loginPending: boolean;
   loginState: ManagedAttemptState | "idle" | "authenticated";
   attemptState?: ManagedAttemptState | null;
@@ -129,7 +141,28 @@ export type AccountOption = {
   login?: ClaudeLoginView | null;
   /** Session/weekly quota windows with reset times, when a read exists (issue #40). */
   limits?: AccountLimits | null;
+  /** Reset credits at the last read (issue #1373, Codex only); null until a
+      read that carried the summary has happened. */
+  resetCredits?: AccountResetCredits | null;
+  /** Projects this account is bound to (#1279). Empty means it is fenced to no
+      project — which does not fence the account, it fences the projects: any
+      project with no binding of its own may still use it. */
+  projects?: { project: string; displayName: string }[];
 };
+
+/** Crash-safe: a malformed projects block renders as no bindings, never a throw. */
+function parseBoundProjects(raw: unknown): { project: string; displayName: string }[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.project !== "string" || !record.project.trim()) return [];
+    return [{
+      project: record.project,
+      displayName: typeof record.displayName === "string" && record.displayName.trim() ? record.displayName : record.project,
+    }];
+  });
+}
 
 /** Crash-safe validation of one quota window. A malformed shape yields `null` so
     a stray payload never breaks the account row. */
@@ -156,12 +189,54 @@ export function parseAccountLimits(raw: unknown): AccountLimits | null {
   if (!freshness) return null;
   const session = parseLimitWindow(record.session);
   const weekly = parseLimitWindow(record.weekly);
-  if (!session && !weekly) return null;
+  const flagship = parseTierLimitWindow(record.flagship);
+  if (!session && !weekly && !flagship) return null;
   const checkedAt = typeof record.checkedAt === "string" && Number.isFinite(Date.parse(record.checkedAt)) ? record.checkedAt : null;
-  return { freshness, session, weekly, checkedAt };
+  return { freshness, session, weekly, ...(flagship ? { flagship } : {}), checkedAt };
+}
+
+/** A tier window needs a tier name on top of a valid window; anything else is
+    no flagship bucket, and the row simply does not render. */
+function parseTierLimitWindow(raw: unknown): AccountTierLimitWindow | null {
+  const window = parseLimitWindow(raw);
+  if (!window) return null;
+  const tier = (raw as { tier?: unknown }).tier;
+  if (typeof tier !== "string" || !tier.trim()) return null;
+  return { ...window, tier };
+}
+
+/** Crash-safe read of the route's `resetCredits` block; null means the count
+    is not known yet, never zero. */
+export function parseResetCredits(raw: unknown): AccountResetCredits | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.availableCount !== "number" || !Number.isInteger(record.availableCount) || record.availableCount < 0) return null;
+  const expiresAt = typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt) ? record.expiresAt : null;
+  return { availableCount: record.availableCount, expiresAt };
+}
+
+/** The observation-derived half of one account row — auth health, plan, quota
+    windows and reset credits — exactly as `GET /api/accounts`, the per-account
+    re-read (#1418) and the reset-credit redemption (#1373) all send it, so one
+    parse serves the list read and the in-place card updates alike. */
+export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<AccountOption, "authHealth" | "plan" | "limits" | "resetCredits"> {
+  const record = (typeof raw === "object" && raw !== null ? raw : {}) as { auth?: unknown; limits?: unknown; resetCredits?: unknown };
+  const auth = typeof record.auth === "object" && record.auth !== null
+    ? record.auth as { state?: unknown; plan?: unknown }
+    : null;
+  const authState = auth?.state;
+  const authHealth: AccountAuthHealth = authState === "authenticated" || authState === "signed_out" || authState === "unknown" || authState === "error"
+    ? authState
+    : authPresent ? "unknown" : "signed_out";
+  const plan = typeof auth?.plan === "string" && auth.plan.trim() ? auth.plan : null;
+  return { authHealth, plan, limits: parseAccountLimits(record.limits), resetCredits: parseResetCredits(record.resetCredits) };
 }
 export type AccountLoadState = "loading" | "ready" | "error";
-export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "terminal";
+export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "terminal" | "refreshLimits" | "resetCredit";
+
+/** The per-card limits actions (issues #1418, #1373) run one at a time and
+    keep the rest of the panel usable; this names the card and the action. */
+export type LimitsAction = { accountId: string; operation: "refreshLimits" | "resetCredit" };
 
 /** A retry action carries exactly the identifier its endpoint needs. */
 export type AccountRetryAction =
@@ -177,6 +252,8 @@ export type AccountNoticeKey =
   | "accounts.claudeLoginStarted"
   | "accounts.removeBlocked" | "accounts.removeHistoryBlocked" | "accounts.removeFailed" | "accounts.cleanupPending" | "accounts.cleanupManual" | "accounts.cleanupFailed"
   | "accounts.terminalCopied" | "accounts.terminalFailed"
+  | "accounts.limitsRefreshFailed"
+  | "accounts.resetUsed" | "accounts.resetNone" | "accounts.resetNothing" | "accounts.resetFailed"
   | ClaudeLoginErrKey;
 
 export interface AccountNotice {
@@ -231,6 +308,11 @@ export interface EngineAccountsSnapshot {
   /** Per-engine auto-balance status, or null when the coordinator is absent.
       Presence also signals the migration coordinator is available. */
   autoBalance: AutoBalance | null;
+  /** The one per-card limits action in flight, or null (#1418, #1373). */
+  limitsBusy: LimitsAction | null;
+  /** Bumps when a card's limits changed through one of those actions, so the
+      limits footer re-reads its own payload for the same account. */
+  limitsVersion: number;
 }
 
 export interface EngineAccountsState extends EngineAccountsSnapshot {
@@ -257,9 +339,16 @@ export interface EngineAccountsState extends EngineAccountsSnapshot {
   /** Copies the account-bound agent CLI command (for a terminal/tmux on the
       operator's machine) to the clipboard; the notice echoes the command. */
   copyTerminalCommand: (accountId: string) => Promise<boolean>;
+  /** Re-reads one account's live limits now (#1418) and merges the reading
+      into its card: `Checked`, the windows and the rate-limit line move. */
+  refreshLimits: (accountId: string) => Promise<boolean>;
+  /** Redeems one usage-limit reset credit on a Codex account (#1373) — no
+      confirmation step — and shows the new window the provider answers with. */
+  useResetCredit: (accountId: string) => Promise<boolean>;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+const currentGlobalFetch: Fetcher = (input, init) => globalThis.fetch(input, init);
 
 export interface EngineAccountsStoreOptions {
   fetcher?: Fetcher;
@@ -281,6 +370,8 @@ const INITIAL_SNAPSHOT: EngineAccountsSnapshot = {
   mutation: null,
   migration: null,
   autoBalance: null,
+  limitsBusy: null,
+  limitsVersion: 0,
 };
 
 interface EngineResponse {
@@ -294,18 +385,12 @@ function accountResponse(body: unknown, engine: Engine): EngineResponse {
   const section = (body as Record<string, unknown> | null)?.[engine] as { active?: unknown; accounts?: unknown; migration?: unknown; autoBalance?: unknown } | undefined;
   if (typeof section?.active !== "string" || !Array.isArray(section.accounts)) throw new Error("accounts response invalid");
   const accounts = section.accounts.map((raw): AccountOption => {
-    const account = raw as AccountOption & { auth?: unknown; login?: unknown; limits?: unknown };
+    const account = raw as AccountOption & { login?: unknown };
     const login = engine === "claude" ? parseClaudeLogin(account.login) : null;
     // The phase is authoritative for pending state (C3): a nonterminal login
     // keeps the row pending even when the server's raw `loginPending` lags.
     const loginPending = login ? NONTERMINAL_CLAUDE_LOGIN_PHASES.has(login.phase) : account.loginPending === true;
-    const authState = typeof account.auth === "object" && account.auth !== null
-      ? (account.auth as { state?: unknown }).state
-      : null;
-    const authHealth: AccountAuthHealth = authState === "authenticated" || authState === "signed_out" || authState === "unknown" || authState === "error"
-      ? authState
-      : account.authPresent ? "unknown" : "signed_out";
-    return { ...account, authHealth, login, loginPending, limits: parseAccountLimits(account.limits) };
+    return { ...account, ...observedAccountFields(raw, account.authPresent), login, loginPending, projects: parseBoundProjects((raw as { projects?: unknown }).projects) };
   });
   return {
     active: section.active,
@@ -361,7 +446,7 @@ function failureDetailOf(body: unknown): string | undefined {
     so a mounted Switchboard, footer, and Accounts panel can never diverge. */
 export function createEngineAccountsStore(
   engine: Engine,
-  { fetcher = globalThis.fetch.bind(globalThis), timeoutMs = 10_000 }: EngineAccountsStoreOptions = {},
+  { fetcher = currentGlobalFetch, timeoutMs = 10_000 }: EngineAccountsStoreOptions = {},
 ): EngineAccountsStore {
   const activeUrl = `/api/accounts/${engine}/active`;
   const addUrl = `/api/accounts/${engine}`;
@@ -684,14 +769,15 @@ export function createEngineAccountsStore(
         if (!response.ok) {
           const body = await response.json().catch(() => null) as { code?: unknown; blockers?: unknown } | null;
           const blocked = body?.code === "account_removal_blocked";
-          const historyBlocked = blocked && Array.isArray(body?.blockers) && body.blockers.includes("current_conversations");
+          const historyBlocked = blocked && Array.isArray(body?.blockers)
+            && (body.blockers.includes("current_conversations") || body.blockers.includes("filesystem_history"));
           patchSnapshot({
             notice: {
               kind: "error",
               operation: "remove",
               messageKey: historyBlocked ? "accounts.removeHistoryBlocked" : blocked ? "accounts.removeBlocked" : "accounts.removeFailed",
               target: label,
-              action: blocked && !historyBlocked ? { type: "retry", kind: "forceRemove", accountId } : null,
+              action: null,
             },
           });
           await refresh();
@@ -743,6 +829,82 @@ export function createEngineAccountsStore(
         return false;
       }
     });
+  };
+
+  /** Merges a route's per-account block into the row it names; label, login
+      and bindings come from the list read and stay. */
+  const patchAccountObservation = (accountId: string, raw: unknown) => {
+    patchSnapshot({
+      accounts: snapshot.accounts.map((account) => account.id === accountId ? { ...account, ...observedAccountFields(raw, account.authPresent) } : account),
+    });
+  };
+
+  const noticeCleared = (operation: AccountOperation): AccountNotice | null =>
+    snapshot.notice?.operation === operation ? null : snapshot.notice;
+
+  const refreshLimits = async (accountId: string): Promise<boolean> => {
+    const target = snapshot.accounts.find((account) => account.id === accountId);
+    if (!target || snapshot.limitsBusy) return false;
+    patchSnapshot({ limitsBusy: { accountId, operation: "refreshLimits" }, notice: noticeCleared("refreshLimits") });
+    const failed = (detail?: string) => patchSnapshot({
+      limitsBusy: null,
+      notice: { kind: "error", operation: "refreshLimits", messageKey: "accounts.limitsRefreshFailed", target: target.label, ...(detail ? { detail } : {}), action: null },
+    });
+    try {
+      const response = await fetcher(`/api/accounts/${engine}/limits`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: accountId }),
+      });
+      const body = await response.json().catch(() => null) as { account?: unknown; detail?: unknown; error?: unknown } | null;
+      if (!response.ok || !body?.account) {
+        failed(failureDetailOf(body));
+        return false;
+      }
+      patchAccountObservation(accountId, body.account);
+      patchSnapshot({ limitsBusy: null, limitsVersion: snapshot.limitsVersion + 1 });
+      return true;
+    } catch {
+      failed();
+      return false;
+    }
+  };
+
+  const useResetCredit = async (accountId: string): Promise<boolean> => {
+    const target = snapshot.accounts.find((account) => account.id === accountId);
+    if (!target || engine !== "codex" || snapshot.limitsBusy) return false;
+    patchSnapshot({ limitsBusy: { accountId, operation: "resetCredit" }, notice: noticeCleared("resetCredit") });
+    const settle = (kind: AccountNotice["kind"], messageKey: AccountNoticeKey, detail?: string) => patchSnapshot({
+      limitsBusy: null,
+      notice: { kind, operation: "resetCredit", messageKey, target: target.label, ...(detail ? { detail } : {}), action: null },
+    });
+    try {
+      const response = await fetcher("/api/accounts/codex/reset-credits", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // One key per click: a retry of the same click would reuse it, a new
+        // click is a new attempt.
+        body: JSON.stringify({ id: accountId, idempotencyKey: attemptKey() }),
+      });
+      const body = await response.json().catch(() => null) as { account?: unknown; code?: unknown; detail?: unknown; error?: unknown } | null;
+      // Refused or not, the route answers with the reading it took, so the
+      // card shows the window as it stands now.
+      if (body?.account) {
+        patchAccountObservation(accountId, body.account);
+        patchSnapshot({ limitsVersion: snapshot.limitsVersion + 1 });
+      }
+      if (response.ok) {
+        settle("success", "accounts.resetUsed");
+        return true;
+      }
+      if (body?.code === "no_resets_available") settle("error", "accounts.resetNone");
+      else if (body?.code === "nothing_to_reset") settle("error", "accounts.resetNothing");
+      else settle("error", "accounts.resetFailed", failureDetailOf(body));
+      return false;
+    } catch {
+      settle("error", "accounts.resetFailed");
+      return false;
+    }
   };
 
   const cleanupOrphans = (): Promise<boolean> => {
@@ -814,6 +976,8 @@ export function createEngineAccountsStore(
     get mutation() { return snapshot.mutation; },
     get migration() { return snapshot.migration; },
     get autoBalance() { return snapshot.autoBalance; },
+    get limitsBusy() { return snapshot.limitsBusy; },
+    get limitsVersion() { return snapshot.limitsVersion; },
     refresh,
     add,
     retryNotice,
@@ -824,7 +988,15 @@ export function createEngineAccountsStore(
     remove,
     cleanupOrphans,
     copyTerminalCommand,
+    refreshLimits,
+    useResetCredit,
   };
+}
+
+/** A fresh idempotency key per redemption attempt. */
+function attemptKey(): string {
+  const random = globalThis.crypto?.randomUUID?.();
+  return random ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 const stores: Record<Engine, EngineAccountsStore> = {
@@ -850,5 +1022,7 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     remove: store.remove,
     cleanupOrphans: store.cleanupOrphans,
     copyTerminalCommand: store.copyTerminalCommand,
+    refreshLimits: store.refreshLimits,
+    useResetCredit: store.useResetCredit,
   };
 }

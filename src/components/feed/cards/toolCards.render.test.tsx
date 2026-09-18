@@ -35,8 +35,9 @@ function toolEvent(over: Partial<ToolEvent> = {}): ToolEvent {
 }
 
 test("a collapsed tool row renders its summary as a quiet line while body nodes stay lazily unmounted", () => {
-  const html = renderToStaticMarkup(<ToolCard event={toolEvent({ outputPreview: "total 8\nfile.ts" })} />);
+  const html = renderToStaticMarkup(<ToolCard event={toolEvent({ endTs: "2026-07-10T10:00:00.750Z", outputPreview: "total 8\nfile.ts" })} />);
   expect(html).toContain("ls -la");
+  expect(html).toContain("750ms");
   // Success is silence (§3.4): a collapsed ok row shows no status label.
   expect(html).not.toContain(">ok<");
   // The body (output pre, raw-record button) is not in the DOM until expanded.
@@ -165,6 +166,16 @@ test("a collapsed cmd-group defers all child rendering until it is expanded", ()
   expect(html).not.toContain(en("tools.rawRecord"));
 });
 
+test("a collapsed action group renders its transcript start-to-completion duration", () => {
+  const item = cmdGroup([
+    toolEvent({ id: "a", ts: "2026-07-10T10:00:00.000Z" }),
+    toolEvent({ id: "b", ts: "2026-07-10T10:00:01.000Z", endTs: "2026-07-10T10:00:02.250Z" }),
+  ]);
+  item.t1 = item.calls.at(-1)?.endTs;
+  const html = renderToStaticMarkup(<CmdGroupCard item={item} />);
+  expect(html).toContain("2.3s");
+});
+
 test("a collapsed cmd-group does not mount a diff-backed child's diff body", () => {
   const patch = ["*** Begin Patch", "*** Update File: src/edit-x.ts", "@@", " keep", "-old", "+new", "*** End Patch"].join("\n");
   const model = diffFromApplyPatch(patch);
@@ -217,6 +228,7 @@ test("a fallback transcript record renders a typed chip with bounded collapsible
         kind: "record",
         ts: "2026-07-14T10:00:00Z",
         recordType: "future_payload",
+        summary: "A future payload summary",
         body: '{\n  "detail": "synthetic"\n}',
         truncated: true,
       }}
@@ -224,6 +236,7 @@ test("a fallback transcript record renders a typed chip with bounded collapsible
   );
   expect(html).toContain(en("render.transcriptRecord"));
   expect(html).toContain("future_payload");
+  expect(html).toContain("A future payload summary");
   expect(html).toContain("synthetic");
   expect(html).toContain(en("render.truncated"));
   expect(html).toContain("<details");

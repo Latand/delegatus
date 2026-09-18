@@ -7,8 +7,9 @@ import { ArrowUpToLine, Check, FoldVertical, Loader2, Play, RotateCw, Square, Sq
 
 import { Hint } from "@/components/Hint";
 import { AttachTerminalDialog } from "@/components/AttachTerminalDialog";
+import { useConversationControl } from "@/hooks/useConversationControl";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { interruptRuntime, refreshRuntime } from "@/hooks/useRuntime";
+import { refreshRuntime } from "@/hooks/useRuntime";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
@@ -371,19 +372,48 @@ export function AgentControlStripView({
 }
 
 /**
- * Container: computes the capability matrix for this conversation and wires
- * the stop/compact/attach actions. The header keeps only identity + status;
- * the runtime control lives in the composer's RuntimePill (issue #390).
+ * What the strip's actions are, apart from the strip that draws them.
+ *
+ * Mobile v2 lane 3 (docs/design/mobile-v2/README.md §4.2, §8 row 3): on the
+ * phone the strip itself does not render — every one of its controls is a
+ * labelled row in the conversation's `⋯` menu, because an icon-only control
+ * has no touch route to its meaning (2026-08 audit finding 18). So the
+ * capability matrix, the busy flags, the status line and the four actions live
+ * here, and both the desktop strip and `MobileConversationMenu` read the same
+ * hook. Neither surface owns a second copy of what Stop, Compact, Re-check or
+ * Open in terminal do.
  */
-export function AgentControlStrip({ file }: { file: FileEntry }) {
+export interface AgentControlActions {
+  caps: StripCapabilities;
+  /** True when no control applies at all: the strip renders nothing. */
+  empty: boolean;
+  compactArmed: boolean;
+  stopBusy: boolean;
+  compactBusy: boolean;
+  recheckBusy: boolean;
+  status: { kind: "ok" | "info" | "err"; text: string } | null;
+  stop: () => void;
+  /** Desktop arms first, then compacts; the phone acts on the tap it names
+      (README §2 rule 9, Q4), so it passes `{ immediate: true }`. */
+  compact: (options?: { immediate?: boolean }) => void;
+  recheck: () => void;
+  terminal: () => void;
+  /** The attach dialog the terminal action falls back to; the host renders it. */
+  attachOpen: boolean;
+  closeAttach: () => void;
+  attachMode: ReturnType<typeof useAgentCapabilities>["attachMode"];
+}
+
+export function useAgentControlActions(file: FileEntry): AgentControlActions {
   const { t } = useLocale();
-  const isMobile = useIsMobile();
   const { caps, attachMode, structuredSession } = useAgentCapabilities(file);
 
-  const observerRef = useRef<ResizeObserver | null>(null);
-  const [layout, setLayout] = useState<StripLayout>("full");
-  const [overflowOpen, setOverflowOpen] = useState(false);
-  const [stopBusy, setStopBusy] = useState(false);
+  const interrupt = useConversationControl(caps.surface === "structured-subagent" && structuredSession
+    ? { conversationId: structuredSession.session.conversationId }
+    : { ...(file.conversationId ? { conversationId: file.conversationId } : {}), path: file.path }, "interrupt");
+  const stopBusy = interrupt.busy;
+  const interruptTurn = useRef<number | null>(null);
+  const [interruptNoteActive, setInterruptNoteActive] = useState(false);
   const [compactBusy, setCompactBusy] = useState(false);
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [compactArmed, setCompactArmed] = useState(false);
@@ -399,6 +429,7 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
       outcome, which would otherwise sit on the status line forever and hide the
       note the NEXT action wants to show (#1214). */
   const clearStatus = () => {
+    setInterruptNoteActive(false);
     setStatus(null);
     setCompactWatch(null);
   };
@@ -431,23 +462,6 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
     setAttachOpen(true);
   };
 
-  /* Width is the collapse trigger (§3) — scheme nodes vary continuously with
-     zoom, so a ResizeObserver on the strip beats any media query. A callback
-     ref (not a mount-once effect) attaches it, because the strip root can mount
-     LATE: an unresolved/gated surface renders nothing at first and the observed
-     div only appears once host evidence arrives (#257). */
-  const rootRef = useCallback((el: HTMLDivElement | null) => {
-    observerRef.current?.disconnect();
-    observerRef.current = null;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 999;
-      setLayout(width >= 430 ? "full" : width >= 300 ? "narrow" : "mini");
-    });
-    observer.observe(el);
-    observerRef.current = observer;
-  }, []);
-
   useEffect(() => {
     if (!compactArmed) return;
     const id = window.setTimeout(() => setCompactArmed(false), 4000);
@@ -466,34 +480,14 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
       : undefined,
   );
 
-  if (!stripHasVisibleControls(caps)) return null;
-
   const stop = async () => {
     if (stopBusy) return;
-    setStopBusy(true);
     clearStatus();
-    try {
-      const result = structuredSession
-        ? await interruptRuntime(structuredSession.session.conversationId, mintIdempotencyKey())
-        : await fetch("/api/tmux", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "interrupt", path: file.path }),
-          }).then(async (response) => {
-            const body = (await response.json()) as { ok?: boolean; error?: string };
-            return { ok: response.ok && body.ok === true, error: body.error };
-          });
-      setStatus(result.ok
-        /* Keep the turn this Escape was aimed at: the note is about THAT turn,
-           and the spinner beside it is about whichever turn is running now. */
-        ? { kind: "interrupt", turnStartedAt: file.lastTurn?.startedAt ?? null }
-        : { kind: "err", text: result.error ?? t("composer.failedInterrupt") });
-    } catch {
-      setStatus({ kind: "err", text: t("common.serverUnavailable") });
-    } finally {
-      setStopBusy(false);
-    }
+    interruptTurn.current = file.lastTurn?.startedAt ?? null;
+    setInterruptNoteActive(true);
+    await interrupt.run();
   };
+
 
   const recheck = async () => {
     if (recheckBusy) return;
@@ -507,8 +501,8 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
     }
   };
 
-  const compact = async () => {
-    if (!compactArmed) {
+  const compact = async (options?: { immediate?: boolean }) => {
+    if (!compactArmed && !options?.immediate) {
       setCompactArmed(true);
       return;
     }
@@ -564,26 +558,82 @@ export function AgentControlStrip({ file }: { file: FileEntry }) {
     }
   };
 
+  return {
+    caps,
+    empty: !stripHasVisibleControls(caps),
+    compactArmed,
+    stopBusy,
+    compactBusy,
+    recheckBusy,
+    status: interruptNoteActive
+      ? interrupt.outcome === "done"
+        ? resolvedStatus({ kind: "interrupt", turnStartedAt: interruptTurn.current }, file, t)
+        : interrupt.outcome === "failed"
+          ? { kind: "err", text: interrupt.error ?? t("composer.failedInterrupt") }
+          : { kind: "info", text: t(interrupt.outcome === "unknown" ? "task.controlUnknown" : "task.interruptPending") }
+      : compactOutcome ?? resolvedStatus(status, file, t),
+    stop: () => void stop(),
+    compact: (options) => void compact(options),
+    recheck: () => void recheck(),
+    terminal: () => void copyAttachCommand(),
+    attachOpen,
+    closeAttach: () => setAttachOpen(false),
+    attachMode,
+  };
+}
+
+/**
+ * Container: computes the capability matrix for this conversation and wires
+ * the stop/compact/attach actions. The header keeps only identity + status;
+ * the runtime control lives in the composer's RuntimePill (issue #390).
+ *
+ * On the phone it renders NOTHING: the same actions are rows in the
+ * conversation menu (mobile v2 lane 3). The hook above is the shared owner.
+ */
+export function AgentControlStrip({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const isMobile = useIsMobile();
+  const actions = useAgentControlActions(file);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const [layout, setLayout] = useState<StripLayout>("full");
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  /* Width is the collapse trigger (§3) — scheme nodes vary continuously with
+     zoom, so a ResizeObserver on the strip beats any media query. A callback
+     ref (not a mount-once effect) attaches it, because the strip root can mount
+     LATE: an unresolved/gated surface renders nothing at first and the observed
+     div only appears once host evidence arrives (#257). */
+  const rootRef = useCallback((el: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 999;
+      setLayout(width >= 430 ? "full" : width >= 300 ? "narrow" : "mini");
+    });
+    observer.observe(el);
+    observerRef.current = observer;
+  }, []);
+  if (isMobile || actions.empty) return null;
   return (
     <div ref={rootRef}>
       <AgentControlStripView
         t={t}
-        isMobile={isMobile}
-        caps={caps}
+        isMobile={false}
+        caps={actions.caps}
         layout={layout}
-        compactArmed={compactArmed}
-        stopBusy={stopBusy}
-        compactBusy={compactBusy}
-        recheckBusy={recheckBusy}
+        compactArmed={actions.compactArmed}
+        stopBusy={actions.stopBusy}
+        compactBusy={actions.compactBusy}
+        recheckBusy={actions.recheckBusy}
         overflowOpen={overflowOpen}
-        onStop={() => void stop()}
-        onCompact={() => void compact()}
-        onRecheck={() => void recheck()}
-        onTerminal={() => void copyAttachCommand()}
+        onStop={actions.stop}
+        onCompact={() => actions.compact()}
+        onRecheck={actions.recheck}
+        onTerminal={actions.terminal}
         onToggleOverflow={() => setOverflowOpen((open) => !open)}
-        status={compactOutcome ?? resolvedStatus(status, file, t)}
+        status={actions.status}
       />
-      {attachOpen ? <AttachTerminalDialog file={file} mode={attachMode} onClose={() => setAttachOpen(false)} /> : null}
+      {actions.attachOpen ? <AttachTerminalDialog file={file} mode={actions.attachMode} onClose={actions.closeAttach} /> : null}
     </div>
   );
 }

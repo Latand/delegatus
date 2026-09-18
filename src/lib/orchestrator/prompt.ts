@@ -22,7 +22,17 @@
  * the moment a seat still holding a schedule of its own drops it. v12 (#1301)
  * names the delivery endpoint in the fences for what it does: the seat's own
  * surface list said `tmux`, and a seat that repeats that word sends whoever
- * reads its report looking for a server this machine does not run. */
+ * reads its report looking for a server this machine does not run. v13 (#1428)
+ * sends the seat to prior conversations first: the Viewer indexes every message
+ * of every transcript, and seats kept re-solving what an earlier one had
+ * already solved because nothing they read told them to look. v14 (#1720)
+ * makes the board task the unit of work: one product outcome owns one task
+ * across diagnosis, build, review, repair and release, the seat finds that task
+ * before it launches anything, and it carries the id into the launch call
+ * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
+ * launch that names no task is recorded somewhere else: on the card of a
+ * conversation it names as parent or reviews, or on a placeholder card of its
+ * own. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -38,7 +48,14 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 12;
+export const ORCHESTRATOR_PROMPT_VERSION = 14;
+
+/** Whether a seat's recorded mandate version is behind the current default —
+    the one question rotation, the seat card and `rotate_orchestrator` ask
+    (#1452). A bespoke mandate claims no version and is never stale. */
+export function orchestratorMandateStale(promptVersion: number | null | undefined): promptVersion is number {
+  return typeof promptVersion === "number" && promptVersion < ORCHESTRATOR_PROMPT_VERSION;
+}
 
 /** Appended to bespoke and stale mandates at delivery time; the current
     versioned default already contains it. */
@@ -72,6 +89,99 @@ The Viewer wakes you. A controller in the release that owns traffic checks this 
 So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
 If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.
 Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+
+/** Identifies the task-ownership section below inside a mandate, however its
+    body was edited — the same reason the clock heading exists: a caller who
+    reworded the section meant their wording, and appending the canonical copy
+    beside it would put two ownership rules in one mandate. */
+export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of work — find it before you launch anything";
+
+/**
+ * Canonical task ownership (#1720), delivered on the same terms as the clock
+ * handover above and for the same reason: the seats that open work without a
+ * task are exactly the seats carrying a bespoke or older mandate, and a
+ * rotation hands the successor the INCUMBENT's mandate, so a paragraph living
+ * only inside the current default would reach neither.
+ *
+ * Delivery is the seat lifecycle, so this reaches a seat at its next spawn,
+ * adoption or rotation — a seat already running keeps the mandate it was
+ * delivered, and the version bump is what marks it stale in the seat card,
+ * `get_orchestrator` and `rotate_orchestrator` until then.
+ *
+ * Every API statement below is a server-side guarantee, and each is checked
+ * where it is performed:
+ *
+ * - explicit `taskIds` on a pipeline are read fresh at every stage launch
+ *   (`launchMembership.ts`, `launchMembership.test.ts`);
+ * - an id naming no task refuses the launch before actuation on either tool,
+ *   in a different place each time: `create_pipeline` refuses at the create
+ *   call (`pipelineTaskLinkError` in `store.ts`, called from `engine.ts`),
+ *   while a spawn's explicit id refuses at the admission (`membership.ts`,
+ *   `membership.test.ts`). A pipeline whose recorded task was deleted AFTER
+ *   creation does not refuse its stage: the launch falls back to the container
+ *   task (`launchMembership.ts`);
+ * - a launch carrying NO task: a pipeline stage mints the container
+ *   placeholder; a spawn joins every task held by its lineage parent and by the
+ *   conversation it reviews (`inherit` in `launchMembership.ts`, joined in
+ *   `membership.ts`), and mints a placeholder only when neither holds one. Who
+ *   the parent is depends on the path. MCP `spawn_agent` dispatches same-origin
+ *   with the operator spawn capability, so `/api/spawn` sees no agent caller
+ *   and the parent comes only from `src`, `parent` or `parentConversationId`
+ *   in the body — a reviewer with none of those parents on the reviewed
+ *   conversation (`spawnParent.ts`). An agent-capability POST to `/api/spawn`
+ *   always makes the caller the parent (`admission.ts`). So a task-less spawn
+ *   that names no parent is a duplicate card, and a reviewer that names one
+ *   joins the caller's card beside the reviewed work's
+ *   (`membership.test.ts`, `spawnRecovery.integration.test.ts`);
+ * - the CROSS-PROJECT refusal belongs to `create_pipeline` and
+ *   `pipeline_action: "link-task"`, which validate against the pipeline's own
+ *   project at the store seam (`pipelineTaskLinkError` in `store.ts`, called
+ *   from `engine.ts`). A spawn's explicit target carries its own project —
+ *   `launchMembership.ts` commits it with an EMPTY project — so the guard in
+ *   `membership.ts` compares against nothing and a SINGLE foreign id is
+ *   admitted. The directive and the `spawn_agent` schema say this per tool;
+ *   do not restate it as one rule for both (`membership.test.ts` pins the
+ *   admission, `launchMembership.test.ts` pins the empty project);
+ * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
+ *   `link_task_to_pipeline` writes one assignment row and leaves that list
+ *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
+ * - a pipeline created without `taskIds` adopts the placeholder its first
+ *   stage minted AT THAT STAGE'S RESERVATION, so a repair starts from
+ *   `[placeholder]`: `link-task` makes it `[placeholder, outcome]` and later
+ *   stages join both. Re-adoption runs only on an EMPTY list
+ *   (`adoptPipelineFallbackTask` and `reconcilePipelineFallbackTasks` in
+ *   `engine.ts`), so unlinking the placeholder after the link leaves
+ *   `[outcome]` for good, while unlinking a pipeline's last task brings the
+ *   placeholder back (`taskBinding.test.ts`);
+ * - a link is visible on the task as `pipelineIds` immediately
+ *   (`projectTaskPipelineIds` in `taskBinding.ts`, which both `get_task` and
+ *   `list_tasks` read through). It writes no assignment, and `planAdmissions`
+ *   skips a pipeline that already carries `taskIds` (`membership.ts`), so the
+ *   stages already running stay on the card they were admitted to and the
+ *   task's first assignment arrives with the next launch.
+ */
+export const ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE = `${ORCHESTRATOR_TASK_OWNERSHIP_HEADING}
+A board task is one PRODUCT OUTCOME. Everything done for that outcome — the diagnosis, the implementer, every reviewer, every retry, the fix round, the release — belongs to that one task. Open a second task only for genuinely separate work: an independent audit, or an investigation asked for on its own.
+
+FIND IT BEFORE YOU LAUNCH ANYTHING. Call list_tasks for this project with NO status filter and limit: 200, so blocked and finished work can reach you beside inbox and assigned. That answer is one capped page in creation order (#1725), so a page at the cap was truncated and the NEWEST work is what it dropped: treat it as a lead, never as the whole board. Read the candidates with get_task, get_task any id the operator or a report hands you even when the page did not carry it, and run search_transcripts when their words name work you cannot place. Reuse what you find, and create a task only when nothing you can reach owns this outcome.
+
+NAME AND DESCRIBE IT AT CREATION. create_task takes one text whose FIRST LINE is a human title of 3 to 10 words; the lines after it say what the work has to achieve, in the operator's own words where you have them. A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. Never leave the naming to the agent you launch: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
+
+CARRY THE TASK INTO THE LAUNCH ITSELF. The Viewer binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one: spawn_agent sets a parent only when the call names one, while POST /api/spawn always makes you the parent, putting the worker on your seat's card. None of these is the outcome's card. So:
+- create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every stage launch of that pipeline — run, review-loop, retry, fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
+- spawn_agent or POST /api/spawn — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
+- A review flow or a pipeline's review-loop stage inherits the task of the work it reviews. Pass nothing, create nothing.
+- Use the exact id THIS project's board gave you. An id naming no task refuses the launch before any agent starts, on either tool; create_pipeline also refuses a task belonging to another project, while spawn_agent takes the id as given and binds the agent to that other project's card.
+
+EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
+
+REPAIR WITH THE TOOL THAT BINDS. A pipeline started without taskIds already carries the placeholder its first stage minted. Repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts its placeholder on the next controller tick.
+
+READ BACK WHAT YOU DID. After a create or a link, call get_pipeline and confirm its taskIds contain the task, then call get_task and confirm the task's pipelineIds contain the pipeline, which holds the moment the link lands. Assignments answer a different question: a link writes none, and the stages already running stay on the card they were admitted to, so a repaired pipeline's task shows its first assignment when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
+
+ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pipeline after a failure, a fix lane after a review — retire the superseded container only once the outcome is carried by the surviving one and nothing in the old one is still running or unknown. Closing a container is unavailable as a way to hide work that is still owed: say out loud what you are dropping, and mark a task blocked with the reason when it cannot proceed. Never close containers in bulk to tidy the board.
+
+RECEIPTS ARE THE RECORD. Every one of these calls is keyed by clientRequestId. A retry of the SAME logical operation reuses its id and replays the original receipt; a new operation gets a new id. When an outcome is unknown, replay the original id and read what the receipt says. Re-issuing it under a fresh id is how one outcome ends up with two pipelines and two cards.`;
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are the viewer's built-in Manager (issues #182, #691) — the agent that owns the board and runs the whole conveyor through the viewer's own HTTP API and MCP tools. You never act outside them.
 
@@ -110,13 +220,18 @@ They render as pills under your message and land in their composer on a tap, edi
 
 ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
 
+## Search prior conversations before deciding
+Much of what you will meet has been met before, and the Viewer indexes every user and assistant message of every conversation on this machine, across both engines and all accounts. At the start of any non-trivial task, and whenever a problem, failure or unknown appears, run several search_transcripts queries — 3 to 5, in different phrasings: the error text, the subsystem, the symptom, the file or tool involved — scoped to the project first, then unscoped. A snippet is only a pointer: open the hit through conversation_messages at its transcript path (its timestamp as since; the transcript path and byte offset pin the exact line) and read the turns around it before choosing an approach. Cite what you found, by conversation title and date, in the plan or spec you hand on, or state that nothing relevant existed. Check an old answer against current main before you build on it; the code has usually moved since.
+
+${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
+
 ## Conveyor rules
 Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> batched deploy -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
-- Spawn implementers via POST /api/spawn with title = a semantic task name, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
-- Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
+- Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
+- Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
 - Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests). Never merge red.
-- Keep task cards updated via /api/tasks. Report state changes as bridge reports.
+- Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
 
 ## Pipeline stage contract
 A pipeline is a GRAPH of stages, not a list. Each stage is {id (unique, URL-safe), kind: "run" | "review-loop", prompt, next: <stage id> | null, onFail?: {to, maxRounds?} (run stages only), role: {roleId, params?}} and carries its runtime overrides — engine, model, effort, access — on the stage itself, never inside role. next is the pass edge and DEFAULTS TO null: stages you never wire reach nothing, and a review-loop must be pass-reachable from a run stage through next edges (it reviews that run's session), so array order alone is not a chain. review-loop stages are read-only, take no onFail, and default to the registry's Codex reviewer runtime. src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
@@ -137,17 +252,29 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 - Replacing manual spawns is a non-goal: the user's own agents keep working; you coordinate, you do not take over.
 - Re-derive board state per turn from bounded snapshots rather than accumulating it in context.`;
 
-/** Every seat receives the initial-status contract AND the clock handover,
-    whatever mandate it holds. Delivery checks the text itself because a
-    caller-edited mandate may retain the current prompt version and a rotation
-    passes the incumbent's version through unchanged — so a version number
+/** What delivery appends, in order, and the text each is recognized by: a
+    section with its own heading is recognized by that heading, so a caller who
+    reworded the body under it keeps their wording; the initial-status contract
+    has no heading of its own and is recognized by its whole text. Adding a
+    directive is one entry here. */
+const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
+  { marker: ORCHESTRATOR_TASK_OWNERSHIP_HEADING, directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
+  { marker: ORCHESTRATOR_VIEWER_CLOCK_HEADING, directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
+  { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
+];
+
+/** Every seat receives the initial-status contract, the clock handover AND the
+    task-ownership section (#1720), whatever mandate it holds. Each is appended
+    at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
+    a rotation — so a seat that is already running receives it at its next one.
+    Delivery checks the text itself because a caller-edited mandate may retain
+    the current prompt version and a rotation passes the incumbent's version
+    through unchanged — so a version number
     cannot say which paragraphs a mandate actually contains. The stored mandate
     stays raw, and a retry appends each directive at most once. */
 export function orchestratorMandateForDelivery(mandate: string): string {
-  const withClock = mandate.includes(ORCHESTRATOR_VIEWER_CLOCK_HEADING)
-    ? mandate
-    : `${mandate}\n\n${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}`;
-  return withClock.includes(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)
-    ? withClock
-    : `${withClock}\n\n${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}`;
+  return DELIVERED_DIRECTIVES.reduce(
+    (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
+    mandate,
+  );
 }

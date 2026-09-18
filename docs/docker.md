@@ -68,6 +68,14 @@ serializes the request, verifies the candidate, and switches its listener
 target. Inspect the owner with
 `docker compose --profile runtime-host logs -f runtime-host`.
 
+Run that command from any checkout of the repository, a worktree included, with
+nothing wrapping it and no `git pull` before it: it posts a revision, and the
+runtime host builds that revision from its own canonical Git mirror rather than
+from the working tree (#1309). With no argument and no `LLV_DEPLOY_REVISION`
+override it resolves the canonical `refs/heads/main` tip and deploys that exact
+commit; a full 40-character commit SHA in either case pins a redeploy or a
+rollback and is posted lowercase.
+
 ### Bootstrap the runtime host onto a new revision (#1216)
 
 `scripts/rebuild.sh` replaces the runtime-host generation only in the
@@ -114,8 +122,8 @@ makes a wedged hand-over visible.
 `--hand-over` performs the staging and then stops the predecessor runtime-host
 container so the successor acquires the fence. `127.0.0.1:8898` is unserved for
 the length of that exit; the run waits for the fence and names what it saw if
-it never arrives. The successor removes the stopped predecessor once it owns
-the fence.
+it never arrives. A managed predecessor remains stopped as the bounded rollback
+target after the successor proves its startup and framed serving evidence.
 
 After a host-only bootstrap the runtime host runs a newer revision than the
 published Viewer release, so its boot-time MCP reconcile logs
@@ -126,6 +134,96 @@ the published runtime unchanged. That is expected; the next successful
 The Compose `viewer` service exists only for the one-time listener migration. Its
 `legacy-viewer-migration` profile and `LLV_ALLOW_LEGACY_VIEWER=1` launch grant
 must both be present.
+
+### Personal workstation: token-free localhost, authenticated tailnet
+
+Once `LLV_TOKEN` is configured, the Viewer authenticates every connection,
+loopback included (#1496). On a shared host that is the whole point. On a
+personal workstation it means the operator's own browser at
+`http://127.0.0.1:8898/` gets a 403, while the same port is also where
+Tailscale Serve delivers the tailnet, so the Viewer cannot tell the two apart
+from the connection: both arrive from 127.0.0.1, and `Host` or `X-Forwarded-*`
+say only what the caller wrote (#1547).
+
+Runtime-host can split the stable listener into two entries, decided by which
+listener the kernel accepted the connection on:
+
+- the **remote entry**, a second loopback port for Tailscale Serve to target.
+  It is the same raw pipe port 8898 has always been, so the Viewer's own gate
+  (cookie, bearer, `?k=` link) keeps authenticating it;
+- the **local entry**, port 8898 itself, which once marked trusted forwards
+  each request whose `Host` names loopback with the release's own credential.
+  A DNS-rebound page in the browser reaches the same port with the attacker's
+  `Host` and is not vouched for; the Viewer's gate refuses it as before.
+
+Nothing changes without the gateway file, and the Viewer image, `src/proxy.ts`
+and the CLI's `--tailscale` path are untouched. The file lives in the state
+directory beside `viewer-release.json`:
+
+```json
+{ "remoteEntryPort": 8897, "localEntry": "trusted" }
+```
+
+Whether port 8898 is the raw pipe or the local entry is read once, when a
+runtime-host generation boots. `localEntry` is read again on every request, so
+trust is granted and withdrawn by editing the file, with no restart. A file
+that cannot be read as this configuration — unknown key, unknown value, a
+remote port equal to the local one, malformed JSON — counts as absent at boot
+and as `"authenticated"` per request, and the boot log names the reason.
+
+**Setup**, on a host whose runtime-host image carries this change. Order
+matters: the tailnet moves to the authenticated entry before the local entry
+is trusted, so no remote traffic ever reaches a token-free listener.
+
+```bash
+state="${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer/state"
+
+# 1. Name the remote entry only. The local entry stays authenticated.
+printf '%s\n' '{ "remoteEntryPort": 8897 }' > "$state/viewer-gateway.json.next" \
+  && mv "$state/viewer-gateway.json.next" "$state/viewer-gateway.json"
+
+# 2. Boot a runtime-host generation on this image (see the host-only bootstrap
+#    above). Its log reports: viewer gateway: local entry 127.0.0.1:8898 is
+#    authenticated at boot (re-read per request); remote entry 127.0.0.1:8897
+docker compose --profile runtime-host logs --tail 20 runtime-host
+
+# 3. Point the tailnet at the remote entry and confirm it still authenticates.
+#    Only the https=443 handler changes; other serve/funnel handlers stay.
+tailscale serve --bg --https=443 http://127.0.0.1:8897
+tailscale serve status
+curl --silent --output /dev/null --write-out '%{http_code}\n' http://127.0.0.1:8897/   # 403
+
+# 4. Trust the local entry. Effective on the next request.
+printf '%s\n' '{ "remoteEntryPort": 8897, "localEntry": "trusted" }' > "$state/viewer-gateway.json.next" \
+  && mv "$state/viewer-gateway.json.next" "$state/viewer-gateway.json"
+curl --silent --output /dev/null --write-out '%{http_code}\n' http://127.0.0.1:8898/   # 200
+curl --silent --output /dev/null --write-out '%{http_code}\n' -H 'Host: attacker.example' http://127.0.0.1:8898/   # 403
+```
+
+The credential the local entry vouches with is the promoted release
+container's, read from its Compose snapshot under
+`state/deployments/compose/`; a release published before snapshots existed
+falls back to the runtime-host container's own `LLV_TOKEN`. If neither names
+a token the entry stays authenticated and logs it once.
+
+**Rollback.** Withdrawing trust is one file edit and takes effect on the next
+request; removing the gateway entirely takes a host restart because the
+listener kind is chosen at boot.
+
+```bash
+# Withdraw trust only: 8898 authenticates again, the tailnet keeps working.
+printf '%s\n' '{ "remoteEntryPort": 8897 }' > "$state/viewer-gateway.json.next" \
+  && mv "$state/viewer-gateway.json.next" "$state/viewer-gateway.json"
+
+# Full rollback: tailnet back on 8898, gateway file gone, host generation restarted.
+tailscale serve --bg --https=443 http://127.0.0.1:8898
+rm "$state/viewer-gateway.json"
+```
+
+Under the Bun the image pins (1.4.0) the local entry relays Upgrade requests
+and tears down a Viewer stream whose reader went away; Bun 1.3.3's node:http
+does neither, which is one more reason the runtime host runs only under the
+pin. On a shared host, leave the file absent.
 
 ## Legacy tmux supervisor migration
 

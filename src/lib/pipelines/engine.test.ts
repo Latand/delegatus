@@ -6,10 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 
-import type { Flow } from "@/lib/flows/types";
+import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
@@ -63,13 +64,16 @@ test("a pipeline stage keeps its reserved account through a routing change befor
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-account-pin-registry.json"));
   const cwd = process.env.LLV_STATE_DIR!;
   setAgentRegistryForTests(registry);
-  const resolveSpawn = spyOn(accountManager, "resolveSpawn").mockImplementation(() => ({
-    engine: "codex",
-    accountId: "limited",
-    kind: "managed",
-    home: process.env.LLV_STATE_DIR!,
-    transcriptRoot: process.env.LLV_STATE_DIR!,
-    env: { NODE_ENV: "test" },
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: "limited",
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
   }));
   const reservations: Array<{ launchId: string; conversationId: string }> = [];
   try {
@@ -83,7 +87,10 @@ test("a pipeline stage keeps its reserved account through a routing change befor
         access: "read-write",
         promptScaffold: "Builder guidance",
       },
+      runtimeProfile: { access: "read-write", sandbox: "full" },
       cwd,
+      project: "repo-00000000000000000000000000000001",
+      requestedAccountId: null,
       title: "Build scoped change · build",
       ["prompt"]: "Build the scoped change",
       parentPath: null,
@@ -140,6 +147,193 @@ test("a pipeline stage keeps its reserved account through a routing change befor
   }
 });
 
+test("a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-phantom-replay-registry.json"));
+  const cwd = process.env.LLV_STATE_DIR!;
+  const previousCodexBinary = process.env.LLV_CODEX_BINARY;
+  const codexBinary = path.join(cwd, "codex-mcp-fixture");
+  fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[{\"name\":\"viewer\"}]'\n");
+  fs.chmodSync(codexBinary, 0o755);
+  process.env.LLV_CODEX_BINARY = codexBinary;
+  setAgentRegistryForTests(registry);
+  const resolveSpawn = spyOn(accountManager, "resolveSpawn").mockImplementation(() => ({
+    engine: "codex",
+    accountId: "pipeline-account",
+    kind: "managed",
+    home: cwd,
+    transcriptRoot: cwd,
+    env: { NODE_ENV: "test" },
+  }));
+  const input: Parameters<PipelinePorts["spawnAgent"]>[0] = {
+    role: {
+      roleId: "builder",
+      engine: "codex" as const,
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
+      access: "read-write" as const,
+      promptScaffold: "Builder guidance",
+    },
+    runtimeProfile: { access: "read-write", sandbox: "full" },
+    cwd,
+    project: "repo-00000000000000000000000000000001",
+    requestedAccountId: null,
+    title: "Build scoped change",
+    "prompt": "Build the scoped change",
+    parentPath: null,
+    clientAttemptId: "pipeline_phantom_replay_attempt",
+    membership: {
+      kind: "pipeline" as const,
+      containerId: "pipeline-phantom-replay",
+      role: "builder",
+      slot: "build:1",
+      stageId: "build",
+      stageOrder: 0,
+      round: 1,
+      parentConversationId: null,
+    },
+    creatorConversationId: null,
+  };
+  const reservations: Array<{ launchId: string; conversationId: string }> = [];
+
+  try {
+    const ports = defaultPipelinePorts();
+    await expect(ports.spawnAgent(input, (created) => {
+      reservations.push(created);
+      throw new Error("reservation captured");
+    })).rejects.toThrow("reservation captured");
+    const reservation = reservations[0];
+    if (!reservation) throw new Error("pipeline reservation was not captured");
+    const receipt = registry.snapshot().receipts[reservation.launchId]!;
+    const stagedPath = path.join(cwd, "provisional-stage.jsonl");
+    registry.stageStructuredSpawn(receipt.launchId, {
+      key: { engine: "codex", sessionId: "provisional-session" },
+      artifactPath: stagedPath,
+      cwd,
+      accountId: "pipeline-account",
+      launchProfile: receipt.launchProfile,
+      status: "idle",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "stdio:provisional-session",
+        process: { pid: process.pid, startIdentity: "provisional-session-host" },
+        eventCursor: 0,
+        protocolVersion: null,
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: "structured-host:provisional-session-host",
+      pendingAction: "spawn",
+    });
+    const parent = registry.ensureConversation("codex", path.join(cwd, "parent.jsonl"), "pipeline-account");
+    registry.rememberMembership(receipt.conversationId, {
+      kind: "pipeline",
+      containerId: "pipeline-phantom-replay",
+      role: "builder",
+      slot: "adopt:build:1",
+      stageId: "build",
+      stageOrder: 0,
+      round: 1,
+      parentConversationId: parent.id,
+    });
+
+    const replay = await ports.spawnAgent(input, () => {});
+    expect(replay).toMatchObject({
+      launchId: receipt.launchId,
+      conversationId: receipt.conversationId,
+      sessionId: null,
+      "transcript": null,
+    });
+    expect(ports.spawnReceipt(receipt.launchId)).toMatchObject({
+      sessionId: null,
+      "transcript": null,
+    });
+    expect(ports.pathForConversation(receipt.conversationId)).toBeNull();
+    expect(ports.conversationIdForPath(stagedPath)).toBeNull();
+    expect(ports.pipelineAdoptionCandidates("pipeline-phantom-replay")).toEqual([]);
+
+    registry.finalizeStructuredSpawn(receipt.launchId);
+    const completedPorts = defaultPipelinePorts();
+    expect(completedPorts.spawnReceipt(receipt.launchId)).toMatchObject({
+      sessionId: "provisional-session",
+      "transcript": stagedPath,
+    });
+    expect(completedPorts.pathForConversation(receipt.conversationId)).toBe(stagedPath);
+    expect(completedPorts.conversationIdForPath(stagedPath)).toBe(receipt.conversationId);
+    expect(completedPorts.pipelineAdoptionCandidates("pipeline-phantom-replay")).toEqual([
+      expect.objectContaining({
+        sessionId: "provisional-session",
+        agentPath: stagedPath,
+      }),
+    ]);
+  } finally {
+    if (previousCodexBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousCodexBinary;
+    resolveSpawn.mockRestore();
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("a staged resume cannot hide its already-published transcript (#1123)", () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-staged-resume-registry.json"));
+  const cwd = process.env.LLV_STATE_DIR!;
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: sessionId } })}\n`);
+  const conversation = registry.ensureConversation("codex", transcript, "pipeline-account");
+  setAgentRegistryForTests(registry);
+
+  try {
+    const begun = registry.beginSpawnRequest({
+      engine: "codex",
+      cwd,
+      transport: "structured",
+      accountId: "pipeline-account",
+      conversationId: conversation.id,
+      purpose: "resume-successor",
+      launchProfile: { title: "Resume published session" },
+    });
+    if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+    const staged = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId },
+      artifactPath: transcript,
+      cwd,
+      accountId: "pipeline-account",
+      launchProfile: begun.receipt.launchProfile,
+      status: "idle",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: `stdio:${sessionId}`,
+        process: { pid: process.pid, startIdentity: "staged-resume-host" },
+        eventCursor: 0,
+        protocolVersion: null,
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: "structured-host:staged-resume-host",
+      pendingAction: "spawn",
+    });
+    if (staged.kind !== "settled") throw new Error("resume staging conflicted");
+
+    const ports = defaultPipelinePorts();
+    expect(ports.spawnReceipt(begun.receipt.launchId)).toMatchObject({
+      sessionId: null,
+      "transcript": null,
+    });
+    expect(ports.pathForConversation(conversation.id)).toBe(transcript);
+    expect(ports.conversationIdForPath(transcript)).toBe(conversation.id);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
 const RUN_STAGES = [
   { id: "plan", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Plan {{task}}", next: "build" },
   { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build from {{prev.output}}", next: null },
@@ -155,6 +349,14 @@ test("Claude pipeline roles keep autonomous tool access under read-only scope fe
     access: "read-only",
     promptScaffold: "Read-only architecture contract",
   })).toBe("bypassPermissions");
+  expect(pipelineClaudePermissionMode({
+    roleId: "architect",
+    engine: "claude",
+    model: "fable",
+    effort: "high",
+    access: "read-only",
+    promptScaffold: "Read-only architecture contract",
+  }, "restricted")).toBe("auto");
   expect(pipelineClaudePermissionMode({
     roleId: "builder",
     engine: "claude",
@@ -184,10 +386,12 @@ function entry(pathname: string): FileEntry {
 function harness() {
   const calls: string[] = [];
   const spawnRoles: Array<Parameters<PipelinePorts["spawnAgent"]>[0]["role"]> = [];
+  const spawnInputs: Array<Parameters<PipelinePorts["spawnAgent"]>[0]> = [];
   const spawnTitles: string[] = [];
   const messages = new Map<string, { text: string; ts: number }>();
   const durableTurns = new Map<string, StageTurnEvidence>();
   const flows = new Map<string, Flow>();
+  const flowRequests: CreateFlowRequest[] = [];
   let spawn = 0;
   let clock = 1_000_000;
   let builderEffort = "medium";
@@ -236,14 +440,17 @@ function harness() {
     },
     spawnReceipt: () => null,
     claimSpawnRetry: () => "claimed",
-    spawnAgent: async ({ role, title, parentPath, clientAttemptId, membership, supersedes }, onReserved) => {
+    spawnAgent: async (input, onReserved) => {
+      const { role, title, parentPath, clientAttemptId, membership, supersedes } = input;
+      const accountId = input.unavailableAccountIds?.includes(LIMITED_ACCOUNT) ? SPARE_ACCOUNT : LIMITED_ACCOUNT;
       spawn += 1;
+      spawnInputs.push(structuredClone(input));
       spawnRoles.push(structuredClone(role));
       spawnTitles.push(title);
       calls.push(`spawn:${clientAttemptId}:parent=${parentPath ?? "root"}:supersedes=${supersedes ?? "none"}`);
       calls.push(`membership:${membership.kind}:${membership.containerId}:${membership.slot}:${membership.role}:${membership.stageOrder}:round=${membership.round}`);
-      onReserved({ launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}` });
-      return { launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, sessionId: `session-${spawn}`, transcript: `/codex/stage-${spawn}.jsonl`, paneId: `%${spawn}` };
+      onReserved({ launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, accountId });
+      return { launchId: `launch-${spawn}`, conversationId: `conversation_stage_${spawn}`, sessionId: `session-${spawn}`, transcript: `/codex/stage-${spawn}.jsonl`, paneId: `%${spawn}`, accountId };
     },
     paneAgentAlive: async () => paneAlive,
     stopStageAgent: async (target) => {
@@ -275,6 +482,7 @@ function harness() {
       : pathname.includes("stage-1") ? "conversation_stage_1" : pathname.includes("stage-2") ? "conversation_stage_2" : null,
     pipelineAdoptionCandidates: () => [],
     createFlow: async (req) => {
+      flowRequests.push(structuredClone(req));
       calls.push(`flow:${req.implementerPath}:${req.baseRef}:${req.targetSha}:${req.spec}`);
       const flow = { id: `flow-${flows.size + 1}`, implementerPath: req.implementerPath, baseRef: req.baseRef, headRef: req.headRef, targetSha: req.targetSha, state: "waiting_ready", rounds: [], createdAt: new Date(clock).toISOString(), closedAt: null } as unknown as Flow;
       flows.set(flow.id, flow);
@@ -284,6 +492,13 @@ function harness() {
       calls.push(`flow-patch:${id}:${action}`);
       if (note) calls.push(`flow-note:${note}`);
       const flow = flows.get(id);
+      if (flow && action === "retry-round") {
+        if (flow.state !== "needs_decision") return { error: "flow cannot retry from its current state", status: 409 };
+        const round = flow.rounds.at(-1);
+        if (round) Object.assign(round, { spawnStartedAt: null, launchId: null, reviewerPath: null, sessionId: null, error: null, terminalAt: null });
+        flow.state = "spawning";
+        flow.stateDetail = null;
+      }
       if (flow && action === "resume" && flow.state === "paused") {
         const round = flow.rounds.at(-1);
         if (round && isRecoverableLegacyRelayFailurePause(flow)) {
@@ -319,6 +534,8 @@ function harness() {
     messages,
     durableTurns,
     flows,
+    flowRequests,
+    spawnInputs,
     spawnRoles,
     spawnTitles,
     finish,
@@ -335,12 +552,128 @@ function harness() {
   };
 }
 
-async function create(ports: PipelinePorts, stages = RUN_STAGES as never) {
+/** Publication is opt-in (#1692): the tests of the remote-branch contract ask for it. */
+const REMOTE_BRANCH = { publication: "remote-branch" } as const;
+
+async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch" } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl" }, ports);
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages, src: "/codex/creator.jsonl", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   return result.pipeline;
 }
+
+test.each([
+  { access: "read-write", sandbox: "full" },
+  { access: "read-write", sandbox: "restricted" },
+  { access: "read-only", sandbox: "full" },
+  { access: "read-only", sandbox: "restricted" },
+] as const)("pipeline stage runtime profile preserves access=$access with sandbox=$sandbox", async ({ access, sandbox }) => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "audit", kind: "run", engine: "codex", access, sandbox, prompt: "Audit", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(h.spawnInputs[0]).toMatchObject({
+    role: { access },
+    runtimeProfile: { access, sandbox },
+  });
+  expect(h.spawnInputs[0]?.prompt).toContain(`Host access: ${sandbox}`);
+});
+
+test("read-only stages preserve declared outputs and tell the agent their write boundary", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [
+    {
+      id: "audit",
+      kind: "run",
+      role: { roleId: "architect" },
+      access: "read-only",
+      outputs: ["reports/audit.md"],
+      "prompt": "Audit",
+      next: null,
+    },
+  ] as never);
+
+  expect(pipeline.stages[0]?.outputs).toEqual(["reports/audit.md"]);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]?.prompt).toContain("reports/audit.md");
+  expect(h.spawnInputs[0]?.prompt).toContain("Do not commit");
+});
+
+test("declared outputs reject traversal, Git metadata, and duplicate normalized paths", async () => {
+  const h = harness();
+  savePipelines([]);
+  const result = await createPipelineFromRequest({
+    task: "Audit",
+    repoDir: "/repo",
+    src: "/codex/creator.jsonl",
+    stages: [{
+      id: "audit",
+      kind: "run",
+      access: "read-only",
+      outputs: ["../outside.md", ".git/config", "reports/*.md", "reports/audit.md", "reports/audit.md/"],
+      "prompt": "Audit",
+      next: null,
+    }],
+  }, h.ports);
+
+  expect(result.status).toBe(400);
+  expect(result.violations?.map((violation) => violation.field)).toEqual([
+    "stages[0].outputs[0]",
+    "stages[0].outputs[1]",
+    "stages[0].outputs[2]",
+    "stages[0].outputs[4]",
+  ]);
+
+  const reviewOutput = await createPipelineFromRequest({
+    task: "Review",
+    repoDir: "/repo",
+    src: "/codex/creator.jsonl",
+    stages: [
+      { id: "build", kind: "run", "prompt": "Build", next: "review" },
+      { id: "review", kind: "review-loop", outputs: ["reports/review.md"], "prompt": "Review", next: null },
+    ],
+  }, h.ports);
+  expect(reviewOutput.violations).toContainEqual(expect.objectContaining({
+    field: "stages[1].outputs",
+    message: "review-loop stage review cannot declare worktree outputs",
+  }));
+
+  const readWriteOutput = await createPipelineFromRequest({
+    task: "Build",
+    repoDir: "/repo",
+    src: "/codex/creator.jsonl",
+    stages: [{
+      id: "build",
+      kind: "run",
+      access: "read-write",
+      outputs: ["reports/build.md"],
+      "prompt": "Build",
+      next: null,
+    }],
+  }, h.ports);
+  expect(readWriteOutput.violations).toContainEqual(expect.objectContaining({
+    field: "stages[0].outputs",
+    message: "stage build outputs require read-only access",
+  }));
+});
+
+test("review-loop sandbox restriction reaches its reviewer flow", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", access: "read-only", sandbox: "restricted", prompt: "Review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(h.flowRequests[0]).toMatchObject({ reviewerSandbox: "restricted" });
+});
 
 async function exhaustVerdictRecovery(h: ReturnType<typeof harness>, entries: FileEntry[] = []): Promise<void> {
   h.advanceWallClock(30_000);
@@ -1272,14 +1605,14 @@ test("auto-start creation persists the fetched origin/main identity before provi
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
 });
 
 test("auto-start creation rejects an unavailable remote without persisting a pipeline", async () => {
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd) => args[0] === "fetch"
+  h.ports.exec = (command, args, cwd) => (command === "timeout" ? args.slice(args.indexOf("git") + 1) : args)[0] === "fetch"
     ? { code: 128, stdout: "", stderr: "origin unavailable" }
     : baseExec(command, args, cwd);
 
@@ -1386,7 +1719,7 @@ test("controller recovery stamps an older unresolved provisioning record before 
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  expect(h.calls).toContain("git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
+  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
 });
 
 test("autoStart false persists a draft without provisioning or spawning", async () => {
@@ -1419,6 +1752,43 @@ test("set-position persists a finite world pin without changing pipeline executi
   expect(moved.pipeline).toMatchObject({ id: created.id, state: created.state, pos: { x: 1337, y: -240 } });
   expect(loadPipelines()[0]).toMatchObject({ pos: { x: 1337, y: -240 } });
   expect((await patchPipeline(created.id, { action: "set-position", pos: { x: Number.NaN, y: 1 } }, h.ports)).status).toBe(400);
+});
+
+test("dismiss and undismiss take a lane off the phone board and back without touching the lane (#1671)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = loadPipelines()[0]!;
+  const callsBefore = h.calls.length;
+
+  const dismissed = await patchPipeline(created.id, { action: "dismiss" }, h.ports);
+  expect(dismissed.error).toBeUndefined();
+  const hiddenAt = dismissed.pipeline!.dismissedAt;
+  expect(typeof hiddenAt).toBe("string");
+  /* The lane itself is exactly what it was: state, cursor, runs, and the
+     markers every other reader takes to mean closed. */
+  const stored = loadPipelines()[0]!;
+  expect(stored).toMatchObject({ state: before.state, closedAt: null, hiddenAt: before.hiddenAt ?? null, dismissedAt: hiddenAt });
+  expect(stored.cursor).toEqual(before.cursor);
+  expect(stored.runs).toEqual(before.runs);
+  expect(h.calls.length).toBe(callsBefore);
+
+  /* A second hide keeps the first instant. */
+  expect((await patchPipeline(created.id, { action: "dismiss" }, h.ports)).pipeline!.dismissedAt).toBe(hiddenAt);
+
+  const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
+  expect(shown.pipeline!.dismissedAt).toBeNull();
+  expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
+
+  const closed = await patchPipeline(created.id, { action: "close" }, h.ports);
+  expect(closed.pipeline!.state).toBe("closed");
+  for (const action of ["dismiss", "undismiss"] as const) {
+    expect((await patchPipeline(created.id, { action }, h.ports)).status).toBe(409);
+  }
+
+  savePipelines([]);
+  const draft = await createPipelineFromRequest({ task: "A draft", repoDir: "/repo", stages: RUN_STAGES as never, autoStart: false }, h.ports);
+  expect((await patchPipeline(draft.pipeline!.id, { action: "dismiss" }, h.ports)).status).toBe(409);
+  expect(loadPipelines()[0]!.dismissedAt).toBeUndefined();
 });
 
 test("an explicit draft base remains pinned when the draft starts", async () => {
@@ -1726,6 +2096,270 @@ test("transient structured spawn handshakes retry twice before parking (#1056)",
   expect(parked.stateDetail).toContain("2 retries");
 });
 
+test("a busy account mutation waits between ticks and claims one host on the same attempt (#1433)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  let spawnCalls = 0;
+  let launchClaims = 0;
+  let hostClaims = 0;
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls <= 2) {
+      throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    }
+    const spawned = await baseSpawn(input, (reservation) => {
+      launchClaims += 1;
+      onReserved(reservation);
+    });
+    hostClaims += 1;
+    return spawned;
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(launchClaims).toBe(0);
+  expect(hostClaims).toBe(0);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+    cursor: { stageId: "plan", state: "pending" },
+  });
+  const waitingAttempt = pipeline.runs[0]!.attempts.at(-1)!;
+  expect(waitingAttempt).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null });
+  expect(waitingAttempt.controllerWait).toMatchObject({ rounds: 1 });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(launchClaims).toBe(0);
+  expect(hostClaims).toBe(0);
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "pending", launchId: null });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(3);
+  expect(launchClaims).toBe(1);
+  expect(hostClaims).toBe(1);
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: null,
+    cursor: { stageId: "plan", state: "running" },
+  });
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({
+    n: 1,
+    state: "running",
+    launchId: "launch-1",
+    conversationId: "conversation_stage_1",
+  });
+  expect(scheduled).toEqual([1_000, 2_000]);
+});
+
+test("busy account contention exhausts the existing wait with a truthful terminal failure", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  let spawnCalls = 0;
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async () => {
+    spawnCalls += 1;
+    throw new Error("account mutation is busy; retry shortly");
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  for (let round = 0; round < 8 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(7);
+  expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 7_000]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "stage spawn failed after 6 retries over 30s: account mutation is busy",
+    cursor: { stageId: "plan", state: "spawning" },
+  });
+  expect(parked.runs[0]!.attempts).toHaveLength(1);
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "needs_decision", launchId: null, conversationId: null });
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+});
+
+test("mixed controller waits publish only the current busy retry time", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    if (spawnCalls === 2) throw new Error("structured delivery controller is unavailable");
+    if (spawnCalls === 3) throw new Error("account mutation is busy; retry shortly");
+    return baseSpawn(input, onReserved);
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  const firstRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
+  expect(pipeline.stateDetail).toContain(firstRetryAfter);
+
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "rebinding" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  const rebindingRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
+  expect(rebindingRetryAfter).not.toBe(firstRetryAfter);
+  expect(pipeline.stateDetail).toBeNull();
+  expect(spawnCalls).toBe(1);
+
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "ready" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  const controllerRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
+  expect(controllerRetryAfter).not.toBe(rebindingRetryAfter);
+  expect(pipeline.stateDetail).toBeNull();
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  const latestRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
+  expect(latestRetryAfter).not.toBe(controllerRetryAfter);
+  expect(pipeline.stateDetail).toBe(`stage spawn deferred: account mutation is busy; retry at ${latestRetryAfter}`);
+  expect(spawnCalls).toBe(3);
+});
+
+test("a due busy wait survives a restarted controller race with one fresh host claim", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async () => {
+    throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  const pending = loadPipelines()[0]!;
+  const retryAfter = pending.runs[0]!.attempts[0]!.controllerWait?.retryAfter;
+  if (!retryAfter) throw new Error("busy contention did not persist a retry time");
+  advance(Date.parse(retryAfter) - Date.parse(h.ports.now()) + 1);
+
+  const state = process.env.LLV_STATE_DIR!;
+  const enginePath = path.join(import.meta.dir, "engine.ts");
+  const claimsPath = path.join(state, "busy-race-claims.jsonl");
+  const startedPath = path.join(state, "busy-race-second-started");
+  const releasePath = path.join(state, "busy-race-release");
+  const childScript = (marksSecond: boolean) => `
+    process.env.LLV_STATE_DIR = ${JSON.stringify(state)};
+    const fs = await import("node:fs");
+    const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(enginePath)});
+    const ports = defaultPipelinePorts();
+    ports.structuredDeliveryPublication = () => "ready";
+    ports.conversationAgentActive = async () => true;
+    ports.spawnAgent = async (input, onReserved) => {
+      fs.appendFileSync(${JSON.stringify(claimsPath)}, JSON.stringify({ pid: process.pid, clientAttemptId: input.clientAttemptId }) + "\\n");
+      onReserved({ launchId: "race-launch-" + process.pid, conversationId: "race-conversation-" + process.pid, accountId: "race-account" });
+      while (!fs.existsSync(${JSON.stringify(releasePath)})) await Bun.sleep(5);
+      return { launchId: "race-launch-" + process.pid, conversationId: "race-conversation-" + process.pid, sessionId: "race-session-" + process.pid, transcript: null, paneId: null, accountId: "race-account" };
+    };
+    ${marksSecond ? `fs.writeFileSync(${JSON.stringify(startedPath)}, "started");` : ""}
+    await tickPipelines([], ports);
+  `;
+  const childEnv = { ...process.env, LLV_STATE_DIR: state };
+  let first: ReturnType<typeof Bun.spawn> | null = null;
+  let second: ReturnType<typeof Bun.spawn> | null = null;
+  const waitFor = async (filename: string): Promise<void> => {
+    for (let attempt = 0; attempt < 400 && !fs.existsSync(filename); attempt += 1) await Bun.sleep(5);
+    if (!fs.existsSync(filename)) throw new Error(`timed out waiting for ${path.basename(filename)}`);
+  };
+  try {
+    first = Bun.spawn({ cmd: [process.execPath, "-e", childScript(false)], env: childEnv, stdout: "ignore", stderr: "pipe" });
+    await waitFor(claimsPath);
+    second = Bun.spawn({ cmd: [process.execPath, "-e", childScript(true)], env: childEnv, stdout: "ignore", stderr: "pipe" });
+    await waitFor(startedPath);
+    fs.writeFileSync(releasePath, "release");
+    const [firstExit, secondExit, firstError, secondError] = await Promise.all([
+      first.exited,
+      second.exited,
+      new Response(first.stderr as ReadableStream<Uint8Array>).text(),
+      new Response(second.stderr as ReadableStream<Uint8Array>).text(),
+    ]);
+    expect({ firstExit, secondExit, firstError, secondError }).toEqual({ firstExit: 0, secondExit: 0, firstError: "", secondError: "" });
+  } finally {
+    fs.writeFileSync(releasePath, "release");
+    for (const child of [first, second]) {
+      if (!child) continue;
+      const finished = await Promise.race([child.exited.then(() => true), Bun.sleep(100).then(() => false)]);
+      if (!finished) child.kill();
+    }
+  }
+
+  expect(scheduled).toEqual([1_000]);
+  expect(fs.readFileSync(claimsPath, "utf8").trim().split("\n")).toHaveLength(1);
+  const raced = loadPipelines()[0]!;
+  expect(raced).toMatchObject({
+    state: "running",
+    stateDetail: null,
+    cursor: { stageId: "plan", state: "running" },
+  });
+  expect(raced.runs[0]!.attempts).toHaveLength(1);
+  expect(raced.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: expect.stringMatching(/^race-launch-/), conversationId: expect.stringMatching(/^race-conversation-/) });
+});
+
+test("a busy-looking failure after reservation stays in unknown receipt recovery", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-unknown-busy", conversationId: "conversation-unknown-busy" });
+    throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+  };
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: "account mutation is busy in this process; retry shortly" });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    launchId: "launch-unknown-busy",
+    conversationId: "conversation-unknown-busy",
+  });
+  expect(parked.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
 /* The controller wait must never be slept through: the pipelines phase holds
    the pipeline mutation, and a tick that blocks in it for the whole budget is
    what pushed the flow pipeline controller past its 15s deadline (#1191). */
@@ -1857,6 +2491,8 @@ test("a controller that is between publications is never spawned into (#1191)", 
   await tickPipelines([], h.ports);
 
   expect(spawnCalls).toBe(1);
+  /* A fresh attempt keeps its base id through the wait (#1678 review 3). */
+  expect(h.calls.find((call) => call.startsWith("spawn:"))).not.toContain("handshake_retry_");
   expect(loadPipelines()[0]!).toMatchObject({
     state: "running",
     cursor: { stageId: "plan", state: "running" },
@@ -2021,6 +2657,220 @@ test("durable conversation identity never adopts a competing cwd session", async
   expect(loadPipelines()[0]!.cursor?.stageId).toBe("plan");
 });
 
+test("a stage with an unwritten transcript parks on its first-message drain failure", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    onReserved({ launchId: "launch-drain-timeout", conversationId: "conversation_drain_timeout" });
+    return {
+      launchId: "launch-drain-timeout",
+      conversationId: "conversation_drain_timeout",
+      sessionId: "session-drain-timeout",
+      "transcript": "/codex/unwritten-stage.jsonl",
+      paneId: null,
+    };
+  };
+  await tickPipelines([], h.ports);
+  h.setConversationActive(false);
+  const reason = "first message never drained: runtime host request timed out";
+  h.ports.spawnReceipt = () => ({
+    state: "failed",
+    launchId: "launch-drain-timeout",
+    conversationId: "conversation_drain_timeout",
+    sessionId: "session-drain-timeout",
+    "transcript": "/codex/unwritten-stage.jsonl",
+    paneId: null,
+    error: reason,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: reason });
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(reason);
+});
+
+test("a runtime-host outage does not hide a terminal spawn receipt's drain cause (#1314, #1326)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    onReserved({ launchId: "launch-drain-outage", conversationId: "conversation_drain_outage" });
+    return {
+      launchId: "launch-drain-outage",
+      conversationId: "conversation_drain_outage",
+      sessionId: "session-drain-outage",
+      "transcript": "/codex/unwritten-outage-stage.jsonl",
+      paneId: null,
+    };
+  };
+  await tickPipelines([], h.ports);
+  /* The runtime host is unreachable: liveness answers null, not false. */
+  h.setConversationActive(null);
+  const reason = "first message never drained: runtime host request timed out";
+  h.ports.spawnReceipt = () => ({
+    state: "failed",
+    launchId: "launch-drain-outage",
+    conversationId: "conversation_drain_outage",
+    sessionId: "session-drain-outage",
+    "transcript": "/codex/unwritten-outage-stage.jsonl",
+    paneId: null,
+    error: reason,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: reason });
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(reason);
+});
+
+test("a terminal spawn receipt parks while runtime liveness still reports active (#1326)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    onReserved({ launchId: "launch-drain-stale-live", conversationId: "conversation_drain_stale_live" });
+    return {
+      launchId: "launch-drain-stale-live",
+      conversationId: "conversation_drain_stale_live",
+      sessionId: "session-drain-stale-live",
+      "transcript": "/codex/unwritten-stale-live-stage.jsonl",
+      paneId: null,
+    };
+  };
+  await tickPipelines([], h.ports);
+  h.setConversationActive(true);
+  const reason = "first message never drained: runtime host request timed out";
+  h.ports.spawnReceipt = () => ({
+    state: "failed",
+    launchId: "launch-drain-stale-live",
+    conversationId: "conversation_drain_stale_live",
+    sessionId: "session-drain-stale-live",
+    "transcript": "/codex/unwritten-stale-live-stage.jsonl",
+    paneId: null,
+    error: reason,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: reason });
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(reason);
+});
+
+test("an unregistered stage with only its launch record parks and the lane closes (#1325)", async () => {
+  const h = harness();
+  const pipeline = await runningStructuredStage(h);
+  h.setConversationActive(null);
+  h.ports.conversationRegistered = () => false;
+  h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "busy",
+    message: null,
+    launchOnly: true,
+  });
+
+  for (let check = 0; check < 3; check += 1) {
+    if (check > 0) h.advanceWallClock(30_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "stage verdict recovery exhausted after 3 checks: the stage host died before its session registered",
+  });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    completedAt: expect.any(String),
+    verdictRecovery: { state: "exhausted", checks: 3 },
+  });
+
+  h.setHostsResident(false);
+  h.setStageHost("conversation_stage_1", {
+    outcome: "failed",
+    error: "structured runtime host is unavailable",
+  });
+  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+
+  expect(closed.error).toBeUndefined();
+  expect(closed.close?.stillRunning).toEqual([]);
+  expect(closed.close?.alreadyStopped).toMatchObject([{ stageId: "plan", attempt: 1 }]);
+  expect(closed.close?.notes).toMatchObject([{
+    stageId: "plan",
+    attempt: 1,
+    detail: expect.stringContaining("the stage host died before its session registered"),
+  }]);
+  expect(loadPipelines()[0]!.state).toBe("closed");
+});
+
+test("an unregistered launch-only stage with a resident host still refuses close (#1325)", async () => {
+  const h = harness();
+  const pipeline = await runningStructuredStage(h);
+  h.ports.conversationRegistered = () => false;
+  h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "busy",
+    message: null,
+    launchOnly: true,
+  });
+  h.setHostsResident(true);
+  h.setStageHost("conversation_stage_1", {
+    outcome: "failed",
+    error: "structured runtime host is unavailable",
+  });
+
+  const refused = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+
+  expect(refused.status).toBe(409);
+  expect(refused.close?.stillRunning).toMatchObject([{ stageId: "plan", attempt: 1 }]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", closedAt: null });
+});
+
+test("an unregistered stage with agent transcript progress keeps running (#1325)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(null);
+  h.ports.conversationRegistered = () => false;
+  h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "busy",
+    message: { text: "working through the stage", ts: 5_000_000 },
+    launchOnly: false,
+  });
+
+  for (let check = 0; check < 4; check += 1) {
+    if (check > 0) h.advanceWallClock(30_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null });
+  expect(current.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+});
+
+test("an unregistered launch-only stage stays running with affirmative runtime activity (#1325)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(true);
+  h.ports.conversationRegistered = () => false;
+  h.durableTurns.set("/codex/stage-1.jsonl", {
+    turn: "unknown",
+    message: null,
+    launchOnly: true,
+  });
+
+  for (let check = 0; check < 4; check += 1) {
+    if (check > 0) h.advanceWallClock(30_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("running");
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null });
+  expect(current.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+});
+
 test("a worker that dies after transcript discovery enters bounded verdict recovery", async () => {
   const h = harness();
   await create(h.ports);
@@ -2181,6 +3031,31 @@ test("a stage whose host is proven dead becomes retryable without closing the pi
   expect(retried.error).toBeUndefined();
   expect(retried.pipeline?.state).not.toBe("closed");
   expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+});
+
+test("a stage stays non-retryable while automatic host retirement is unconfirmed (#1296)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  const unavailableSince = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => unavailableSince;
+  h.ports.stopStageAgent = async () => ({
+    outcome: "unconfirmed",
+    operationId: "fixture-kill",
+    detail: "fixture termination remains in flight",
+  });
+  h.advanceWallClock(5 * 60_000);
+
+  await tickPipelines([], h.ports);
+
+  const current = loadPipelines()[0]!;
+  expect(current).toMatchObject({
+    state: "running",
+    stateDetail: "automatic recovery is waiting for the unavailable stage host to terminate",
+  });
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null });
+  const retry = await patchPipeline(current.id, { action: "retry-stage" }, h.ports);
+  expect(retry).toMatchObject({ error: "pipeline does not have a stage awaiting retry", status: 409 });
 });
 
 test("an exhausted false park ingests its live host's late verdict without a duplicate attempt (#1109)", async () => {
@@ -2466,7 +3341,10 @@ function pinStageHead(h: ReturnType<typeof harness>) {
 /** Provision + spawn the first stage, then strip its pane so the attempt is a
     structured host, and pin later HEAD reads to the stage's own commit. */
 async function runningStructuredStage(h: ReturnType<typeof harness>) {
-  const pipeline = await create(h.ports);
+  const pipeline = await create(h.ports, [
+    { id: "plan", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Plan {{task}}", next: "build" },
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build from {{prev.output}}", next: null },
+  ] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   makeStructuredAttempt();
@@ -3284,7 +4162,7 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
   const reviewRepo = path.join(process.env.LLV_STATE_DIR!, "retry-review-repo");
   fs.mkdirSync(reviewRepo, { recursive: true });
   expect(spawnSync("git", ["init", "-b", "main"], { cwd: reviewRepo }).status).toBe(0);
-  expect(spawnSync("git", ["config", "user.email", "flow@example.com"], { cwd: reviewRepo }).status).toBe(0);
+  expect(spawnSync("git", ["config", "user.email", "noreply"], { cwd: reviewRepo }).status).toBe(0);
   expect(spawnSync("git", ["config", "user.name", "Flow Test"], { cwd: reviewRepo }).status).toBe(0);
   fs.writeFileSync(path.join(reviewRepo, "repair.txt"), "repair\n");
   expect(spawnSync("git", ["add", "repair.txt"], { cwd: reviewRepo }).status).toBe(0);
@@ -3325,7 +4203,7 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
     return baseExec(rawCommand, rawArgs, cwd);
   };
 
-  const pipeline = await create(h.ports, stages as never);
+  const pipeline = await create(h.ports, stages as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -3417,7 +4295,7 @@ test("a divergent pipeline branch leaves a retried review parked with an actiona
     return baseExec(command, args, cwd);
   };
 
-  const pipeline = await create(h.ports, stages as never);
+  const pipeline = await create(h.ports, stages as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -4073,7 +4951,7 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
   const pipeline = await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
     { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
-  ] as never);
+  ] as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -4088,7 +4966,8 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
     if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
       return { code: 0, stdout: `${repairHead}\n`, stderr: "" };
     }
-    if (command === "git" && args[0] === "ls-remote") {
+    /* The approval's remote read is time-bounded (#1692). */
+    if (command === "timeout" && args.includes("ls-remote")) {
       return { code: 0, stdout: `${staleRemoteHead}\trefs/heads/${pipeline.branch}\n`, stderr: "" };
     }
     return baseExec(command, args, cwd);
@@ -4104,6 +4983,306 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
     reviewHeadSha: repairHead,
     state: "needs_decision",
   });
+});
+
+const SSH_CONNECT_TIMEOUT = "ssh: connect to host example.invalid port 22: Connection timed out\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+
+/** A two-stage pipeline whose review flow approved `ORIGIN_MAIN_SHA`, with the
+    remote read after approval answering whatever `remote` holds. Every remote
+    read, bounded or not, is counted, and the flow, spawn and send calls made
+    before approval are the baseline nothing after it may add to (#1692). */
+async function approvedReviewAwaitingRemote(h: ReturnType<typeof harness>, request: { publication?: "internal" | "remote-branch" } = REMOTE_BRANCH) {
+  await create(h.ports, [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as never, request);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  flow.rounds.push({ n: 1, reviewHeadSha: ORIGIN_MAIN_SHA, launchId: "review-launch", sessionId: "review-session", reviewerPath: "/codex/reviewer.jsonl", reviewerConversationId: "conversation_reviewer" } as never);
+  flow.state = "approved";
+  const control = { remote: { code: 128 as number | null, stdout: "", stderr: SSH_CONNECT_TIMEOUT }, reads: 0 };
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "ls-remote") {
+      control.reads += 1;
+      return { ...control.remote };
+    }
+    return baseExec(command, args, cwd);
+  };
+  const effects = () => h.calls.filter((call) => /^(flow:|flow-patch:|flow-close:|spawn:)/.test(call));
+  return { flow, control, effects, baseline: effects() };
+}
+
+test("an approval whose remote head read times out retries on its own and settles the reviewed head without touching the flow (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toStartWith("approved review flow waiting for the remote pipeline head: checking the remote pipeline branch: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(waiting.stateDetail).toContain("; retry at ");
+  expect(waiting.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, remoteHeadWait: { rounds: 1 } });
+  expect(control.reads).toBe(1);
+
+  /* Not yet due: no second read. */
+  await tickPipelines([], h.ports);
+  expect(control.reads).toBe(1);
+  expect(loadPipelines()[0]!.state).toBe("running");
+
+  h.advanceWallClock(60_000);
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${waiting.branch}\n`, stderr: "" };
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.stateDetail).toBeNull();
+  expect(completed.runs[1]!.attempts).toHaveLength(1);
+  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", error: null, flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA });
+  expect(completed.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
+  expect(completed.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
+  expect(effects()).toEqual(baseline);
+});
+
+test("a remote that comes back at a different head after a timeout parks on the mismatch and approves nothing (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+  const divergedRemote = "d".repeat(40);
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  h.advanceWallClock(60_000);
+  control.remote = { code: 0, stdout: `${divergedRemote}\trefs/heads/${loadPipelines()[0]!.branch}\n`, stderr: "" };
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${ORIGIN_MAIN_SHA}, remote pipeline head is ${divergedRemote}`);
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
+  expect(effects()).toEqual(baseline);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
+});
+
+test("a remote that refuses the login parks at once, with no automatic retry (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+  control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists." };
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toStartWith("approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: git@example.invalid: Permission denied (publickey).");
+  expect(parked.runs[1]!.attempts[0]!.remoteHeadWait).toBeUndefined();
+  expect(control.reads).toBe(1);
+
+  h.advanceWallClock(60 * 60_000);
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(control.reads).toBe(1);
+  expect(effects()).toEqual(baseline);
+});
+
+test("a remote that never answers parks after a bounded wait that counts its retries, and stays parked (#1692)", async () => {
+  const h = harness();
+  const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
+
+  for (let tick = 0; tick < 40 && loadPipelines()[0]!.state === "running"; tick += 1) {
+    await tickPipelines([], h.ports);
+    h.advanceWallClock(61_000);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toMatch(/^approved review flow could not verify the remote pipeline head after \d+ automatic retries over \d+s: checking the remote pipeline branch: ssh: connect to host example\.invalid port 22: Connection timed out/);
+  const reads = control.reads;
+  expect(reads).toBeGreaterThan(2);
+  expect(reads).toBeLessThanOrEqual(15);
+
+  control.remote = { code: 0, stdout: `${ORIGIN_MAIN_SHA}\trefs/heads/${parked.branch}\n`, stderr: "" };
+  h.advanceWallClock(60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
+  expect(control.reads).toBe(reads);
+  expect(effects()).toEqual(baseline);
+});
+
+/* --- internal publication: the Viewer's own state is the authority (#1692) --- */
+
+/** Takes the network away after creation: every push, fetch and remote read,
+    bounded or not, fails the way an unreachable forge does and is recorded. */
+function networkDown(h: ReturnType<typeof harness>): { remoteCalls: string[] } {
+  const remoteCalls: string[] = [];
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (["ls-remote", "push", "fetch"].includes(gitArgs[0] ?? "")) {
+      remoteCalls.push(`${command} ${args.join(" ")}`);
+      return { code: 128, stdout: "", stderr: SSH_CONNECT_TIMEOUT };
+    }
+    return baseExec(command, args, cwd);
+  };
+  return { remoteCalls };
+}
+
+const NO_CODE_TEST_STAGES = [
+  { id: "observe", kind: "run", access: "read-only", prompt: "observe", next: "verify" },
+  { id: "verify", kind: "run", access: "read-only", prompt: "verify", next: "review" },
+  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+] as const;
+
+test("an internal pipeline runs every stage and settles its approved review with the network unreachable (#1692)", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, NO_CODE_TEST_STAGES as never);
+  expect(pipeline.publication).toBeUndefined();
+  const { remoteCalls } = networkDown(h);
+
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-2.jsonl")], h.ports);
+
+  const reviewing = loadPipelines()[0]!;
+  expect(reviewing.state).toBe("running");
+  expect(reviewing.runs.map((run) => run.attempts[0]?.state)).toEqual(["passed", "passed", "reviewing"]);
+  expect(h.flowRequests).toHaveLength(1);
+  expect(h.flowRequests[0]!.requireRemoteHead).toBeUndefined();
+  expect(h.flowRequests[0]!.targetSha).toBe(ORIGIN_MAIN_SHA);
+
+  const flow = h.flows.get("flow-1")!;
+  flow.rounds.push({ n: 1, verdict: "APPROVE", reviewHeadSha: ORIGIN_MAIN_SHA, reviewerPath: "/codex/reviewer.jsonl", reviewerConversationId: "conversation_reviewer" } as never);
+  flow.state = "approved";
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.stateDetail).toBeNull();
+  expect(completed.runs[2]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" }, reviewHeadSha: ORIGIN_MAIN_SHA, error: null });
+  expect(completed.lastPassedCommit).toBe(ORIGIN_MAIN_SHA);
+  /* Nothing claims a publication that never happened. */
+  expect(completed.publishedCommit).toBeNull();
+  expect(remoteCalls).toEqual([]);
+});
+
+test("an internal approval of a revision the worktree no longer holds settles nothing and a retry reviews the new head (#1692)", async () => {
+  const h = harness();
+  const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
+  const { remoteCalls } = networkDown(h);
+  const changedHead = "e".repeat(40);
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd) => {
+    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: `${changedHead}\n`, stderr: "" };
+    return baseExec(command, args, cwd);
+  };
+
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${ORIGIN_MAIN_SHA}, current pipeline head is ${changedHead}`);
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
+  expect(effects()).toEqual(baseline);
+
+  /* The way on is a new review of the head the worktree now holds, still
+     without the network. The approved round's reviewer launch completed. */
+  h.ports.spawnReceipt = (launchId) => launchId === "review-launch"
+    ? { state: "completed", launchId, conversationId: "conversation_reviewer", sessionId: "review-session", "transcript": "/codex/reviewer.jsonl", paneId: null }
+    : null;
+  const retried = await patchPipeline(parked.id, { action: "retry-stage" }, h.ports);
+  expect(retried.error).toBeUndefined();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: changedHead });
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const rereview = loadPipelines()[0]!;
+  expect(rereview.runs[1]!.attempts).toHaveLength(2);
+  expect(rereview.runs[1]!.attempts[1]).toMatchObject({ expectedReviewHeadSha: changedHead });
+  expect(h.flowRequests.at(-1)!.targetSha).toBe(changedHead);
+  expect(remoteCalls).toEqual([]);
+});
+
+test("an internal pipeline an older build parked on the remote head check completes on its local identity with the network down (#1692)", async () => {
+  const h = harness();
+  const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
+  /* The record as production left it: review ingress had published the head,
+     then the approval's remote read timed out and parked the stage. */
+  const legacy = `approved review flow could not verify the remote pipeline head: checking the remote pipeline branch: ${SSH_CONNECT_TIMEOUT}`;
+  const stored = loadPipelines()[0]!;
+  stored.publishedCommit = ORIGIN_MAIN_SHA;
+  stored.state = "needs_decision";
+  stored.stateDetail = legacy;
+  Object.assign(stored.runs[1]!.attempts[0]!, { state: "needs_decision", error: legacy, reviewHeadSha: ORIGIN_MAIN_SHA, expectedReviewHeadSha: ORIGIN_MAIN_SHA });
+  savePipelines([stored]);
+  const { remoteCalls } = networkDown(h);
+
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs[1]!.attempts).toHaveLength(1);
+  expect(completed.runs[1]!.attempts[0]).toMatchObject({ state: "passed", flowId: "flow-1", reviewHeadSha: ORIGIN_MAIN_SHA, error: null });
+  expect(completed.publishedCommit).toBe(ORIGIN_MAIN_SHA);
+  expect(remoteCalls).toEqual([]);
+  expect(effects()).toEqual(baseline);
+});
+
+test("an internal terminal pass an older build left waiting on publication closes without the network (#1692)", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", prompt: "build", next: null }] as never, REMOTE_BRANCH);
+  const { remoteCalls } = networkDown(h);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toStartWith("passed but unpublished: ");
+  const publishAttempts = remoteCalls.length;
+  expect(publishAttempts).toBeGreaterThan(0);
+
+  /* The same record without the explicit policy is what every pipeline
+     created before it looks like. */
+  delete waiting.publication;
+  savePipelines([waiting]);
+  await tickPipelines([], h.ports);
+
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", error: null });
+  expect(remoteCalls).toHaveLength(publishAttempts);
+});
+
+test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {
+  const h = harness();
+  const { remoteCalls } = networkDown(h);
+  savePipelines([]);
+
+  const created = await createPipelineFromRequest({ task: "Pinned offline", repoDir: "/repo", baseRef: ORIGIN_MAIN_SHA, stages: RUN_STAGES as never }, h.ports);
+  expect(created.pipeline).toMatchObject({ state: "provisioning", baseRef: ORIGIN_MAIN_SHA });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: ORIGIN_MAIN_SHA, lastPassedCommit: ORIGIN_MAIN_SHA });
+  expect(remoteCalls).toEqual([]);
+
+  /* Without a pin, creation asks the remote for the current base once, and a
+     remote that cannot answer refuses the creation instead of guessing. */
+  savePipelines([]);
+  const unpinned = await createPipelineFromRequest({ task: "Unpinned offline", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  expect(unpinned.status).toBe(409);
+  expect(unpinned.error).toStartWith("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(remoteCalls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
+  expect(loadPipelines()).toEqual([]);
+});
+
+test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {
+  const h = harness();
+  expect((await create(h.ports, RUN_STAGES as never, REMOTE_BRANCH)).publication).toBe("remote-branch");
+  expect((await create(h.ports, RUN_STAGES as never, { publication: "internal" })).publication).toBe("internal");
+  savePipelines([]);
+  const refused = await createPipelineFromRequest({ task: "Ship", repoDir: "/repo", stages: RUN_STAGES as never, publication: "github" as never }, h.ports);
+  expect(refused.status).toBe(400);
+  expect(refused.violations).toContainEqual(expect.objectContaining({ field: "publication", message: "publication must be internal or remote-branch" }));
 });
 
 test("an approval parks when the clean head advances during final settlement (#526)", async () => {
@@ -5545,6 +6724,10 @@ test("close terminalizes host-unavailable attempts from durable evidence and rec
    reading at all and refused, parking the lane on the board forever. The
    fixtures below are written here, never lifted from a live transcript. */
 const PROVIDER_LIMIT_NOTICE = "You've hit your session limit. Try again once the window resets.";
+const LIMITED_ACCOUNT = ["account", "limited"].join("-");
+const SPARE_ACCOUNT = ["account", "spare"].join("-");
+const LIMITED_ACCOUNT_LABEL = "Limited seat";
+const SPARE_ACCOUNT_LABEL = "Spare seat";
 
 function stageTranscript(name: string, records: Record<string, unknown>[]): string {
   const file = path.join(process.env.LLV_STATE_DIR!, `${name}.jsonl`);
@@ -5570,6 +6753,33 @@ function limitInterruptedTranscript(name: string): string {
         model: "<synthetic>",
         stop_reason: "stop_sequence",
         content: [{ type: "text", text: PROVIDER_LIMIT_NOTICE }],
+      },
+    },
+  ]);
+}
+
+function codexUsageLimitTranscript(name: string, resetsAt: number): string {
+  return stageTranscript(name, [
+    { timestamp: "2026-08-31T10:00:00.000Z", payload: { type: "task_started" } },
+    {
+      timestamp: "2026-08-31T10:04:00.000Z",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          limit_id: "codex",
+          primary: { used_percent: 27, window_minutes: 10_080, resets_at: resetsAt },
+          secondary: null,
+          credits: { has_credits: true, balance: "0" },
+          plan_type: "pro",
+        },
+      },
+    },
+    {
+      timestamp: "2026-08-31T10:05:00.000Z",
+      payload: {
+        type: "task_complete",
+        message: "You've hit your usage limit. Try again after the weekly reset.",
+        codex_error_info: "usage_limit",
       },
     },
   ]);
@@ -5613,6 +6823,353 @@ function readFixtures(h: ReturnType<typeof harness>, fixtures: Record<string, st
     return fixture ? await durableStageTurnEvidence(engine, fixture) : null;
   };
 }
+
+/** The #1589 production tail, in the order the incident wrote it: a
+    `function_call` the deploy cut off mid-flight, the standing continuation
+    prompt startup delivered, and the re-hosted turn that finished with a
+    fenced verdict. */
+function severedToolTranscript(name: string): string {
+  return stageTranscript(name, [
+    { timestamp: "2026-09-09T05:36:42.000Z", type: "response_item", payload: { type: "function_call", call_id: "cut-off-by-the-restart" } },
+    { timestamp: "2026-09-09T05:38:44.000Z", type: "event_msg", payload: { type: "user_message", message: "Continue the interrupted turn from the transcript." } },
+    { timestamp: "2026-09-09T05:38:45.000Z", type: "event_msg", payload: { type: "task_started", turn_id: "continued-turn" } },
+    { timestamp: "2026-09-09T05:40:17.000Z", type: "event_msg", payload: { type: "agent_message", message: PASS_TEXT } },
+    { timestamp: "2026-09-09T05:40:18.000Z", type: "event_msg", payload: { type: "task_complete", turn_id: "continued-turn" } },
+  ]);
+}
+
+/** A tail window that begins inside an oversized tool output, so the matching
+    `function_call` and every lifecycle boundary sit above it. Everything the
+    engine can see is mid-turn — including a message that parses as a verdict. */
+function truncatedMidTurnTranscript(name: string): string {
+  return stageTranscript(name, [
+    { timestamp: "2026-09-09T08:00:00.000Z", type: "response_item", payload: { type: "function_call", call_id: "oversized" } },
+    { timestamp: "2026-09-09T08:00:01.000Z", type: "event_msg", payload: { type: "agent_reasoning", text: "r".repeat(200_000) } },
+    { timestamp: "2026-09-09T08:00:02.000Z", type: "event_msg", payload: { type: "agent_message", message: PASS_TEXT } },
+    { timestamp: "2026-09-09T08:00:03.000Z", type: "response_item", payload: { type: "custom_tool_call_output", call_id: "oversized", output: "x".repeat(40_000) } },
+    { timestamp: "2026-09-09T08:00:04.000Z", type: "event_msg", payload: { type: "token_count" } },
+  ]);
+}
+
+test("a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  /* Through the real projection over the real fixture, so the assertion fails
+     for the reason the incident had rather than for a hand-shaped map entry. */
+  readFixtures(h, { "/codex/stage-1.jsonl": severedToolTranscript("issue-1589-severed-tool") });
+
+  await tickPipelines([], h.ports);
+
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts).toHaveLength(1);
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({
+    state: "passed",
+    verdict: { status: "pass", confidence: 0.9 },
+  });
+  /* No recovery misses were spent, so nothing asked the operator anything. */
+  expect(settled.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
+  expect(settled).toMatchObject({ state: "running", stateDetail: null });
+  expect(settled.cursor).toMatchObject({ stageId: "build", state: "pending" });
+  expect(settled.lastPassedCommit).toBe(STAGE_HEAD);
+
+  await tickPipelines([], h.ports);
+
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.runs[1]!.attempts).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(2);
+
+  /* A third tick is the exactly-once check: no second settlement, no second
+     attempt on either stage, no second spawn. */
+  await tickPipelines([], h.ports);
+
+  const stable = loadPipelines()[0]!;
+  expect(stable.runs[0]!.attempts).toHaveLength(1);
+  expect(stable.runs[1]!.attempts).toHaveLength(1);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(2);
+  expect(stable).toMatchObject({ state: "running", stateDetail: null });
+});
+
+test("a truncated mid-turn window cannot settle a structured stage on its trailing message (#1589)", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  readFixtures(h, { "/codex/stage-1.jsonl": truncatedMidTurnTranscript("issue-1589-truncated-mid-turn") });
+
+  /* The scan does have the transcript and its trailing message parses as a
+     verdict; only the busy turn projection stands between them and a
+     settlement over work that is still running. */
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+
+  const current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", completedAt: null });
+  expect(current.runs[1]!.attempts).toHaveLength(0);
+  expect(current.cursor?.stageId).toBe("plan");
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+function usageLimitPorts(
+  h: ReturnType<typeof harness>,
+  resolution: ReturnType<typeof accountManager.resolveProjectSpawn>,
+): void {
+  Object.assign(h.ports, {
+    accountForTranscript: (_engine: string, transcriptPath: string) => transcriptPath.includes("stage-2")
+      ? { accountId: SPARE_ACCOUNT, label: SPARE_ACCOUNT_LABEL }
+      : { accountId: LIMITED_ACCOUNT, label: LIMITED_ACCOUNT_LABEL },
+    accountLabel: (_engine: string, accountId: string) => accountId === SPARE_ACCOUNT ? SPARE_ACCOUNT_LABEL : LIMITED_ACCOUNT_LABEL,
+    resolveProjectSpawn: () => resolution,
+  });
+}
+
+const usageLimitStage = (account?: string) => [{
+  id: "build",
+  kind: "run" as const,
+  role: { roleId: "builder" as const },
+  engine: "codex" as const,
+  access: "read-write" as const,
+  ["prompt"]: "Recover the usage-limited attempt",
+  next: null,
+  ...(account ? { account } : {}),
+}];
+
+test("a usage-limit terminal transcript parks promptly with the earliest allowed reset (#1371)", async () => {
+  const h = harness();
+  const currentReset = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const earlierReset = Math.floor(Date.parse("2026-09-02T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("running-usage-limit", currentReset) });
+  usageLimitPorts(h, {
+    kind: "exhausted",
+    resetsAt: earlierReset,
+    allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT],
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  const detail = `rate limited until ${new Date(earlierReset * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: detail });
+});
+
+test("an unpinned usage-limited stage respawns on another allowed account (#1371)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-usage-limit", resetsAt) });
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+
+  await tickPipelines([], h.ports);
+  const retrying = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  expect(retrying.stateDetail).toContain(`rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`);
+  expect(retrying.runs[0]!.attempts).toHaveLength(2);
+  expect(retrying.runs[0]!.attempts[0]).toMatchObject({ state: "failed" });
+  expect(retrying.runs[0]!.attempts[1]).toMatchObject({ state: "pending" });
+
+  await tickPipelines([], h.ports);
+
+  const failedOver = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: null, unavailableAccountIds: [LIMITED_ACCOUNT] });
+  expect(failedOver.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: SPARE_ACCOUNT });
+});
+
+test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-engine-override", resetsAt) });
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  await tickPipelines([], h.ports);
+  const retrying = loadPipelines()[0]!.runs[0]!.attempts[1]!;
+  expect(retrying).toMatchObject({ state: "pending", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retrying.definition).toBeUndefined();
+
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "applied", appliesFromAttempt: 2 });
+
+  /* The Claude account shares the limited Codex account's id and never hit a limit. */
+  const checks: Array<{ engine: string; unavailableIds: string[] }> = [];
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex", request: { unavailableIds?: string[] }) => {
+      checks.push({ engine, unavailableIds: [...(request.unavailableIds ?? [])] });
+      return { kind: "unavailable", allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+
+  const launched = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(launched.state).toBe("running");
+  expect(launched.runs[0]!.attempts[1]).toMatchObject({ state: "running", accountId: LIMITED_ACCOUNT });
+  expect(launched.runs[0]!.attempts[1]!.effectiveRole.engine).toBe("claude");
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
+});
+
+test("a usage limit hit after the stage moved to another engine retries there without checking the old engine (graph slice 1)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "architect" } }, h.ports);
+  expect(edited.graphEdit).toMatchObject({ effect: "pending-next-attempt", appliesFromAttempt: 2 });
+
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("limit-after-engine-override", resetsAt) });
+  const checks: string[] = [];
+  usageLimitPorts(h, { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] });
+  Object.assign(h.ports, {
+    resolveProjectSpawn: (engine: "claude" | "codex") => {
+      checks.push(engine);
+      return { kind: "exhausted", resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+    },
+  });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  const retried = loadPipelines()[0]!;
+  expect(checks).toEqual([]);
+  expect(retried.state).toBe("running");
+  expect(retried.runs[0]!.attempts[0]).toMatchObject({ state: "failed", usageLimitedAccounts: [{ accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt }] });
+  expect(retried.runs[0]!.attempts[1]).toMatchObject({ state: "running" });
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.role.engine).toBe("claude");
+  expect(h.spawnInputs[1]!.unavailableAccountIds).toEqual([]);
+});
+
+test("a failover whose remaining capacity disappears parks with the limit detail (#1371)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("failover-capacity-race", resetsAt) });
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  await tickPipelines([], h.ports);
+  usageLimitPorts(h, {
+    kind: "exhausted",
+    resetsAt,
+    allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT],
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`,
+  });
+});
+
+test("successive usage limits park on the earliest reset across failed-over accounts (#1371)", async () => {
+  const h = harness();
+  const firstReset = Math.floor(Date.parse("2026-09-02T10:05:00.000Z") / 1_000);
+  const secondReset = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage() as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("first-account-usage-limit", firstReset) });
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  readFixtures(h, { "/codex/stage-2.jsonl": codexUsageLimitTranscript("second-account-usage-limit", secondReset) });
+  usageLimitPorts(h, {
+    kind: "unavailable",
+    allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT],
+  });
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `rate limited until ${new Date(firstReset * 1_000).toISOString()}, account ${SPARE_ACCOUNT_LABEL}`,
+  });
+  expect(parked.runs[0]!.attempts[1]?.usageLimitedAccounts).toEqual([
+    { accountId: LIMITED_ACCOUNT, engine: "codex", resetsAt: firstReset },
+    { accountId: SPARE_ACCOUNT, engine: "codex", resetsAt: secondReset },
+  ]);
+});
+
+test("a pinned usage-limited stage parks on its account and names the reset (#1371)", async () => {
+  const h = harness();
+  const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
+  const pipeline = await create(h.ports, usageLimitStage(LIMITED_ACCOUNT) as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  readFixtures(h, { "/codex/stage-1.jsonl": codexUsageLimitTranscript("pinned-usage-limit", resetsAt) });
+  let selectionCalls = 0;
+  usageLimitPorts(h, {
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: SPARE_ACCOUNT,
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  });
+  Object.assign(h.ports, { resolveProjectSpawn: () => { selectionCalls += 1; throw new Error("pinned failover must not select"); } });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines().find((candidate) => candidate.id === pipeline.id)!;
+  const detail = `rate limited until ${new Date(resetsAt * 1_000).toISOString()}, account ${LIMITED_ACCOUNT_LABEL}`;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: detail });
+  expect(selectionCalls).toBe(0);
+});
 
 test("close retires an attempt whose turn a provider limit cut off, naming the notice (#1141)", async () => {
   const h = harness();
@@ -5835,7 +7392,7 @@ test("reviewNote parks a too-long directive for raw and role-backed review stage
   expect(noteOf(ok)).toBe("Check ship the widget against the ACs.");
 });
 
-test("override-stage re-configures an unstarted stage and rejects a started one (issue #118)", async () => {
+test("override-stage re-configures an unstarted stage and holds one whose live attempt predates definition binding (issue #118)", async () => {
   const { ports } = harness();
   const created = await create(ports);
   /* The trailing "build" stage has not run yet, so its config is still editable. */
@@ -5854,7 +7411,8 @@ test("override-stage re-configures an unstarted stage and rejects a started one 
   expect(cleared.error).toBeUndefined();
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "build")!.effectiveRole.model).toBeNull();
 
-  /* Once the stage has an attempt it is frozen: the override 409s. */
+  /* A running attempt recorded without a bound definition would read the live
+     stage on a re-issued launch, so its stage refuses the override until it settles. */
   const started = loadPipelines()[0]!;
   const buildStage = started.stages.find((stage) => stage.id === "build")!;
   started.runs.find((run) => run.stageId === "build")!.attempts.push({
@@ -6113,10 +7671,11 @@ test("draft-only mutations cannot rewrite or delete an active pipeline", async (
   const { ports } = harness();
   const active = await create(ports);
   const before = structuredClone(loadPipelines()[0]!);
+  /* add-stage, reorder-stage, set-edge and override-stage edit a started graph
+     (graph slice 1, graphEdits.test.ts); the cursor stage keeps its place. */
   const attempts = [
     { action: "start" },
     { action: "update-draft", task: "rewritten" },
-    { action: "add-stage", stage: { id: "extra", kind: "run", prompt: "extra", next: null } },
     { action: "remove-stage", stageId: "plan" },
     { action: "reorder-stage", stageId: "plan", toIndex: 1 },
     { action: "delete" },
@@ -6175,7 +7734,7 @@ test("override-stage rejects an unknown/disallowed role and an incompatible role
   const unknown = await patchPipeline(created.id, { action: "override-stage", stageId: "build", engine: "codex", model: "gpt-5.6-codex" }, ports);
   expect(unknown).toMatchObject({
     status: 400,
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   });
 });
 
@@ -6774,7 +8333,7 @@ const PUBLISH_STAGES = [
 test("a passed run stage publishes its committed head before the review stage creates its flow (#729)", async () => {
   const h = harness();
   const box = publishHarness(h);
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6795,7 +8354,7 @@ test("a passed run stage publishes its committed head before the review stage cr
 test("an unreachable remote leaves the stage passed and records it as unpublished (#999)", async () => {
   const h = harness();
   const box = publishHarness(h, { remoteReadFails: true });
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6838,7 +8397,7 @@ test("a final passing stage stays open until its accepted head is published (#99
   const box = publishHarness(h, { remoteReadFails: true });
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: null },
-  ] as never);
+  ] as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6882,7 +8441,7 @@ test("a final passing stage stays open until its accepted head is published (#99
 test("a publication that cannot land parks the pass without losing the commit", async () => {
   const h = harness();
   const box = publishHarness(h, { pushFails: true });
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6901,7 +8460,7 @@ test("a publication that cannot land parks the pass without losing the commit", 
 test("a pipeline whose repo has no origin parks at review ingress instead of fencing on a remote it cannot have", async () => {
   const h = harness();
   const box = publishHarness(h, { origin: false });
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   /* The pass itself still advances — an unpublishable repo is not a reason to
@@ -6926,7 +8485,7 @@ test("a pipeline whose repo has no origin parks at review ingress instead of fen
 test("retrying a parked review stage republishes a local repair before the reviewer relaunches", async () => {
   const h = harness();
   const box = publishHarness(h);
-  const pipeline = await create(h.ports, PUBLISH_STAGES as never);
+  const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6965,7 +8524,7 @@ const FAIL_EDGE_STAGES = [
 test("a skipped stage publishes the accepted head before its review flow is created", async () => {
   const h = harness();
   const box = publishHarness(h);
-  const pipeline = await create(h.ports, SKIP_STAGES as never);
+  const pipeline = await create(h.ports, SKIP_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -6989,7 +8548,7 @@ test("a skipped stage publishes the accepted head before its review flow is crea
 test("a fail edge into a review stage publishes the accepted head before its review flow is created", async () => {
   const h = harness();
   const box = publishHarness(h);
-  await create(h.ports, FAIL_EDGE_STAGES as never);
+  await create(h.ports, FAIL_EDGE_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -7011,7 +8570,7 @@ test("a fail edge into a review stage publishes the accepted head before its rev
 test("review ingress re-probes the remote instead of trusting a stale publishedCommit", async () => {
   const h = harness();
   const box = publishHarness(h);
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -7061,7 +8620,7 @@ test("a worktree head that is not the accepted review head parks without publish
 test("a remote that diverged from the accepted head parks review ingress and keeps both revisions", async () => {
   const h = harness();
   const box = publishHarness(h);
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -7083,7 +8642,7 @@ test("a remote that diverged from the accepted head parks review ingress and kee
 test("a push that fails at review ingress parks before the review flow exists", async () => {
   const h = harness();
   const box = publishHarness(h);
-  await create(h.ports, PUBLISH_STAGES as never);
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
@@ -7098,4 +8657,1417 @@ test("a push that fails at review ingress parks before the review flow exists", 
   expect(parked.stateDetail).toContain("publishing the pipeline branch:");
   expect(h.flows.size).toBe(0);
   expect(parked.lastPassedCommit).toBe(box.passedSha);
+});
+
+test("a pipeline without a recorded task adopts the fallback task its admission minted, on the tick and at the stage reservation (#1586)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  expect(created.taskIds).toEqual([]);
+  const other = {
+    id: "other-fallback", project: created.project, status: "inbox" as const, text: "Another pipeline's fallback", placement: "unplaced" as const,
+    origin: { kind: "pipeline" as const, key: "some-other-pipeline", refinement: "pending" as const }, assignments: [], createdAt: "2026-09-09T12:00:00.000Z", updatedAt: "2026-09-09T12:00:00.000Z",
+  };
+  const fallback = { ...other, id: "created-fallback", text: "Ship pipelines", origin: { kind: "pipeline" as const, key: created.id, refinement: "pending" as const } };
+  saveTasks([other, fallback]);
+  await tickPipelines([], h.ports);
+  /* The controller pass binds the fallback before any stage is reserved. */
+  expect(loadPipelines().find((pipeline) => pipeline.id === created.id)!.taskIds).toEqual(["created-fallback"]);
+  /* Recovery of the same pipeline reuses the same binding; a bound pipeline is left alone. */
+  await tickPipelines([], h.ports);
+  expect(loadPipelines().find((pipeline) => pipeline.id === created.id)!.taskIds).toEqual(["created-fallback"]);
+  const bound = loadPipelines().find((pipeline) => pipeline.id === created.id)!;
+  expect(engineModule.adoptPipelineFallbackTask(bound, [other, fallback])).toBe(false);
+  /* The reservation callback binds a fallback minted for a pipeline whose
+     record still shows none, before the stage's agent is actuated. */
+  const unbound = { ...bound, taskIds: [] as string[] };
+  expect(engineModule.adoptPipelineFallbackTask(unbound, [other, fallback])).toBe(true);
+  expect(unbound.taskIds).toEqual(["created-fallback"]);
+  expect(engineModule.adoptPipelineFallbackTask({ ...bound, taskIds: [] }, [other])).toBe(false);
+});
+
+/* #1678: the 7eef4743 prototype's confirm stage. The spawn reserved a launch,
+   every runtime-host RPC then timed out, the spawn layer recorded the receipt
+   as failed with the actionable host message, and the stage parked on that
+   first sighting until an operator ran retry-stage two minutes later. */
+const HOST_UNAVAILABLE = "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure";
+
+function failedReceipt(launchId: string, conversationId: string, error: string): NonNullable<ReturnType<PipelinePorts["spawnReceipt"]>> {
+  return { state: "failed", launchId, conversationId, sessionId: null, "transcript": null, paneId: null, error };
+}
+
+test("a runtime-host transport failure after reservation retries the same attempt from its failed receipt (#1678)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const receipts = new Map<string, ReturnType<PipelinePorts["spawnReceipt"]>>();
+  const claims: string[] = [];
+  const clientAttemptIds: string[] = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-host-1", conversationId: "conversation_host_1" });
+      receipts.set("launch-host-1", failedReceipt("launch-host-1", "conversation_host_1", HOST_UNAVAILABLE));
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => receipts.get(launchId) ?? null;
+  h.ports.claimSpawnRetry = (launchId, claimId) => {
+    claims.push(`${launchId}:${claimId}`);
+    return "claimed";
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(claims).toEqual([`launch-host-1:${created.id}:plan:launch-host-1`]);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure; retry at /),
+    cursor: { stageId: "plan", state: "pending" },
+  });
+  const waiting = pipeline.runs[0]!.attempts.at(-1)!;
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(waiting).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, error: null });
+  expect(waiting.controllerWait).toMatchObject({ rounds: 1 });
+  expect(waiting.retiredLaunches).toEqual([{
+    launchId: "launch-host-1",
+    conversationId: "conversation_host_1",
+    error: HOST_UNAVAILABLE,
+    retiredAt: expect.any(String),
+  }]);
+  expect(scheduled).toEqual([1_000]);
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(2);
+  expect(new Set(clientAttemptIds).size).toBe(2);
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "plan", state: "running" } });
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({
+    n: 1,
+    state: "running",
+    launchId: "launch-1",
+    conversationId: "conversation_stage_1",
+    retiredLaunches: [{ launchId: "launch-host-1", conversationId: "conversation_host_1" }],
+  });
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test.each([
+  { fate: "no receipt", receipt: null },
+  { fate: "a receipt still starting", receipt: { state: "starting", launchId: "launch-host-unknown", conversationId: "conversation_host_unknown", sessionId: null, "transcript": null, paneId: null } },
+] as const)("a runtime-host transport failure with $fate parks without re-dispatching (#1678)", async ({ receipt }) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  const claims: string[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-host-unknown", conversationId: "conversation_host_unknown" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(claims).toEqual([]);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: HOST_UNAVAILABLE });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    launchId: "launch-host-unknown",
+    conversationId: "conversation_host_unknown",
+    error: HOST_UNAVAILABLE,
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+test("runtime-host retries are bounded and park with the wait they spent (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE);
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(16);
+  expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 57_000]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `stage spawn failed after 15 retries over 600s: ${HOST_UNAVAILABLE}`,
+    cursor: { stageId: "plan", state: "spawning" },
+  });
+  expect(parked.runs[0]!.attempts).toHaveLength(1);
+  /* The last launch stays on the attempt: its receipt is what retry-stage claims. */
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    n: 1,
+    state: "needs_decision",
+    launchId: "launch-host-16",
+    conversationId: "conversation_host_16",
+    error: parked.stateDetail,
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(15);
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.at(-1)).toMatchObject({ launchId: "launch-host-15" });
+});
+
+test("a busy account mutation after reservation retries once its receipt has failed (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-busy-1", conversationId: "conversation_busy_1" });
+      throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-busy-1"
+    ? failedReceipt("launch-busy-1", "conversation_busy_1", "account mutation is busy in this process; retry shortly")
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+  });
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-busy-1", conversationId: "conversation_busy_1" }],
+  });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(2);
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a spawn interrupted by a restart retries from a transient failed receipt instead of parking (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts.push({
+    n: 1,
+    state: "spawning",
+    effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: "launch-interrupted",
+    conversationId: "conversation_interrupted",
+    sessionId: null,
+    agentPath: null,
+    paneId: null,
+    flowId: null,
+    startedAt: h.ports.now(),
+    completedAt: null,
+    input: null,
+    activatedBy: null,
+    output: null,
+    verdict: null,
+    error: null,
+  });
+  pipeline.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([pipeline]);
+  const scheduled: number[] = [];
+  const claims: string[] = [];
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-interrupted"
+    ? failedReceipt("launch-interrupted", "conversation_interrupted", "structured spawn runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure")
+    : null;
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  await tickPipelines([], h.ports);
+  let current = loadPipelines()[0]!;
+  expect(claims).toEqual(["launch-interrupted"]);
+  expect(current).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
+  expect(current.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-interrupted", conversationId: "conversation_interrupted" }],
+  });
+  expect(scheduled).toEqual([1_000]);
+
+  h.advanceWallClock(1_000);
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a spawn interrupted by a restart still parks on a deterministic failed receipt (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts.push({
+    n: 1,
+    state: "spawning",
+    effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: "launch-refused",
+    conversationId: "conversation_refused",
+    sessionId: null,
+    agentPath: null,
+    paneId: null,
+    flowId: null,
+    startedAt: h.ports.now(),
+    completedAt: null,
+    input: null,
+    activatedBy: null,
+    output: null,
+    verdict: null,
+    error: null,
+  });
+  pipeline.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([pipeline]);
+  const claims: string[] = [];
+  h.ports.spawnReceipt = () => failedReceipt("launch-refused", "conversation_refused", "pipeline spawn attempt conflicts with its original request");
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+
+  await tickPipelines([], h.ports);
+
+  expect(claims).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "pipeline spawn attempt conflicts with its original request" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-refused" });
+});
+
+test("a pipeline spawn that finds no runtime host fails its own receipt before it throws (#1678)", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-no-host-registry.json"));
+  const cwd = process.env.LLV_STATE_DIR!;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  setAgentRegistryForTests(registry);
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: "no-host",
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  }));
+  const reservations: Array<{ launchId: string; conversationId: string }> = [];
+  try {
+    const ports = defaultPipelinePorts();
+    await expect(ports.spawnAgent({
+      role: {
+        roleId: "builder",
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+        access: "read-write",
+        promptScaffold: "Builder guidance",
+      },
+      runtimeProfile: { access: "read-write", sandbox: "full" },
+      cwd,
+      project: "repo-00000000000000000000000000000001",
+      requestedAccountId: null,
+      title: "Build scoped change · build",
+      ["prompt"]: "Build the scoped change",
+      parentPath: null,
+      clientAttemptId: "pipeline_no_host_attempt",
+      membership: {
+        kind: "pipeline",
+        containerId: "pipeline-no-host",
+        role: "builder",
+        slot: "build:1",
+        stageId: "build",
+        stageOrder: 0,
+        round: 1,
+        parentConversationId: null,
+      },
+      creatorConversationId: null,
+    }, (created) => { reservations.push(created); })).rejects.toThrow("pipeline structured runtime host is unavailable");
+    const reservation = reservations[0];
+    if (!reservation) throw new Error("pipeline reservation was not captured");
+    expect(ports.spawnReceipt(reservation.launchId)).toMatchObject({
+      state: "failed",
+      launchId: reservation.launchId,
+      conversationId: reservation.conversationId,
+      error: "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure",
+    });
+    expect(ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
+  } finally {
+    resolveSpawn.mockRestore();
+    setAgentRegistryForTests(null);
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+test("a failed receipt that settles before its retry claim parks instead of re-dispatching (#1678)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-host-settled", conversationId: "conversation_host_settled" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => failedReceipt("launch-host-settled", "conversation_host_settled", HOST_UNAVAILABLE);
+  h.ports.claimSpawnRetry = () => "settled";
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: HOST_UNAVAILABLE });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({
+    state: "needs_decision",
+    launchId: "launch-host-settled",
+    conversationId: "conversation_host_settled",
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+/* #1678: pipeline 4d6f4fc1's review stage. The implementer had passed from its
+   transcript artifact, ahead of the scanner; the flow engine paused on the
+   stale completed scan snapshot, a paused flow is never ticked, and the stage
+   parked until an operator resumed the flow by hand. */
+async function reviewFlowPausedOnUnscannedImplementer(h: ReturnType<typeof harness>) {
+  const stages = [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as const;
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  const pauseOnScan = () => {
+    flow.state = "paused";
+    flow.pausedState = "spawning";
+    flow.stateDetail = "implementer transcript is missing";
+  };
+  pauseOnScan();
+  return { flow, pauseOnScan };
+}
+
+test("a review flow paused on an unscanned implementer transcript resumes on a bounded wait (#1678)", async () => {
+  const h = harness();
+  const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(1);
+  expect(flow).toMatchObject({ state: "spawning", pausedState: null });
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^review flow waiting for its implementer transcript to be scanned; retry at /),
+    cursor: { stageId: "review", state: "reviewing" },
+  });
+  expect(pipeline.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, flowId: "flow-1" });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  expect(scheduled).toEqual([1_000]);
+
+  /* The flows phase re-pauses on the same stale snapshot; the next resume is
+     not due until the booked backoff passes. */
+  pauseOnScan();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+  expect(scheduled).toEqual([1_000, 2_000]);
+
+  /* The snapshot caught up: the flow spawned its reviewer and the wait is over. */
+  flow.state = "reviewing";
+  flow.stateDetail = null;
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "review", state: "reviewing" } });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test("a review flow whose implementer transcript the scan never lists parks after the bounded resumes (#1678)", async () => {
+  const h = harness();
+  const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      pauseOnScan();
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(15);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "review flow paused in spawning: implementer transcript is missing (after 15 automatic resumes over 600s)",
+  });
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(flow.state).toBe("paused");
+
+  /* An exhausted park is not resumed again behind the operator's back. */
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:resume")).toHaveLength(15);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("a review flow paused on a transcript the Viewer does not know parks at once (#1678)", async () => {
+  const h = harness();
+  await reviewFlowPausedOnUnscannedImplementer(h);
+  h.ports.pathForConversation = () => null;
+  h.ports.conversationRegistered = () => false;
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+
+  expect(h.calls).not.toContain("flow-patch:flow-1:resume");
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "review flow paused in spawning: implementer transcript is missing",
+  });
+});
+
+/* #1678: pipeline 4d6f4fc1's review stage again, after the scan caught up. The
+   flow engine met the busy account mutation lock inside prepareReviewerLaunch,
+   ended the round as needs_decision before any launch was reserved, and the
+   pipeline parked on that terminal state twice in a row. */
+const REVIEWER_BUSY = "account mutation is busy; retry shortly";
+
+async function reviewFlowEndedOnBusyAccount(h: ReturnType<typeof harness>) {
+  const stages = [
+    { id: "build", kind: "run", prompt: "build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  ] as const;
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const flow = h.flows.get("flow-1")!;
+  flow.rounds.push({ n: 1, reviewerPath: null, reviewerConversationId: null, sessionId: null, launchId: null, spawnStartedAt: null, verdict: null, error: null } as never);
+  const busy = () => {
+    flow.state = "needs_decision";
+    flow.stateDetail = REVIEWER_BUSY;
+    flow.rounds.at(-1)!.error = REVIEWER_BUSY;
+  };
+  busy();
+  return { flow, busy };
+}
+
+test("a reviewer launch the flow ended on a busy account lock is retried on a bounded wait (#1678)", async () => {
+  const h = harness();
+  const { flow, busy } = await reviewFlowEndedOnBusyAccount(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+  const retries = () => h.calls.filter((call) => call === "flow-patch:flow-1:retry-round").length;
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(retries()).toBe(1);
+  expect(flow).toMatchObject({ state: "spawning", stateDetail: null });
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^review flow reviewer launch deferred: account mutation is busy; retry at /),
+    cursor: { stageId: "review", state: "reviewing" },
+  });
+  expect(pipeline.runs[1]!.attempts[0]).toMatchObject({ state: "reviewing", error: null, flowId: "flow-1" });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  expect(scheduled).toEqual([1_000]);
+
+  /* A tick while the fresh round is still waiting to launch keeps the budget. */
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+
+  busy();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(retries()).toBe(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(retries()).toBe(2);
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+
+  /* The lock cleared: the fresh round launched and the wait is over. */
+  flow.state = "reviewing";
+  flow.rounds.at(-1)!.spawnStartedAt = h.ports.now();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "review", state: "reviewing" } });
+  expect(pipeline.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test("a reviewer launch that stays contended parks after the bounded retries (#1678)", async () => {
+  const h = harness();
+  const { busy } = await reviewFlowEndedOnBusyAccount(h);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
+    const scheduledBefore = scheduled.length;
+    await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+    if (loadPipelines()[0]!.state === "running") {
+      expect(scheduled.length).toBe(scheduledBefore + 1);
+      busy();
+      advance(scheduled.at(-1)!);
+    }
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(15);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `review loop ended in needs_decision: ${REVIEWER_BUSY} (after 15 automatic launch retries over 600s)`,
+  });
+  expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(15);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("a busy-account round that had already begun a launch parks without a retry (#1678)", async () => {
+  const h = harness();
+  const { flow } = await reviewFlowEndedOnBusyAccount(h);
+  flow.rounds.at(-1)!.spawnStartedAt = h.ports.now();
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+
+  expect(h.calls).not.toContain("flow-patch:flow-1:retry-round");
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `review loop ended in needs_decision: ${REVIEWER_BUSY}`,
+  });
+});
+
+test("a review flow paused on the scan in a phase past spawning parks at once (#1678 review)", async () => {
+  const h = harness();
+  const { flow } = await reviewFlowPausedOnUnscannedImplementer(h);
+  flow.pausedState = "fixing";
+  flow.rounds.push({ n: 1, reviewerPath: "/codex/reviewer.jsonl", reviewerConversationId: "conversation_reviewer", sessionId: "reviewer-session", launchId: "launch-reviewer", spawnStartedAt: h.ports.now(), verdict: "REQUEST_CHANGES", error: null } as never);
+
+  await tickPipelines([entry("/codex/reviewer.jsonl")], h.ports);
+
+  expect(h.calls).not.toContain("flow-patch:flow-1:resume");
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "review flow paused in fixing: implementer transcript is missing",
+  });
+  expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test("a failed receipt that staged a session is not re-dispatched into a read-write worktree (#1678 review)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  const claims: string[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-staged", conversationId: "conversation_staged" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = () => ({ ...failedReceipt("launch-staged", "conversation_staged", HOST_UNAVAILABLE), staged: true });
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, { sleep: forbiddenSleep });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(claims).toEqual([]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `${HOST_UNAVAILABLE}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`,
+  });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-staged" });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+test("a failed receipt that staged a session still retries a read-only stage (#1678 review)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-staged-ro", conversationId: "conversation_staged_ro" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-staged-ro"
+    ? { ...failedReceipt("launch-staged-ro", "conversation_staged_ro", HOST_UNAVAILABLE), staged: true }
+    : null;
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); }, sleep: forbiddenSleep });
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-staged-ro" }],
+  });
+  h.advanceWallClock(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+function interruptedSpawnAttempt(h: ReturnType<typeof harness>, startedAt: string, controllerWait?: { startedAt: string; rounds: number; retryAfter: string }) {
+  const pipeline = loadPipelines()[0]!;
+  pipeline.runs[0]!.attempts.push({
+    n: 1,
+    state: "spawning",
+    effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole),
+    launchId: "launch-interrupted",
+    conversationId: "conversation_interrupted",
+    sessionId: null,
+    agentPath: null,
+    paneId: null,
+    flowId: null,
+    startedAt,
+    completedAt: null,
+    input: null,
+    activatedBy: null,
+    output: null,
+    verdict: null,
+    error: null,
+    ...(controllerWait ? { controllerWait } : {}),
+  });
+  pipeline.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([pipeline]);
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-interrupted"
+    ? failedReceipt("launch-interrupted", "conversation_interrupted", HOST_UNAVAILABLE)
+    : null;
+}
+
+test("a spawn interrupted by a long restart starts its retry budget at the first sighting (#1678 review)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  Object.assign(h.ports, { scheduleTick: (delayMs: number) => { scheduled.push(delayMs); } });
+  const twentyMinutesAgo = new Date(Date.parse(h.ports.now()) - 20 * 60_000).toISOString();
+  interruptedSpawnAttempt(h, twentyMinutesAgo);
+
+  await tickPipelines([], h.ports);
+
+  const current = loadPipelines()[0]!;
+  expect(current).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "pending", launchId: null, retiredLaunches: [{ launchId: "launch-interrupted" }] });
+  expect(current.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 1 });
+  expect(scheduled).toEqual([1_000]);
+});
+
+test("a spawn interrupted by a restart with its wait already spent parks with the rounds and seconds (#1678 review)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const claims: string[] = [];
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  const now = Date.parse(h.ports.now());
+  const elevenMinutesAgo = new Date(now - 11 * 60_000).toISOString();
+  interruptedSpawnAttempt(h, elevenMinutesAgo, { startedAt: elevenMinutesAgo, rounds: 3, retryAfter: new Date(now - 60_000).toISOString() });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(claims).toEqual(["launch-interrupted"]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: expect.stringMatching(new RegExp(`^stage spawn failed after 3 retries over 66\\ds: ${HOST_UNAVAILABLE.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}$`)),
+  });
+  expect(parked.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-interrupted" });
+});
+
+test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute budget (#1678 review 2)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls <= 7) {
+      onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    if (spawnCalls === 8) throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
+    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  /* Seven host failures spend 1+2+4+8+16+32+60 = 123 s of the ten-minute budget. */
+  for (let round = 0; round < 7; round += 1) {
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    advance(scheduled.at(-1)!);
+  }
+  expect(spawnCalls).toBe(7);
+
+  /* The eighth activation meets the busy lock 123 s in; the wait keeps the host budget. */
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(8);
+  expect(pipeline).toMatchObject({
+    state: "running",
+    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+  });
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 8, budgetMs: 600_000, retryMaxMs: 60_000 });
+  expect(scheduled.at(-1)).toBe(60_000);
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(9);
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "plan", state: "running" } });
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
+});
+
+test("a busy-lock wait alone still ends at thirty seconds (#1678 review 2)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async () => { throw new Error("account mutation is busy; retry shortly"); };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+  for (let round = 0; round < 8 && loadPipelines()[0]!.state === "running"; round += 1) {
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") advance(scheduled.at(-1)!);
+  }
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "needs_decision",
+    stateDetail: "stage spawn failed after 6 retries over 30s: account mutation is busy",
+  });
+});
+
+test("the reviewer launch deferral keeps its status line through a tick before the retry is due (#1678 review 2)", async () => {
+  const h = harness();
+  const { busy } = await reviewFlowEndedOnBusyAccount(h);
+  frozenWallClock(h);
+  Object.assign(h.ports, { scheduleTick: () => {} });
+
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  const deferred = loadPipelines()[0]!.stateDetail;
+  expect(deferred).toMatch(/^review flow reviewer launch deferred: account mutation is busy; retry at /);
+
+  /* The fresh round met the lock again before the backoff fell due. */
+  busy();
+  await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: deferred });
+  expect(h.calls.filter((call) => call === "flow-patch:flow-1:retry-round")).toHaveLength(1);
+});
+
+test("a retry after an in-activation handshake retry never reuses a client attempt id (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const clientAttemptIds: string[] = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
+    if (spawnCalls === 2) {
+      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-host-2"
+    ? failedReceipt("launch-host-2", "conversation_host_2", HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ spawnCalls: 2, controllerWait: { rounds: 1 } });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+
+  expect(spawnCalls).toBe(3);
+  expect(new Set(clientAttemptIds).size).toBe(3);
+  expect(clientAttemptIds[0]).toBe(`pipeline_${created.id}_plan_1`);
+  expect(clientAttemptIds[2]).not.toBe(clientAttemptIds[1]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
+});
+
+test("a retry after a restart never reuses the retired launch's client attempt id (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  Object.assign(h.ports, { scheduleTick: () => {} });
+  interruptedSpawnAttempt(h, h.ports.now());
+
+  await tickPipelines([], h.ports);
+  h.advanceWallClock(1_000);
+  await tickPipelines([], h.ports);
+
+  const spawnCall = h.calls.find((call) => call.startsWith("spawn:"))!;
+  expect(spawnCall).toBeDefined();
+  expect(spawnCall).not.toContain(`spawn:pipeline_${created.id}_plan_1:`);
+  /* The fixture carries no call count, so the retry starts past every id an
+     uncounted engine could have spent: the round the recovery booked plus
+     the three calls of one activation (#1678 review 3). */
+  expect(spawnCall).toContain("spawn:handshake_retry_4_");
+});
+
+test("a spawn call is counted before it is made, so a restart that interrupts it cannot hand its client attempt id to the retry (#1678 review 2)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const clientAttemptIds: string[] = [];
+  const countedBeforeCall: Array<number | undefined> = [];
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    clientAttemptIds.push(input.clientAttemptId);
+    countedBeforeCall.push(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls);
+    if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
+    if (spawnCalls === 2) {
+      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      throw new Error(HOST_UNAVAILABLE);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
+    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+
+  /* One activation: a handshake retry, then a retired host launch. Each call
+     found its own number already persisted when it was made. */
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(countedBeforeCall).toEqual([1, 2]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", spawnCalls: 2, retiredLaunches: [{ launchId: "launch-host-2" }] });
+
+  /* The third call (handshake_retry_2) reserved its launch and the process
+     died before the call returned: the persisted attempt is exactly what the
+     engine wrote before that call, plus the reservation. */
+  advance(scheduled.at(-1)!);
+  const interrupted = loadPipelines()[0]!;
+  const attempt = interrupted.runs[0]!.attempts[0]!;
+  attempt.state = "spawning";
+  attempt.launchId = "launch-host-3";
+  attempt.conversationId = "conversation_host_3";
+  attempt.spawnCalls = 3;
+  interrupted.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  savePipelines([interrupted]);
+  const interruptedId = `handshake_retry_2_pipeline_${created.id}_plan_1`;
+
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    state: "pending",
+    launchId: null,
+    retiredLaunches: [{ launchId: "launch-host-2" }, { launchId: "launch-host-3" }],
+  });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(spawnCalls).toBe(3);
+  expect(clientAttemptIds[2]).toBe(`handshake_retry_3_pipeline_${created.id}_plan_1`);
+  expect(clientAttemptIds).not.toContain(interruptedId);
+  expect(new Set([...clientAttemptIds, interruptedId]).size).toBe(4);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1", spawnCalls: 4 });
+});
+
+/* The engine before #1678 numbered a spawn call `rounds + call - 1` and
+   persisted no call count, so the ids it spent are known only up to that
+   bound: a handshake retry before the controller failure spends one more id
+   than the round it books. These fixtures let the current engine create the
+   attempt through one such activation, then strip what that engine did not
+   write. A registry that meets a spent id replays or rejects that launch,
+   which parks the stage. */
+async function legacySpawnAttempt(h: ReturnType<typeof harness>) {
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  let fixtureCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    fixtureCalls += 1;
+    if (fixtureCalls === 1) throw new Error("structured initial message was not acknowledged");
+    onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
+    throw new Error(HOST_UNAVAILABLE);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-fixture"
+    ? failedReceipt("launch-fixture", "conversation_fixture", HOST_UNAVAILABLE)
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: async () => {},
+  });
+  await tickPipelines([], h.ports);
+  expect(fixtureCalls).toBe(2);
+
+  const baseId = `pipeline_${created.id}_plan_1`;
+  const spent = [baseId, `handshake_retry_1_${baseId}`];
+  const clientAttemptIds: string[] = [];
+  h.ports.spawnAgent = async (input, onReserved) => {
+    clientAttemptIds.push(input.clientAttemptId);
+    if (spent.includes(input.clientAttemptId)) {
+      throw new Error(`client attempt id ${input.clientAttemptId} replays launch-legacy-2, whose receipt is failed`);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-legacy-2"
+    ? failedReceipt("launch-legacy-2", "conversation_legacy_2", HOST_UNAVAILABLE)
+    : null;
+  const legacy = loadPipelines()[0]!;
+  const attempt = legacy.runs[0]!.attempts[0]!;
+  const wait = attempt.controllerWait!;
+  delete attempt.spawnCalls;
+  delete attempt.retiredLaunches;
+  attempt.launchId = "launch-legacy-2";
+  attempt.conversationId = "conversation_legacy_2";
+  attempt.controllerWait = { startedAt: wait.startedAt, rounds: wait.rounds, retryAfter: wait.retryAfter };
+  return { legacy, attempt, spent, clientAttemptIds, advance, scheduled };
+}
+
+test("a spawn wait persisted by the engine before #1678 retries under an id that engine never spent (#1678 review 3)", async () => {
+  const h = harness();
+  const { legacy, attempt, spent, clientAttemptIds, advance, scheduled } = await legacySpawnAttempt(h);
+  /* Its last activation: a handshake retry, then a reservation that met an
+     unavailable runtime host. It booked round one and kept the launch. */
+  expect(attempt).toMatchObject({ state: "pending", controllerWait: { rounds: 1 } });
+  savePipelines([legacy]);
+
+  /* The deploy lands during a publication handoff, so the first activation
+     of this engine only waits; the count it records must keep the bound. */
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "rebinding" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", controllerWait: { rounds: 2 } });
+
+  Object.assign(h.ports, { structuredDeliveryPublication: () => "ready" as const });
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(1);
+  expect(spent).not.toContain(clientAttemptIds[0]);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
+});
+
+test("a spawn the engine before #1678 left interrupted retries under an id that engine never spent (#1678 review 3)", async () => {
+  const h = harness();
+  const { legacy, attempt, spent, clientAttemptIds, advance, scheduled } = await legacySpawnAttempt(h);
+  /* A restart interrupted its handshake retry after the reservation, before
+     any wait was booked; the spawn layer then failed that receipt. */
+  attempt.state = "spawning";
+  delete attempt.controllerWait;
+  legacy.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
+  legacy.stateDetail = null;
+  savePipelines([legacy]);
+
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", retiredLaunches: [{ launchId: "launch-legacy-2" }] });
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  expect(clientAttemptIds).toHaveLength(1);
+  expect(spent).not.toContain(clientAttemptIds[0]);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1" });
+});
+
+/* ── #1695 C7 and the retry/skip guard: stated expectations, checked in the mutation ── */
+
+const { stageDigest } = await import("./stageDigest");
+const buildStageOf = () => loadPipelines()[0]!.stages.find((stage) => stage.id === "build")!;
+
+test("override-stage with expectedStageDigest writes only against the digest the stage still has, whatever another client changed", async () => {
+  const { ports } = harness();
+  const created = await create(ports);
+  const seen = stageDigest(buildStageOf());
+  const saved = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine.", expectedStageDigest: seen }, ports);
+  expect(saved.error).toBeUndefined();
+  expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine.");
+
+  /* Each change another client can make through override-stage moves the digest, and a write against the old one changes nothing. */
+  const changes: Array<[string, Parameters<typeof patchPipeline>[1]]> = [
+    ["prompt", { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nTheirs." }],
+    ["account", { action: "override-stage", stageId: "build", account: "account-b" }],
+    ["role", { action: "override-stage", stageId: "build", role: { roleId: "architect" } }],
+    ["runtime", { action: "override-stage", stageId: "build", engine: "claude", model: "opus", effort: "high" }],
+  ];
+  for (const [label, change] of changes) {
+    const before = stageDigest(buildStageOf());
+    expect((await patchPipeline(created.id, change, ports)).error).toBeUndefined();
+    const theirs = structuredClone(buildStageOf());
+    expect(stageDigest(theirs)).not.toBe(before);
+    const refused = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": `Build from {{prev.output}}\n\nMine after ${label}.`, account: null, expectedStageDigest: before }, ports);
+    expect({ label, status: refused.status, code: refused.code, field: refused.field }).toEqual({ label, status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+    expect(buildStageOf()).toEqual(theirs);
+  }
+
+  /* A write against the digest the stage has now goes through. */
+  const current = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine at last.", expectedStageDigest: current }, ports)).error).toBeUndefined();
+  expect(buildStageOf().prompt).toBe("Build from {{prev.output}}\n\nMine at last.");
+});
+
+test("a started stage answers a stale digest with STAGE_CHANGED, and an attempt launched before definitions were bound holds its stage until it settles", async () => {
+  const { ports } = harness();
+  const created = await create(ports);
+  const stale = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build v2" }, ports)).error).toBeUndefined();
+  const started = loadPipelines()[0]!;
+  started.runs.find((run) => run.stageId === "build")!.attempts.push({
+    n: 1, state: "running", effectiveRole: structuredClone(buildStageOf().effectiveRole), launchId: null,
+    conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+  });
+  savePipelines([started]);
+  expect(await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stale }, ports))
+    .toMatchObject({ status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+  const legacy = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()) }, ports);
+  expect(legacy.status).toBe(409);
+  expect(legacy.error).toContain("before attempts recorded their own definition");
+  expect(buildStageOf().prompt).toBe("Build v2");
+});
+
+test("guard values that are present but malformed, or stated on an action they do not guard, are refused before anything changes", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = structuredClone(loadPipelines()[0]!);
+  const refusals: Array<[Record<string, unknown>, "expectedStageDigest" | "expectedStageId" | "expectedAttempt"]> = [
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: "abc" }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: null }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()).toUpperCase() }, "expectedStageDigest"],
+    [{ action: "retry-stage", expectedStageDigest: stageDigest(buildStageOf()) }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageId: "build" }, "expectedStageId"],
+    [{ action: "skip-stage", expectedStageId: "" }, "expectedStageId"],
+    [{ action: "retry-stage", expectedStageId: 7 }, "expectedStageId"],
+    /* 0 is the stated "no own attempt yet" (see the provisioning-park test); below it, null and fractions are malformed. */
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: -1 }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: null }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1.5 }, "expectedAttempt"],
+    [{ action: "skip-stage", expectedStageId: "plan", expectedAttempt: "1" }, "expectedAttempt"],
+    [{ action: "retry-stage", expectedAttempt: 1 }, "expectedAttempt"],
+    [{ action: "pause", expectedAttempt: 1 }, "expectedAttempt"],
+  ];
+  for (const [request, field] of refusals) {
+    const refused = await patchPipeline(created.id, request as never, h.ports);
+    expect({ request, status: refused.status, field: refused.field, code: refused.code }).toEqual({ request, status: 400, field, code: undefined });
+  }
+  expect(loadPipelines()[0]).toEqual(before);
+  expect(h.calls.some((call) => call.includes("reset --hard"))).toBe(false);
+});
+
+test("retry-stage with the stage and attempt the caller saw retries it; the same expectations again are refused before any effect, and one new attempt starts", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+
+  const first = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(first.error).toBeUndefined();
+  const callsAfterFirst = h.calls.length;
+  const second = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: second.status, code: second.code, field: second.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageId" });
+  expect(h.calls.length).toBe(callsAfterFirst);
+
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith(`spawn:pipeline_${pipeline.id}_plan_`))).toEqual([
+    `spawn:pipeline_${pipeline.id}_plan_1:parent=/codex/creator.jsonl:supersedes=none`,
+    `spawn:pipeline_${pipeline.id}_plan_2:parent=/codex/creator.jsonl:supersedes=conversation_stage_1`,
+  ]);
+
+  /* Attempt 2 parks too: a retry that still names attempt 1 is refused, one naming attempt 2 retries. */
+  await tickPipelines([h.finish("/codex/stage-2.jsonl", "fail", "still blocked")], h.ports);
+  const callsBeforeStale = h.calls.length;
+  const stale = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: stale.status, code: stale.code, field: stale.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(h.calls.length).toBe(callsBeforeStale);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect((await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_3:parent=/codex/creator.jsonl:supersedes=conversation_stage_2`);
+});
+
+test("skip-stage naming another stage or another attempt is refused before the worktree is reset; the one it names is skipped", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision", "operator choice")], h.ports);
+  const resets = () => h.calls.filter((call) => call.includes("reset --hard") || call.includes("clean -fd")).length;
+
+  const otherStage = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "build" }, h.ports);
+  expect({ status: otherStage.status, code: otherStage.code, field: otherStage.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageId" });
+  const otherAttempt = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports);
+  expect({ status: otherAttempt.status, code: otherAttempt.code, field: otherAttempt.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(resets()).toBe(0);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+
+  const skipped = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(skipped.pipeline?.cursor?.stageId).toBe("build");
+  expect(resets()).toBe(2);
+  /* The pipeline no longer waits on plan: the same skip again changes nothing. */
+  const again = await patchPipeline(pipeline.id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(again.code).toBe("STAGE_CHANGED");
+  expect(resets()).toBe(2);
+});
+
+test("the attempt retry expects is the stage's latest own attempt, never a lineage-adopted one", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "retry me")], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  adoptAttempt(pipeline, "plan", {
+    sourceConversationId: "conversation_stage_1", launchId: "launch-historical", conversationId: "conversation_historical",
+    sessionId: "session-historical", agentPath: "/codex/historical.jsonl", paneId: null, startedAt: "1970-01-01T00:12:00.000Z",
+  });
+  savePipelines([pipeline]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.map((attempt) => [attempt.n, attempt.historical ?? false])).toEqual([[1, false], [2, true]]);
+
+  const onHelper = await patchPipeline(created.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 2 }, h.ports);
+  expect({ code: onHelper.code, field: onHelper.field }).toEqual({ code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect((await patchPipeline(created.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+});
+
+test("a launch-receipt retry keeps its meaning with the guard stated beside it", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  const firstAttempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.ports.spawnReceipt = (candidate) => candidate === firstAttempt.launchId ? {
+    state: "failed", launchId: firstAttempt.launchId!, conversationId: firstAttempt.conversationId!,
+    sessionId: firstAttempt.sessionId, "transcript": firstAttempt.agentPath, paneId: firstAttempt.paneId,
+  } : null;
+  /* A receipt for a different launch is still refused as before, guard or not. */
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "plan", launchId: "launch-other", expectedStageId: "plan", expectedAttempt: 1 }, h.ports))
+    .toEqual({ error: "the clicked launch is no longer the current failed attempt", status: 409 });
+  const retried = await patchPipeline(pipeline.id, { action: "retry-stage", stageId: "plan", launchId: firstAttempt.launchId!, expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(retried.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.calls).toContain(`spawn:pipeline_${pipeline.id}_plan_2:parent=/codex/creator.jsonl:supersedes=conversation_stage_1`);
+});
+
+test("the digest follows the stored role snapshot: a registry edit no override applied changes nothing, and an override re-resolving the same role moves it by the scaffold alone", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  const before = structuredClone(buildStageOf());
+  const lookup = h.ports.roleLookup!;
+  h.ports.roleLookup = (roleId) => {
+    const resolved = lookup(roleId);
+    return roleId === "builder" && resolved ? { ...resolved, promptScaffold: "Builder guidance, revised" } : resolved;
+  };
+  /* The registry changed; the stored stage, and what its first attempt would snapshot, did not. */
+  expect(stageDigest(buildStageOf())).toBe(stageDigest(before));
+  const unchanged = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine.", expectedStageDigest: stageDigest(before) }, h.ports);
+  expect(unchanged.error).toBeUndefined();
+  expect(buildStageOf().effectiveRole.promptScaffold).toBe(before.effectiveRole.promptScaffold);
+
+  /* Another client re-applies the same role: only the stored scaffold moves, and the digest with it. */
+  const seen = stageDigest(buildStageOf());
+  expect((await patchPipeline(created.id, { action: "override-stage", stageId: "build", role: { roleId: "builder" } }, h.ports)).error).toBeUndefined();
+  const theirs = structuredClone(buildStageOf());
+  expect({ engine: theirs.effectiveRole.engine, model: theirs.effectiveRole.model, effort: theirs.effectiveRole.effort, access: theirs.effectiveRole.access, prompt: theirs.prompt })
+    .toEqual({ engine: before.effectiveRole.engine, model: before.effectiveRole.model, effort: before.effectiveRole.effort, access: before.effectiveRole.access, prompt: "Build from {{prev.output}}\n\nMine." });
+  expect(theirs.effectiveRole.promptScaffold).toBe("Builder guidance, revised");
+  expect(stageDigest(theirs)).not.toBe(seen);
+  const refused = await patchPipeline(created.id, { action: "override-stage", stageId: "build", "prompt": "Build from {{prev.output}}\n\nMine, again.", expectedStageDigest: seen }, h.ports);
+  expect({ status: refused.status, code: refused.code, field: refused.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" });
+  expect(buildStageOf()).toEqual(theirs);
+});
+
+test("expectedAttempt 0 states a stage with no attempt of its own: it retries a provisioning park, and is refused once attempt 1 exists", async () => {
+  const h = harness();
+  savePipelines([]);
+  const baseExec = h.ports.exec;
+  let failWorktreeAdd = true;
+  h.ports.exec = (command, args, cwd) => {
+    if (args[0] === "worktree" && failWorktreeAdd) return { code: 128, stdout: "", stderr: "worktree unavailable" };
+    if (args[0] === "rev-parse" && args[1] === "--abbrev-ref" && cwd?.includes("-pipeline-")) {
+      return failWorktreeAdd ? { code: 128, stdout: "", stderr: "missing worktree" } : { code: 0, stdout: `${loadPipelines()[0]!.branch}\n`, stderr: "" };
+    }
+    return baseExec(command, args, cwd);
+  };
+  const created = await createPipelineFromRequest({ task: "Recover provision", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const id = created.pipeline!.id;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts).toHaveLength(0);
+
+  /* Naming an attempt that does not exist is refused before anything is reset. */
+  const resets = () => h.calls.filter((call) => call.includes("reset --hard") || call.includes("clean -fd")).length;
+  const named = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect({ status: named.status, code: named.code, field: named.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+
+  failWorktreeAdd = false;
+  const none = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports);
+  expect(none.pipeline?.state).toBe("provisioning");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "fail", "blocked")], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", cursor: { stageId: "plan" } });
+  expect(loadPipelines()[0]!.runs.find((run) => run.stageId === "plan")!.attempts.map((attempt) => attempt.n)).toEqual([1]);
+
+  /* A menu that still shows "no attempt yet" is stale now. */
+  const resetsBefore = resets();
+  const stale = await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports);
+  expect({ status: stale.status, code: stale.code, field: stale.field }).toEqual({ status: 409, code: "STAGE_CHANGED", field: "expectedAttempt" });
+  expect(resets()).toBe(resetsBefore);
+  expect((await patchPipeline(id, { action: "skip-stage", expectedStageId: "plan", expectedAttempt: 0 }, h.ports)).code).toBe("STAGE_CHANGED");
+  expect(resets()).toBe(resetsBefore);
+  expect((await patchPipeline(id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+});
+
+/* Engine scope only (#1695 K6b): the conversation's path, host availability and the successor's turns are
+   given to the engine here, and no registry migration, commit or delivery runs. The integration, a real
+   switch whose successor turn is started by the message held for it, needs #1709 (K6c). */
+test("the engine keeps a switched stage's attempt running across an unavailable host inside the grace, follows its new path, and settles on the successor's verdict without the fail edge (#1695 K6b)", async () => {
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null, onFail: { to: "recover", maxRounds: 1 } },
+    { id: "recover", kind: "run", role: { roleId: "builder" }, prompt: "Recover {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  pinStageHead(h);
+  const stageConversation = loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId!;
+  const sourcePath = "/codex/stage-1.jsonl";
+  const successorPath = "/codex/accounts/account-b/stage-1.jsonl";
+
+  /* The switch waits for a turn boundary: the source's turn ends without a verdict, and its host is
+     released while the successor starts, well inside the grace a dead host gets. */
+  h.durableTurns.set(sourcePath, { turn: "terminal", message: { text: "Halfway through; continuing on the other account.", ts: 5_000_000 } });
+  h.setConversationActive(false);
+  const releasedAt = h.ports.now();
+  h.ports.conversationHostUnavailableSince = async () => releasedAt;
+  h.advanceWallClock(60_000);
+  await tickPipelines([entry(sourcePath)], h.ports);
+  let current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts[0]!.state).toBe("running");
+  expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
+
+  /* The switch commits: the conversation continues under its successor generation, hosted and working. */
+  h.ports.pathForConversation = (id) => (id === stageConversation ? successorPath : null);
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(true);
+  h.durableTurns.set(successorPath, { turn: "busy", message: null });
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([{ ...entry(successorPath), activity: "live" }], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "running", agentPath: successorPath });
+
+  /* The successor's turn ends with the stage's verdict. */
+  h.durableTurns.set(successorPath, { turn: "terminal", message: { text: PASS_TEXT, ts: 5_600_000 } });
+  h.setConversationActive(false);
+  await tickPipelines([entry(successorPath)], h.ports);
+  await tickPipelines([entry(successorPath)], h.ports);
+
+  current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "passed", agentPath: successorPath, conversationId: stageConversation, verdict: { status: "pass" } });
+  expect(current.runs.find((run) => run.stageId === "recover")?.attempts ?? []).toEqual([]);
+  expect(current.cursor?.activatedBy?.edge ?? null).not.toBe("fail");
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
 });

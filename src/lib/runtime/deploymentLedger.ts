@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 
@@ -33,8 +33,15 @@ function ledgerPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
+  /* Resolved when a read happens, as the other SQLite stores do. A static
+     `bun:sqlite` import makes every route that reaches this file fail to load
+     while `next build` collects route configuration outside Bun, which is how
+     the seat tick diagnostics route broke the build (#1672). Outside Bun there
+     is no ledger to read, and the caller reports that as unreadable. */
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) return null;
   try {
-    return new Database(ledgerPath(env), { readonly: true, create: false });
+    return new sqlite.Database(ledgerPath(env), { readonly: true, create: false });
   } catch {
     /* No journal on this host, or it is not readable from here. The caller
        reports that as unreadable rather than as an empty ledger. */

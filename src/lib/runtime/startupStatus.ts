@@ -3,6 +3,7 @@ import { structuredHostsEnabled } from "./flags";
 const startupStore = process as typeof process & {
   __llvStructuredHostStartupFailed?: boolean;
   __llvStructuredHostStartupProgress?: StructuredHostStartupStatus;
+  __llvStructuredDeliveryControllerReady?: boolean;
 };
 
 export type StructuredHostStartupPhase =
@@ -12,6 +13,15 @@ export type StructuredHostStartupPhase =
   | "adopting Claude hosts"
   | "reconciling structured hosts"
   | "finalizing structured delivery"
+  | "registering structured delivery hosts"
+  | "reading fallback runtime snapshot"
+  | "publishing historical host fallbacks"
+  | "reconciling terminal delivery receipts"
+  | "draining startup delivery queue"
+  | "recovering orchestrator deliveries"
+  | "recovering interrupted deliveries"
+  | "kicking recovered deliveries"
+  | "recovering pending spawns"
   | "ready";
 
 export interface StructuredHostStartupProgress {
@@ -23,6 +33,8 @@ export interface StructuredHostStartupProgress {
 export interface StructuredHostStartupStatus extends StructuredHostStartupProgress {
   state: "pending" | "failed" | "ready";
   updatedAt: string;
+  phaseStartedAt?: string;
+  pid?: number;
 }
 
 function pendingStatus(): StructuredHostStartupStatus {
@@ -47,10 +59,25 @@ function setStatus(
       || progress.totalHosts < progress.completedHosts)) {
     throw new Error("structured host startup total count is invalid");
   }
+  const previous = startupStore.__llvStructuredHostStartupProgress;
+  const now = new Date().toISOString();
+  const changed = previous?.phase !== progress.phase || previous.state !== state;
+  if (changed) {
+    // Fixed phase names and numeric timing only. No exception, host identity,
+    // transcript, operation payload or account data enters this diagnostic.
+    console.error("[structured hosts] startup progress", {
+      pid: process.pid, phase: progress.phase, state,
+      previousPhase: previous?.phase ?? null,
+      previousPhaseMs: previous?.phaseStartedAt
+        ? Math.max(0, Date.now() - Date.parse(previous.phaseStartedAt)) : null,
+    });
+  }
   startupStore.__llvStructuredHostStartupProgress = {
     ...progress,
     state,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
+    phaseStartedAt: changed ? now : previous?.phaseStartedAt ?? now,
+    pid: process.pid,
   };
 }
 
@@ -72,6 +99,24 @@ export function markStructuredHostStartupReady(): void {
 
 export function didStructuredHostStartupFail(): boolean {
   return startupStore.__llvStructuredHostStartupFailed === true;
+}
+
+/** Kept beside startup status so the deployment capability has a tiny
+    process-shared answer and leaves the registry/controller graph unloaded.
+    The controller flips this only at its atomic publication boundary. */
+export function markStructuredDeliveryControllerReady(): void {
+  startupStore.__llvStructuredDeliveryControllerReady = true;
+}
+
+export function markStructuredDeliveryControllerUnavailable(): void {
+  startupStore.__llvStructuredDeliveryControllerReady = false;
+}
+
+export function structuredDeliveryControllerReadiness(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): "ready" | "unavailable" | null {
+  if (!structuredHostsEnabled(env)) return null;
+  return startupStore.__llvStructuredDeliveryControllerReady === true ? "ready" : "unavailable";
 }
 
 /** Truthful readiness axis for operator surfaces: "ready" only after startup

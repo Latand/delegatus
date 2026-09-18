@@ -65,23 +65,30 @@ export interface StructuredSpawnCardState {
   initialMessage: "pending" | "queued" | "delivered" | "failed";
   retrySafe: boolean;
   error: string | null;
-  /** The initial launch prompt (issue #614), sourced from the queued initial
-      delivery so ANY surface — not only the browser that ran the composer —
-      renders it as the conversation's first user bubble while the transcript is
-      still absent. Present only while the delivery still carries its text (it is
-      cleared once delivered, by which point the transcript echoes it); the seed
-      it produces is keyed by {@link launchId}, so it survives a refresh and
-      transcript adoption and never duplicates the composer's own seed. */
+  /** The durable initial-launch display text (issue #614), projected so every
+      surface renders the first user bubble while the transcript is absent. The
+      seed is keyed by {@link launchId}, survives refresh, and retires when the
+      materialized live transcript is adopted. */
   prompt?: string;
   /** How many images rode with the launch prompt, for the bubble's count chip. */
   promptImages?: number;
   /** Submission moment (ms) of the launch prompt — the receipt's creation time —
       so the seeded bubble orders ahead of any follow-up the operator queues. */
   promptAt?: number;
+  /** The launch admission instant (ms) — the receipt's creation time, the
+      earliest durable timestamp of the starting window's pending work (issue
+      #1397). Unlike {@link promptAt} it needs no prompt to exist and survives
+      the live-transcript adoption, so "working…" is timed from it before any
+      transcript turn exists. */
+  admittedAt?: number;
   /** The canonical text the transcript will echo for this launch (issue #615) —
       the delivered message, which for a role launch is the scaffold PLUS the raw
       draft. The optimistic bubble displays `prompt` (the raw draft) but retires on
-      THIS text, so a scaffolded role launch never lingers and never duplicates. */
+      THIS text, so a scaffolded role launch never lingers and never duplicates.
+      When it differs from `prompt`, it remains on adopted live facts after the
+      display fields retire, allowing a direct 202-to-live path to reconcile the
+      browser's raw seed (issue #616). Live adoption also retires image-only
+      launches with an empty echo (issue #617). */
   promptEcho?: string;
   /** When the launch's initial message actually reached the agent (ms, issue
       #648). A structured / MCP spawn journals its first user record with SDK /
@@ -125,6 +132,13 @@ export interface BridgeAsk {
 
 /** One sidebar entry returned by GET /api/files. */
 export interface FileEntry {
+  /** Current registry transport for this exact conversation. Presentation only;
+      controls resolve and fence ownership again when the operator acts. */
+  controlHost?: { conversationId: string; transport: "legacy" | "structured" };
+  /** Current canonical root owner for a shared Claude child. The selected
+      conversation keeps its own identity; parentPath binds this projection to
+      the scanner parent, even when the root has advanced to a new generation. */
+  rootControlHost?: { conversationId: string; transport: "legacy" | "structured"; parentPath: string };
   path: string;
   root: RootKey;
   /** Path relative to its root. */
@@ -252,6 +266,10 @@ export interface FileEntry {
       no such message; absent means the derivation has not run or a truncated
       prefix prevents that conclusion. */
   lastAssistantMessageAt?: number | null;
+  /** Latest observed assistant/reasoning/tool execution timestamp, in epoch
+      milliseconds. User messages, lifecycle/usage and metadata never advance
+      it. Null/absent means no work timestamp is known from the bounded tail. */
+  lastAgentWorkAt?: number | null;
   /** Best-effort TUI scrape fallback for prompts without a transcript protocol. */
   waitingInput: WaitingInput | null;
   /** Live pane wall or fresh structured account exhaustion. */
@@ -329,6 +347,8 @@ export interface FileEntry {
   /** Live per-session migration annotation while an intent drains. Absent for
       every session not currently migrating. */
   migration?: ConversationMigration;
+  /** Oldest durable message this live conversation still owes the operator. */
+  stuckDelivery?: StuckDelivery;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live
@@ -336,6 +356,13 @@ export interface FileEntry {
       once its transcript exists — it folds into this conversation's own window
       as compact status chips, and drops off once it stops being news. */
   launch?: StructuredSpawnCardState;
+}
+
+export interface StuckDelivery {
+  /** Immutable reservation admission time. */
+  since: string;
+  attempts: number;
+  state: "held" | "assigned" | "delivery-uncertain";
 }
 
 /** Per-session migration annotation carried on a {@link FileEntry} while an
@@ -381,6 +408,8 @@ export interface ProjectCatalogEntry {
 }
 
 export interface FilesResponse {
+  /** Board-only read: execution bodies remain on targeted full endpoints. */
+  readProjection?: "board-summary";
   files: FileEntry[];
   /** Rows added only to resolve the current deep-link pin, including closure. */
   pinOverlayPaths?: string[];
@@ -586,10 +615,26 @@ export interface LimitWindow {
   windowMinutes?: number | null;
 }
 
+/** A weekly window the provider meters separately for one model tier (issue
+    #1358): Anthropic's OAuth usage payload carries the flagship tier's own
+    seven-day bucket beside the general week. `tier` is the bucket's tier name
+    as the provider spelled it (`opus` for `seven_day_opus`), so the label the
+    row carries is the provider's, never a guess. */
+export interface TierLimitWindow extends LimitWindow {
+  tier: string;
+}
+
+/** The quota window that bound an effective-remaining minimum. `flagship` is
+    the model-tier weekly of {@link EngineLimits.flagship}. */
+export type QuotaWindowKey = "session" | "weekly" | "flagship";
+
 /** Plan rate limits of one engine, returned by GET /api/limits. */
 export interface EngineLimits {
   session: LimitWindow | null;
   weekly: LimitWindow | null;
+  /** The flagship model tier's own weekly window when the account reports one
+      (issue #1358); absent or null when the provider meters no distinct tier. */
+  flagship?: TierLimitWindow | null;
   plan: string | null;
   /** Unix seconds of the oldest selected window observation. Null means the
       provider supplied no observation clock. */

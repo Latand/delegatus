@@ -1,17 +1,20 @@
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
-import { accountManager } from "@/lib/accounts/manager";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
-import { procBackend } from "@/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { spawnStructuredConversation } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 
@@ -54,9 +57,9 @@ export interface StructuredRecoveryDependencies {
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
   transport?: () => "tmux" | "structured";
-  resolveAccount?: (engine: "claude" | "codex", accountId: string | null) => AccountContext;
+  resolveAccount?: (engine: "claude" | "codex", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
-  processIdentity?: () => { pid: number; startIdentity: string | null };
+  processIdentity?: () => ProcessIdentity;
   requestDeliveryDrain?: () => void;
   park?: StructuredHostParkResolver;
   ownership?: {
@@ -65,6 +68,16 @@ export interface StructuredRecoveryDependencies {
     owns: () => Promise<boolean>;
     releaseHost: (key: SessionKey) => Promise<boolean>;
   };
+}
+
+/** A live structured process is still fenced while its durable row carries a
+    lifecycle action. Spawning a successor in that window cannot claim the
+    existing writer and would perturb the live runtime session first. */
+export class StructuredRecoverySynchronizingError extends Error {
+  constructor() {
+    super("structured recovery is synchronizing while a live host owner remains");
+    this.name = "StructuredRecoverySynchronizingError";
+  }
 }
 
 class StructuredRecoverySupersededError extends Error {
@@ -80,8 +93,15 @@ interface RecoveryCandidate {
   key: SessionKey;
   path: string;
   accountId: string | null;
+  /** The project this conversation's work belongs to, so a resume that has to
+      CHOOSE an account draws from that project's pool (#1279). */
+  project: string | null;
   parentConversationId: ViewerConversationId | null;
   spec: ResumeSpec;
+  /** A non-terminal row's recorded structured process is alive or
+      unverifiable, so recovery must not issue a successor spawn while the
+      durable row is unsettled. */
+  hostProcessLive: boolean;
   /** The registered host is process-alive, claim-owned and not terminal. */
   hostLive: boolean;
   /** The provider limit parking that live host's account, if any. */
@@ -91,9 +111,7 @@ interface RecoveryCandidate {
 }
 
 export function structuredHostProcessAlive(identity: ProcessIdentity | null): boolean {
-  if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0) return false;
-  if (!procBackend.pidAlive(identity.pid)) return false;
-  return identity.startIdentity === null || procBackend.processIdentity(identity.pid) === identity.startIdentity;
+  return identity ? processIdentityMayOwn(identity) : false;
 }
 
 const recoveryStore = globalThis as typeof globalThis & {
@@ -121,7 +139,9 @@ function candidateFor(
      including conversations that predate registry entries. A verified live
      tmux owner returned above keeps ownership until that process exits. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
-  const hostLive = Boolean(structuredHostProcessAlive(entry?.structuredHost?.process ?? null)
+  const hostProcessLive = Boolean(!terminal
+    && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
+  const hostLive = Boolean(hostProcessLive
     && entry?.claimOwner
     && entry.pendingAction === null
     && !terminal);
@@ -165,6 +185,13 @@ function candidateFor(
     key,
     path: generation.path,
     accountId: generation.accountId ?? entry?.accountId ?? null,
+    /* A getter, because deriving a project can read the disk and most calls
+       here never reach the account resolution — a live host is handed straight
+       back. The MERGED profile, not the generation's own: a conversation the
+       Viewer ADOPTED rather than spawned carries an empty generation profile,
+       and the registry entry's durable one, folded in above, is the only thing
+       left naming a project or a cwd to derive one from. */
+    get project() { return conversationProjectKey(conversation.projectOwnership, profile); },
     parentConversationId: parentConversationId === conversation.id ? null : parentConversationId,
     spec: {
       command: "",
@@ -174,6 +201,7 @@ function candidateFor(
       "transcript": generation.path,
       launchProfile: profile,
     },
+    hostProcessLive,
     hostLive,
     park: hostPark,
     publishReady,
@@ -204,15 +232,15 @@ async function recoverCandidate(
   const assertOwnership = async (): Promise<void> => {
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
   };
-  const owner = (dependencies.processIdentity ?? (() => ({
-    pid: process.pid,
-    startIdentity: procBackend.processIdentity(process.pid),
-  })))();
+  const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {
     await assertOwnership();
     const park = dependencies.park ?? defaultParkResolver;
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
+    if (current.hostProcessLive && !current.hostLive) {
+      throw new StructuredRecoverySynchronizingError();
+    }
     /* A host wrapper can disappear before its live Viewer writer releases the
        claim. Retire that claim only through the registry's PID/start-identity
        check; a live or unverifiable host remains fenced. */
@@ -236,19 +264,40 @@ async function recoverCandidate(
     }
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     if (!client) throw new Error("structured recovery runtime host is unavailable");
-    const account = (dependencies.resolveAccount ?? accountManager.resolveSpawn)(current.engine, current.accountId);
-    const begun = registry.beginSpawnRequest({
-      engine: current.engine,
-      cwd: current.spec.cwd,
-      transport: "structured",
-      accountId: account.accountId,
-      conversationId: current.conversationId,
-      parentConversationId: current.parentConversationId,
-      purpose: "resume-successor",
-      origin: { kind: "successor" },
-      expectedArtifactPath: current.path,
-      launchProfile: current.spec.launchProfile,
-    });
+    /* #1279: a resume whose conversation RECORDS an account continues on it —
+       the session lives in that home and nothing is being chosen. A resume of a
+       conversation that records none was choosing one, silently, from engine
+       routing; that half now asks the project's pool and its capacity like
+       every other automatic pick, and refuses before the spawn reservation
+       exists when the binding record cannot be read. */
+    const account = (dependencies.resolveAccount ?? resolveContinuityAccount)(
+      current.engine,
+      current.accountId,
+      current.project,
+    );
+    let begun: SpawnBeginResult;
+    try {
+      begun = registry.beginSpawnRequest({
+        engine: current.engine,
+        cwd: current.spec.cwd,
+        transport: "structured",
+        accountId: account.accountId,
+        conversationId: current.conversationId,
+        parentConversationId: current.parentConversationId,
+        purpose: "resume-successor",
+        origin: { kind: "successor" },
+        expectedArtifactPath: current.path,
+        launchProfile: current.spec.launchProfile,
+      });
+    } catch (error) {
+      /* #1716: the lock throws its typed busy refusal from the acquire, before
+         the reservation's transaction is admitted, so this recovery reserved
+         nothing and started nothing and may be tried again. Only this call can
+         say so: the same error raised later in recovery reaches the caller
+         unchanged. */
+      if (error instanceof AccountMutationBusyError) throw new StructuredRecoveryContendedError(error);
+      throw error;
+    }
     if (begun.kind !== "created") throw new Error("structured recovery reservation is unavailable");
     try {
       await assertOwnership();

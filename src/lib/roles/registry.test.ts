@@ -17,12 +17,12 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
-    reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "xhigh" },
-    verifier: { engine: "codex", model: "gpt-5.6-sol", effort: "high" },
-    builder: { engine: "codex", model: "gpt-5.6-sol", effort: "medium" },
+    reviewer: { engine: "codex", model: "gpt-6-astra", effort: "xhigh" },
+    verifier: { engine: "codex", model: "gpt-6-astra", effort: "high" },
+    builder: { engine: "codex", model: "gpt-6-astra", effort: "medium" },
     architect: { engine: "claude", model: "opus", effort: "high" },
     cleaner: { engine: "codex", model: "gpt-5.6-terra", effort: "low" },
-    "prod-auditor": { engine: "codex", model: "gpt-5.6-sol", effort: "xhigh" },
+    "prod-auditor": { engine: "codex", model: "gpt-6-astra", effort: "xhigh" },
     deployer: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" },
   });
 
@@ -36,7 +36,8 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     completionPolicy: "released",
   });
   expect(orchestrator.ok && orchestrator.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
-  expect(orchestrator.ok && orchestrator.value.prompt).toContain(`http://127.0.0.1:${process.env.PORT?.trim() || "8898"}`);
+  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Viewer MCP tools");
+  expect(orchestrator.ok && orchestrator.value.prompt).not.toMatch(/(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/live-log-viewer-next");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Issue query: is:open");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Urgent list: #35");
@@ -48,11 +49,11 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
 
   expect(resolveRole("builder", { mode: "plain", domain: "general" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-5.6-sol", effort: "medium" } },
+    value: { config: { engine: "codex", model: "gpt-6-astra", effort: "medium" } },
   });
   expect(resolveRole("verifier", { claims: "the regression is fixed" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-5.6-sol", effort: "high" } },
+    value: { config: { engine: "codex", model: "gpt-6-astra", effort: "high" } },
   });
   expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-5.6-terra", effort: "low" } } });
   expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" } } });
@@ -98,6 +99,22 @@ test("resolved prompts carry role safety fences and reject cross-engine inherite
     ok: false,
     error: "model is required when overriding a role engine",
   });
+});
+
+/* #1428 — pipeline stages inherit the role scaffold, so one sentence here reaches
+   every builder, reviewer and architect stage without each spec restating it. */
+test("builder, reviewer and architect scaffolds send the seat to search prior conversations first", () => {
+  const resolved = [
+    resolveRole("builder", { mode: "plain" }),
+    resolveRole("reviewer", { diffSource: "origin/main...HEAD", lens: "all" }),
+    resolveRole("architect", { mode: "design" }),
+  ];
+  for (const role of resolved) {
+    if (!role.ok) throw new Error(role.error);
+    expect(role.value.prompt).toContain("search_transcripts");
+    expect(role.value.prompt).toContain("conversation_messages");
+    expect(role.value.prompt).toContain("solved before");
+  }
 });
 
 test("deployer requires confirmation while explicit spawn fields can override its profile", () => {

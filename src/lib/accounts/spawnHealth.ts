@@ -4,10 +4,15 @@ import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib
 import { fetchClaudeLimits } from "@/lib/limits";
 import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 
-import type { ClaudeAccount } from "./claude";
+import { listClaudeAccounts, UnknownClaudeAccountError, type ClaudeAccount } from "./claude";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
+import { withAccountMutationLockAsync } from "./accountMutation";
 
 export type ClaudeValidityProbeResult = SpawnAccountAdmission;
+
+export class ClaudeCredentialUnavailableError extends Error {
+  constructor() { super("Claude credential store is unavailable; retry when access is restored"); this.name = "ClaudeCredentialUnavailableError"; }
+}
 
 export interface ClaudeSpawnAccountSelection {
   account: ClaudeAccount;
@@ -38,13 +43,16 @@ function refreshSingleFlight(
   if (existing) return existing;
   const pending = Promise.resolve()
     .then(() => refresh(account))
-    .catch(() => classifySpawnAccountAdmission({
-      enabled: true,
-      authentication: "unknown",
-      limits: "unknown",
-      stale: true,
-      retryAt: null,
-    }))
+    .catch((error: unknown) => {
+      if (error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
+      return classifySpawnAccountAdmission({
+        enabled: true,
+        authentication: "unknown",
+        limits: "unknown",
+        stale: true,
+        retryAt: null,
+      });
+    })
     .finally(() => {
       if (inflight.get(key) === pending) inflight.delete(key);
     });
@@ -73,15 +81,18 @@ export function claudeValidityFromLimitRead(
   },
   now = Date.now(),
 ): ClaudeValidityProbeResult {
+  if (result.reason === "credential store unavailable" || result.reason?.startsWith("credentials unreadable:")) {
+    throw new ClaudeCredentialUnavailableError();
+  }
   const authentication = result.reason === LIMITS_REAUTH_REQUIRED_REASON
     || result.reason === "credentials missing access token"
-    || result.reason?.startsWith("credentials unreadable:")
+    || result.reason === "credentials absent"
     ? "failed" as const
     : result.source === "live"
       ? "authenticated" as const
       : "unknown" as const;
   const windows = result.data
-    ? [result.data.session, result.data.weekly].filter((window) => window !== null)
+    ? [result.data.session, result.data.weekly, result.data.flagship ?? null].filter((window) => window !== null)
     : [];
   const exhausted = windows.filter((window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 100);
   const limits = exhausted.length > 0
@@ -117,32 +128,44 @@ async function liveValidityProbe(account: ClaudeAccount): Promise<ClaudeValidity
   return claudeValidityFromLimitRead(result);
 }
 
+function currentClaudeAccount(account: ClaudeAccount): ClaudeAccount {
+  const current = listClaudeAccounts().find((candidate) => candidate.id === account.id);
+  if (!current || current.kind !== account.kind || path.resolve(current.home) !== path.resolve(account.home)) {
+    throw new UnknownClaudeAccountError(account.id);
+  }
+  return current;
+}
+
+async function fencedLiveValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
+  return await withAccountMutationLockAsync(async () => {
+    const current = currentClaudeAccount(account);
+    return await liveValidityProbe(current);
+  });
+}
+
 async function refreshValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
-  const refreshed = await refreshClaudeOauth(account);
-  if (refreshed === "invalid") {
-    return classifySpawnAccountAdmission({
-      enabled: true,
-      authentication: "failed",
-      limits: "unknown",
-      stale: false,
-      retryAt: null,
-    });
-  }
-  if (refreshed === "unknown") {
-    return classifySpawnAccountAdmission({
-      enabled: true,
-      authentication: "unknown",
-      limits: "unknown",
-      stale: true,
-      retryAt: null,
-    });
-  }
-  return await liveValidityProbe(account);
+  return await withAccountMutationLockAsync(async () => {
+    const current = currentClaudeAccount(account);
+    const refreshed = await refreshClaudeOauth(current);
+    if (refreshed === "invalid") {
+      return classifySpawnAccountAdmission({
+        enabled: true,
+        authentication: "failed",
+        limits: "unknown",
+        stale: false,
+        retryAt: null,
+      });
+    }
+    if (refreshed === "unknown") {
+      throw new ClaudeCredentialUnavailableError();
+    }
+    return await liveValidityProbe(current);
+  });
 }
 
 const productionDependencies: ClaudeSpawnHealthDependencies = {
   now: Date.now,
-  probe: liveValidityProbe,
+  probe: fencedLiveValidityProbe,
   refresh: refreshValidityProbe,
 };
 
@@ -162,10 +185,28 @@ export async function selectHealthyClaudeAccount(
 ): Promise<ClaudeSpawnAccountSelection> {
   const now = dependencies.now();
   const classified = accounts.map((account) => {
-    const oauth = claudeOauthMetadata(account);
-    return { account, oauth };
+    const metadata = claudeOauthMetadata(account);
+    const unknown = metadata === "unknown";
+    if (unknown && pinPreferred && account.id === preferredId) throw new ClaudeCredentialUnavailableError();
+    return { account, oauth: unknown ? null : metadata, unknown };
   });
   type Evaluated = { account: ClaudeAccount; admission: SpawnAccountAdmission };
+  const unknownAccounts = new Set(classified.filter((candidate) => candidate.unknown).map((candidate) => candidate.account.id));
+  const evaluate = async (
+    account: ClaudeAccount,
+    probe: ClaudeSpawnHealthDependencies["probe"],
+  ): Promise<Evaluated | null> => {
+    try {
+      return { account, admission: await probe(account) };
+    } catch (error) {
+      // Credential uncertainty excludes only this candidate. An explicit pin
+      // must still refuse substitution; identity and other errors retain their fences.
+      if (!(error instanceof ClaudeCredentialUnavailableError)
+        || (pinPreferred && account.id === preferredId)) throw error;
+      unknownAccounts.add(account.id);
+      return null;
+    }
+  };
   const rank = (admission: SpawnAccountAdmission) => admission.kind === "admissible"
     ? admission.basis === "current" ? 2 : 1
     : 0;
@@ -180,9 +221,10 @@ export async function selectHealthyClaudeAccount(
     ...(pinPreferred && preferredId && requested ? { requestedAdmission: requested.admission } : {}),
   });
 
-  const current = await Promise.all(classified
+  const current = (await Promise.all(classified
     .filter((candidate) => candidate.oauth && candidate.oauth.expiresAt > now)
-    .map(async ({ account }) => ({ account, admission: await dependencies.probe(account) })));
+    .map(({ account }) => evaluate(account, dependencies.probe))))
+    .filter((candidate) => candidate !== null);
   let requested = preferredId ? current.find((candidate) => candidate.account.id === preferredId) ?? null : null;
   if (pinPreferred && requested?.admission.kind === "admissible") return result(requested, requested);
 
@@ -203,12 +245,14 @@ export async function selectHealthyClaudeAccount(
   const currentSelection = select(current);
   if (currentSelection) return result(currentSelection, requested);
 
-  const refreshed = await Promise.all(classified
+  const refreshed = (await Promise.all(classified
     .filter((candidate) => candidate.oauth?.expiresAt && candidate.oauth.expiresAt <= now && candidate.oauth.refreshable)
     .filter((candidate) => candidate.account.id !== preferredExpired?.account.id)
-    .map(async ({ account }) => ({ account, admission: await refreshSingleFlight(account, dependencies.refresh) })));
+    .map(({ account }) => evaluate(account, (candidate) => refreshSingleFlight(candidate, dependencies.refresh)))))
+    .filter((candidate) => candidate !== null);
   const all = [...current, ...(requested ? [requested] : []), ...refreshed];
   const refreshedSelection = select(all);
   if (refreshedSelection) return result(refreshedSelection, requested);
+  if (unknownAccounts.size > 0) throw new ClaudeCredentialUnavailableError();
   throw new NoHealthyClaudeAccountError(accounts.map((candidate) => candidate.id));
 }

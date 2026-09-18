@@ -1,6 +1,13 @@
 import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
+import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
 export type PipelineAccess = "read-only" | "read-write";
+export type PipelineSandbox = "full" | "restricted";
+
+/** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
+    `expectedAttempt`) no longer holds: nothing was changed. */
+export type PipelineGuardErrorCode = "STAGE_CHANGED";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -70,7 +77,20 @@ export type PipelineStageInput = {
   engine?: FlowEngine;
   model?: string | null;
   effort?: string | null;
+  /** Repository mutation policy, enforced when the stage settles. It does not
+      select the engine's tool/network sandbox. */
   access?: PipelineAccess;
+  /** Tool/network boundary, independent from the repository policy in
+      `access`. Omitted stages run with full host access. */
+  sandbox?: PipelineSandbox;
+  /** Repository-relative files or directories a read-only stage may produce.
+      The controller alone records these paths in Git. */
+  outputs?: string[];
+  /** The account this stage runs on (#1279). Omitted, the stage resolves its
+      account the way every unattended launch does — inside whatever set the
+      pipeline's project allows. Named, it is honored only when the project
+      allows it; otherwise the stage is refused, never quietly reseated. */
+  account?: string | null;
   "prompt": string;
   /** Pass edge: the stage activated when this one passes. Schema v3 allows any
       stage id (direct links, merges), constrained to an acyclic pass graph. */
@@ -121,17 +141,96 @@ export type PipelineVerdictRecovery = {
   messageTs: number | null;
 };
 
+/** What a pipeline's accepted revisions depend on (#1692).
+
+    `internal` (the default, and every record without the field): the Viewer's
+    own durable state is the authority. A stage passes on its attempt, its
+    verdict and the exact clean local revision it was judged on; a review
+    settles on the SHA the reviewer was fenced to, read from the local
+    worktree. Nothing is pushed, fetched or read from a remote while the
+    pipeline runs. Creating or starting one without `baseRef` still fetches
+    `origin/<base>` once, time-bounded, so it starts from the current base;
+    a pinned `baseRef` never touches the network.
+
+    `remote-branch`: the caller asked for publication. Every accepted revision
+    is pushed to `origin/<branch>`, reviewers launch only on a published head,
+    an approval settles only when the remote carries the reviewed SHA, and a
+    terminal stage completes only once its revision is remotely durable. A
+    publication failure is its own state beside the verdict and never rewrites
+    it. */
+export type PipelinePublication = "internal" | "remote-branch";
+
+export type PipelineBoundedWait = {
+  startedAt: string;
+  rounds: number;
+  retryAfter: string;
+  /** The largest budget any round of this wait asked for, and its backoff
+      cap (#1678): a later round of a cheaper class keeps the wait's budget.
+      Absent on waits persisted before these fields existed, which then read
+      as the round's own class. */
+  budgetMs?: number;
+  retryMaxMs?: number;
+};
+
+/** The stage definition an attempt runs, bound in the record transaction that
+    moves it out of `pending`, before its first spawn call (graph slice 1,
+    ADR-0002 of automation-v2). Together with the attempt's `effectiveRole`,
+    re-cloned at the same instant, it is everything the attempt reads about its
+    stage: an edit accepted after it is bound applies from the next attempt. */
+export type PipelineAttemptDefinition = {
+  boundAt: string;
+  /** `stageDigest` of the stage as it was bound. */
+  stageDigest: string;
+  "prompt": string;
+  account: string | null;
+  role: PipelineRoleRef | null;
+  sandbox: PipelineSandbox | null;
+  outputs: string[] | null;
+};
+
+export type PipelineGraphEditAction = "add-stage" | "remove-stage" | "reorder-stage" | "set-edge" | "override-stage";
+
+/** One accepted graph edit, as the pipeline's own journal keeps it. */
+export type PipelineGraphEdit = {
+  /** Increments per pipeline, and keeps incrementing past trimmed entries. */
+  seq: number;
+  at: string;
+  /** The operator, or the agent conversation that made the edit. */
+  actor: PauseResumeActor;
+  action: PipelineGraphEditAction;
+  stageId: string | null;
+  /** The pipeline state the edit was accepted in. */
+  pipelineState: PipelineState;
+  /** `applied`: nothing had bound the stage yet, so its next attempt runs the
+      edit. `pending-next-attempt`: an attempt of the stage is already bound
+      and keeps its definition; the edit applies from `appliesFromAttempt`. */
+  effect: "applied" | "pending-next-attempt";
+  /** The first attempt of `stageId` that runs under this edit; null for an
+      edge or an order change, which apply at the next routing decision. */
+  appliesFromAttempt: number | null;
+  summary: string;
+};
+
 export type PipelineStageAttempt = {
   n: number;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
   historical?: boolean;
   state: PipelineAttemptState;
   effectiveRole: EffectivePipelineRole;
+  /** Absent until the attempt leaves `pending`, and on attempts recorded
+      before definitions were bound, which read the live stage. */
+  definition?: PipelineAttemptDefinition | null;
   launchId: string | null;
   conversationId: string | null;
   sessionId: string | null;
   agentPath: string | null;
   paneId: string | null;
+  /** Account that owns this launch. Optional for records written before #1371. */
+  accountId?: string | null;
+  /** Usage-limited accounts excluded from this activation, with their resets.
+      `engine` names the engine the limit was hit on; account ids are unique
+      only within an engine. Entries written before it was recorded omit it. */
+  usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null }>;
   flowId: string | null;
   /** Clean pipeline SHA expected when the first reviewer launches. */
   expectedReviewHeadSha?: string | null;
@@ -163,11 +262,33 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: {
-    startedAt: string;
-    rounds: number;
-    retryAfter: string;
-  };
+  controllerWait?: PipelineBoundedWait;
+  /** Bounded wait for the remote pipeline branch after an approved review
+      whose final remote read the network failed (#1692). Same shape and
+      arithmetic as `controllerWait`, kept apart because that wait ends the
+      moment a reviewer launch is under way, which an approved flow always is.
+      Left in place when the budget runs out, as the record of the retries the
+      park counts. */
+  remoteHeadWait?: PipelineBoundedWait;
+  /** Spawn calls this attempt has made across its activations, immediate
+      handshake retries included (#1678). Each consumed one client attempt id,
+      so the next retry index starts here. Persisted before the call is made:
+      a restart that interrupts a call still counts it, and the retry that
+      follows cannot replay the interrupted call's id. An attempt an engine
+      without this count left behind starts it past every id that engine
+      could have spent (#1678 review 3). */
+  spawnCalls?: number;
+  /** Launches this attempt reserved and then retired because their receipt
+      settled `failed` before any host ran them (#1678): the runtime host was
+      unreachable or the account mutation lock was busy. The receipt's own
+      terminal verdict is what permits re-dispatch; a launch whose fate the
+      receipt cannot vouch for is never retired here. Bounded, oldest first. */
+  retiredLaunches?: Array<{
+    launchId: string;
+    conversationId: string | null;
+    error: string;
+    retiredAt: string;
+  }>;
   /** Exactly-once relay (#353): the `{{prev.output}}` payload persisted when the
       cursor advanced here. Null on pre-v3 attempts, which fall back to the
       legacy positional scan. */
@@ -178,6 +299,18 @@ export type PipelineStageAttempt = {
   error: string | null;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
+  /** What a close could prove it did not finish (#1501): the authorized host
+      processes still unresolved across identity-bound stops, each with the
+      kernel identity it carried. While one of them is still that process, no
+      close may terminalize this attempt, however dead the registry row looks;
+      the record is cleared once every one is proven gone. */
+  unresolvedTermination?: PipelineUnresolvedTermination;
+};
+
+export type PipelineUnresolvedTermination = {
+  survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
+  error: string;
+  recordedAt: string;
 };
 
 export type PipelineStageRun = {
@@ -209,18 +342,21 @@ export type PipelineCreationIntent = {
   launchId: string;
 };
 
-/** Durable receipt of the terminal-settlement host reap (#574). Completion
-    sweeps the pipeline's finished stage hosts in bounded rounds; persisting the
-    round count and the settlement is what keeps the sweep from re-killing the
-    same survivor on every tick forever, across process restarts included. */
+/** Durable receipt of finished-attempt host reaping (#574, #1123). Each stage
+    attempt is settled independently, so an idle host can be retired while the
+    rest of its pipeline runs or waits for a decision. */
 export type PipelineTerminalReap = {
-  /** Sweeps that dispatched at least one kill, or were cut off by the budget. */
+  /** Sweeps in the current unsettled batch that dispatched at least one kill,
+      or were cut off by the budget. Reset when a later attempt becomes eligible. */
   rounds: number;
-  /** Hosts whose termination this reap evidenced, across all rounds. */
+  /** Hosts whose termination this reap evidenced, across all batches. */
   stopped: number;
   lastAt: string;
-  /** Set once no finished host remains resident, or the round ceiling is
-      reached — survivors then live on as unconfirmed hosts. Never re-entered. */
+  /** Stage-attempt keys already proved absent, stopped, or handed to the idle
+      lifecycle after the runtime reported a later active turn. */
+  settledAttempts: string[];
+  /** Set once the current batch has no unfinished host, or the round ceiling is
+      reached. A later finished attempt opens a new batch. */
   settledAt: string | null;
 };
 
@@ -240,11 +376,13 @@ export type Pipeline = {
   baseBranch: string;
   baseRef: string;
   lastPassedCommit: string;
-  /** The revision the orchestrator last published to `origin/<branch>`. The
-      review layer fences every round on the published head, so publication is
-      the pipeline's job, not a stage's; recording what landed lets a steady
-      state skip the remote probe entirely. Null while nothing is published
-      (a fresh pipeline, or a repo with no `origin` to publish to). */
+  /** Absent reads as `internal`. See {@link PipelinePublication}. */
+  publication?: PipelinePublication;
+  /** The revision the orchestrator last published to `origin/<branch>` under
+      the `remote-branch` policy. Under that policy the review layer fences
+      every round on the published head, so publication is the pipeline's job,
+      not a stage's; recording what landed lets a steady state skip the remote
+      probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
@@ -268,6 +406,11 @@ export type Pipeline = {
   createdAt: string;
   closedAt: string | null;
   hiddenAt?: string | null;
+  /** When the operator took this lane off the phone board's queue (#1671).
+      Presentation only and reversible: the lane's state, hosts, worktree and
+      transcripts are untouched, and `undismiss` clears it. `hiddenAt` cannot
+      carry this, because every reader takes it to mean closed or discarded. */
+  dismissedAt?: string | null;
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
@@ -279,6 +422,8 @@ export type Pipeline = {
   restored?: boolean;
   /** Durable user pin for the desktop board's world-space pipeline group. */
   pos?: { x: number; y: number };
+  /** Accepted graph edits, oldest first, at most MAX_PIPELINE_GRAPH_EDITS. */
+  graphEdits?: PipelineGraphEdit[];
 };
 
 export type CreatePipelineRequest = {
@@ -294,6 +439,8 @@ export type CreatePipelineRequest = {
   /** Creator transcript. API callers may omit it only when caller authentication can derive it. */
   src?: string;
   autoStart?: boolean;
+  /** Defaults to `internal`; see {@link PipelinePublication}. */
+  publication?: PipelinePublication;
 };
 
 /* The accepted actions, declared once (#774). The MCP tool schema publishes
@@ -317,6 +464,8 @@ export const PIPELINE_ACTIONS = [
   "set-src",
   "delete",
   "close",
+  "dismiss",
+  "undismiss",
 ] as const;
 
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
@@ -339,6 +488,23 @@ export type PatchPipelineRequest = {
   stageId?: string;
   /** retry-stage identity fence for a retry initiated from a launch receipt. */
   launchId?: string;
+  /** The read a graph edit was made against (#1695 C7, graph slice 1). On
+      override-stage and set-edge it is the `stageDigest` of `stageId`, which
+      covers the stage's edges; on add-stage, remove-stage and reorder-stage it
+      is the `graphDigest` of the whole ordered plan. `GET /api/pipelines/:id`
+      and `get_pipeline` answer both. A plan that no longer has it answers 409
+      `STAGE_CHANGED` and is left unchanged. */
+  expectedStageDigest?: string;
+  /** for retry-stage and skip-stage: the stage the caller saw the pipeline
+      waiting on. A pipeline no longer waiting on it answers 409 `STAGE_CHANGED`
+      before anything is closed, reset or started. Deliberately not `stageId`,
+      which on retry-stage names a launch-receipt retry. */
+  expectedStageId?: string;
+  /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
+      attempt the caller saw, or `0` when it saw none yet (a provisioning park).
+      A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
+      non-integers are malformed. */
+  expectedAttempt?: number;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;
@@ -346,6 +512,10 @@ export type PatchPipelineRequest = {
   /** for override-stage: the not-yet-started run stage's access. Review-loop
       stages stay read-only (the resolver rejects read-write there). */
   access?: PipelineAccess;
+  /** for override-stage: the account the stage runs on (#1279); `null` clears
+      the pin back to the project's ordinary selection. Refused when the
+      project's binding does not allow the named account. */
+  account?: string | null;
   prompt?: string;
   task?: string;
   spec?: string;

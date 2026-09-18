@@ -199,6 +199,72 @@ test("a process that never bound the delivery queue reports an unbound publicati
   expect(probe.stdout.toString().trim()).toBe("unbound");
 });
 
+test("startup drains registered hosts while retaining original sends for unregistered hosts", async () => {
+  const { registry, journal, directory, client, close } = fixture("startup-partial-registration");
+  const first = seedConversation(registry, directory, "first-startup-host");
+  const second = seedConversation(registry, directory, "second-startup-host");
+  const firstHost = structuredHost();
+  const secondHost = structuredHost();
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    await publishStructuredDeliveryHost({ key: first.key, host: firstHost });
+    for (const [index, target] of [first, second].entries()) {
+      if (index === 1) journal.append({
+        scope: { type: "session", id: target.conversationId }, kind: "session-status",
+        payload: { conversationId: target.conversationId, sessionKey: target.key,
+          hostKind: "codex-app-server", host: "hosted", turn: "idle" },
+      });
+      journal.executeOperation({
+        kind: "send", operationId: `startup-original-${index}`,
+        idempotencyKey: `startup-original-key-${index}`, conversationId: target.conversationId,
+        text: `original payload ${index}`, policy: "queue",
+      });
+    }
+    const pending = journal.operationResult("startup-original-1");
+    expect(pending?.receipt.status).toBe("queued");
+    await kickStructuredDeliveryQueue();
+    await settles(() => journal.operationResult("startup-original-0")?.receipt.status === "delivered");
+    expect(journal.operationResult("startup-original-1")).toEqual(pending);
+    expect(secondHost.ledger.writes).toEqual([]);
+    await publishStructuredDeliveryHost({ key: second.key, host: secondHost });
+    await kickStructuredDeliveryQueue();
+    await settles(() => journal.operationResult("startup-original-1")?.receipt.status === "delivered");
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(firstHost.ledger.writes).toMatchObject([{ id: "startup-original-0", text: "original payload 0" }]);
+    expect(secondHost.ledger.writes).toMatchObject([{ id: "startup-original-1", text: "original payload 1" }]);
+    expect(firstHost.ledger.writes).toHaveLength(1);
+    expect(secondHost.ledger.writes).toHaveLength(1);
+  } finally {
+    await close();
+  }
+});
+
+test("separate Next bundle realms share one delivery controller lifecycle (#572)", async () => {
+  const { registry, directory, client, close } = fixture("bundle-realms");
+  const moduleCopy = (name: string) => `./structuredDeliveryController?${name}`;
+  const instrumentationRealm = await import(moduleCopy("issue-572-instrumentation"));
+  const routeRealm = await import(moduleCopy("issue-572-route"));
+  const { key } = seedConversation(registry, directory, "bundle-realm-session");
+  const host = structuredHost();
+
+  try {
+    expect(instrumentationRealm).not.toBe(routeRealm);
+    await instrumentationRealm.bindStructuredDeliveryQueue([], { registry, client });
+    expect(routeRealm.hasStructuredDeliveryController(registry)).toBe(true);
+
+    await routeRealm.publishStructuredDeliveryHost({ key, host });
+    expect(instrumentationRealm.hasStructuredDeliveryHost(key)).toBe(true);
+
+    /* Re-entering startup through the other compiled module replaces the
+       generation while preserving its one process-owned host lifecycle. */
+    await routeRealm.bindStructuredDeliveryQueue([], { registry, client });
+    expect(instrumentationRealm.hasStructuredDeliveryController(registry)).toBe(true);
+    expect(instrumentationRealm.hasStructuredDeliveryHost(key)).toBe(true);
+  } finally {
+    await close();
+  }
+});
+
 test("a spawn issued while the queue rebinds is published once the bind completes (#1191)", async () => {
   const { registry, journal, client, close } = fixture("rebind-window");
   await bindStructuredDeliveryQueue([], { registry, client });

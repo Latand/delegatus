@@ -18,6 +18,7 @@ import { DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES } from "@/lib/board/types";
  */
 
 export const VIEW_MODE_KEY = "viewMode";
+export const DESKTOP_BOARD_KEY = "desktopBoard";
 export const TASK_PANEL_KEY = "taskPanelOpen";
 export const IDLE_COLLAPSE_KEY = "idleCollapseMinutes";
 const PATH_PREFIX = "path:";
@@ -107,6 +108,7 @@ export function boardKeysChanged(before: BoardProjectStateV1, after: BoardProjec
   for (const id of symmetricDifference(before.prefs.foldedEngineChildIds, after.prefs.foldedEngineChildIds)) keys.add(foldKey(id));
   for (const id of symmetricDifference(before.prefs.expandedEngineTrayParentIds, after.prefs.expandedEngineTrayParentIds)) keys.add(trayKey(id));
   if (before.prefs.viewMode !== after.prefs.viewMode) keys.add(VIEW_MODE_KEY);
+  if ((before.prefs.desktopBoard ?? null) !== (after.prefs.desktopBoard ?? null)) keys.add(DESKTOP_BOARD_KEY);
   if (before.prefs.taskPanelOpen !== after.prefs.taskPanelOpen) keys.add(TASK_PANEL_KEY);
   const beforeIdle = before.prefs.idleCollapseMinutes === undefined ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES : before.prefs.idleCollapseMinutes;
   const afterIdle = after.prefs.idleCollapseMinutes === undefined ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES : after.prefs.idleCollapseMinutes;
@@ -144,6 +146,7 @@ export function mutationKeys(mutation: BoardMutationV1, aliases: Record<string, 
     case "set-presentation":
       return [
         ...(mutation.viewMode === undefined ? [] : [VIEW_MODE_KEY]),
+        ...(mutation.desktopBoard === undefined ? [] : [DESKTOP_BOARD_KEY]),
         ...(mutation.taskPanelOpen === undefined ? [] : [TASK_PANEL_KEY]),
         ...(mutation.idleCollapseMinutes === undefined ? [] : [IDLE_COLLAPSE_KEY]),
       ];

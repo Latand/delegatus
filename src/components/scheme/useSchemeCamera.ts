@@ -1,16 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Camera } from "./Minimap";
 import { stackItemAt, type SchemeLayout, type SchemeRect } from "./layout";
 
-const MIN_Z = 0.12;
+const MIN_Z = 0.07;
 const MAX_Z = 1.6;
 /* At least this much of the world stays inside the viewport when panning. */
 const EDGE_KEEP = 120;
+/* How long the board must hold a framing that shows nothing before it is
+   re-framed — long enough that a measuring layout is never judged. */
+const OFF_WORLD_SETTLE_MS = 300;
 
 const MODE_KEY = "llvSchemeMode";
+/* Band board framings (#1586): the band stack is a document taller than any
+   viewport, so "fit" frames it from the top at a chosen scale rather than
+   shrinking it in. Fit All frames the task overview at chip scale; Fit Current
+   frames the top (working) bands at tile scale. */
+export const BAND_FIT_ALL_Z = 0.2;
+export const BAND_FIT_CURRENT_Z = 0.58;
 
 export type Mode = "hand" | "select";
 
@@ -64,6 +73,33 @@ interface CameraOptions {
   onZoomKey?: React.RefObject<(dir: 1 | -1) => boolean>;
   /** Announces explicit framing actions to the board live region. */
   onFit?: (kind: "current" | "all") => void;
+  /** Selected projection whose header top-left must keep its screen position
+      through zoom and relayout (#1586): key identifies the projection, rect is
+      its current world box. Null when nothing is selected. */
+  anchor?: SchemeAnchor | null;
+  /** Band layouts read as a document (#1641): the band stack is exactly one
+      viewport wide in world pixels, so whenever it fits the viewport (zoom at
+      or below 1) the camera keeps its left edge on the viewport's — no dead
+      canvas beside the bands, from any zoom, framing, anchor hold, resize or
+      pan; when the stack is wider than the viewport the camera may show any
+      part of it but never past its edges. Every camera the hook settles on the
+      band board goes through this rule, the selection anchor included. */
+  lockX?: boolean;
+  /** Zoom an opened conversation is framed at (#1641). On the physical-scaling
+      band board a reader's size follows the camera, so an open reaches for a
+      fuller zoom than the bare readable floor; defaults to `READABLE_Z`. */
+  focusZoom?: number;
+}
+
+export interface SchemeAnchor {
+  key: string;
+  rect: SchemeRect;
+}
+
+/** Pure anchor equation: the camera translation that puts `rect`'s top-left at
+    the captured screen point under the new zoom. */
+export function anchoredCamera(captured: { sx: number; sy: number }, rect: SchemeRect, z: number): Camera {
+  return { z, x: captured.sx - rect.x * z, y: captured.sy - rect.y * z };
 }
 
 export interface SchemeCamera {
@@ -104,6 +140,11 @@ export interface SchemeCamera {
   glideFrame: (rect: SchemeRect, z: number) => void;
   /** Put the camera back at an exact position (#688's return point). */
   glideToCamera: (camera: { x: number; y: number; zoom: number }) => void;
+  /** Seed the selection anchor with a destination projection before the layout
+      moves the surface there (#1586): the next commit holds that projection's
+      screen point, so a reader opened from a reference tile lands where the
+      tile was even though the bands around it reflow. */
+  primeAnchor: (key: string, rect: SchemeRect) => void;
 }
 
 /**
@@ -136,6 +177,85 @@ export function fitCameraToRect(rect: SchemeRect, vp: { w: number; h: number }):
   return { z, x: (vp.w - rect.w * z) / 2 - rect.x * z, y: (vp.h - rect.h * z) / 2 - rect.y * z };
 }
 
+/**
+ * Whether a camera still shows the world it is pointed at (#1614).
+ *
+ * The saved camera is per project and survives a reload, but the world it was
+ * saved against does not have to: hiding the empty task bands of a 390-task
+ * board shortens the band stack from tens of thousands of pixels to a few
+ * thousand, and a camera parked far down the old stack then frames nothing at
+ * all — an empty canvas the operator has no way to read as "scrolled off the
+ * board". This is the same visibility rule `clampCam` maintains during a pan,
+ * asked as a question instead of enforced: at least `EDGE_KEEP` of the world
+ * (or all of it, when it is smaller than that) overlaps the viewport on both
+ * axes. An unmeasured viewport cannot answer it and does not veto.
+ */
+export function cameraShowsWorld(camera: Camera, world: SchemeRect, vp: { w: number; h: number }): boolean {
+  /* An unmeasured viewport, or a world with no extent yet (the first commit of
+     a board whose layout has not been measured), cannot answer the question —
+     and must not answer it "no", or a camera would be thrown away over a
+     transient. */
+  if (!(vp.w > 1) || !(vp.h > 1) || !(world.w > 0) || !(world.h > 0)) return true;
+  const overlap = (origin: number, extent: number, offset: number, size: number) => {
+    const start = origin * camera.z + offset;
+    return Math.min(start + extent * camera.z, size) - Math.max(start, 0);
+  };
+  return overlap(world.x, world.w, camera.x, vp.w) >= Math.min(EDGE_KEEP, world.w * camera.z)
+    && overlap(world.y, world.h, camera.y, vp.h) >= Math.min(EDGE_KEEP, world.h * camera.z);
+}
+
+/** Where the camera must sit for `node` to be framed: centred horizontally,
+    its head near the top so a tall pane starts readable instead of split. */
+export function centredCamera(node: SchemeRect, z: number, vp: { w: number; h: number }): Camera {
+  return {
+    z,
+    x: vp.w / 2 - (node.x + node.w / 2) * z,
+    y: Math.min(vp.h / 2 - node.y * z, vp.h * 0.08 - (node.y - 40) * z),
+  };
+}
+
+/** How much of a node's head must be on screen before an opened conversation
+    counts as shown: its title row and the first lines under it. */
+const FRAMED_HEAD = 120;
+/** The scale below which a conversation is drawn as a chip rather than as
+    content. `centerOn` has always raised the camera to it for a focus, which is
+    what makes an opened conversation readable rather than merely located. */
+export const READABLE_Z = 0.55;
+
+/**
+ * Whether `node` is on screen and readable at this camera — the question a
+ * focus request actually asks, as opposed to "did a camera move happen".
+ *
+ * Readable is the operative word, and it rules out two things that "the
+ * rectangle overlaps the viewport" would accept: a board zoomed out far enough
+ * that the node is a chip, and a node hanging off an edge with a sliver of
+ * itself showing. The head is what is judged, so a pane taller than the
+ * viewport is framed when its top is inside it and one pushed past an edge is
+ * not.
+ */
+export function nodeIsFramed(node: SchemeRect, camera: Camera, vp: { w: number; h: number }): boolean {
+  if (!(vp.w > 1) || !(vp.h > 1)) return false;
+  if (camera.z < READABLE_Z) return false;
+  const sx = camera.x + node.x * camera.z;
+  const sy = camera.y + node.y * camera.z;
+  const head = Math.min(node.h * camera.z, FRAMED_HEAD);
+  const across = Math.min(sx + node.w * camera.z, vp.w) - Math.max(sx, 0);
+  return sy >= 0 && sy + head <= vp.h && across >= Math.min(node.w * camera.z, FRAMED_HEAD);
+}
+
+const sameRect = (a: SchemeRect, b: SchemeRect) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+/** A focus request the camera still owes the operator: the node it names, the
+    rectangle the last aim was taken against, and the camera that aim asked for.
+    Cleared when the node is framed, when the operator moves the camera, or when
+    a new request replaces it. */
+interface FocusAim {
+  path: string;
+  project: string;
+  at: SchemeRect | null;
+  cam: Camera | null;
+}
+
 /** The deadband used by repeated 0 to escalate from current work to all. */
 export function cameraMatchesFraming(camera: Camera, target: Camera): boolean {
   return Math.abs(camera.z - target.z) <= target.z * 0.01 && Math.abs(camera.x - target.x) <= 4 && Math.abs(camera.y - target.y) <= 4;
@@ -158,6 +278,9 @@ export function useSchemeCamera({
   onArrowNav,
   onZoomKey,
   onFit,
+  anchor = null,
+  lockX = false,
+  focusZoom = READABLE_Z,
 }: CameraOptions): SchemeCamera {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const tapRef = useRef<{ x: number; y: number } | null>(null);
@@ -184,6 +307,16 @@ export function useSchemeCamera({
   const glideTimer = useRef<number | null>(null);
   const initedFor = useRef<string | null>(null);
   const latestCam = useRef(cam);
+  /* An explicit framing change (fit, focus glide, jump, Return) re-baselines
+     the selection anchor instead of being undone by it. */
+  const framingRef = useRef(false);
+  /* The standing focus obligation, and the flag that tells the framings below
+     that the move they are being asked for IS that obligation's own aim. */
+  const focusAim = useRef<FocusAim | null>(null);
+  const aiming = useRef(false);
+  const dropFocusAim = useCallback(() => {
+    if (!aiming.current) focusAim.current = null;
+  }, []);
 
   useEffect(() => {
     latestCam.current = cam;
@@ -247,6 +380,60 @@ export function useSchemeCamera({
     },
     [world, vp],
   );
+  /* The document rule of the band board (see `lockX`): a world that fits the
+     viewport horizontally sits on its left edge; a wider one is clamped so
+     neither of its edges leaves a gap. Identity on the free map. */
+  const alignX = useCallback((c: Camera): Camera => {
+    if (!lockX) return c;
+    const left = -world.x * c.z;
+    if (world.w * c.z <= vp.w) return c.x === left ? c : { ...c, x: left };
+    const x = Math.min(left, Math.max(vp.w - (world.x + world.w) * c.z, c.x));
+    return x === c.x ? c : { ...c, x };
+  }, [lockX, world.x, world.w, vp.w]);
+  /* Every gesture and framing settles through both rules. */
+  const settle = useCallback((c: Camera): Camera => alignX(clampCam(c)), [alignX, clampCam]);
+
+  /* Selection anchor (#1586). Every commit records where the selected
+     projection's top-left sits on screen. When the next commit finds the same
+     projection at a different world position or under a different zoom — a
+     wheel/pinch/button/keyboard zoom, a viewport resize, a band reflow — the
+     camera is translated synchronously, before paint, so that point holds. A
+     pure pan (same zoom, same world rect) records the new position instead, and
+     an explicit framing (fit, focus glide, jump) re-baselines. Clamping is
+     skipped on purpose: content-bound clamping must not drag a retained
+     selection away. */
+  const anchorRef = useRef<{ key: string; sx: number; sy: number; wx: number; wy: number; z: number } | null>(null);
+  const primeAnchor = useCallback((key: string, rect: SchemeRect) => {
+    const c = latestCam.current;
+    anchorRef.current = { key, sx: c.x + rect.x * c.z, sy: c.y + rect.y * c.z, wx: rect.x, wy: rect.y, z: c.z };
+  }, []);
+  useLayoutEffect(() => {
+    if (!anchor) {
+      anchorRef.current = null;
+      framingRef.current = false;
+      return;
+    }
+    const explicit = framingRef.current;
+    framingRef.current = false;
+    const prev = anchorRef.current;
+    const { rect } = anchor;
+    const sx = cam.x + rect.x * cam.z;
+    const sy = cam.y + rect.y * cam.z;
+    if (prev && prev.key === anchor.key && !explicit && (prev.z !== cam.z || prev.wx !== rect.x || prev.wy !== rect.y)) {
+      /* The hold is exact on the free map. On the band board the document
+         rule outranks it horizontally (#1641): a reader that wrapped to
+         another row keeps its vertical screen position, and the band stack
+         stays on the viewport's left edge instead of following the tile. */
+      const next = alignX(anchoredCamera(prev, rect, cam.z));
+      if (Math.abs(next.x - cam.x) > 0.01 || Math.abs(next.y - cam.y) > 0.01) {
+        anchorRef.current = { key: anchor.key, sx: next.x + rect.x * cam.z, sy: next.y + rect.y * cam.z, wx: rect.x, wy: rect.y, z: cam.z };
+        latestCam.current = next;
+        setCam(next);
+        return;
+      }
+    }
+    anchorRef.current = { key: anchor.key, sx, sy, wx: rect.x, wy: rect.y, z: cam.z };
+  }, [anchor, cam, alignX]);
 
   /* High-rate gestures (wheel, pointermove, pinch) coalesce into one camera
      update per frame: updater functions queue up and compose inside a single
@@ -254,6 +441,9 @@ export function useSchemeCamera({
   const camQueue = useRef<((c: Camera) => Camera)[]>([]);
   const camRaf = useRef<number | null>(null);
   const queueCam = useCallback((fn: (c: Camera) => Camera) => {
+    /* Pan, wheel and pinch: the operator has taken the camera, so a focus
+       request still owed is dropped rather than pulling them back. */
+    dropFocusAim();
     camQueue.current.push(fn);
     if (camRaf.current != null) return;
     camRaf.current = requestAnimationFrame(() => {
@@ -262,7 +452,7 @@ export function useSchemeCamera({
       camQueue.current = [];
       setCam((c) => fns.reduce((acc, apply) => apply(acc), c));
     });
-  }, []);
+  }, [dropFocusAim]);
   useEffect(
     () => () => {
       if (camRaf.current != null) cancelAnimationFrame(camRaf.current);
@@ -276,10 +466,10 @@ export function useSchemeCamera({
         const z = Math.min(MAX_Z, Math.max(MIN_Z, c.z * factor));
         if (z === c.z) return c;
         const k = z / c.z;
-        return clampCam({ z, x: cx - (cx - c.x) * k, y: cy - (cy - c.y) * k });
+        return settle({ z, x: cx - (cx - c.x) * k, y: cy - (cy - c.y) * k });
       });
     },
-    [clampCam, queueCam],
+    [settle, queueCam],
   );
 
   const zoomCenter = useCallback(
@@ -301,10 +491,10 @@ export function useSchemeCamera({
         const k = z / c.z;
         const cx = rect.width / 2;
         const cy = rect.height / 2;
-        return clampCam({ z, x: cx - (cx - c.x) * k, y: cy - (cy - c.y) * k });
+        return settle({ z, x: cx - (cx - c.x) * k, y: cy - (cy - c.y) * k });
       });
     },
-    [clampCam],
+    [settle],
   );
 
   const fitCam = useCallback((): Camera | null => {
@@ -313,17 +503,23 @@ export function useSchemeCamera({
        cards and no nodes/drafts must still fit, or Fit sits inert and a
        relocated card can stay off-screen. `world` already spans the cards. */
     if (!rect || !hasBoardContent(layout, taskRects, pipelineRects)) return null;
-    return fitCameraToRect(world, { w: rect.width, h: rect.height });
+    if (lockX) return { z: BAND_FIT_ALL_Z, x: -world.x * BAND_FIT_ALL_Z, y: -world.y * BAND_FIT_ALL_Z };
+    return alignX(fitCameraToRect(world, { w: rect.width, h: rect.height }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hasBoardContent reads the listed layout lengths and rect maps; subscribing to all of `layout` would re-fit on every unrelated relayout
-  }, [layout.nodes.length, layout.drafts.length, layout.groups.length, taskRects, pipelineRects, world]);
+  }, [layout.nodes.length, layout.drafts.length, layout.groups.length, taskRects, pipelineRects, world, alignX, lockX]);
 
   const glideTo = useCallback((next: Camera | ((c: Camera) => Camera)) => {
+    /* Every explicit framing but the focus aim itself — fit, jump, Return, a
+       task-panel row — is the operator deciding where to look, and ends any
+       focus request still owed. */
+    dropFocusAim();
     /* Reduced motion: skip the CSS transition — the move lands instantly. */
     if (!reducedMotion()) setGlide(true);
+    framingRef.current = true;
     setCam(next);
     if (glideTimer.current) window.clearTimeout(glideTimer.current);
     glideTimer.current = window.setTimeout(() => setGlide(false), 500);
-  }, []);
+  }, [dropFocusAim]);
   useEffect(
     () => () => {
       if (glideTimer.current) window.clearTimeout(glideTimer.current);
@@ -334,28 +530,29 @@ export function useSchemeCamera({
   const fit = useCallback(() => {
     const c = fitCam();
     if (c) {
-      glideTo(c);
+      glideTo(settle(c));
       onFit?.("all");
     }
-  }, [fitCam, glideTo, onFit]);
+  }, [fitCam, glideTo, settle, onFit]);
 
   const currentFitCam = useCallback((): Camera | null => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect || !hasBoardContent(layout, taskRects, pipelineRects)) return null;
-    return fitCameraToRect(currentWork ?? world, { w: rect.width, h: rect.height });
-  }, [currentWork, world, layout, taskRects, pipelineRects]);
+    if (lockX) return { z: BAND_FIT_CURRENT_Z, x: -world.x * BAND_FIT_CURRENT_Z, y: -world.y * BAND_FIT_CURRENT_Z };
+    return alignX(fitCameraToRect(currentWork ?? world, { w: rect.width, h: rect.height }));
+  }, [currentWork, world, layout, taskRects, pipelineRects, alignX, lockX]);
 
   const fitCurrent = useCallback(() => {
     const c = currentFitCam();
     if (!c) return;
-    glideTo(clampCam(c));
+    glideTo(settle(c));
     onFit?.(currentWork ? "current" : "all");
-  }, [currentFitCam, glideTo, clampCam, onFit, currentWork]);
+  }, [currentFitCam, glideTo, settle, onFit, currentWork]);
 
   const fitCurrentOrAll = useCallback(() => {
     const current = currentFitCam();
     if (!current) return;
-    const target = clampCam(current);
+    const target = settle(current);
     if (currentWork && cameraMatchesFraming(latestCam.current, target)) {
       fit();
       return;
@@ -363,15 +560,15 @@ export function useSchemeCamera({
     latestCam.current = target;
     glideTo(target);
     onFit?.(currentWork ? "current" : "all");
-  }, [currentFitCam, currentWork, clampCam, fit, glideTo, onFit]);
+  }, [currentFitCam, currentWork, settle, fit, glideTo, onFit]);
 
   const fitRect = useCallback(
     (r: SchemeRect) => {
       const rect = viewportRef.current?.getBoundingClientRect();
       if (!rect || r.w <= 0 || r.h <= 0) return;
-      glideTo(clampCam(fitCameraToRect(r, { w: rect.width, h: rect.height })));
+      glideTo(settle(fitCameraToRect(r, { w: rect.width, h: rect.height })));
     },
-    [glideTo, clampCam],
+    [glideTo, settle],
   );
 
   /* Glide a node into view: centered horizontally, its head near the top so
@@ -380,25 +577,18 @@ export function useSchemeCamera({
     (node: SchemeRect, zMin: number) => {
       const rect = viewportRef.current?.getBoundingClientRect();
       if (!rect) return;
-      glideTo((c) => {
-        const z = Math.min(MAX_Z, Math.max(c.z, zMin));
-        return {
-          z,
-          x: rect.width / 2 - (node.x + node.w / 2) * z,
-          y: Math.min(rect.height / 2 - node.y * z, rect.height * 0.08 - (node.y - 40) * z),
-        };
-      });
+      glideTo((c) => alignX(centredCamera(node, Math.min(MAX_Z, Math.max(c.z, zMin)), { w: rect.width, h: rect.height })));
     },
-    [glideTo],
+    [glideTo, alignX],
   );
 
   /* Follow-anchor reflow: the anchor's world position shifted by (wdx, wdy);
      translate the camera the opposite way (× z) so it holds its screen spot. */
   const glideBy = useCallback(
     (wdx: number, wdy: number) => {
-      glideTo((c) => clampCam({ ...c, x: c.x - wdx * c.z, y: c.y - wdy * c.z }));
+      glideTo((c) => settle({ ...c, x: c.x - wdx * c.z, y: c.y - wdy * c.z }));
     },
-    [glideTo, clampCam],
+    [glideTo, settle],
   );
 
   /* Restore an exact camera — #688's return point, which puts back a framing
@@ -406,9 +596,9 @@ export function useSchemeCamera({
      position verbatim (still clamped, since the world may have shrunk). */
   const glideToCamera = useCallback(
     (next: { x: number; y: number; zoom: number }) => {
-      glideTo(clampCam({ x: next.x, y: next.y, z: next.zoom }));
+      glideTo(settle({ x: next.x, y: next.y, z: next.zoom }));
     },
-    [glideTo, clampCam],
+    [glideTo, settle],
   );
 
   /* The keyboard zoom ladder: same centered/head-near-top placement as
@@ -419,14 +609,14 @@ export function useSchemeCamera({
       if (!rect) return;
       const zz = Math.min(MAX_Z, Math.max(MIN_Z, z));
       glideTo(
-        clampCam({
+        settle({
           z: zz,
           x: rect.width / 2 - (node.x + node.w / 2) * zz,
           y: Math.min(rect.height / 2 - node.y * zz, rect.height * 0.08 - (node.y - 40) * zz),
         }),
       );
     },
-    [glideTo, clampCam],
+    [glideTo, settle],
   );
 
   /* First layout of a project: restore the saved camera or fit everything.
@@ -439,7 +629,16 @@ export function useSchemeCamera({
         const raw = sessionStorage.getItem("llvCam:" + project);
         if (raw) {
           const saved = JSON.parse(raw) as Camera;
-          if (Number.isFinite(saved.x) && Number.isFinite(saved.y) && Number.isFinite(saved.z) && saved.z >= MIN_Z && saved.z <= MAX_Z) {
+          const rect = viewportRef.current?.getBoundingClientRect();
+          const measured = rect && rect.width > 1 && rect.height > 1 ? { w: rect.width, h: rect.height } : vp;
+          /* A camera the world grew out from under is not restored: it framed
+             a part of the board that no longer exists, so the operator would
+             open an empty canvas. Every camera that still shows the world is
+             restored exactly as it was saved — scroll position is state, and
+             re-fitting an in-bounds camera would throw it away. */
+          if (Number.isFinite(saved.x) && Number.isFinite(saved.y) && Number.isFinite(saved.z) && saved.z >= MIN_Z && saved.z <= MAX_Z
+            && cameraShowsWorld(saved, world, measured)) {
+            framingRef.current = true;
             /* eslint-disable-next-line react-hooks/set-state-in-effect */
             setCam(saved);
             return;
@@ -451,9 +650,48 @@ export function useSchemeCamera({
     }
     const c = mapMode ? fitCam() : currentFitCam();
     if (c) {
+      framingRef.current = true;
+      /* Not clamped: this can run before the viewport is measured, and the
+         framings above are already aligned to the world. */
       setCam(c);
     }
-  }, [project, layout, taskRects, pipelineRects, fitCam, currentFitCam, mapMode]);
+  }, [project, layout, taskRects, pipelineRects, fitCam, currentFitCam, mapMode, world, vp]);
+
+  /* The standing rule behind the restore check above: a camera that framed the
+     board when it was set can be left framing nothing when the WORLD moves
+     instead — the board's own content decides its bounds, and hiding 384 empty
+     task bands shortens the stack from tens of thousands of pixels to a few
+     thousand under a camera parked at the bottom of the old one. The world
+     arrives a commit or two after the camera does, so checking only at restore
+     time reads the world before it has shrunk and lets exactly that camera
+     through; this runs on every world the board reports.
+     It cannot fight a gesture: `clampCam` already keeps a strip of the world on
+     screen through every pan and zoom, so a camera that frames none of it is
+     one no gesture could have produced. */
+  const reframedTo = useRef<Camera | null>(null);
+  useEffect(() => {
+    if (mapMode || initedFor.current !== project) return;
+    if (!hasBoardContent(layout, taskRects, pipelineRects)) return;
+    if (cameraShowsWorld(cam, world, vp)) return;
+    /* One verdict per framing: if the board is already sitting on the framing
+       this rule chose and still reports nothing on screen, the disagreement is
+       between the fit and the world box, and re-fitting on a timer forever
+       would only render the board unusable in a new way. */
+    if (reframedTo.current && cameraMatchesFraming(cam, reframedTo.current)) return;
+    /* Only a settled board is judged. Bands span the viewport, so between the
+       viewport being measured and the layout being recomputed for it the board
+       reports a world about one pixel wide — which no camera "shows", and which
+       is nobody's lost canvas. Any camera, world or viewport change re-arms
+       this, so what runs is one verdict on a board that stopped moving. */
+    const timer = window.setTimeout(() => {
+      const c = currentFitCam();
+      if (!c) return;
+      framingRef.current = true;
+      reframedTo.current = c;
+      setCam(c);
+    }, OFF_WORLD_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [world, vp, cam, mapMode, project, layout, taskRects, pipelineRects, currentFitCam]);
 
   /* Debounced: a pan produces hundreds of camera frames, storage needs only
      the resting position. The map never writes — the desktop camera survives. */
@@ -463,23 +701,106 @@ export function useSchemeCamera({
     return () => window.clearTimeout(t);
   }, [cam, project, mapMode]);
 
-  /* An opened conversation glides into view once its node exists in the layout. */
+  /*
+   * An opened conversation is brought into view — and STAYS the camera's
+   * obligation until it actually is (#1625).
+   *
+   * The band projection is built for a camera it is built BEFORE: SchemeBoard
+   * must hand `layoutTaskBands` a zoom and a viewport width, and — the layout
+   * is an input to this hook, not an output of it — those can only be copies of
+   * this camera's own values, applied one commit late. A board that mounts with
+   * a focus already standing (the catalog open: the list unmounts, the board
+   * mounts, the request arrives with it) therefore offers the requested node a
+   * PROVISIONAL rectangle, projected at the initial 0.5 zoom and 1400px width,
+   * and on a tall stack of task bands that rectangle is thousands of world
+   * pixels away from where the node settles. Aiming at it once and calling the
+   * request handled left the operator's own conversation far outside the
+   * viewport, with nothing left to correct it: the saved-camera restore and the
+   * off-world re-fit both ran afterwards and framed something else entirely.
+   *
+   * So the request is an obligation rather than an event. It is discharged the
+   * moment the node is framed — after that a reflow moves the node freely and
+   * the camera stays where the operator left it — and it re-aims only while the
+   * node is NOT framed and either its rectangle or the camera has moved since
+   * the aim, so it answers the settling board without ever chasing a settled
+   * one. `glideTo` drops it, which is every explicit framing the operator can
+   * ask for; so does `queueCam`, which is every pan, wheel and pinch. Neither
+   * the highlight expiring nor a scanner poll can re-arm it — only a new focus
+   * VALUE can, and upstream only a new focus nonce produces one, which is what
+   * keeps this from being the standing follow `focusRequestEdge` removed.
+   */
   const focusHandled = useRef<string | null>(null);
   useEffect(() => {
-    if (!focus) {
-      focusHandled.current = null;
+    if (focus && focusHandled.current !== focus) {
+      focusHandled.current = focus;
+      focusAim.current = { path: focus, project, at: null, cam: null };
+    }
+    /* A repeated open of the same conversation must move the view again, so
+       the handled marker — not the obligation — clears when the request ends. */
+    if (!focus) focusHandled.current = null;
+    const aim = focusAim.current;
+    if (!aim) return;
+    /* Another project is another board: a request made against the one the
+       operator left is not owed by the one they arrived at, and must not be
+       waiting for them when they come back. */
+    if (aim.project !== project) {
+      focusAim.current = null;
       return;
     }
-    if (focusHandled.current === focus) return;
-    const node = layout.byPath.get(focus) ?? taskRects?.get(focus);
+    const node = layout.byPath.get(aim.path) ?? taskRects?.get(aim.path);
+    /* Not placed yet is not a failure: the request is still owed. */
     if (!node) return;
-    focusHandled.current = focus;
-    centerOn(node, 0.55);
-  }, [focus, layout, taskRects, centerOn]);
+    /* The FIRST aim is unconditional. An open asks for a readable framing of
+       that conversation, not merely for its rectangle to be somewhere in the
+       viewport, so returning to one from the overview scale still zooms in to
+       it — the guarantee `centerOn(node, 0.55)` has always carried. Only once
+       an aim has been taken AGAINST THE RECTANGLE THE NODE STILL HAS does
+       "already shown" complete the request: the aim promised the framing
+       `centredCamera` computes for that rectangle, and a rectangle that moved
+       since (the tile it was taken against became the reader and wrapped to
+       the next row, the bands re-measured for a mode change) has not been
+       given that framing — its head may be on screen, its composer below the
+       fold, with the space it was promised sitting empty above it (#1641).
+       Such a node is aimed at again; a node whose rectangle is stable and
+       framed discharges the request, and a stable one that the aim could not
+       frame is left alone rather than fought over. */
+    if (aim.at && sameRect(aim.at, node)) {
+      if (nodeIsFramed(node, cam, vp)) {
+        focusAim.current = null;
+        return;
+      }
+      /* Our own aim is already standing and the node is still not framed:
+         there is nothing further this rule can do, and repeating the move
+         would only fight whatever is holding the camera. */
+      if (aim.cam && cameraMatchesFraming(cam, aim.cam)) return;
+    }
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect || !(rect.width > 1) || !(rect.height > 1)) return;
+    /* The zoom an open reaches for. On the physical-scaling band board a card's
+       size follows the camera, so opening a conversation at the bare readable
+       floor would leave its reader shrunk; the band asks for a fuller zoom so
+       the opened conversation reads prominently. Never below the readable floor,
+       and never past the current zoom downward. */
+    const openZoom = Math.max(focusZoom, READABLE_Z);
+    const z = Math.min(MAX_Z, Math.max(cam.z, openZoom));
+    aim.at = { x: node.x, y: node.y, w: node.w, h: node.h };
+    aim.cam = alignX(centredCamera(node, z, { w: rect.width, h: rect.height }));
+    aiming.current = true;
+    try {
+      centerOn(node, openZoom);
+    } finally {
+      aiming.current = false;
+    }
+  }, [focus, project, layout, taskRects, cam, vp, centerOn, alignX, focusZoom]);
 
   /* Wheel: plain — pan (shift turns it horizontal); ctrl/cmd (and trackpad
-     pinch) — zoom at the cursor. In select mode a wheel over a scrollable
-     feed keeps native scrolling. */
+     pinch) — zoom at the cursor. The only surface that keeps the wheel for
+     itself is a scroll container under the pointer with content to scroll —
+     the open conversation reader's feed, or a scrollable panel floating over
+     the board. Everything else pans, so a wheel over the task background, a
+     band's header controls, «+ Agent», a mirror tile or a collapsed agent card
+     moves the board instead of being swallowed by a control that cannot use it
+     (#1641). */
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
@@ -489,8 +810,20 @@ export function useSchemeCamera({
       if (wheelSettle.current) window.clearTimeout(wheelSettle.current);
       wheelSettle.current = window.setTimeout(() => setManualNonce((n) => n + 1), 250);
     };
+    /* The nearest ancestor between the target and the viewport that can consume
+       vertical wheel: overflowing content in an auto/scroll box. Interactive
+       chrome that does not scroll (a button, a status pill, a card that is not
+       an open reader) returns nothing, so the board pans over it. */
+    const scrollableAncestor = (target: HTMLElement | null): HTMLElement | null => {
+      for (let node = target; node && node !== el; node = node.parentElement) {
+        if (node.scrollHeight > node.clientHeight + 1) {
+          const overflowY = getComputedStyle(node).overflowY;
+          if (overflowY === "auto" || overflowY === "scroll") return node;
+        }
+      }
+      return null;
+    };
     const onWheel = (event: WheelEvent) => {
-      if ((event.target as HTMLElement).closest("[data-scheme-ui]")) return;
       const rect = el.getBoundingClientRect();
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
@@ -498,18 +831,12 @@ export function useSchemeCamera({
         armSettle();
         return;
       }
-      if (modeRef.current === "select" && !spaceRef.current) {
-        for (let node = event.target as HTMLElement | null; node && node !== el; node = node.parentElement) {
-          if (node.scrollHeight > node.clientHeight + 1) {
-            const overflowY = getComputedStyle(node).overflowY;
-            if (overflowY === "auto" || overflowY === "scroll") return;
-          }
-        }
-      }
+      /* A held Space is an explicit hand-pan and overrides even a feed. */
+      if (!spaceRef.current && scrollableAncestor(event.target as HTMLElement | null)) return;
       event.preventDefault();
       const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
       const dy = event.shiftKey && !event.deltaX ? 0 : event.deltaY;
-      queueCam((c) => clampCam({ ...c, x: c.x - dx, y: c.y - dy }));
+      queueCam((c) => settle({ ...c, x: c.x - dx, y: c.y - dy }));
       armSettle();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -517,7 +844,7 @@ export function useSchemeCamera({
       el.removeEventListener("wheel", onWheel);
       if (wheelSettle.current) window.clearTimeout(wheelSettle.current);
     };
-  }, [applyZoom, clampCam, queueCam]);
+  }, [applyZoom, settle, queueCam]);
 
   /* Keyboard: H/V tools, Space-hold temporary hand, +/−/1 zoom, 0 fit,
      arrows pan, Esc drops the selection. */
@@ -673,7 +1000,7 @@ export function useSchemeCamera({
         queueCam((c) => {
           const z = Math.min(MAX_Z, Math.max(MIN_Z, c.z * factor));
           const k = z / c.z;
-          return clampCam({ z, x: cx - (pinch.cx - c.x) * k, y: cy - (pinch.cy - c.y) * k });
+          return settle({ z, x: cx - (pinch.cx - c.x) * k, y: cy - (pinch.cy - c.y) * k });
         });
         pinchRef.current = { d, cx, cy };
         return;
@@ -686,7 +1013,7 @@ export function useSchemeCamera({
     /* Past the 9px tap threshold this is a real drag, not a click — mark it so
        its end re-baselines nav. */
     if (Math.hypot(dx, dy) > 9) panMovedRef.current = true;
-    queueCam((c) => clampCam({ ...c, x: pan.cx + dx, y: pan.cy + dy }));
+    queueCam((c) => settle({ ...c, x: pan.cx + dx, y: pan.cy + dy }));
   };
 
   /* Gestures end on window-level listeners: a pointerup outside the viewport
@@ -778,8 +1105,11 @@ export function useSchemeCamera({
   };
 
   const jump = useCallback(
-    (wx: number, wy: number) => setCam((c) => clampCam({ ...c, x: vp.w / 2 - wx * c.z, y: vp.h / 2 - wy * c.z })),
-    [vp, clampCam],
+    (wx: number, wy: number) => {
+      framingRef.current = true;
+      setCam((c) => settle({ ...c, x: vp.w / 2 - wx * c.z, y: vp.h / 2 - wy * c.z }));
+    },
+    [vp, settle],
   );
 
   return {
@@ -808,5 +1138,6 @@ export function useSchemeCamera({
     glideBy,
     glideFrame,
     glideToCamera,
+    primeAnchor,
   };
 }

@@ -16,7 +16,7 @@ import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
-import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -172,7 +172,7 @@ export interface FreshSpecOptions {
   deferClaudeSpawnPolicy?: boolean;
 }
 
-const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "LLV_TOKEN"];
+const CLAUDE_SHADOWED_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "LLV_TOKEN"];
 
 function telegramTokenAssignment(mcpServers: readonly string[]): string {
   if (!mcpServers.includes("telegram")) return "";
@@ -330,7 +330,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     else args.push("--strict-mcp-config");
     const command = args.map(shellQuote).join(" ");
     return {
-      command: telegramScopedCommand(managed ? `${claudeEnvPrefix(options.claudeConfigDir!, mcpServers)} ${command}` : command, mcpServers),
+      command: telegramScopedCommand(`${claudeEnvPrefix(options.claudeConfigDir ?? legacyClaudeHome(), mcpServers)} ${command}`, mcpServers),
       cwd,
       windowName: "claude-new",
       engine: "claude",
@@ -392,60 +392,6 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   };
 }
 
-export function claudeSuccessorSpecFor(input: {
-  sourcePath: string;
-  candidateId: string;
-  targetHome: string;
-  targetProjectsDir: string;
-  profile: LaunchProfile;
-}): ResumeSpec {
-  if (!/^[0-9a-f-]{36}$/.test(input.candidateId)) throw new Error("candidate session id is invalid");
-  const args = [
-    resolveBinary("claude"),
-    "-p",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--verbose",
-    "--replay-user-messages",
-    "--permission-prompt-tool", "stdio",
-  ];
-  const permissionMode = effectiveClaudePermissionMode(input.profile);
-  if (input.profile.readOnly || permissionMode === "plan") {
-    args.push("--permission-mode", "plan", "--disallowedTools", "Edit,Write,NotebookEdit");
-  } else if (permissionMode !== "bypassPermissions") {
-    if (permissionMode.length <= 64 && /^[a-zA-Z-]+$/.test(permissionMode)) {
-      args.push("--permission-mode", permissionMode);
-    }
-  } else {
-    args.push("--dangerously-skip-permissions");
-  }
-  const model = normalizeClaudeLaunchModel(input.profile.model);
-  if (model) args.push("--model", model);
-  if (input.profile.effort && /^[a-z]+$/.test(input.profile.effort)) args.push("--effort", input.profile.effort);
-  args.push("--resume", input.sourcePath, "--fork-session", "--session-id", input.candidateId);
-  const cwd = input.profile.cwd || resumeCwd(input.sourcePath);
-  const policy = applyClaudeSpawnPolicy(input.targetHome, {
-    allowSubagents: input.profile.allowSubagents,
-    baseSettingsPath: isManagedClaudeHome(input.targetHome) ? claudeSettingsPath() : null,
-    profileId: input.candidateId,
-    cwd,
-    mcpServers: input.profile.mcpServers,
-    mcpStatePath: isManagedClaudeHome(input.targetHome)
-      ? path.join(input.targetHome, ".claude.json")
-      : path.join(path.dirname(input.targetHome), ".claude.json"),
-  });
-  pushClaudePolicyArgs(args, policy);
-  return {
-    command: telegramScopedCommand(`${claudeEnvPrefix(input.targetHome, input.profile.mcpServers)} ${args.map(shellQuote).join(" ")}`, input.profile.mcpServers),
-    cwd,
-    windowName: "claude-migration-successor",
-    engine: "claude",
-    ["transcript"]: claudeTranscriptPath(input.profile.cwd || resumeCwd(input.sourcePath), input.candidateId, input.targetProjectsDir),
-    printMode: true,
-    launchProfile: { ...input.profile, model, permissionMode },
-  };
-}
-
 /** Whether a transcript can be reopened, and — when it cannot — which single
     condition refused it. A caller that only needs the command uses
     {@link resumeSpecFor}; a caller that has to tell the operator why nothing
@@ -503,13 +449,10 @@ export function resumeSpecFor(root: string, pathname: string, options: ResumeSpe
 
 /**
  * Compose the resume/attach command from an explicit engine + session id + cwd +
- * account home, without needing the transcript file to exist yet (round-1 P1#6).
+ * account home, without waiting for the transcript scanner (round-1 P1#6).
  * The transcript-path form {@link resumeSpecFor} delegates here after sniffing
- * the session id and home off the path; the launch-receipt form (a queued
- * `spawn:<launchId>` window whose transcript has not materialized) passes the
- * durable receipt's recorded session id, cwd, and account home directly, so
- * "Open in terminal" composes a real working command instead of 400-ing on a
- * synthetic path.
+ * the session id and home off the path; a finalized launch receipt can pass its
+ * recorded session id, cwd, and account home directly during scan lag.
  */
 export function resumeSpecForSession(
   engine: AgentEngine,
@@ -546,7 +489,7 @@ export function resumeSpecForSession(
     args.push("--resume", sessionId);
     const command = args.map(shellQuote).join(" ");
     return {
-      command: telegramScopedCommand(managed ? `${claudeEnvPrefix(home, mcpServers)} ${command}` : command, mcpServers),
+      command: telegramScopedCommand(`${claudeEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
       cwd,
       windowName: "claude-resume",
       engine: "claude",
@@ -596,6 +539,6 @@ function emptyLaunchProfileForResume(cwd: string, model: string | null, effort: 
 
 /** A resume window must land in a directory that still exists; the home
     directory is the safe fallback when the transcript's cwd is gone. */
-function resumeCwd(pathname: string): string {
+export function resumeCwd(pathname: string): string {
   return headCwd(pathname, { maxLines: 30, requireDir: true }) ?? os.homedir();
 }

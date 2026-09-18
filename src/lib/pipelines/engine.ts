@@ -2,25 +2,36 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager } from "@/lib/accounts/manager";
-import { mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
+import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
+import { listClaudeAccounts, mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, type DurableMembershipInput, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
-import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
+import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { headCwd } from "@/lib/agent/transcript";
 import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLegacyRelayFailurePause, patchFlow } from "@/lib/flows/commands";
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
 import { loadFlows } from "@/lib/flows/store";
-import type { CreateFlowRequest, Flow, RoleConfig } from "@/lib/flows/types";
+import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flows/types";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
-import { conversationTurnLiveness } from "@/lib/runtime/liveness";
+import { conversationTurnLiveness, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
+import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
+import {
+  describeStructuredHostOwnerGeneration,
+  structuredHostKillRefFromRegistry,
+  structuredHostKillRefusal,
+  terminateStructuredHostTree,
+  type StructuredHostTerminationDependencies,
+} from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
+import { processIdentityStatus } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -39,8 +50,11 @@ import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBr
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
+  MAX_PIPELINE_GRAPH_EDITS,
   MAX_PIPELINE_STAGES,
   MAX_SPEC_LENGTH,
+  MAX_STAGE_OUTPUTS,
+  MAX_STAGE_OUTPUT_PATH_LENGTH,
   MAX_STAGE_PROMPT_LENGTH,
   MAX_TASK_LENGTH,
   MIN_STARTED_PIPELINE_STAGES,
@@ -48,6 +62,9 @@ import {
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
+import { normalizeStageOutputPath } from "./stageAccess";
+import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
+import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
@@ -56,14 +73,21 @@ import type {
   EffectivePipelineRole,
   PatchPipelineRequest,
   Pipeline,
+  PipelineBoundedWait,
+  PipelineGraphEdit,
+  PipelineGraphEditAction,
+  PipelineGuardErrorCode,
+  PipelineGuardField,
   PipelineRoleId,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
+  PipelineSandbox,
   PipelineStage,
   PipelineStageInput,
   PipelineStageAttempt,
   PipelineTerminalReap,
   PipelineUnconfirmedHost,
+  PipelineUnresolvedTermination,
 } from "./types";
 import { parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict } from "./verdict";
 
@@ -73,6 +97,7 @@ export type PipelineStageSpawn = {
   sessionId: string | null;
   "transcript": string | null;
   paneId: string | null;
+  accountId?: string | null;
 };
 
 /** Identity of the agent host a stage attempt owns, as a close reports it. */
@@ -85,12 +110,22 @@ export type PipelineStageHostRef = {
   /** Set for a conversation a stage agent spawned and the pipeline adopted, so
       the report distinguishes it from the stage's own launch. */
   adopted?: true;
+  /** The attempt's immutable launch identity. A stop that has to act on the
+      registry row alone (#1501) binds the row to this launch's receipt. */
+  launchId?: string | null;
 };
 
 export type PipelineStageStopResult =
-  /** Termination is evidenced: the kill was delivered, or the host is gone. */
-  | { outcome: "stopped" }
+  /** Termination is evidenced: the kill was delivered, or the host is gone.
+      `detail` names the evidence when the stop went around the runtime. */
+  | { outcome: "stopped"; detail?: string }
   | { outcome: "not-running" }
+  /** Termination was attempted and the authorized tree is unresolved (#1501):
+      a survivor, refused signal, or lost authority. Typed apart from `failed` because
+      no evidence about the registry row or the transcript may terminalize
+      the attempt over it — the processes named in `survivors` are still the
+      attempt's, and only their proven death releases it. */
+  | { outcome: "unresolved"; error: string; survivors: PipelineUnresolvedTermination["survivors"] }
   /** The kill was accepted (a `queued` receipt is the normal first answer) but
       termination was not evidenced inside the confirmation budget. The host may
       still be alive, so a close carrying one of these never claims a clean stop. */
@@ -124,9 +159,15 @@ export type PipelineCloseReport = {
   worktree: { dir: string; uncommitted: string[]; truncated: boolean; error?: string } | null;
 };
 
-export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId" | "conversationId">;
+export type PipelineStageLaunchReservation = Pick<PipelineStageSpawn, "launchId" | "conversationId" | "accountId">;
 export type PipelineSpawnReceipt = PipelineStageSpawn & {
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
+  error?: string | null;
+  /** A session identity was staged for this launch, so an engine host was
+      started and may have run its first turn before the receipt failed
+      (#1678). Independent of the identity fence that withholds `sessionId`
+      and `transcript` from an unpublished receipt. */
+  staged?: boolean;
 };
 
 export interface PipelinePorts {
@@ -135,7 +176,16 @@ export interface PipelinePorts {
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
     role: EffectivePipelineRole;
+    /** Immutable repository-policy and tool-boundary pair for this attempt. */
+    runtimeProfile: PipelineStageRuntimeProfile;
     cwd: string;
+    /** Project the launch belongs to; the account it may use is drawn from
+        this project's allowed set and nothing wider (#1279). */
+    project: string;
+    /** The account the stage named, if it named one. */
+    requestedAccountId: string | null;
+    /** Accounts proven unavailable by earlier attempts of this same activation. */
+    unavailableAccountIds?: string[];
     title: string;
     "prompt": string;
     parentPath: string | null;
@@ -180,6 +230,8 @@ export interface PipelinePorts {
       merge is a tidy close, not an unreadable worktree. */
   worktreePresent(dir: string): boolean;
   conversationAgentActive(conversationId: string): Promise<boolean | null>;
+  /** False means the durable registry has never registered this conversation. */
+  conversationRegistered?(conversationId: string): boolean;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -192,7 +244,7 @@ export interface PipelinePorts {
   conversationIdForPath(pathname: string): string | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
   createFlow(req: CreateFlowRequest, entries: FileEntry[]): Promise<{ flow?: Flow; error?: string }>;
-  patchFlow(id: string, action: "advance" | "pause" | "resume", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
+  patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
     error?: string;
@@ -202,7 +254,80 @@ export interface PipelinePorts {
   getFlow(id: string): Flow | null;
   findFlow(implementerPath: string, implementerConversationId: string | null, baseRef: string, targetSha: string): Flow | null;
   projectForCwd(cwd: string): string | null;
+  /** Accounts `project` allows for `engine`, or null when the project has no
+      binding for it — which means every account, as it always did (#1279). */
+  allowedAccountIds?(project: string, engine: FlowEngine): string[] | null;
+  /** Shared project account-selection seam used to decide a usage-limit retry. */
+  resolveProjectSpawn?(
+    engine: FlowEngine,
+    request: Parameters<typeof accountManager.resolveProjectSpawn>[1],
+  ): ReturnType<typeof accountManager.resolveProjectSpawn>;
+  /** Durable launch ownership fallback for attempts written before accountId. */
+  accountForTranscript?(engine: FlowEngine, transcriptPath: string): { accountId: string; label: string } | null;
+  accountLabel?(engine: FlowEngine, accountId: string): string;
   now(): string;
+}
+
+/** A refusal a caller returns verbatim, or null when the stages are acceptable. */
+type StageAccountRefusal = {
+  error: string;
+  status: number;
+  violations?: PipelineValidationViolation[];
+};
+
+/**
+ * The pool that governs `project`'s launches, or a refusal when the record that
+ * defines it cannot be read.
+ *
+ * The read throws so no caller can mistake a damaged record for an unbound
+ * project. Here that has to become an ANSWER: a well-formed request against a
+ * record that needs the operator is a conflict, and the same conflict — same
+ * wording, same status — the launch, the reseat and the binding route all give,
+ * so one repair clears every one of them. Left to propagate it is a 500 on a
+ * request nothing is wrong with.
+ */
+function stageAccountPool(
+  ports: PipelinePorts,
+  project: string,
+  engine: FlowEngine,
+): { pool: string[] | null } | { refusal: StageAccountRefusal } {
+  try {
+    return { pool: ports.allowedAccountIds?.(project, engine) ?? null };
+  } catch (error) {
+    if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
+    return { refusal: { error: error.message, status: 409 } };
+  }
+}
+
+/** Create/override-time reading of #1279's rule, over stages already
+    normalized. The launch re-reads it at the seam; this is what keeps a plan
+    that could never run from being stored in the first place. */
+function stageAccountRefusal(
+  stages: readonly PipelineStage[],
+  project: string,
+  ports: PipelinePorts,
+): StageAccountRefusal | null {
+  if (!ports.allowedAccountIds) return null;
+  const violations: PipelineValidationViolation[] = [];
+  for (const [index, stage] of stages.entries()) {
+    const requested = stage.account?.trim();
+    if (!requested) continue;
+    const engine = stage.effectiveRole.engine;
+    const read = stageAccountPool(ports, project, engine);
+    if ("refusal" in read) return read.refusal;
+    const allowed = read.pool;
+    if (allowed === null || allowed.includes(requested)) continue;
+    violations.push({
+      field: `stages[${index}].account`,
+      message: allowed.length
+        ? `stage ${stage.id} names ${engine} account ${requested}, which project ${project} does not allow (allowed: ${allowed.join(", ")})`
+        : `stage ${stage.id} names ${engine} account ${requested}, and project ${project} allows no ${engine} account`,
+      expected: STAGE_ACCOUNT_SHAPE,
+    });
+  }
+  return violations.length
+    ? { error: pipelineValidationError(violations), violations, status: 400 }
+    : null;
 }
 
 function engineForTranscript(transcript: string): "claude" | "codex" | null {
@@ -213,12 +338,17 @@ function engineForTranscript(transcript: string): "claude" | "codex" | null {
 
 /**
  * Viewer-managed Claude stages run autonomously. Their role access remains a
- * product-scope contract, while the CLI permission mode must allow ordinary
+ * product-scope contract, while the default CLI permission mode allows ordinary
  * repository reads, GitHub inspection, screenshots, and verification commands
- * without an interactive permission wall.
+ * without an interactive permission wall. An explicit restricted sandbox uses
+ * Claude's ordinary restrictive mode.
  */
-export function pipelineClaudePermissionMode(role: EffectivePipelineRole): string | null {
-  return role.engine === "claude" ? "bypassPermissions" : null;
+export function pipelineClaudePermissionMode(
+  role: EffectivePipelineRole,
+  sandbox: PipelineSandbox = "full",
+): string | null {
+  if (role.engine !== "claude") return null;
+  return sandbox === "full" ? "bypassPermissions" : "auto";
 }
 
 function parentIdentity(parentPath: string | null): {
@@ -237,13 +367,35 @@ async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
   onReserved: (reservation: PipelineStageLaunchReservation) => void,
 ): Promise<PipelineStageSpawn> {
-  const account = accountManager.resolveSpawn(input.role.engine);
+  /* #1279's seam. An unbound project takes the same branch it always took —
+     the active account — so nothing changes for a project nobody configured.
+     A bound one draws from its allowed set only: a stage naming an account
+     outside it is refused, and an allowed set with no capacity left is
+     REPORTED. Neither case falls back onto an account the project forbids;
+     the throw parks the stage with the reason on the record. */
+  const resolution = accountManager.resolveProjectSpawn(input.role.engine, {
+    project: input.project,
+    requestedId: input.requestedAccountId,
+    ...(input.unavailableAccountIds?.length
+      ? { unavailableIds: input.unavailableAccountIds }
+      : {}),
+  });
+  if (resolution.kind !== "available") {
+    throw new Error(projectAccountRefusalDetail(resolution, input.role.engine, input.project));
+  }
+  const account = resolution.account;
   const parent = parentIdentity(input.parentPath);
+  const { access, sandbox } = input.runtimeProfile;
+  if (access !== input.role.access) {
+    throw new Error("pipeline stage runtime access does not match its effective role");
+  }
   const specBase = freshSpecFor(input.role.engine, input.cwd, {
     model: input.role.model,
     effort: input.role.effort,
-    readOnly: input.role.access === "read-only",
-    permissionMode: pipelineClaudePermissionMode(input.role),
+    /* Pipeline access is enforced at settlement. Passing it to the engine
+       would make the repository policy silently select the sandbox again. */
+    readOnly: false,
+    permissionMode: pipelineClaudePermissionMode(input.role, sandbox),
     codexHome: input.role.engine === "codex" ? account.home : null,
     claudeConfigDir: input.role.engine === "claude" ? account.home : null,
     claudeProjectsDir: input.role.engine === "claude" ? account.transcriptRoot : null,
@@ -251,6 +403,8 @@ async function spawnPipelineAgent(
   const launchProfile = emptyLaunchProfile({
     ...(specBase.launchProfile ?? {}),
     cwd: input.cwd,
+    readOnly: access === "read-only",
+    sandbox,
     parentConversationId: parent.conversationId,
     title: input.title,
   });
@@ -267,6 +421,7 @@ async function spawnPipelineAgent(
     engine: input.role.engine,
     model: input.role.model,
     effort: input.role.effort,
+    runtimeProfile: input.runtimeProfile,
     cwd: input.cwd,
     parentConversationId: parent.conversationId,
     ...(supersedes ? { supersedes } : {}),
@@ -303,23 +458,33 @@ async function spawnPipelineAgent(
     supersedesReason: "stage-retry",
   });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
-  onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId });
+  onReserved({
+    launchId: begun.receipt.launchId,
+    conversationId: begun.receipt.conversationId,
+    accountId: begun.receipt.accountId ?? account.accountId,
+  });
   if (begun.kind === "replay") {
-    const conversation = registry.conversation(begun.receipt.conversationId);
-    const transcript = begun.receipt.artifactPath ?? conversation?.generations.at(-1)?.path ?? null;
+    const identityPublished = identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(begun.receipt);
     return {
       launchId: begun.receipt.launchId,
       conversationId: begun.receipt.conversationId,
-      sessionId: begun.receipt.key?.sessionId ?? null,
-      transcript,
+      sessionId: identityPublished ? begun.receipt.key?.sessionId ?? null : null,
+      "transcript": identityPublished ? begun.receipt.artifactPath : null,
       paneId: begun.receipt.verifiedHost?.paneId ?? begun.receipt.pane?.paneId ?? null,
+      accountId: begun.receipt.accountId ?? account.accountId,
     };
   }
 
   const spec = { ...specBase, launchProfile };
   const client = runtimeHostClient();
   const unavailable = supervisedRuntimeHostUnavailableReason("pipeline structured runtime host");
-  if (!client) throw new Error(unavailable);
+  if (!client) {
+    /* Nothing was dispatched, and the receipt has to say so itself (#1678):
+       the engine re-dispatches only on the receipt's own terminal verdict,
+       exactly as the spawn layer records one after its transport fails. */
+    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    throw new Error(unavailable);
+  }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
   try {
     response = await spawnStructuredConversation({
@@ -343,6 +508,7 @@ async function spawnPipelineAgent(
     sessionId: key?.sessionId ?? null,
     transcript,
     paneId: null,
+    accountId: begun.receipt.accountId ?? account.accountId,
   };
 }
 
@@ -360,6 +526,14 @@ const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
   client?: RuntimeHostClient | null;
+  /** Injected into the identity-bound termination a socketless caller falls
+      back to (#1501); production uses the real kernel probes and signals. */
+  termination?: StructuredHostTerminationDependencies;
+  action?: (request: {
+    conversationId: string;
+    transcriptPath: string;
+    action: "kill";
+  }) => Promise<{ status: number; body: unknown }>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   budgetMs?: number;
@@ -388,6 +562,8 @@ export type StageStopProbes = {
 type StageHostProbe = {
   conversationId: ViewerConversationId;
   transcriptPath: string;
+  /** The conversation's current generation: the one registry row a stop may act on. */
+  key: SessionKey;
   resident(): boolean;
   /** Durable tmux evidence recorded for this session, if any. It is the only
       thing that can identify a stored pane id as still being this agent's. */
@@ -410,6 +586,7 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   return {
     conversationId: conversation.id,
     transcriptPath: generation.path,
+    key: { engine: conversation.engine, sessionId: generation.id },
     /* Re-read every call: the registry read cache invalidates on the file
        signature, so a teardown written by the host process is visible here. */
     resident: () => {
@@ -487,9 +664,15 @@ export async function stopPipelineStageAgent(
     if (!probe || !probe.resident()) return { outcome: "not-running" };
     const { conversationId, transcriptPath, resident } = probe;
 
-    const { applyConversationAction } = await import("@/lib/conversation/actions");
-    const result = await applyConversationAction({ conversationId, transcriptPath, action: "kill" });
-    const body = result.body as { ok?: boolean; error?: string; operationId?: string; receipt?: { status?: string } };
+    const applyAction = probes.action ?? (async (request) => {
+      const { applyConversationAction } = await import("@/lib/conversation/actions");
+      return applyConversationAction(request);
+    });
+    const result = await applyAction({ conversationId, transcriptPath, action: "kill" });
+    const body = result.body as { ok?: boolean; error?: string; code?: string; operationId?: string; receipt?: { status?: string } };
+    if (result.status === 503 && body.code === RUNTIME_HOST_UNAVAILABLE_CODE) {
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    }
     if (result.status >= 400 || body.ok !== true) {
       return { outcome: "failed", error: body.error ?? `stage host kill was refused with status ${result.status}` };
     }
@@ -531,17 +714,181 @@ export async function stopPipelineStageAgent(
   }
 }
 
-export function defaultPipelinePorts(): PipelinePorts {
+/** Why this process could not use the runtime command channel; every report
+    the identity path produces ends with it, so the operator can tell a
+    socketless caller from a host that answered. */
+const NO_CONTROL_CHANNEL = "this process has no structured control channel (LLV_RUNTIME_HOST_SOCKET is unset), so no runtime host generation could be asked";
+
+/**
+ * Ends a stage host from a process that has no channel to any runtime host
+ * generation (#1501): the MCP host process, which answered every close of a
+ * parked lane with "structured runtime host is unavailable" while the host it
+ * could see kept burning quota under a Viewer generation the record no longer
+ * named.
+ *
+ * The authority comes from the durable registry row and nothing else: the
+ * engine process the Viewer recorded (pid, start identity, boot epoch) and the
+ * generation that claimed it. It is bound to the attempt affirmatively before
+ * anything is signalled — the attempt must name a conversation the row is the
+ * current generation of, and the attempt's launch must have a receipt naming
+ * that same conversation; an attempt with no launch, or a launch with no
+ * receipt, is unresolved and gets no signal. The same authority (row still
+ * naming this process, still this conversation, no orchestrator seat) is asked
+ * again after every await inside the termination and one step before each
+ * signal, and the host is ended through the same identity-fenced termination
+ * the resources rail uses, which signals exactly once per pid.
+ *
+ * A refusal before termination starts is a `failed` stop with no signal sent.
+ * Once termination starts, a survivor, an EPERM, or lost authority is
+ * `unresolved`, with
+ * each survivor's identity, and the close keeps that record on the attempt so
+ * no later evidence about the row or the transcript can terminalize it while
+ * one of them is still that process. The row is retired only by the
+ * termination itself, and only once the tree is proven gone.
+ */
+async function stopStageHostByRecordedIdentity(
+  target: PipelineStageHostRef,
+  probe: StageHostProbe,
+  termination: StructuredHostTerminationDependencies,
+): Promise<PipelineStageStopResult> {
+  const registry = agentRegistry();
+  const refused = (reason: string): PipelineStageStopResult => ({
+    outcome: "failed",
+    error: `${reason}; nothing was signalled; ${NO_CONTROL_CHANNEL}`,
+  });
+  if (!target.conversationId?.startsWith("conversation_")) {
+    return refused("unresolved ownership: the attempt records no conversation id to bind the host to");
+  }
+  if (registry.canonicalConversationId(target.conversationId as ViewerConversationId) !== probe.conversationId) {
+    return refused(`contradictory ownership: the attempt names ${target.conversationId} but the registry resolves its transcript to ${probe.conversationId}`);
+  }
+  if (!target.launchId) {
+    return refused("unresolved ownership: the attempt records no launch identity, so the host cannot be bound to a Viewer launch");
+  }
+  const receipt = registry.readOnlySnapshot().receipts[target.launchId] ?? null;
+  if (!receipt) {
+    return refused(`unresolved ownership: no launch receipt exists for launch ${target.launchId}`);
+  }
+  if (!receipt.conversationId || registry.canonicalConversationId(receipt.conversationId) !== probe.conversationId) {
+    return refused(`contradictory ownership: the attempt's launch receipt names ${receipt.conversationId ?? "no conversation"}, not ${probe.conversationId}`);
+  }
+  const built = structuredHostKillRefFromRegistry(probe.key);
+  const generation = describeStructuredHostOwnerGeneration(built.owner);
+  if (!built.ok) {
+    return refused(`${built.error}; ${generation}`);
+  }
+  const { ref } = built;
+  /* Asked now, and again by the termination after each await and before each
+     signal: the row must still name this exact process as this conversation's
+     current host, and the conversation must not hold an orchestrator seat. */
+  const authorize = (): { status: 403 | 409; error: string } | null => {
+    const current = structuredHostKillRefFromRegistry(probe.key);
+    if (!current.ok) return { status: 409, error: `authority lost before signalling: ${current.error}` };
+    if (current.ref.pid !== ref.pid
+      || current.ref.startIdentity !== ref.startIdentity
+      || current.ref.bootEpoch !== ref.bootEpoch) {
+      return { status: 409, error: `authority lost before signalling: the registry row now names pid ${current.ref.pid}, not pid ${ref.pid}` };
+    }
+    if (current.ref.conversationId !== ref.conversationId) {
+      return { status: 409, error: `authority lost before signalling: the registry row is now the current generation of ${current.ref.conversationId}` };
+    }
+    return structuredHostKillRefusal(current.ref, { kind: "row" }, false);
+  };
+  const refusal = authorize();
+  if (refusal) {
+    return refused(`${refusal.error} (pid ${ref.pid}); ${generation}`);
+  }
+  const outcome = await terminateStructuredHostTree(ref, { ...termination, authorize });
+  if (outcome.ok) {
+    return {
+      outcome: "stopped",
+      detail: `ended host pid ${ref.pid} by its recorded identity (${outcome.via}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+    };
+  }
+  const named = outcome.remaining.length > 0 ? `; still running: ${outcome.remaining.join(", ")}` : "";
+  if (outcome.terminationStarted || outcome.status === 500) {
+    /* Termination may have effects even when a later authority check refuses.
+       Keep captured identities until their death is proven. */
+    const survivors: PipelineUnresolvedTermination["survivors"] = outcome.terminationStarted || outcome.survivors.length > 0
+      ? outcome.survivors.map((survivor) => ({ pid: survivor.pid, startIdentity: survivor.startIdentity, bootEpoch: survivor.bootEpoch ?? null }))
+      : outcome.remaining.map((pid) => ({ pid, startIdentity: null }));
+    return {
+      outcome: "unresolved",
+      error: `${outcome.error} (pid ${ref.pid}${named}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+      survivors,
+    };
+  }
+  return refused(`${outcome.error} (pid ${ref.pid}${named}); ${generation}`);
+}
+
+function terminationIdentityStatus(identity: PipelineUnresolvedTermination["survivors"][number]) {
+  try { return processIdentityStatus(identity); }
+  catch { return "unverified" as const; }
+}
+
+function rememberUnresolvedTermination(
+  attempt: PipelineStageAttempt,
+  result: Extract<PipelineStageStopResult, { outcome: "unresolved" }>,
+  recordedAt: string,
+): void {
+  const survivors = [...(attempt.unresolvedTermination?.survivors ?? []), ...result.survivors]
+    .filter((survivor) => terminationIdentityStatus(survivor) !== "dead");
+  const unique = new Map(survivors.map((survivor) => [
+    JSON.stringify([survivor.pid, survivor.startIdentity, survivor.bootEpoch ?? null]), survivor,
+  ]));
+  attempt.unresolvedTermination = { survivors: [...unique.values()], error: result.error, recordedAt };
+}
+
+/**
+ * Whether an attempt still carries survivors of an earlier stop that are not
+ * proven gone (#1501). Alive or unverifiable means the attempt cannot be
+ * terminalized by any other evidence; every survivor proven dead by identity
+ * clears the record. Never signals anything.
+ */
+function unresolvedTerminationRefusal(attempt: PipelineStageAttempt): string | null {
+  const record = attempt.unresolvedTermination;
+  if (!record) return null;
+  const standing: string[] = [];
+  record.survivors = record.survivors.filter((survivor) => terminationIdentityStatus(survivor) !== "dead");
+  for (const survivor of record.survivors) {
+    const status = terminationIdentityStatus(survivor);
+    if (status === "dead") continue;
+    standing.push(`pid ${survivor.pid} ${status === "alive" ? "is still running" : "cannot be verified"}`);
+  }
+  if (standing.length === 0) {
+    delete attempt.unresolvedTermination;
+    return null;
+  }
+  return `an earlier stop left authorized processes it could not end (${record.error}); ${standing.join(", ")}`;
+}
+
+/** Older attempts can retain descendants after a replacement becomes current. */
+function pipelineSurvivorRefusal(pipeline: Pipeline): { error: string; status: number } | null {
+  for (const run of pipeline.runs) {
+    for (const attempt of run.attempts) {
+      const error = unresolvedTerminationRefusal(attempt);
+      if (error) return { error, status: 409 };
+    }
+  }
+  return null;
+}
+
+export function defaultPipelinePorts(
+  dependencies: { liveness?: TurnLivenessDependencies } = {},
+): PipelinePorts {
   let runtimeSnapshot: ReturnType<NonNullable<ReturnType<typeof runtimeHostClient>>["snapshot"]> | null = null;
   const registry = agentRegistry();
   let registrySnapshot: ReturnType<typeof registry.readOnlySnapshot> | null = null;
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
+  let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
   let flowSnapshot: Flow[] | null = null;
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
+  const identityFence = () => materializationFence ??= identityMaterializationFence(snapshot());
   const flows = () => flowSnapshot ??= loadFlows();
   const invalidateRegistryProjection = () => {
     registrySnapshot = null;
     adoptionCandidatesByPipeline = null;
+    materializationFence = null;
   };
   const adoptionCandidates = () => {
     if (adoptionCandidatesByPipeline) return adoptionCandidatesByPipeline;
@@ -557,7 +904,13 @@ export function defaultPipelinePorts(): PipelinePorts {
         const receipt = receiptsByConversation.get(conversationId as ViewerConversationId) ?? null;
         const conversation = current.conversations[conversationId as ViewerConversationId] ?? null;
         const generation = conversation?.generations.at(-1) ?? null;
-        const agentPath = receipt?.artifactPath ?? generation?.path ?? null;
+        const receiptPublished = receipt ? identityFence().allowsReceipt(receipt) : false;
+        let agentPath = generation?.path ?? null;
+        let sessionId: string | null = null;
+        if (receipt) {
+          agentPath = receiptPublished ? receipt.artifactPath : null;
+          sessionId = receiptPublished ? receipt.key?.sessionId ?? null : null;
+        }
         if (!agentPath) continue;
         const runtime = membership.runtime ?? (receipt ? {
           engine: receipt.engine,
@@ -574,7 +927,7 @@ export function defaultPipelinePorts(): PipelinePorts {
           sourceConversationId: membership.parentConversationId,
           launchId: receipt?.launchId ?? null,
           conversationId,
-          sessionId: receipt?.key?.sessionId ?? null,
+          sessionId,
           agentPath,
           paneId: receipt?.verifiedHost?.paneId ?? receipt?.pane?.paneId ?? null,
           startedAt: receipt?.createdAt ?? membership.createdAt,
@@ -590,6 +943,17 @@ export function defaultPipelinePorts(): PipelinePorts {
     exec: realExec,
     preflightRepo: preflightPipelineRepo,
     roleLookup: pipelineRoleLookup,
+    allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
+    resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
+    accountForTranscript: (engine, transcriptPath) => {
+      const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
+      if (!owner) return null;
+      const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+        .find((candidate) => candidate.id === owner.accountId);
+      return { accountId: owner.accountId, label: account?.label ?? owner.accountId };
+    },
+    accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+      .find((candidate) => candidate.id === accountId)?.label ?? accountId,
     spawnAgent: async (input, onReserved) => {
       const result = await spawnPipelineAgent(input, onReserved);
       invalidateRegistryProjection();
@@ -609,15 +973,20 @@ export function defaultPipelinePorts(): PipelinePorts {
       timer.unref?.();
     },
     spawnReceipt: (launchId) => {
-      const receipt = snapshot().receipts[launchId];
+      const current = snapshot();
+      const receipt = current.receipts[launchId];
       if (!receipt) return null;
+      const identityPublished = identityFence().allowsReceipt(receipt);
       return {
         state: receipt.state,
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
-        sessionId: receipt.key?.sessionId ?? null,
-        "transcript": receipt.artifactPath,
+        sessionId: identityPublished ? receipt.key?.sessionId ?? null : null,
+        "transcript": identityPublished ? receipt.artifactPath : null,
         paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null,
+        accountId: receipt.accountId,
+        error: receipt.error,
+        staged: receipt.key !== null,
       };
     },
     claimSpawnRetry: (launchId, claimId) => {
@@ -664,6 +1033,8 @@ export function defaultPipelinePorts(): PipelinePorts {
       /* A hosted idle turn is an inter-turn state with unknown agent activity. */
       return null;
     },
+    conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
+      && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationHostUnavailableSince: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return undefined;
       const current = snapshot();
@@ -683,7 +1054,10 @@ export function defaultPipelinePorts(): PipelinePorts {
          evidence decides instead — and only `severed` counts, so a host writing
          to its transcript or burning CPU keeps the attempt alive however long
          its current step takes. */
-      const liveness = await conversationTurnLiveness(registry, conversation.id, { snapshot: current });
+      const liveness = await conversationTurnLiveness(registry, conversation.id, {
+        ...dependencies.liveness,
+        snapshot: current,
+      });
       return liveness?.state === "severed" && liveness.since !== null
         ? new Date(liveness.since).toISOString()
         : null;
@@ -693,10 +1067,11 @@ export function defaultPipelinePorts(): PipelinePorts {
     headCwd: (transcriptPath) => headCwd(transcriptPath),
     lastMessage: lastAssistantMessage,
     pathForConversation: (conversationId) => conversationId.startsWith("conversation_")
-      ? snapshot().conversations[conversationId as ViewerConversationId]?.generations.at(-1)?.path ?? null
+      ? identityFence().pathForConversation(conversationId as ViewerConversationId)
       : null,
     sourcePathAllowed: transcriptAllowed,
     conversationIdForPath: (pathname) => {
+      if (!identityFence().allowsPath(pathname)) return null;
       for (const conversation of Object.values(snapshot().conversations)) {
         if (conversation.generations.some((generation) => generation.path === pathname)) return conversation.id;
       }
@@ -751,7 +1126,23 @@ const SPAWN_HANDSHAKE_RETRY_DELAY_MS = 1_000;
     real time inside `spawnAgent`, and that time is part of the wait. */
 const SPAWN_CONTROLLER_WAIT_BUDGET_MS = 30_000;
 const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
+/** A runtime host whose RPCs time out comes back in minutes, not seconds: the
+    7eef4743 prototype's outage ran four and a half (#1678). A stage whose
+    launch receipt proves nothing was dispatched rides it out on this budget
+    with a slower backoff, because every round burns a real reservation and the
+    admission attempts the spawn layer makes before it records the failure. */
+const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
+const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+/** A `remote-branch` pipeline whose remote the network failed after an
+    approved review asks again on this budget (#1692). Every read may hold the
+    tick for its full five-second timeout, so the backoff starts at fifteen
+    seconds rather than one. */
+const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, retryMaxMs: 60_000 };
+/** Retired launches an attempt keeps; the host budget cannot mint more than
+    sixteen, so the cap only guards the record against a future longer budget. */
+const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
+const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
     fresh attempt on the next tick (tickRunStage/tickReviewStage). */
 const TERMINAL_ATTEMPT_STATES = new Set<PipelineStageAttempt["state"]>(["passed", "failed", "needs_decision", "skipped"]);
@@ -900,12 +1291,127 @@ function recordVerdictRecoveryMiss(
   pipeline.stateDetail = `re-evaluating terminal stage verdict (${checks}/${VERDICT_RECOVERY_MAX_CHECKS}): ${reason}`;
 }
 
+async function unregisteredStageHostDeathEvidence(
+  attempt: PipelineStageAttempt,
+  target: PipelineStageHostRef,
+  ports: PipelinePorts,
+  durable?: StageTurnEvidence | null,
+): Promise<string | null> {
+  if (target.paneId || !target.conversationId || !target.agentPath
+    || ports.conversationRegistered?.(target.conversationId) !== false) return null;
+  const evidence = durable === undefined
+    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, target.agentPath)
+    : durable;
+  return evidence?.launchOnly === true && evidence.message === null
+    ? UNREGISTERED_STAGE_HOST_DIED_REASON
+    : null;
+}
+
 function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null): void {
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt) attempt.error = detail;
   pipeline.state = "needs_decision";
   pipeline.pausedState = null;
   pipeline.stateDetail = detail;
+}
+
+function knownReset(...candidates: Array<number | null | undefined>): number | null {
+  const resets = candidates.filter((candidate): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0);
+  return resets.length ? Math.min(...resets) : null;
+}
+
+function rateLimitParkDetail(resetsAt: number | null, accountLabel: string): string {
+  const reset = resetsAt === null ? "an unknown reset time" : new Date(resetsAt * 1_000).toISOString();
+  return `rate limited until ${reset}, account ${accountLabel}`;
+}
+
+/** The usage limits that exclude accounts of `engine`. Both engines name their
+    main account `default`, so a limit hit on one engine never excludes an
+    account of the other; an entry from before engines were recorded belongs to
+    the engine its attempt was created under. */
+function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNullable<PipelineStageAttempt["usageLimitedAccounts"]> {
+  return (attempt.usageLimitedAccounts ?? []).filter((limited) => (limited.engine ?? attempt.effectiveRole.engine) === engine);
+}
+
+/** Terminal usage-limit recovery reuses the ordinary attempt and account
+    selection seams. The failed attempt stays as evidence; an automatic retry
+    carries a durable exclusion into the next spawn, while a pin or exhausted
+    allowed set parks on the earliest reset the two sources can establish. */
+function recoverUsageLimitedAttempt(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  usageLimit: { resetsAt: number | null },
+  ports: PipelinePorts,
+): void {
+  const fromTranscript = attempt.agentPath
+    ? ports.accountForTranscript?.(attempt.effectiveRole.engine, attempt.agentPath) ?? null
+    : null;
+  const pinnedAccount = attemptStage(stage, attempt).account?.trim() || null;
+  const accountId = attempt.accountId?.trim()
+    || fromTranscript?.accountId
+    || pinnedAccount
+    || null;
+  let accountLabel = "unknown";
+  if (fromTranscript?.accountId === accountId) accountLabel = fromTranscript.label;
+  else if (accountId) accountLabel = ports.accountLabel?.(attempt.effectiveRole.engine, accountId) ?? accountId;
+  const terminalDetail = rateLimitParkDetail(knownReset(usageLimit.resetsAt), accountLabel);
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  attempt.error = terminalDetail;
+
+  if (pinnedAccount || !accountId) {
+    park(pipeline, terminalDetail, attempt);
+    return;
+  }
+
+  const limitedEngine = attempt.effectiveRole.engine;
+  attempt.usageLimitedAccounts = [
+    ...(attempt.usageLimitedAccounts ?? []).filter((limited) => !(limited.accountId === accountId && (limited.engine ?? limitedEngine) === limitedEngine)),
+    { accountId, engine: limitedEngine, resetsAt: knownReset(usageLimit.resetsAt) },
+  ];
+  const retryWithLimits = () => {
+    pipeline.state = "running";
+    pipeline.pausedState = null;
+    pipeline.stateDetail = terminalDetail;
+    setCursorState(pipeline, stage.id, "pending");
+    const retry = newAttempt(pipeline, stage);
+    if (retry) retry.usageLimitedAccounts = attempt.usageLimitedAccounts!.map((limited) => ({ ...limited }));
+  };
+  /* An edit accepted since this attempt bound moved the stage to another
+     engine: the retry launches there, where this limit excludes nothing. */
+  if (stage.effectiveRole.engine !== limitedEngine) {
+    retryWithLimits();
+    return;
+  }
+  const usageLimitedAccounts = usageLimitsOn(attempt, limitedEngine);
+  const unavailableAccountIds = usageLimitedAccounts.map((limited) => limited.accountId);
+  let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+  try {
+    resolution = ports.resolveProjectSpawn?.(attempt.effectiveRole.engine, {
+      project: pipeline.project,
+      unavailableIds: unavailableAccountIds,
+    }) ?? accountManager.resolveProjectSpawn(attempt.effectiveRole.engine, {
+      project: pipeline.project,
+      unavailableIds: unavailableAccountIds,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    park(pipeline, `${terminalDetail}; failover unavailable: ${reason}`, attempt);
+    return;
+  }
+
+  if (resolution.kind === "available" && resolution.account.accountId !== accountId) {
+    retryWithLimits();
+    return;
+  }
+
+  const earliestReset = knownReset(
+    ...usageLimitedAccounts.map((limited) => limited.resetsAt),
+    resolution.kind === "exhausted" ? resolution.resetsAt : null,
+  );
+  park(pipeline, rateLimitParkDetail(earliestReset, accountLabel), attempt);
 }
 
 /** Moves the cursor's lifecycle state while preserving the durable relay record
@@ -1021,6 +1527,8 @@ function newAttempt(pipeline: Pipeline, stage: PipelineStage): PipelineStageAtte
     sessionId: null,
     agentPath: null,
     paneId: null,
+    accountId: null,
+    usageLimitedAccounts: [],
     flowId: null,
     expectedReviewHeadSha: null,
     reviewHeadSha: null,
@@ -1037,6 +1545,47 @@ function newAttempt(pipeline: Pipeline, stage: PipelineStage): PipelineStageAtte
   };
   run.attempts.push(attempt);
   return attempt;
+}
+
+/**
+ * Binds the stage definition an attempt runs (graph slice 1, automation-v2
+ * ADR-0002). Called in the record transaction that moves the attempt out of
+ * `pending`, before anything is launched for it, and a no-op once bound: a
+ * handshake retry, a controller wait that bounced the attempt back to
+ * `pending`, or a restart all keep the definition the first launch was issued
+ * under. The role is re-cloned here, so an edit accepted while the attempt was
+ * still unbound reaches it.
+ */
+function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): void {
+  if (attempt.definition) return;
+  attempt.effectiveRole = structuredClone(stage.effectiveRole);
+  attempt.definition = {
+    boundAt: ports.now(),
+    stageDigest: stageDigest(stage),
+    "prompt": stage.prompt,
+    account: stage.account?.trim() || null,
+    role: stage.role ? structuredClone(stage.role) : null,
+    sandbox: stage.sandbox ?? null,
+    outputs: stage.outputs ? [...stage.outputs] : null,
+  };
+}
+
+/** The stage as this attempt runs it: its bound definition over the live
+    stage's identity and edges. An attempt recorded before definitions were
+    bound reads the live stage, as it always did. */
+function attemptStage(stage: PipelineStage, attempt: PipelineStageAttempt | null | undefined): PipelineStage {
+  const definition = attempt?.definition;
+  if (!attempt || !definition) return stage;
+  const { account: _account, role: _role, sandbox: _sandbox, outputs: _outputs, ...identity } = stage;
+  return {
+    ...identity,
+    "prompt": definition.prompt,
+    ...(definition.account ? { account: definition.account } : {}),
+    ...(definition.role ? { role: definition.role } : {}),
+    ...(definition.sandbox ? { sandbox: definition.sandbox } : {}),
+    ...(definition.outputs ? { outputs: definition.outputs } : {}),
+    effectiveRole: attempt.effectiveRole,
+  };
 }
 
 export type PipelineAttemptConversationRef = {
@@ -1141,6 +1690,43 @@ export async function adoptPipelineAttemptFromSource(
   });
 }
 
+/** The task store as the pipeline controller reads it for bindings; an
+    unreadable store binds nothing this tick and is retried on the next. */
+function tasksForBinding(): readonly BoardTask[] {
+  try {
+    return loadTasks();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A pipeline without a recorded task adopts the fallback task its admission
+ * minted (#1586, origin `pipeline:<id>`), so the task/pipeline read model and
+ * `ensurePipelineForTask` see the binding instead of asking for another
+ * pipeline. Idempotent: recovery of the same launch reuses the same fallback.
+ */
+export function adoptPipelineFallbackTask(pipeline: Pipeline, tasks: readonly BoardTask[]): boolean {
+  if (pipeline.taskIds.length) return false;
+  const fallback = tasks.find((task) => task.origin?.kind === "pipeline" && task.origin.key === pipeline.id);
+  if (!fallback) return false;
+  pipeline.taskIds = [fallback.id];
+  return true;
+}
+
+function reconcilePipelineFallbackTasks(pipelines: readonly Pipeline[], persist: (records: readonly Pipeline[]) => void): boolean {
+  const unbound = pipelines.filter((pipeline) => !pipeline.taskIds.length && !pipeline.hiddenAt);
+  if (!unbound.length) return false;
+  const tasks = tasksForBinding();
+  let changed = false;
+  for (const pipeline of unbound) {
+    if (!adoptPipelineFallbackTask(pipeline, tasks)) continue;
+    persist([pipeline]);
+    changed = true;
+  }
+  return changed;
+}
+
 function reconcilePendingPipelineAdoptions(pipeline: Pipeline, ports: PipelinePorts): boolean {
   let changed = false;
   for (const candidate of ports.pipelineAdoptionCandidates(pipeline.id)) {
@@ -1170,6 +1756,7 @@ async function reconcileHistoricalAttempts(pipeline: Pipeline, entries: FileEntr
             attempt.sessionId = receipt.sessionId;
             attempt.agentPath = receipt.transcript;
             attempt.paneId = receipt.paneId;
+            attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
             if (receipt.state === "failed" || receipt.state === "conflicted") {
               attempt.state = "failed";
               attempt.completedAt = ports.now();
@@ -1221,6 +1808,58 @@ const TERMINAL_REVIEW_FLOW_STATES: ReadonlySet<Flow["state"]> = new Set([
 ]);
 const REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX = "review flow host claim retry: ";
 const REVIEW_FLOW_RELAY_RETRY_PREFIX = "review flow relay retry: ";
+const REVIEW_FLOW_SCAN_WAIT_PREFIX = "review flow waiting for its implementer transcript to be scanned; retry at ";
+/** The flow engine's own pause wording when the controller's completed scan
+    snapshot does not list the implementer transcript (flows/engine.ts). */
+const MISSING_IMPLEMENTER_TRANSCRIPT = "implementer transcript is missing";
+
+/**
+ * Rides out a review flow that paused because the controller's completed scan
+ * snapshot did not list the implementer transcript yet (#1678). The pipeline
+ * itself settled that implementer from its transcript artifact, ahead of the
+ * scanner, and the ordinary snapshot refresh runs minutes apart; the flow
+ * engine pauses on the stale snapshot and a paused flow is never ticked again,
+ * so without this the stage parked on the first sighting and only an
+ * operator's flow resume could free it (pipeline 4d6f4fc1, 2026-09-13).
+ *
+ * The evidence required before any resume is the registry naming the
+ * implementer conversation's transcript: a conversation the Viewer does not
+ * know is not a scan lag and parks as before. Only a flow paused in
+ * `spawning` is resumed, the one phase the live run showed and the only one
+ * in which the round has not launched: the attempt's controller wait ends on
+ * launch evidence, so a pause in a later phase would end the wait on every
+ * resume and never reach exhaustion. The resume is booked on the same bounded
+ * wall-clock wait the host-unavailable spawn uses, so a transcript the scan
+ * never lists ends in a truthful park that counts the resumes.
+ */
+function deferUnscannedImplementerTranscript(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  implementer: PipelineStageAttempt,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "paused" || flow.pausedState !== "spawning" || flow.stateDetail !== MISSING_IMPLEMENTER_TRANSCRIPT) {
+    return "not-applicable";
+  }
+  const registered = implementer.conversationId !== null && ports.pathForConversation(implementer.conversationId) !== null;
+  if (!registered) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const resumed = ports.patchFlow(flow.id, "resume");
+  if (resumed.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_SCAN_WAIT_PREFIX}${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
+}
 
 function reviewFlowRetryDetail(flow: Flow): string | null {
   if (flow.state !== "relaying" || !flow.stateDetail?.includes("retrying automatically")) return null;
@@ -1350,6 +1989,13 @@ export function reconcileEmbeddedReviewFlows(
   return changed;
 }
 
+/** Whether this pipeline asked for remote publication (#1692). Every other
+    record, including every one written before the policy existed, is
+    internal: nothing it accepts waits on a remote. */
+function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean {
+  return pipeline.publication === "remote-branch";
+}
+
 /** Advance along the pass edge, persisting the relay record: the completed
     attempt's output is the next activation's `{{prev.output}}`, written in the
     same mutation as the verdict/commit that produced it (exactly-once, #353). */
@@ -1384,15 +2030,22 @@ function keepPassedStageUnpublished(
   pipeline.stateDetail = message;
 }
 
-/** A terminal pass cannot close until its accepted revision is remotely
-    durable. The pass receipt stays terminal and the committing cursor becomes
-    a publication retry seam, so later ticks never rerun or reset stage work. */
+/** Under `remote-branch`, a terminal pass cannot close until its accepted
+    revision is remotely durable. The pass receipt stays terminal and the
+    committing cursor becomes a publication retry seam, so later ticks never
+    rerun or reset stage work. An internal pipeline has nothing to wait for:
+    a pass an older build left waiting here closes on its own record. */
 function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
 ): void {
+  if (!publishesRemoteBranch(pipeline)) {
+    attempt.error = null;
+    advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
   const published = publishPipelineBranch(pipeline, ports.exec, {
     acceptedSha: pipeline.lastPassedCommit,
     publishedSha: pipeline.publishedCommit ?? null,
@@ -1467,7 +2120,8 @@ function commitPassedStage(
   ports: PipelinePorts,
 ): void {
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
-  const result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec);
+  const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
+  const result = commitPipelineStage(pipeline, stage.id, allowCommit, ports.exec, attemptStage(stage, attempt).outputs, protectedHead);
   if (!result.ok) {
     park(pipeline, result.error, attempt);
     return;
@@ -1481,12 +2135,19 @@ function commitPassedStage(
     return;
   }
   pipeline.lastPassedCommit = result.sha;
-  /* Publish before the next stage can gate on the publication (#729). A review
-     stage fences every round on `origin/<branch>` through captureReviewHead, so
-     a builder that produced a usable head strands the whole handoff unless the
-     orchestrator itself pushes it — waiting for a stage to have run `git push`
-     is what left pipeline 2ae14391 parked for over seven hours. Publication
-     failure is its own recoverable class: the commit is already durable in
+  if (!publishesRemoteBranch(pipeline)) {
+    attempt.state = "passed";
+    attempt.completedAt = ports.now();
+    advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
+  /* Under `remote-branch`, publish before the next stage can gate on the
+     publication (#729). A review stage then fences every round on
+     `origin/<branch>` through captureReviewHead, so a builder that produced a
+     usable head strands the whole handoff unless the orchestrator itself
+     pushes it — waiting for a stage to have run `git push` is what left
+     pipeline 2ae14391 parked for over seven hours. Publication failure is its
+     own recoverable class: the commit is already durable in
      `lastPassedCommit`, so nothing is lost while the operator resolves it. */
   const published = publishPipelineBranch(pipeline, ports.exec, {
     acceptedSha: result.sha,
@@ -1627,12 +2288,52 @@ async function tickRunStage(
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
+    /* A failover attempt is still unbound here, so it launches on whatever
+       engine the stage names by the time it binds below; an edit accepted
+       since it was created is checked against that engine, and only limits
+       hit on that engine exclude its accounts. */
+    const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
+    const usageLimitedAccounts = usageLimitsOn(attempt, engine);
+    if (usageLimitedAccounts.length > 0) {
+      const unavailableIds = usageLimitedAccounts.map((limited) => limited.accountId);
+      const latestLimited = usageLimitedAccounts.at(-1)!;
+      const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
+      let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
+      try {
+        resolution = ports.resolveProjectSpawn?.(engine, {
+          project: pipeline.project,
+          unavailableIds,
+        }) ?? accountManager.resolveProjectSpawn(engine, {
+          project: pipeline.project,
+          unavailableIds,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        park(pipeline, `${rateLimitParkDetail(knownReset(...usageLimitedAccounts.map((limited) => limited.resetsAt)), accountLabel)}; failover unavailable: ${reason}`, attempt);
+        return;
+      }
+      if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)) {
+        const resetsAt = knownReset(
+          ...usageLimitedAccounts.map((limited) => limited.resetsAt),
+          resolution.kind === "exhausted" ? resolution.resetsAt : null,
+        );
+        attempt.state = "failed";
+        attempt.completedAt = activationNow;
+        park(pipeline, rateLimitParkDetail(resetsAt, accountLabel), attempt);
+        return;
+      }
+    }
     /* A publication this process is merely between is transient. Waiting for it
        beats spawning into it: the failure lands deep in durable host setup
        (structuredSpawn's publishHost), so an attempt issued now burns a real
        engine launch before it can fail. */
     if (publication === "rebinding") {
+      /* This wait precedes any spawn call of this engine, so it records the
+         count here: a fresh attempt starts at zero, and a later activation
+         cannot mistake the wait for one an earlier engine left mid-spawn. */
+      attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
+        syncControllerWaitStateDetail(pipeline, attempt, null);
         persist();
         return;
       }
@@ -1643,6 +2344,8 @@ async function tickRunStage(
       );
       return;
     }
+    bindAttemptDefinition(stage, attempt, ports);
+    const bound = attemptStage(stage, attempt);
     attempt.state = "spawning";
     attempt.startedAt = activationNow;
     setCursorState(pipeline, stage.id, "spawning");
@@ -1655,7 +2358,7 @@ async function tickRunStage(
          positional scan byte-identically. */
       const prompt = renderStagePrompt(
         pipeline,
-        stage,
+        bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
       );
@@ -1664,7 +2367,11 @@ async function tickRunStage(
       const priorAttempt = runFor(pipeline, stage.id)?.attempts.filter((candidate) => !candidate.historical).at(-2) ?? null;
       const spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0] = {
         role: attempt.effectiveRole,
+        runtimeProfile: pipelineStageRuntimeProfile(bound),
         cwd: pipeline.worktreeDir,
+        project: pipeline.project,
+        requestedAccountId: bound.account ?? null,
+        unavailableAccountIds: usageLimitsOn(attempt, attempt.effectiveRole.engine).map((limited) => limited.accountId),
         title: pipelineStageTitle(pipeline.task, stage.id),
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
@@ -1688,14 +2395,26 @@ async function tickRunStage(
          The activation leaves the loop for the wall-clock wait below rather
          than sleeping here, so it costs the pipelines phase nothing. */
       let controllerFailure: string | null = null;
-      /* Rounds already booked by earlier ticks of this same activation. The
-         retry index continues across them, so every attempt keeps a distinct
-         launch identity even though the wait now spans ticks (#1056). */
-      const priorControllerRounds = attempt.controllerWait?.rounds ?? 0;
+      /* The failed receipt behind `controllerFailure` when the spawn had
+         already reserved a launch; retired once a further round is booked. */
+      let failedReceipt: PipelineSpawnReceipt | null = null;
       while (true) {
         spawnAttempt += 1;
+        /* Every spawn call of this attempt consumes one client attempt id,
+           the immediate handshake retries inside one tick and the rounds of
+           a wait that spans ticks alike (#1056, review round 2), so the retry
+           index counts spawn calls. The count is persisted before the call:
+           a restart that interrupts the call still finds it counted, so the
+           retry that follows the interrupted launch's retirement cannot
+           replay its id. An attempt persisted before the count existed starts
+           past every id the earlier engine could have spent. */
+        const retryIndex = Math.max(
+          attempt.spawnCalls ?? uncountedSpawnCallFloor(attempt),
+          attempt.retiredLaunches?.length ?? 0,
+        );
+        attempt.spawnCalls = retryIndex + 1;
+        persist();
         try {
-          const retryIndex = priorControllerRounds + spawnAttempt - 1;
           spawned = await ports.spawnAgent({
             ...spawnInput,
             clientAttemptId: retryIndex === 0
@@ -1704,6 +2423,11 @@ async function tickRunStage(
           }, (reservation) => {
             attempt.launchId = reservation.launchId;
             attempt.conversationId = reservation.conversationId;
+            attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
+            /* The reservation committed this stage's membership (#1586); a
+               fallback task it minted is the pipeline's task from here on,
+               recorded before the agent is actuated. */
+            adoptPipelineFallbackTask(pipeline, tasksForBinding());
             persist();
           });
           break;
@@ -1714,7 +2438,20 @@ async function tickRunStage(
              not a rejected launch, so it gets the wall-clock wait budget; every
              other transient keeps the two immediate handshake retries (#1056),
              which stay well inside the controller's phase deadline. */
-          if (isStructuredDeliveryControllerFailure(message)) {
+          const accountMutationContention = isAccountMutationContention(message);
+          const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
+          /* A busy account or an unreachable runtime host is retryable before
+             the registry publishes a launch claim. Once a callback supplied an
+             id, the receipt alone knows the launch's fate (#1678): `failed` is
+             the spawn layer's own retry-safe verdict and the launch is retired
+             below; anything else parks, and the existing receipt recovery
+             adopts a launch that settles after all. */
+          if ((accountMutationContention || hostUnavailable) && attempt.launchId !== null) {
+            const receipt = ports.spawnReceipt(attempt.launchId);
+            if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
+            failedReceipt = receipt;
+          }
+          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable) {
             controllerFailure = message;
             break;
           }
@@ -1730,11 +2467,24 @@ async function tickRunStage(
            spent inside spawnAgent counts against the budget rather than being
            invisible to it. */
         const failedAt = ports.now();
+        if (failedReceipt) {
+          /* Claimed under the identity retry-stage uses, so a later manual
+             retry of the same launch is idempotent; a claim that finds the
+             receipt settled after all parks, and the completed-receipt
+             reconcile adopts the launch on the next tick. */
+          const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
+          if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+          if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
+          if (deferred === "settled") throw new Error(controllerFailure);
+          persist();
+          return;
+        }
         if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
         attempt.state = "pending";
         setCursorState(pipeline, stage.id, "pending");
+        syncControllerWaitStateDetail(pipeline, attempt, controllerFailure);
         persist();
         return;
       }
@@ -1745,8 +2495,11 @@ async function tickRunStage(
       attempt.sessionId = spawned.sessionId;
       attempt.agentPath = spawned.transcript;
       attempt.paneId = spawned.paneId;
+      attempt.accountId = spawned.accountId ?? attempt.accountId ?? null;
       attempt.state = "running";
       setCursorState(pipeline, stage.id, "running");
+      if (pipeline.stateDetail?.startsWith("rate limited until ")
+        || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
     } catch (error) {
       park(pipeline, error instanceof Error ? error.message : String(error), attempt);
     } finally {
@@ -1771,8 +2524,28 @@ async function tickRunStage(
       attempt.sessionId = receipt.sessionId;
       attempt.agentPath = receipt.transcript;
       attempt.paneId = receipt.paneId;
+      attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
+      /* A launch the spawn layer ended `failed` for a transient reason gets
+         the same bounded wait the live activation gets (#1678). The budget
+         starts at this process's first sighting: the interrupted activation's
+         own clock includes the restart, which would spend the budget before a
+         single retry. A wait persisted from before the restart keeps its own
+         start, so its exhaustion still counts every round. */
+      if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
+        const now = ports.now();
+        const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
+        if (deferred === "waiting") return;
+        if (deferred === "exhausted") {
+          park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
+          return;
+        }
+        if (deferred === "unsafe") {
+          park(pipeline, stagedLaunchRetryRefusal(receipt.error), attempt);
+          return;
+        }
+      }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
-        park(pipeline, `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
+        park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
       }
     }
@@ -1783,8 +2556,22 @@ async function tickRunStage(
   const structuredActive = !attempt.paneId && attempt.conversationId
     ? await ports.conversationAgentActive(attempt.conversationId)
     : null;
+  const spawnReceipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+  const terminalSpawnFailure = spawnReceipt
+    && (spawnReceipt.state === "failed" || spawnReceipt.state === "conflicted")
+    ? spawnReceipt.error ?? `stage spawn cannot recover from receipt state ${spawnReceipt.state}`
+    : null;
+  /* A terminal spawn receipt is durable launch evidence. Runtime liveness can
+     lag behind receipt settlement or fail to answer, so it has no authority to
+     hide the recorded drain cause behind a later transcript park (#1326). */
+  if (terminalSpawnFailure) {
+    park(pipeline, terminalSpawnFailure, attempt);
+    return;
+  }
   if (!attempt.agentPath) {
-    if (structuredActive === false) park(pipeline, "structured stage ended before its session was discovered", attempt);
+    if (structuredActive === false) {
+      park(pipeline, "structured stage ended before its session was discovered", attempt);
+    }
     else if (attempt.paneId && !(await ports.paneAgentAlive(attempt.paneId))) park(pipeline, "stage agent exited before its session was discovered", attempt);
     return;
   }
@@ -1815,6 +2602,29 @@ async function tickRunStage(
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath);
+  const unregisteredHostDeath = structuredActive === true
+    ? null
+    : await unregisteredStageHostDeathEvidence(attempt, {
+      stageId: stage.id,
+      attempt: attempt.n,
+      conversationId: attempt.conversationId,
+      agentPath: attempt.agentPath,
+      paneId: attempt.paneId,
+      ...(attempt.historical ? { adopted: true as const } : {}),
+    }, ports, durable);
+  if (unregisteredHostDeath && canSpendRecoveryCheck()) {
+    recordVerdictRecoveryMiss(pipeline, attempt, ports, unregisteredHostDeath, null);
+    return;
+  }
+  const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
+  const terminalUsageLimit = terminalProviderMessage
+    && terminalProviderMessage.ts > unixMs(attempt.startedAt)
+    ? terminalProviderMessage.usageLimit ?? null
+    : null;
+  if (terminalUsageLimit) {
+    recoverUsageLimitedAttempt(pipeline, stage, attempt, terminalUsageLimit, ports);
+    return;
+  }
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const parsed = parsePipelineStageVerdict(durable.message!.text);
@@ -1836,6 +2646,27 @@ async function tickRunStage(
     }
   }
   if (hostUnavailablePastGrace) {
+    /* A CPU-flat structured process is still a real process. Retire it through
+       the same identity-fenced control path as an operator kill before making
+       the attempt retryable; otherwise pane-less retry admission can launch a
+       replacement while the recorded engine still exists (#1296). */
+    const stopped = await ports.stopStageAgent({
+      stageId: stage.id,
+      attempt: attempt.n,
+      conversationId: attempt.conversationId,
+      agentPath: attempt.agentPath,
+      paneId: attempt.paneId,
+      ...(attempt.historical ? { adopted: true as const } : {}),
+    });
+    if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+    if (stopped.outcome === "failed" || stopped.outcome === "unresolved" || stopped.outcome === "unconfirmed") {
+      pipeline.stateDetail = stopped.outcome === "unconfirmed"
+        ? "automatic recovery is waiting for the unavailable stage host to terminate"
+        : `automatic recovery could not retire the unavailable stage host: ${stopped.error}`;
+      ports.scheduleTick?.(1_000);
+      return;
+    }
+    pipeline.stateDetail = null;
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     attempt.error = HISTORICAL_MISSING_STAGE_VERDICT;
@@ -1999,6 +2830,8 @@ function publishReviewIngressHead(
       detail: `review stage head mismatch: the accepted review head is ${expected}, but the pipeline worktree is at ${local.sha}; nothing was published`,
     };
   }
+  /* An internal pipeline reviews the clean local revision it accepted. */
+  if (!publishesRemoteBranch(pipeline)) return { ok: true };
 
   /* `publishedSha` is deliberately omitted: ingress probes the remote for real
      rather than trusting a durable record that may be stale or migrated. */
@@ -2037,12 +2870,7 @@ async function tickReviewStage(
     return;
   }
   if (attempt.state === "committing") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
-    commitPassedStage(pipeline, stage, attempt, ports);
+    if (approvedReviewHeadHolds(pipeline, attempt, ports)) commitPassedStage(pipeline, stage, attempt, ports);
     return;
   }
   const implementer = latestPassedRun(pipeline, stage.id);
@@ -2050,6 +2878,7 @@ async function tickReviewStage(
     park(pipeline, "review-loop stage requires a passed run session", attempt);
     return;
   }
+  if (attempt.state === "pending") bindAttemptDefinition(stage, attempt, ports);
   if (!attempt.startedAt) attempt.startedAt = ports.now();
   attempt.state = "reviewing";
   setCursorState(pipeline, stage.id, "reviewing");
@@ -2103,10 +2932,12 @@ async function tickReviewStage(
       baseMode: "head",
       baseRef: pipeline.baseRef,
       headRef: pipeline.branch,
+      ...(publishesRemoteBranch(pipeline) ? { requireRemoteHead: true } : {}),
       targetSha: attempt.expectedReviewHeadSha,
       spec: pipeline.spec ?? pipeline.task,
       mode: "auto",
       reviewerMode: "headless",
+      reviewerSandbox: pipelineStageSandbox(attemptStage(stage, attempt)),
       roundLimit: 5,
     }, entries);
     if (!created.flow) {
@@ -2119,7 +2950,7 @@ async function tickReviewStage(
       park(pipeline, `review flow startup paused: ${created.flow.stateDetail ?? "kickoff delivery failed"}`, attempt);
       return;
     }
-    const note = reviewNote(pipeline, stage, attempt.effectiveRole);
+    const note = reviewNote(pipeline, attemptStage(stage, attempt), attempt.effectiveRole);
     if ("error" in note) {
       park(pipeline, note.error, attempt);
       return;
@@ -2135,16 +2966,26 @@ async function tickReviewStage(
     return;
   }
   if (flow.state === "paused") {
+    const deferred = deferUnscannedImplementerTranscript(pipeline, stage, attempt, flow, implementer, ports);
+    if (deferred === "waiting") return;
     const phase = flow.pausedState && flow.pausedState !== "paused" ? flow.pausedState : "unknown phase";
-    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}`, attempt);
+    const exhausted = deferred === "exhausted"
+      ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic resumes over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+      : "";
+    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}${exhausted}`, attempt);
     return;
   }
+  /* The bounded wait booked by the scan resume above or the launch retry
+     below ends only once the round shows a launch under way or the flow has
+     moved past spawning; a round still waiting to launch keeps the budget it
+     already spent, so repeated stalls cannot restart it. */
+  if (attempt.controllerWait && reviewerLaunchUnderway(flow)) delete attempt.controllerWait;
   /* Advance appends round 1 synchronously, so waiting_ready with zero rounds
      means the advance never landed (crash between persisting flowId and the
      patch) — without a re-issue the flow waits forever for a ready marker a
      verdict-terminated stage transcript will not produce. */
   if (flow.state === "waiting_ready" && flow.rounds.length === 0) {
-    const note = reviewNote(pipeline, stage, attempt.effectiveRole);
+    const note = reviewNote(pipeline, attemptStage(stage, attempt), attempt.effectiveRole);
     if ("error" in note) {
       park(pipeline, note.error, attempt);
       return;
@@ -2163,21 +3004,24 @@ async function tickReviewStage(
     attempt.reviewHeadSha = capturedReviewHead;
     persist();
   }
+  /* Before the status line is reconciled below: a launch retry whose backoff
+     has not fallen due keeps its "deferred; retry at" detail on the board
+     (review round 2), and the flow's needs_decision is not terminal for it. */
+  const deferredLaunch = deferContendedReviewerLaunch(pipeline, stage, attempt, flow, ports);
+  if (deferredLaunch === "waiting") return;
   const retryDetail = reviewFlowRetryDetail(flow);
   if (retryDetail) {
     pipeline.stateDetail = retryDetail;
   } else if (
     pipeline.stateDetail?.startsWith(REVIEW_FLOW_HOST_CLAIM_RETRY_PREFIX)
     || pipeline.stateDetail?.startsWith(REVIEW_FLOW_RELAY_RETRY_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_SCAN_WAIT_PREFIX)
+    || pipeline.stateDetail?.startsWith(REVIEW_FLOW_LAUNCH_WAIT_PREFIX)
   ) {
     pipeline.stateDetail = null;
   }
   if (flow.state === "approved") {
-    const fenceError = reviewHeadFenceError(pipeline, attempt, ports);
-    if (fenceError) {
-      park(pipeline, fenceError, attempt);
-      return;
-    }
+    if (!approvedReviewHeadHolds(pipeline, attempt, ports)) return;
     attempt.output = `Review loop approved after ${flow.rounds.length} round(s).`;
     attempt.verdict = { status: "pass", confidence: 1 };
     attempt.state = "committing";
@@ -2186,8 +3030,64 @@ async function tickReviewStage(
     commitPassedStage(pipeline, stage, attempt, ports);
   } else {
     const terminalError = terminalReviewFlowError(flow);
-    if (terminalError) park(pipeline, terminalError, attempt);
+    if (terminalError) {
+      const exhausted = deferredLaunch === "exhausted"
+        ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic launch retries over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
+        : "";
+      park(pipeline, `${terminalError}${exhausted}`, attempt);
+    }
   }
+}
+
+const REVIEW_FLOW_LAUNCH_WAIT_PREFIX = "review flow reviewer launch deferred: ";
+
+/** True once the flow's current round has begun a launch (a launch id, a
+    spawn start, a reviewer transcript or session) or the flow has moved past
+    `spawning`; false while the round is still waiting to launch. */
+function reviewerLaunchUnderway(flow: Flow): boolean {
+  if (flow.state !== "spawning" && flow.state !== "needs_decision" && flow.state !== "paused") return true;
+  const round = flow.rounds.at(-1);
+  return Boolean(round?.spawnStartedAt || round?.launchId || round?.reviewerPath || round?.sessionId);
+}
+
+/**
+ * Retries a reviewer launch the flow engine ended on a busy account mutation
+ * lock (#1678, the class of #1433 on the flow side). The flow terminalizes
+ * the round as `needs_decision` the moment `prepareReviewerLaunch` meets the
+ * lock, and the pipeline parked on that terminal state; pipeline 4d6f4fc1 hit
+ * it twice in a row on 2026-09-13, each time before any launch was reserved.
+ *
+ * Evidence before any retry: the round never started a launch
+ * (`spawnStartedAt`, `launchId`, `reviewerPath` and `sessionId` all unset), so
+ * a fresh round cannot duplicate a reviewer. The retry is the flow's own
+ * `retry-round`, booked on the same bounded wait a busy run-stage spawn gets;
+ * exhaustion parks with the flow's terminal detail and the retries counted.
+ */
+function deferContendedReviewerLaunch(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  flow: Flow,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "not-applicable" {
+  if (flow.state !== "needs_decision" || !isAccountMutationContention(flow.stateDetail ?? "")) return "not-applicable";
+  const round = flow.rounds.at(-1);
+  if (!round || round.spawnStartedAt || round.launchId || round.reviewerPath || round.sessionId) return "not-applicable";
+  const now = ports.now();
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return "waiting";
+  if (bookControllerWaitRound(attempt, now, now, ports, {
+    budgetMs: SPAWN_HOST_WAIT_BUDGET_MS,
+    retryMaxMs: SPAWN_HOST_RETRY_MAX_MS,
+  }) === "exhausted") return "exhausted";
+  const reason = controllerFailureReason(flow.stateDetail ?? "");
+  const retried = ports.patchFlow(flow.id, "retry-round");
+  if (retried.error) return "not-applicable";
+  attempt.state = "reviewing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = `${REVIEW_FLOW_LAUNCH_WAIT_PREFIX}${reason}; retry at ${attempt.controllerWait!.retryAfter}`;
+  setCursorState(pipeline, stage.id, "reviewing");
+  return "waiting";
 }
 
 async function tickPipeline(
@@ -2256,21 +3156,80 @@ const RECONCILABLE_BOUND_FLOW_ERRORS = [
   "embedded review flow record disappeared",
 ] as const;
 
-function reviewHeadFenceError(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+const APPROVED_REMOTE_HEAD_UNVERIFIED = "approved review flow could not verify the remote pipeline head";
+const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the remote pipeline head: ";
+
+/** The exact-head fence an approved review must hold before its stage settles
+    (#526, #533): the approval envelope, and the clean local HEAD at the
+    reviewed SHA. A `remote-branch` pipeline also needs `origin/<branch>` at
+    that SHA; an internal one never reads a remote (#1692). `park` is a
+    verdict; `retry` is a remote read the network failed, which says nothing
+    about the head either way. */
+function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): { park: string } | { retry: string } | null {
   if (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha) {
-    return `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}`;
+    return { park: `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}` };
   }
   const currentHead = currentPipelineBranchHead(pipeline, ports.exec);
-  if (!currentHead.ok) return `approved review flow could not verify the current pipeline head: ${currentHead.error}`;
+  if (!currentHead.ok) return { park: `approved review flow could not verify the current pipeline head: ${currentHead.error}` };
   if (attempt.reviewHeadSha !== currentHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}` };
   }
+  if (!publishesRemoteBranch(pipeline)) return null;
   const remoteHead = currentPipelineRemoteBranchHead(pipeline, ports.exec);
-  if (!remoteHead.ok) return `approved review flow could not verify the remote pipeline head: ${remoteHead.error}`;
+  if (!remoteHead.ok) return remoteHead.transient ? { retry: remoteHead.error } : { park: `${APPROVED_REMOTE_HEAD_UNVERIFIED}: ${remoteHead.error}` };
   if (attempt.reviewHeadSha !== remoteHead.sha) {
-    return `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}`;
+    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}` };
   }
   return null;
+}
+
+/**
+ * True when an approved review may settle this tick (#1692).
+ *
+ * For a `remote-branch` pipeline, a remote read the network failed books a
+ * bounded wait instead of parking.
+ * Nothing else moves: the attempt keeps its state, the flow is not touched,
+ * no reviewer launches and nothing is sent. The next due tick checks the
+ * clean local head and the remote head against the reviewed SHA from scratch,
+ * so a remote that comes back at another head parks on the mismatch like any
+ * other. Every other fence failure parks at once, and so does a wait whose
+ * budget is spent, with the retries it made.
+ */
+function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+  const now = ports.now();
+  const wait = attempt.remoteHeadWait;
+  if (wait && unixMs(wait.retryAfter) > unixMs(now)) return false;
+  const fence = reviewHeadFence(pipeline, attempt, ports);
+  if (!fence) {
+    delete attempt.remoteHeadWait;
+    return true;
+  }
+  if ("park" in fence) {
+    park(pipeline, fence.park, attempt);
+    return false;
+  }
+  const next = nextBoundedWait(wait, now, now, APPROVED_REMOTE_HEAD_WAIT);
+  if (!next) {
+    const seconds = Math.round(Math.max(0, unixMs(now) - unixMs(wait!.startedAt)) / 1_000);
+    park(pipeline, `${APPROVED_REMOTE_HEAD_UNVERIFIED} after ${wait!.rounds} automatic retries over ${seconds}s: ${fence.retry}`, attempt);
+    return false;
+  }
+  attempt.remoteHeadWait = next.wait;
+  attempt.error = null;
+  pipeline.stateDetail = `${APPROVED_REMOTE_HEAD_WAIT_PREFIX}${fence.retry}; retry at ${next.wait.retryAfter}`;
+  ports.scheduleTick?.(next.delayMs);
+  return false;
+}
+
+/** A park a build before #1692 left because the remote head could not be
+    read, with the flow still approved. Every such record is internal, and an
+    internal pipeline never needed that read, so it resumes once and settles
+    on the local fence alone. A park on a remote head that answered a
+    different SHA is a verdict about the remote and never resumes here. */
+function parkedOnUnverifiedRemoteHead(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, flow: Flow | null): boolean {
+  return flow?.state === "approved"
+    && !publishesRemoteBranch(pipeline)
+    && !!attempt?.error?.startsWith(`${APPROVED_REMOTE_HEAD_UNVERIFIED}: `);
 }
 
 function terminalReviewFlowError(flow: Flow): string | null {
@@ -2333,7 +3292,7 @@ function reconcileBoundReviewFlow(pipeline: Pipeline, ports: PipelinePorts, pers
   let flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
   if (
     !attemptError
-    || !RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix))
+    || !(RECONCILABLE_BOUND_FLOW_ERRORS.some((prefix) => attemptError.startsWith(prefix)) || parkedOnUnverifiedRemoteHead(pipeline, attempt, flow))
     || !flow
     || !RECONCILABLE_REVIEW_FLOW_STATES.has(flow.state)
   ) return false;
@@ -2387,6 +3346,7 @@ function reconcileParkedStructuredSpawn(pipeline: Pipeline, ports: PipelinePorts
   attempt.sessionId = receipt.sessionId;
   attempt.agentPath = receipt.transcript;
   attempt.paneId = receipt.paneId;
+  attempt.accountId = receipt.accountId ?? attempt.accountId ?? null;
   attempt.state = "running";
   attempt.error = null;
   pipeline.state = "running";
@@ -2469,8 +3429,101 @@ function isStructuredDeliveryControllerFailure(failure: string): boolean {
   return failure.includes("structured delivery controller is unavailable");
 }
 
+function isAccountMutationContention(failure: string): boolean {
+  return failure.startsWith("account mutation is busy");
+}
+
+/** The pipeline spawn adapter's wording for every socket-level runtime-host
+    failure (`supervisedRuntimeHostUnavailableReason`), and the spawn layer's
+    own wording on the receipt it fails for the same reason. The ownership
+    refusal "structured host ownership is unavailable" is a different sentence
+    and a different class, and stays out. */
+function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
+  return failure.includes("runtime host is unavailable");
+}
+
+/**
+ * Retires a launch whose receipt settled `failed` and books the bounded wait
+ * before the same attempt reserves a fresh one (#1678). The receipt is the only
+ * authority consulted: it is the spawn layer's own retry-safe verdict, written
+ * after its admission attempts and its dead-host projection, so the engine
+ * never re-dispatches a launch whose fate it merely failed to observe.
+ *
+ * The claim uses the identity `retry-stage` uses for the same launch, so an
+ * operator retry that reaches the receipt later is idempotent rather than
+ * refused. `settled` means the receipt completed between the read and the
+ * claim: that launch is alive, nothing is retired, and the caller parks so the
+ * completed-receipt reconcile adopts it.
+ *
+ * `unsafe` is a failed receipt that had staged a session identity for a
+ * read-write stage: the spawn layer can fail a receipt after the engine host
+ * started and ran its first turn (a transport failure while marking the
+ * first message delivered), and the host is killed on that path, but the
+ * worktree may hold its partial edits. `retry-stage` resets the worktree
+ * before it re-dispatches; this path does not, so it refuses and the park
+ * says which action to take. A read-only stage has nothing to reset.
+ */
+function deferRetiredLaunchRetry(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  receipt: PipelineSpawnReceipt,
+  since: string,
+  now: string,
+  ports: PipelinePorts,
+): "waiting" | "exhausted" | "settled" | "unsafe" {
+  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") return "unsafe";
+  const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
+  if (claim !== "claimed") return "settled";
+  const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
+  if (bookControllerWaitRound(attempt, since, now, ports, isRuntimeHostUnavailableSpawnFailure(failure)
+    ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
+    : undefined) === "exhausted") return "exhausted";
+  const retired = attempt.retiredLaunches ?? [];
+  retired.push({
+    launchId: receipt.launchId,
+    conversationId: attempt.conversationId ?? receipt.conversationId ?? null,
+    error: failure,
+    retiredAt: now,
+  });
+  attempt.retiredLaunches = retired.slice(-RETIRED_LAUNCH_LIMIT);
+  attempt.launchId = null;
+  attempt.conversationId = null;
+  attempt.sessionId = null;
+  attempt.agentPath = null;
+  attempt.paneId = null;
+  attempt.state = "pending";
+  attempt.error = null;
+  setCursorState(pipeline, stage.id, "pending");
+  syncControllerWaitStateDetail(pipeline, attempt, failure);
+  return "waiting";
+}
+
+function controllerFailureReason(failure: string): string {
+  return failure.replace(/; retry shortly$/, "");
+}
+
+function stagedLaunchRetryRefusal(failure: string): string {
+  return `${controllerFailureReason(failure)}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`;
+}
+
+function syncControllerWaitStateDetail(
+  pipeline: Pipeline,
+  attempt: PipelineStageAttempt,
+  failure: string | null,
+): void {
+  const retryAfter = attempt.controllerWait?.retryAfter;
+  if (failure !== null && (isAccountMutationContention(failure) || isRuntimeHostUnavailableSpawnFailure(failure)) && retryAfter !== undefined) {
+    pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(failure)}; retry at ${retryAfter}`;
+  } else if (pipeline.stateDetail?.startsWith("stage spawn deferred: ")) {
+    pipeline.stateDetail = null;
+  }
+}
+
 function isTransientStructuredSpawnFailure(failure: string): boolean {
   return isStructuredDeliveryControllerFailure(failure)
+    || isAccountMutationContention(failure)
+    || isRuntimeHostUnavailableSpawnFailure(failure)
     || failure.includes("structured initial message")
     || failure.includes("runtime host request timed out");
 }
@@ -2480,6 +3533,19 @@ function isTransientStructuredSpawnFailure(failure: string): boolean {
 function controllerWaitElapsedMs(attempt: PipelineStageAttempt, nowMs: number): number {
   const startedAt = attempt.controllerWait?.startedAt;
   return startedAt ? Math.max(0, nowMs - unixMs(startedAt)) : 0;
+}
+
+/**
+ * The first retry index past every client attempt id an engine without the
+ * persisted call count could have spent (#1678 review 3). That engine numbered
+ * a call `rounds + call - 1` inside an activation of up to
+ * SPAWN_HANDSHAKE_MAX_ATTEMPTS calls, and recorded only the rounds, so the
+ * bound is all it left behind. An attempt with no wait, launch or retired
+ * launch has made no call and keeps its base id.
+ */
+function uncountedSpawnCallFloor(attempt: PipelineStageAttempt): number {
+  if (!attempt.controllerWait && !attempt.launchId && !attempt.retiredLaunches?.length) return 0;
+  return (attempt.controllerWait?.rounds ?? 0) + SPAWN_HANDSHAKE_MAX_ATTEMPTS;
 }
 
 /**
@@ -2501,29 +3567,48 @@ function bookControllerWaitRound(
   since: string,
   now: string,
   ports: PipelinePorts,
+  budget: { budgetMs: number; retryMaxMs: number } = { budgetMs: SPAWN_CONTROLLER_WAIT_BUDGET_MS, retryMaxMs: SPAWN_CONTROLLER_RETRY_MAX_MS },
 ): "waiting" | "exhausted" {
+  const next = nextBoundedWait(attempt.controllerWait, since, now, budget);
+  if (!next) return "exhausted";
+  attempt.controllerWait = next.wait;
+  ports.scheduleTick?.(next.delayMs);
+  return "waiting";
+}
+
+/** One more round of a bounded wait, or null once its budget is spent. The
+    backoff doubles from `retryBaseMs` (one second unless given) up to its cap,
+    and never past what is left of the budget. */
+function nextBoundedWait(
+  wait: PipelineBoundedWait | undefined,
+  since: string,
+  now: string,
+  budget: { budgetMs: number; retryMaxMs: number; retryBaseMs?: number },
+): { wait: PipelineBoundedWait; delayMs: number } | null {
   const nowMs = unixMs(now);
-  const wait = attempt.controllerWait ?? { startedAt: since, rounds: 0, retryAfter: since };
-  const remainingMs = SPAWN_CONTROLLER_WAIT_BUDGET_MS - Math.max(0, nowMs - unixMs(wait.startedAt));
-  if (remainingMs <= 0) return "exhausted";
+  const current = wait ?? { startedAt: since, rounds: 0, retryAfter: since };
+  /* One wait keeps the largest budget any of its rounds asked for (review
+     round 2): a busy-lock sighting a minute into a runtime-host outage must
+     not cut the host's ten minutes down to the lock's thirty seconds. */
+  const budgetMs = Math.max(current.budgetMs ?? 0, budget.budgetMs);
+  const retryMaxMs = Math.max(current.retryMaxMs ?? 0, budget.retryMaxMs);
+  const remainingMs = budgetMs - Math.max(0, nowMs - unixMs(current.startedAt));
+  if (remainingMs <= 0) return null;
   const delayMs = Math.min(
-    SPAWN_CONTROLLER_RETRY_MAX_MS,
-    SPAWN_HANDSHAKE_RETRY_DELAY_MS * (2 ** wait.rounds),
+    retryMaxMs,
+    (budget.retryBaseMs ?? SPAWN_HANDSHAKE_RETRY_DELAY_MS) * (2 ** current.rounds),
     remainingMs,
   );
-  attempt.controllerWait = {
-    startedAt: wait.startedAt,
-    rounds: wait.rounds + 1,
-    retryAfter: new Date(nowMs + delayMs).toISOString(),
+  return {
+    wait: { ...current, rounds: current.rounds + 1, retryAfter: new Date(nowMs + delayMs).toISOString(), budgetMs, retryMaxMs },
+    delayMs,
   };
-  ports.scheduleTick?.(delayMs);
-  return "waiting";
 }
 
 function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, failure: string): string {
   const seconds = Math.round(controllerWaitElapsedMs(attempt, unixMs(now)) / 1_000);
   const rounds = attempt.controllerWait?.rounds ?? 0;
-  return `stage spawn failed after ${rounds} retries over ${seconds}s: ${failure}`;
+  return `stage spawn failed after ${rounds} retries over ${seconds}s: ${controllerFailureReason(failure)}`;
 }
 
 /** A stage waiting out a controller holds a pending cursor on purpose, and its
@@ -2574,41 +3659,60 @@ async function reconcileUnconfirmedHosts(pipeline: Pipeline, ports: PipelinePort
     inside the pipelines transaction, so a slow host defers the rest of its
     pipeline's candidates to the next tick instead of stalling every mutation. */
 const TERMINAL_REAP_BUDGET_MS = 5_000;
-/** Sweeps one pipeline's terminal reap may spend before surfacing survivors. */
+/** Sweeps one finished-attempt batch may spend before surfacing survivors. */
 const TERMINAL_REAP_MAX_ROUNDS = 5;
 
 /**
- * Reaps a completed pipeline's finished stage hosts (#574).
+ * Reaps finished stage hosts as soon as their attempt is terminal (#574, #1123).
  *
- * advancePipeline marks the pipeline completed the moment its last stage
- * passes, but nothing stopped the hosts its stages left behind: every finished
- * builder kept an idle resume process resident on a paid quota, and a machine
- * running many pipelines accumulated hundreds of them. A close tears hosts
- * down (#670); completion now does the same, through the identical
- * identity-verified control path, with `closed` staying the close action's job
- * so an operator's acknowledge decision is never overridden by a later sweep.
+ * A stage may finish long before the pipeline: on a pass edge, a bounded repair
+ * loop, or a parked decision. Waiting for whole-pipeline completion left each
+ * finished host resident. The reap therefore follows attempt evidence through
+ * the same identity-verified control path while `closed` stays the explicit
+ * close action's job.
  *
  * Only hosts whose attempt finished its turn (a verdict or a completion stamp)
  * are candidates, and the runtime gets the last word: a conversation it
  * reports actively running is preserved, as are the pipeline's creator
- * conversation and transcript. The sweep is bounded twice — a per-sweep budget
- * so the transaction cannot stall behind slow kills, and a durable round
- * ceiling so a host that will not die becomes a visible unconfirmed host
- * (retired by reconcileUnconfirmedHosts once it is demonstrably gone) instead
- * of receiving a kill on every tick forever.
+ * conversation and transcript. Settled attempt keys make this incremental: a
+ * later terminal round opens another bounded batch without re-killing an older
+ * host. The per-sweep budget protects the transaction, and the durable round
+ * ceiling turns a survivor into a visible unconfirmed host.
  */
 async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
-  if (pipeline.state !== "completed" || pipeline.terminalReap?.settledAt) return false;
-  const reap: PipelineTerminalReap = pipeline.terminalReap
-    ?? { rounds: 0, stopped: 0, lastAt: ports.now(), settledAt: null };
-  const deadline = ports.monotonicNow() + TERMINAL_REAP_BUDGET_MS;
+  if (!["running", "needs_decision", "paused", "completed"].includes(pipeline.state)) return false;
+  const settledAttempts = new Set(pipeline.terminalReap?.settledAttempts ?? []);
+  const unconfirmedAttempts = new Set((pipeline.unconfirmedHosts ?? [])
+    .map((host) => `${host.stageId}:${host.attempt}`));
+  const prior = pipeline.terminalReap;
   const candidates = launchedStageHosts(pipeline).filter(({ target, turnSettled }) => turnSettled
     && !(target.conversationId && target.conversationId === pipeline.srcConversationId)
-    && !(target.agentPath && target.agentPath === pipeline.srcPath));
+    && !(target.agentPath && target.agentPath === pipeline.srcPath)
+    && !settledAttempts.has(`${target.stageId}:${target.attempt}`)
+    && !unconfirmedAttempts.has(`${target.stageId}:${target.attempt}`));
+  if (candidates.length === 0) {
+    if (pipeline.state !== "completed" || prior?.settledAt) return false;
+    const settledAt = ports.now();
+    pipeline.terminalReap = prior
+      ? { ...prior, lastAt: settledAt, settledAttempts: [...settledAttempts], settledAt }
+      : { rounds: 0, stopped: 0, lastAt: settledAt, settledAttempts: [], settledAt };
+    return true;
+  }
+
+  const reap: PipelineTerminalReap = prior
+    ? {
+        ...prior,
+        rounds: prior.settledAt ? 0 : prior.rounds,
+        settledAttempts: [...settledAttempts],
+        settledAt: null,
+      }
+    : { rounds: 0, stopped: 0, lastAt: ports.now(), settledAttempts: [], settledAt: null };
+  const deadline = ports.monotonicNow() + TERMINAL_REAP_BUDGET_MS;
   const survivors: Array<PipelineStageHostRef & { operationId: string | null; detail: string }> = [];
   let attempted = false;
   let deferred = false;
-  for (const [index, { target }] of candidates.entries()) {
+  for (const [index, { target, attempt }] of candidates.entries()) {
+    const attemptKey = `${target.stageId}:${target.attempt}`;
     if (ports.monotonicNow() >= deadline) {
       deferred = true;
       /* Normally the next sweep picks these up; recorded here so that a reap
@@ -2623,18 +3727,35 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       }
       break;
     }
-    if (!(await ports.stageHostResident(target))) continue;
+    const unresolved = unresolvedTerminationRefusal(attempt);
+    if (unresolved) {
+      attempted = true;
+      survivors.push({ ...target, operationId: null, detail: unresolved });
+      continue;
+    }
+    if (!(await ports.stageHostResident(target))) {
+      settledAttempts.add(attemptKey);
+      continue;
+    }
     /* The attempt's own evidence says its turn ended, but a host the runtime
        still reports mid-turn (an adopted helper on a fresh turn) is live work,
        so it stays; the idle-TTL reaper owns it from here. */
-    if (target.conversationId && await ports.conversationAgentActive(target.conversationId) === true) continue;
+    if (target.conversationId && await ports.conversationAgentActive(target.conversationId) === true) {
+      settledAttempts.add(attemptKey);
+      continue;
+    }
     attempted = true;
     const result = await ports.stopStageAgent(target);
-    if (result.outcome === "stopped") reap.stopped += 1;
+    if (result.outcome === "unresolved") rememberUnresolvedTermination(attempt, result, ports.now());
+    if (result.outcome === "stopped") {
+      reap.stopped += 1;
+      settledAttempts.add(attemptKey);
+    }
     else if (result.outcome === "unconfirmed") survivors.push({ ...target, operationId: result.operationId, detail: result.detail });
-    else if (result.outcome === "failed") survivors.push({ ...target, operationId: null, detail: result.error });
+    else if (result.outcome === "failed" || result.outcome === "unresolved") survivors.push({ ...target, operationId: null, detail: result.error });
   }
   reap.lastAt = ports.now();
+  reap.settledAttempts = [...settledAttempts];
   if (attempted || deferred) reap.rounds += 1;
   const clean = !deferred && survivors.length === 0;
   if (clean || reap.rounds >= TERMINAL_REAP_MAX_ROUNDS) {
@@ -2667,20 +3788,26 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
-      let changed = false;
+      let changed = reconcilePipelineFallbackTasks(pipelines, persist);
       await forEachCooperatively(pipelines, async (pipeline) => {
         const persistPipeline = () => persist([pipeline]);
         let pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, ports);
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, ports) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, ports) || pipelineChanged;
-        pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
-        pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
-        pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
-        pipelineChanged = reconcileBoundReviewFlow(pipeline, ports, persistPipeline) || pipelineChanged;
+        // Evidence above may be synchronized while a stop remains unresolved.
+        // Recovery below can advance the cursor, publish a verdict or resume a
+        // flow, so it needs the same pipeline-wide admission as ordinary ticks.
+        if (!pipelineSurvivorRefusal(pipeline)) {
+          pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, ports, persistPipeline) || pipelineChanged;
+          pipelineChanged = reconcileParkedVerdictMiss(pipeline, ports) || pipelineChanged;
+          pipelineChanged = reconcileParkedStructuredSpawn(pipeline, ports) || pipelineChanged;
+          pipelineChanged = reconcileBoundReviewFlow(pipeline, ports, persistPipeline) || pipelineChanged;
+        }
         pipelineChanged = await reconcileUnconfirmedHosts(pipeline, ports) || pipelineChanged;
         pipelineChanged = await reconcileTerminalStageHosts(pipeline, ports) || pipelineChanged;
-        if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision") {
+        if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
+          && !pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await tickPipeline(
             pipeline,
             entries,
@@ -2722,14 +3849,18 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
 /* #1026: the expected shape each stage constraint names, shared by the batched
    error response and the MCP tool schema's field descriptions so a caller reads
    the same contract whether it asks the schema or trips the validator. */
-const STAGE_OBJECT_SHAPE = "{id, kind, prompt, next, onFail?, role?, engine?/model?/effort?/access? overrides}";
+const STAGE_OBJECT_SHAPE = "{id, kind, prompt, next, onFail?, role?, engine?/model?/effort?/access?/sandbox?/outputs?/account? overrides}";
 const STAGE_PROMPT_SHAPE = `non-empty string up to ${MAX_STAGE_PROMPT_LENGTH} characters`;
 const STAGE_ROLE_SHAPE = `{roleId: one of ${PIPELINE_ROLE_IDS.join(" | ")}, params?: {<key>: string | number}} — runtime overrides belong on the stage, not in role`;
 const STAGE_ROLE_ID_SHAPE = `one of ${PIPELINE_ROLE_IDS.join(" | ")}`;
 const STAGE_ROLE_PARAMS_SHAPE = "object of the role's declared parameters, values string or number";
 const STAGE_RUNTIME_SHAPE = "a role and stage-level engine/model/effort/access the role registry can resolve";
+const STAGE_SANDBOX_SHAPE = '"full" | "restricted" (default "full")';
+const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relative paths, each at most ${MAX_STAGE_OUTPUT_PATH_LENGTH} characters`;
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
+const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}} — run stages only`;
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and only creation or start without baseRef fetches the base, time-bounded) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 function stageViolations(violations: PipelineValidationViolation[]): { error: string; violations: PipelineValidationViolation[] } {
@@ -2864,6 +3995,37 @@ function normalizeStages(
     if (stage.effort !== undefined && stage.effort !== null && typeof stage.effort !== "string") {
       violations.push({ field: at("effort"), message: `stage ${id} effort must be a string or null`, expected: "effort string supported by the stage engine, or null to inherit the role default" });
     }
+    if (stage.sandbox !== undefined && stage.sandbox !== "full" && stage.sandbox !== "restricted") {
+      violations.push({ field: at("sandbox"), message: `stage ${id} sandbox must be full or restricted`, expected: STAGE_SANDBOX_SHAPE });
+    }
+    const rawOutputs = (raw as { outputs?: unknown }).outputs;
+    let outputs: string[] | undefined;
+    if (rawOutputs !== undefined) {
+      if (stage.kind === "review-loop") {
+        violations.push({ field: at("outputs"), message: `review-loop stage ${id} cannot declare worktree outputs`, expected: "outputs belong to run stages" });
+      } else if (!Array.isArray(rawOutputs) || rawOutputs.length < 1 || rawOutputs.length > MAX_STAGE_OUTPUTS) {
+        violations.push({ field: at("outputs"), message: `stage ${id} outputs must contain 1–${MAX_STAGE_OUTPUTS} paths`, expected: STAGE_OUTPUTS_SHAPE });
+      } else {
+        outputs = [];
+        for (const [outputIndex, value] of rawOutputs.entries()) {
+          const output = normalizeStageOutputPath(value);
+          if (!output) {
+            violations.push({ field: `${at("outputs")}[${outputIndex}]`, message: `stage ${id} output must be a safe repository-relative path`, expected: STAGE_OUTPUTS_SHAPE });
+          } else if (outputs.includes(output)) {
+            violations.push({ field: `${at("outputs")}[${outputIndex}]`, message: `stage ${id} output paths must be unique`, expected: STAGE_OUTPUTS_SHAPE });
+          } else {
+            outputs.push(output);
+          }
+        }
+      }
+    }
+    /* #1279: the stage may name the account it runs on. Shape is checked here;
+       whether the project's binding ALLOWS that account is checked where the
+       project is known — at create, at override, and again at the launch
+       itself, which is the seam that actually decides. */
+    if (stage.account !== undefined && stage.account !== null && typeof stage.account !== "string") {
+      violations.push({ field: at("account"), message: `stage ${id} account must be an account id string or null`, expected: STAGE_ACCOUNT_SHAPE });
+    }
     const nextValid = stage.next === undefined || stage.next === null || typeof stage.next === "string";
     if (!nextValid) {
       violations.push({ field: at("next"), message: `stage ${id} next must be a stage id or null`, expected: STAGE_NEXT_SHAPE });
@@ -2896,6 +4058,9 @@ function normalizeStages(
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
+      ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
+      ...(outputs !== undefined ? { outputs } : {}),
+      ...(stage.account !== undefined ? { account: typeof stage.account === "string" ? stage.account.trim() || null : null } : {}),
       prompt,
       next: stage.next ?? null,
       onFail: onFailEdge,
@@ -2907,6 +4072,14 @@ function normalizeStages(
         field: at(field),
         message: "error" in resolved && resolved.error ? resolved.error : "invalid stage role",
         expected: field === "model" ? "model id from the selected engine's curated catalog" : STAGE_RUNTIME_SHAPE,
+      });
+      continue;
+    }
+    if (outputs !== undefined && resolved.role.access !== "read-only") {
+      violations.push({
+        field: at("outputs"),
+        message: `stage ${id} outputs require read-only access`,
+        expected: "outputs belong to read-only run stages",
       });
       continue;
     }
@@ -2934,6 +4107,9 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
+    ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
+    ...(stage.outputs !== undefined ? { outputs: [...stage.outputs] } : {}),
+    ...(stage.account !== undefined ? { account: stage.account } : {}),
     "prompt": stage.prompt,
     next: stage.next ?? null,
     onFail: stage.onFail ?? null,
@@ -2977,6 +4153,195 @@ function replaceDraftStages(
     ? { stageId: normalized.stages[0]!.id, state: "pending", input: null, activatedBy: null }
     : null;
   return {};
+}
+
+const GRAPH_EDIT_ACTIONS: ReadonlySet<string> = new Set<PipelineGraphEditAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
+
+/** Graph edits are accepted while a pipeline can still route (graph slice 1):
+    a draft, or a running, paused or parked pipeline keeps a plan its next
+    routing decision reads. A completed or closed pipeline routes nothing
+    again, so an edit there would record an effect no attempt ever runs. */
+function closedGraphRefusal(pipeline: Pipeline): PipelinePatchResult | null {
+  return TERMINAL_STATES.has(pipeline.state)
+    ? { error: `pipeline is ${pipeline.state}; no further attempt runs, so its graph can no longer be edited`, status: 409 }
+    : null;
+}
+
+/** On a started pipeline array order is presentation, and a stage that has
+    run, or that the cursor rests on, keeps its place so the plan's history
+    reads in the order it happened. */
+function startedStagePositionRefusal(pipeline: Pipeline, ordered: readonly PipelineStageInput[]): PipelinePatchResult | null {
+  if (pipeline.state === "draft") return null;
+  const pinned = pipeline.stages.find((existing, position) =>
+    (ownAttempts(pipeline, existing.id).length > 0 || pipeline.cursor?.stageId === existing.id)
+    && ordered[position]?.id !== existing.id);
+  return pinned
+    ? { error: `stage ${pinned.id} has already started and keeps its place; only stages that have not started move`, status: 409 }
+    : null;
+}
+
+const STAGE_CHANGED_ERROR = "the stage changed since it was read; read it again before overriding it";
+
+/** `expectedStageDigest` on an edit of one stage: that stage's digest, edges included. */
+function stageDigestRefusal(stage: PipelineStage, req: PatchPipelineRequest): PipelinePatchResult | null {
+  if (req.expectedStageDigest === undefined || stageDigest(stage) === req.expectedStageDigest) return null;
+  return { error: STAGE_CHANGED_ERROR, status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
+}
+
+/** `expectedStageDigest` on a structural edit: the digest of the whole ordered plan. */
+function graphDigestRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
+  if (req.expectedStageDigest === undefined || graphDigest(pipeline.stages) === req.expectedStageDigest) return null;
+  return { error: "the pipeline's stages changed since they were read; read the pipeline again before editing its graph", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
+}
+
+/** A stage's own attempts, lineage-adopted evidence excluded. */
+function ownAttempts(pipeline: Pipeline, stageId: string): PipelineStageAttempt[] {
+  return runFor(pipeline, stageId)?.attempts.filter((attempt) => !attempt.historical) ?? [];
+}
+
+/** A pass edge is evidence once the stage has taken it: a recorded pass
+    activation out of the stage, or an attempt whose pass verdict routes along
+    it (committing, passed, or skipped). Until then it is the future, even
+    while the stage's attempt is running (graph slice 1). */
+function passEdgeTaken(pipeline: Pipeline, stageId: string): boolean {
+  if (pipeline.cursor?.activatedBy?.edge === "pass" && pipeline.cursor.activatedBy.stageId === stageId) return true;
+  if (pipeline.runs.some((run) => run.attempts.some((attempt) => !attempt.historical && attempt.activatedBy?.edge === "pass" && attempt.activatedBy.stageId === stageId))) return true;
+  return ownAttempts(pipeline, stageId).some((attempt) => attempt.state === "committing" || attempt.state === "passed" || attempt.state === "skipped");
+}
+
+const UNSETTLED_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running", "reviewing", "committing"]);
+
+/** Which attempt of a stage an accepted edit reaches. The latest own attempt
+    that is still unbound takes it; one that is bound and unsettled keeps its
+    definition, so the edit waits for the attempt after it; a stage with only
+    settled attempts, or none, runs it on the attempt it creates next. */
+function stageEditReach(pipeline: Pipeline, stageId: string): Pick<PipelineGraphEdit, "effect" | "appliesFromAttempt"> {
+  const next = (runFor(pipeline, stageId)?.attempts.length ?? 0) + 1;
+  const latest = ownAttempts(pipeline, stageId).at(-1);
+  if (!latest) return { effect: "applied", appliesFromAttempt: next };
+  if (latest.state === "pending" && !latest.definition) return { effect: "applied", appliesFromAttempt: latest.n };
+  if (latest.state === "pending" || UNSETTLED_ATTEMPT_STATES.has(latest.state)) return { effect: "pending-next-attempt", appliesFromAttempt: next };
+  return { effect: "applied", appliesFromAttempt: next };
+}
+
+/** An attempt a build before definition binding launched reads the live stage
+    on a re-issued launch or review note; its stage waits for it to settle. */
+function unboundLiveAttemptRefusal(pipeline: Pipeline, stageId: string): PipelinePatchResult | null {
+  const latest = ownAttempts(pipeline, stageId).at(-1);
+  if (!latest || latest.definition) return null;
+  const launched = UNSETTLED_ATTEMPT_STATES.has(latest.state)
+    || (latest.state === "pending" && ((latest.spawnCalls ?? 0) > 0 || Boolean(latest.retiredLaunches?.length)));
+  return launched
+    ? { error: `stage ${stageId} attempt ${latest.n} was launched before attempts recorded their own definition; edit the stage once that attempt settles`, status: 409 }
+    : null;
+}
+
+/** Appends an accepted graph edit to the pipeline's own journal. The array is
+    replaced, never pushed into: loaded records share leaves with the cache. */
+function recordGraphEdit(
+  pipeline: Pipeline,
+  ports: PipelinePorts,
+  actor: PauseResumeActor | null,
+  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "summary">,
+): PipelineGraphEdit {
+  const edits = pipeline.graphEdits ?? [];
+  const recorded: PipelineGraphEdit = {
+    seq: (edits.at(-1)?.seq ?? 0) + 1,
+    at: ports.now(),
+    actor: actor ?? OPERATOR_PAUSE_RESUME_ACTOR,
+    pipelineState: pipeline.state,
+    ...edit,
+  };
+  pipeline.graphEdits = [...edits, recorded].slice(-MAX_PIPELINE_GRAPH_EDITS);
+  return recorded;
+}
+
+/** A started pipeline's plan after a structural edit. Every stage keeps its
+    run history and the cursor stays where it is; only a draft is re-seeded
+    (replaceDraftStages). */
+function replaceStartedStages(
+  pipeline: Pipeline,
+  inputs: PipelineStageInput[],
+  lookup?: PipelineRoleLookup | null,
+): { error?: string; violations?: PipelineValidationViolation[] } {
+  const keptIds = new Set(inputs.map((stage) => stage.id));
+  const relinked = inputs.map((stage) => ({
+    ...stage,
+    next: stage.next != null && stage.next !== stage.id && keptIds.has(stage.next) ? stage.next : null,
+    onFail: stage.onFail && keptIds.has(stage.onFail.to) ? stage.onFail : null,
+  }));
+  const preserved = new Map(pipeline.stages.map((stage) => [stage.id, stage]));
+  const normalized = normalizeStages(relinked, lookup, preserved, MIN_STARTED_PIPELINE_STAGES);
+  if (!normalized.stages) return { error: normalized.error ?? "invalid stages", ...(normalized.violations ? { violations: normalized.violations } : {}) };
+  if (normalized.stages[0]!.kind !== "run") {
+    return { error: `review-loop stage ${normalized.stages[0]!.id} may not be the first stage: the first stage must be a run stage whose session a review-loop then reviews` };
+  }
+  const runs = new Map(pipeline.runs.map((run) => [run.stageId, run]));
+  pipeline.stages = normalized.stages;
+  pipeline.runs = normalized.stages.map((stage) => runs.get(stage.id) ?? { stageId: stage.id, attempts: [] });
+  return {};
+}
+
+/**
+ * The guard fields a caller may state (#1695 C7 and the retry/skip guard),
+ * checked for shape on every action: a value that is present but malformed,
+ * or stated on an action it does not guard, is refused with 400, so a caller
+ * never believes a write was guarded when it was not.
+ */
+function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
+  const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
+  const stageBound = req.action === "retry-stage" || req.action === "skip-stage";
+  if (stated("expectedStageDigest")) {
+    if (!GRAPH_EDIT_ACTIONS.has(req.action)) return { error: `expectedStageDigest applies only to graph edits (${[...GRAPH_EDIT_ACTIONS].join(", ")})`, status: 400, field: "expectedStageDigest" };
+    if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
+  }
+  if (stated("expectedStageId")) {
+    if (!stageBound) return { error: "expectedStageId applies only to retry-stage and skip-stage", status: 400, field: "expectedStageId" };
+    if (typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()) return { error: "expectedStageId must be a non-empty stage id", status: 400, field: "expectedStageId" };
+  }
+  if (stated("expectedAttempt")) {
+    /* It only ever rides with expectedStageId, which is refused on any other action. */
+    if (typeof req.expectedAttempt !== "number" || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt < 0) {
+      return { error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet", status: 400, field: "expectedAttempt" };
+    }
+    if (!stated("expectedStageId")) return { error: "expectedAttempt requires expectedStageId", status: 400, field: "expectedAttempt" };
+  }
+  return null;
+}
+
+/**
+ * Retry and skip act on whatever stage the pipeline waits on when they run.
+ * A caller that names the stage (and the attempt) it saw is refused when the
+ * pipeline is no longer waiting on exactly that: not waiting on a decision, on
+ * another stage, or on another latest own attempt of the same stage. A
+ * lineage-adopted (historical) attempt is never the one compared.
+ * `expectedAttempt: 0` states that the stage has no own attempt yet (a
+ * provisioning park waits on its first stage before any attempt exists), so a
+ * pipeline that has since started attempt 1 there is refused too.
+ */
+function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
+  if (req.expectedStageId === undefined) return null;
+  const waiting = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
+  if (waiting !== req.expectedStageId) {
+    return {
+      error: waiting ? `the pipeline waits on ${waiting}, not ${req.expectedStageId}` : `the pipeline is ${pipeline.state} and waits on no stage`,
+      status: 409,
+      code: "STAGE_CHANGED",
+      field: "expectedStageId",
+    };
+  }
+  if (req.expectedAttempt !== undefined) {
+    const latest = currentAttempt(pipeline, waiting)?.n ?? 0;
+    if (latest !== req.expectedAttempt) {
+      return {
+        error: `${waiting} waits on ${latest ? `attempt ${latest}` : "no attempt of its own"}, not ${req.expectedAttempt ? `attempt ${req.expectedAttempt}` : "none"}`,
+        status: 409,
+        code: "STAGE_CHANGED",
+        field: "expectedAttempt",
+      };
+    }
+  }
+  return null;
 }
 
 export type PipelineMutationResult = {
@@ -3114,6 +4479,9 @@ export async function createPipelineFromRequest(
   if (req.spec !== undefined && typeof req.spec !== "string") violations.push({ field: "spec", message: "spec must be a string", expected: `string up to ${MAX_SPEC_LENGTH} characters` });
   if (spec && spec.length > MAX_SPEC_LENGTH) violations.push({ field: "spec", message: `spec exceeds ${MAX_SPEC_LENGTH} characters`, expected: `string up to ${MAX_SPEC_LENGTH} characters` });
   if (req.autoStart !== undefined && typeof req.autoStart !== "boolean") violations.push({ field: "autoStart", message: "autoStart must be a boolean", expected: "boolean (false creates a draft the operator starts)" });
+  if (req.publication !== undefined && req.publication !== "internal" && req.publication !== "remote-branch") {
+    violations.push({ field: "publication", message: "publication must be internal or remote-branch", expected: PIPELINE_PUBLICATION_SHAPE });
+  }
   if (req.baseBranch !== undefined && typeof req.baseBranch !== "string") violations.push({ field: "baseBranch", message: "baseBranch must be a string", expected: "branch name string" });
   if (req.baseRef !== undefined && typeof req.baseRef !== "string") violations.push({ field: "baseRef", message: "baseRef must be a string", expected: "commit-ish string resolved against repoDir" });
   if (req.taskIds !== undefined && (!Array.isArray(req.taskIds) || req.taskIds.some((taskId) => typeof taskId !== "string" || !taskId.trim()))) {
@@ -3161,6 +4529,12 @@ export async function createPipelineFromRequest(
   const admission = ports.preflightRepo(requestedRepoDir);
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
+  /* The project is resolved here rather than at buildPipeline so #1279's rule
+     can be read before anything is stored: a stage naming an account the
+     project does not allow is refused at create, not discovered at launch. */
+  const project = ports.projectForCwd(repoDir) ?? path.basename(repoDir);
+  const accountRefusal = stageAccountRefusal(normalized.stages, project, ports);
+  if (accountRefusal) return accountRefusal;
   const base = req.autoStart === false && !explicitBaseRef
     ? null
     : resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec);
@@ -3171,13 +4545,14 @@ export async function createPipelineFromRequest(
     taskIds,
     ...(taskSpawn ? { creationIntent: { kind: "task-spawn" as const, taskId: taskSpawn.task.id, launchId: taskSpawn.params.launchId } } : {}),
     ...(spec ? { spec } : {}),
-    project: ports.projectForCwd(repoDir) ?? path.basename(repoDir),
+    project,
     repoDir,
     stages: normalized.stages,
     srcPath: creator.lineage.srcPath,
     srcConversationId: creator.lineage.srcConversationId,
     now: ports.now(),
     state: req.autoStart === false ? "draft" : "provisioning",
+    ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
@@ -3273,11 +4648,13 @@ function providerNoticeSummary(text: string): string {
  * What a transcript can prove about an attempt whose host refused to stop — the
  * only thing standing between a superseded lane and the board it cannot leave.
  *
- * Two shapes count, and they are siblings. A completed turn carrying a valid
- * fenced verdict says the stage finished (#1047, #988). A turn the provider cut
- * off — a session or model limit, an expired credential — says the stage ended
- * without producing one (#1141): the message that ended it is right there in the
- * final record, so the attempt is terminal by evidence and retires as failed.
+ * Three shapes count. A missing host and missing conversation registration,
+ * paired with a complete launch-only transcript, say the host died before its
+ * session materialized (#1325). A completed turn carrying a valid fenced verdict
+ * says the stage finished (#1047, #988). A turn the provider cut off — a session
+ * or model limit, an expired credential — says the stage ended without producing
+ * one (#1141): the message that ended it is right there in the final record, so
+ * the attempt is terminal by evidence and retires as failed.
  *
  * Silence is neither. A transcript that simply stops mid-turn proves nothing
  * about a host that may still be working, so it falls through to null and keeps
@@ -3288,7 +4665,10 @@ async function closeStopFailureEvidence(
   ports: PipelinePorts,
 ): Promise<string | null> {
   try {
-    if (!(await ports.stageHostResident(candidate.target))) return "the host registry entry is dead or absent";
+    if (!(await ports.stageHostResident(candidate.target))) {
+      return await unregisteredStageHostDeathEvidence(candidate.attempt, candidate.target, ports)
+        ?? "the host registry entry is dead or absent";
+    }
   } catch {
     // An unreadable registry leaves the transcript as the remaining authority.
   }
@@ -3353,6 +4733,7 @@ function launchedStageHosts(pipeline: Pipeline): StageHostCandidate[] {
           agentPath: attempt.agentPath,
           paneId: attempt.paneId,
           ...(attempt.historical ? { adopted: true as const } : {}),
+          launchId: attempt.launchId,
         },
         /* Same reading orphanAgentPane uses: a verdict or a completion stamp
            means the turn ended, so what is left in the pane is an idle CLI. A
@@ -3447,18 +4828,29 @@ function discardDraft(pipeline: Pipeline, ports: PipelinePorts): void {
   pipeline.stateDetail = "discarded as a draft; it never ran";
 }
 
+/** A patch's answer: a mutation result, or the refusal of a stated guard (`STAGE_CHANGED`, or a malformed guard field). */
+export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field"> & {
+  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode;
+  field?: PipelineMutationResult["field"] | PipelineGuardField;
+  /** The journal entry an accepted graph edit wrote (graph slice 1). */
+  graphEdit?: PipelineGraphEdit;
+};
+
 export async function patchPipeline(
   id: string,
   req: PatchPipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
-): Promise<PipelineMutationResult> {
+): Promise<PipelinePatchResult> {
   return withPipelineMutation(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    const guardShape = stageGuardShapeError(req);
+    if (guardShape) return guardShape;
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
     const flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
+    let graphEdit: PipelineGraphEdit | null = null;
 
     if (req.action === "set-src") {
       if (req.overwrite !== undefined && typeof req.overwrite !== "boolean") {
@@ -3532,6 +4924,17 @@ export async function patchPipeline(
         const taskLinkError = pipelineTaskLinkError({ project }, pipeline.taskIds, loadTasks(), { allowMissing: true });
         if (taskLinkError) return { error: taskLinkError, status: 400 };
       }
+      /* #1279: the allowed set travels with the PROJECT, not with the plan, so
+         a move re-reads the binding exactly as create does. A pin that was
+         legal where the draft was written can be illegal where it lands, and
+         refusing here is what keeps the create-time reading true of every
+         stored draft — the alternative is a draft the launch can only ever
+         park, discovered later. Read before any field is assigned, so a
+         refusal leaves the draft where it was rather than half-moved. */
+      if (project !== pipeline.project) {
+        const movedAccountRefusal = stageAccountRefusal(pipeline.stages, project, ports);
+        if (movedAccountRefusal) return movedAccountRefusal;
+      }
       pipeline.task = task;
       if (spec) pipeline.spec = spec;
       else delete pipeline.spec;
@@ -3549,7 +4952,10 @@ export async function patchPipeline(
       }
       pipeline.pos = { x: Math.round(req.pos.x), y: Math.round(req.pos.y) };
     } else if (req.action === "add-stage") {
-      if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
+      const closed = closedGraphRefusal(pipeline);
+      if (closed) return closed;
+      const stale = graphDigestRefusal(pipeline, req);
+      if (stale) return stale;
       if (!req.stage || typeof req.stage !== "object" || Array.isArray(req.stage)) return { error: "stage is required", status: 400 };
       const inputs = draftStageInputs(pipeline.stages);
       const index = req.index === undefined ? inputs.length : req.index;
@@ -3559,14 +4965,40 @@ export async function patchPipeline(
          every OTHER stage's intentional edge is untouched (#353). Inserting at the
          front makes the new stage the head, pointing at the old head. */
       const predecessor = index > 0 ? inputs[index - 1] : null;
+      /* On a started pipeline the seam rewires the predecessor's pass edge,
+         which is evidence once that stage has taken it. */
+      if (predecessor && passEdgeTaken(pipeline, predecessor.id)) {
+        return { error: `stage ${predecessor.id} has already passed along its pass edge, which is frozen evidence; insert the stage at another index, or add it where its predecessor has not passed yet and wire it with set-edge`, status: 409 };
+      }
       const seamNext = predecessor ? predecessor.next ?? null : inputs[index]?.id ?? null;
       const inserted: PipelineStageInput = { ...req.stage, next: seamNext };
       inputs.splice(index, 0, inserted);
+      /* An insert before a started stage shifts it, and one at the front
+         makes a head nothing routes to once the pipeline has left it. */
+      const displaced = startedStagePositionRefusal(pipeline, inputs);
+      if (displaced) return displaced;
       if (predecessor) predecessor.next = inserted.id;
-      const replaced = replaceDraftStages(pipeline, inputs, ports.roleLookup);
+      const replaced = pipeline.state === "draft"
+        ? replaceDraftStages(pipeline, inputs, ports.roleLookup)
+        : replaceStartedStages(pipeline, inputs, ports.roleLookup);
       if (replaced.error) return { error: replaced.error, status: 400, ...(replaced.violations ? { violations: replaced.violations } : {}) };
+      /* #1279: read after normalization, because the stage's engine — and so
+         which allowed set applies — is what role resolution just settled. The
+         early return leaves the transaction unpersisted, as every other
+         post-mutation refusal in this function does. */
+      const addedAccountRefusal = stageAccountRefusal(pipeline.stages, pipeline.project, ports);
+      if (addedAccountRefusal) return addedAccountRefusal;
+      graphEdit = recordGraphEdit(pipeline, ports, actor, {
+        action: "add-stage",
+        stageId: inserted.id,
+        effect: "applied",
+        appliesFromAttempt: 1,
+        summary: `added stage ${inserted.id} at position ${index + 1}${predecessor ? `, after ${predecessor.id}` : ""}${seamNext ? `, before ${seamNext}` : ""}`,
+      });
     } else if (req.action === "remove-stage") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
+      const stale = graphDigestRefusal(pipeline, req);
+      if (stale) return stale;
       /* A draft can be emptied entirely on the canvas (#136); the 2-stage floor is
          a Start-time gate. remove that would orphan a review-loop (drop its only
          preceding run) is still rejected by replaceDraftStages' normalization. */
@@ -3590,8 +5022,12 @@ export async function patchPipeline(
       }
       const replaced = replaceDraftStages(pipeline, inputs, ports.roleLookup);
       if (replaced.error) return { error: replaced.error, status: 400, ...(replaced.violations ? { violations: replaced.violations } : {}) };
+      graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "remove-stage", stageId: removed.id, effect: "applied", appliesFromAttempt: null, summary: `removed stage ${removed.id}` });
     } else if (req.action === "reorder-stage") {
-      if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
+      const closed = closedGraphRefusal(pipeline);
+      if (closed) return closed;
+      const stale = graphDigestRefusal(pipeline, req);
+      if (stale) return stale;
       const inputs = draftStageInputs(pipeline.stages);
       let ordered: PipelineStageInput[];
       if (Array.isArray(req.stageIds)) {
@@ -3610,17 +5046,33 @@ export async function patchPipeline(
         const [moved] = ordered.splice(from, 1);
         ordered.splice(toIndex!, 0, moved!);
       }
-      const replaced = replaceDraftStages(pipeline, ordered, ports.roleLookup);
+      const displaced = startedStagePositionRefusal(pipeline, ordered);
+      if (displaced) return displaced;
+      const replaced = pipeline.state === "draft"
+        ? replaceDraftStages(pipeline, ordered, ports.roleLookup)
+        : replaceStartedStages(pipeline, ordered, ports.roleLookup);
       if (replaced.error) return { error: replaced.error, status: 400, ...(replaced.violations ? { violations: replaced.violations } : {}) };
+      graphEdit = recordGraphEdit(pipeline, ports, actor, {
+        action: "reorder-stage",
+        stageId: Array.isArray(req.stageIds) ? null : req.stageId ?? null,
+        effect: "applied",
+        appliesFromAttempt: null,
+        summary: `reordered stages: ${ordered.map((item) => item.id).join(", ")}`,
+      });
     } else if (req.action === "set-edge") {
       /* Conversation-graph editing (#353): rewires a stage's pass or fail edge.
          Edits always shape the future, never rewrite evidence: a stage that has
-         already run keeps its pass edge frozen (its history names its
-         successor), and a fail edge freezes once traversed. Accepted for drafts
-         AND running/parked pipelines — that is the point of an editable graph. */
-      if (TERMINAL_STATES.has(pipeline.state)) return { error: "pipeline is closed or completed", status: 409 };
+         passed along its pass edge keeps it frozen (its history names its
+         successor), and a fail edge freezes once traversed. A stage whose
+         attempt is still running has not taken its pass edge yet, so rewiring
+         it decides where that attempt's pass goes (graph slice 1). Accepted in
+         every state but closed. */
+      const closed = closedGraphRefusal(pipeline);
+      if (closed) return closed;
       const from = typeof req.stageId === "string" ? pipeline.stages.find((item) => item.id === req.stageId) ?? null : null;
       if (!from) return { error: "stage not found", status: 404 };
+      const stale = stageDigestRefusal(from, req);
+      if (stale) return stale;
       if (req.edge !== "pass" && req.edge !== "fail") return { error: "edge must be pass or fail", status: 400 };
       if (req.to === undefined) return { error: "to is required (null clears the edge)", status: 400 };
       if (req.to !== null && (typeof req.to !== "string" || !pipeline.stages.some((item) => item.id === req.to))) {
@@ -3628,12 +5080,15 @@ export async function patchPipeline(
       }
       if (req.edge === "pass") {
         if (req.maxRounds !== undefined) return { error: "maxRounds applies only to fail edges", status: 400 };
-        const fromRun = pipeline.runs.find((item) => item.stageId === from.id);
-        if (fromRun && fromRun.attempts.length > 0) return { error: "stage has already run; its pass edge is frozen evidence", status: 409 };
+        if (passEdgeTaken(pipeline, from.id)) return { error: "stage has already passed along its pass edge; it is frozen evidence", status: 409 };
         const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, next: req.to as string | null } : item));
         const graphError = pipelineGraphError(candidate);
         if (graphError) return { error: graphError, status: 400 };
         from.next = req.to;
+        graphEdit = recordGraphEdit(pipeline, ports, actor, {
+          action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
+          summary: req.to ? `set the pass edge of ${from.id} to ${req.to}` : `cleared the pass edge of ${from.id}`,
+        });
       } else {
         /* A fail edge freezes the instant its verdict routes the cursor along it,
            while the target attempt is still forming: the activation lands on the
@@ -3647,6 +5102,7 @@ export async function patchPipeline(
         if (req.to === null) {
           if (req.maxRounds !== undefined) return { error: "maxRounds requires a fail-edge target", status: 400 };
           from.onFail = null;
+          graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null, summary: `cleared the fail edge of ${from.id}` });
         } else {
           const maxRounds = req.maxRounds === undefined ? DEFAULT_FAIL_EDGE_ROUNDS : req.maxRounds;
           if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_FAIL_EDGE_ROUNDS) {
@@ -3656,6 +5112,10 @@ export async function patchPipeline(
           const graphError = pipelineGraphError(candidate);
           if (graphError) return { error: graphError, status: 400 };
           from.onFail = { to: req.to, maxRounds };
+          graphEdit = recordGraphEdit(pipeline, ports, actor, {
+            action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
+            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}`,
+          });
         }
       }
     } else if (req.action === "pause") {
@@ -3675,6 +5135,10 @@ export async function patchPipeline(
       pipeline.stateDetail = pauseResumeDetail("resumed", actor);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
+      const expectation = expectedStageRefusal(pipeline, req);
+      if (expectation) return expectation;
+      const survivorRefusal = pipelineSurvivorRefusal(pipeline);
+      if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
       const recoveryRefusal = verdictRecoveryResetRefusal(pipeline, attempt, ports);
       if (recoveryRefusal) return recoveryRefusal;
@@ -3746,7 +5210,13 @@ export async function patchPipeline(
           };
         }
       }
-      const retryReviewHead = stage?.kind === "review-loop" ? synchronizePipelineRetryHead(pipeline, ports.exec) : null;
+      /* An internal review retries on the clean local head it holds; only a
+         `remote-branch` pipeline takes a remote repair or republishes. */
+      const retryReviewHead = stage?.kind !== "review-loop"
+        ? null
+        : publishesRemoteBranch(pipeline)
+          ? synchronizePipelineRetryHead(pipeline, ports.exec)
+          : currentPipelineBranchHead(pipeline, ports.exec);
       if (retryReviewHead && !retryReviewHead.ok) {
         pipeline.stateDetail = retryReviewHead.error;
         persist();
@@ -3756,20 +5226,22 @@ export async function patchPipeline(
         pipeline.state = "provisioning";
       } else if (stage?.kind === "review-loop") {
         pipeline.lastPassedCommit = retryReviewHead!.sha;
-        /* A retried reviewer fences on the published head exactly like the first
-           one. Without this, a local repair the operator committed in the
-           worktree would park the retry on the same unavailable remote the
-           retry was meant to escape — an unbounded operator loop. */
-        const republished = publishPipelineBranch(pipeline, ports.exec, {
-          acceptedSha: retryReviewHead!.sha,
-          publishedSha: pipeline.publishedCommit ?? null,
-        });
-        if (!republished.ok) {
-          pipeline.stateDetail = republished.error;
-          persist();
-          return { error: republished.error, status: 409 };
+        if (publishesRemoteBranch(pipeline)) {
+          /* A retried reviewer fences on the published head exactly like the
+             first one. Without this, a local repair the operator committed in
+             the worktree would park the retry on the same unavailable remote
+             the retry was meant to escape — an unbounded operator loop. */
+          const republished = publishPipelineBranch(pipeline, ports.exec, {
+            acceptedSha: retryReviewHead!.sha,
+            publishedSha: pipeline.publishedCommit ?? null,
+          });
+          if (!republished.ok) {
+            pipeline.stateDetail = republished.error;
+            persist();
+            return { error: republished.error, status: 409 };
+          }
+          pipeline.publishedCommit = republished.remote === "published" ? republished.sha : null;
         }
-        pipeline.publishedCommit = republished.remote === "published" ? republished.sha : null;
         pipeline.state = "running";
       } else if (pipeline.lastPassedCommit) {
         const reset = resetPipelineStage(pipeline, ports.exec);
@@ -3784,6 +5256,10 @@ export async function patchPipeline(
       pipeline.pausedState = null;
       pipeline.stateDetail = null;
     } else if (req.action === "skip-stage") {
+      const expectation = expectedStageRefusal(pipeline, req);
+      if (expectation) return expectation;
+      const survivorRefusal = pipelineSurvivorRefusal(pipeline);
+      if (survivorRefusal) return survivorRefusal;
       if (pipeline.state !== "needs_decision" || !stage) return { error: "pipeline does not have a stage awaiting a decision", status: 409 };
       const recoveryRefusal = verdictRecoveryResetRefusal(pipeline, attempt, ports);
       if (recoveryRefusal) return recoveryRefusal;
@@ -3807,17 +5283,24 @@ export async function patchPipeline(
       }
       advancePipeline(pipeline, stage, ports, attempt);
     } else if (req.action === "override-stage") {
-      if (TERMINAL_STATES.has(pipeline.state)) return { error: "pipeline is closed or completed", status: 409 };
+      const closed = closedGraphRefusal(pipeline);
+      if (closed) return closed;
       const targetId = typeof req.stageId === "string" ? req.stageId : null;
       const target = targetId ? pipeline.stages.find((item) => item.id === targetId) ?? null : null;
       if (!target) return { error: "stage not found", status: 404 };
-      /* Every attempt snapshots the stage's effectiveRole/prompt when it is
-         created (newAttempt), so an override only takes effect on a stage that
-         has not started; editing a stage mid-attempt would silently no-op. */
-      const run = pipeline.runs.find((item) => item.stageId === target.id);
-      if (run && run.attempts.length > 0) return { error: "stage has already started", status: 409 };
+      /* #1695 C7: checked inside this mutation and before any field is written,
+         so a stage another client changed since the caller read it is refused
+         and keeps that client's values. */
+      const stale = stageDigestRefusal(target, req);
+      if (stale) return stale;
+      /* Graph slice 1: an attempt binds the stage definition when it leaves
+         pending (bindAttemptDefinition), so an edit reaches the stage's next
+         unbound attempt and never the one already running. */
+      const unbound = unboundLiveAttemptRefusal(pipeline, target.id);
+      if (unbound) return unbound;
+      const reach = stageEditReach(pipeline, target.id);
       const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined;
-      if (!changesRoleOrRuntime && req.prompt === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
+      if (!changesRoleOrRuntime && req.prompt === undefined && req.account === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
       /* Validate the runtime types up front: resolvePipelineRole treats a
          non-string, non-null model/effort as absent and silently uses the
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
@@ -3889,6 +5372,55 @@ export async function patchPipeline(
         if (prompt.length > MAX_STAGE_PROMPT_LENGTH) return { error: `stage prompt exceeds ${MAX_STAGE_PROMPT_LENGTH} characters`, status: 400 };
         target.prompt = prompt;
       }
+
+      /* #1279: the account pin is applied last, so it is checked against the
+         engine this override just settled on rather than the stage's previous
+         one. `null` clears the pin; a named account the project does not allow
+         is refused here for the same reason the launch refuses it. */
+      if (req.account !== undefined) {
+        if (req.account !== null && typeof req.account !== "string") return { error: "account must be an account id string or null", status: 400 };
+        const requested = typeof req.account === "string" ? req.account.trim() : "";
+        if (!requested) delete target.account;
+        else {
+          const engine = target.effectiveRole.engine;
+          const read = stageAccountPool(ports, pipeline.project, engine);
+          if ("refusal" in read) return read.refusal;
+          const allowed = read.pool;
+          if (allowed !== null && !allowed.includes(requested)) {
+            return {
+              error: allowed.length
+                ? `${engine} account ${requested} is not allowed on project ${pipeline.project} (allowed: ${allowed.join(", ")})`
+                : `project ${pipeline.project} allows no ${engine} account`,
+              status: 409,
+            };
+          }
+          target.account = requested;
+        }
+      }
+      const changed = [
+        req.role !== undefined ? "role" : null,
+        req.engine !== undefined ? "engine" : null,
+        req.model !== undefined ? "model" : null,
+        req.effort !== undefined ? "effort" : null,
+        req.prompt !== undefined ? "prompt" : null,
+        req.account !== undefined ? "account" : null,
+      ].filter((field): field is string => field !== null);
+      graphEdit = recordGraphEdit(pipeline, ports, actor, {
+        action: "override-stage",
+        stageId: target.id,
+        ...reach,
+        summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
+      });
+    } else if (req.action === "dismiss" || req.action === "undismiss") {
+      /* #1671: the phone board's Hide. It only says whether the lane stands in
+         the board's queue; nothing about the lane itself moves, so no host is
+         touched and the controller is not woken. A draft is never on the board
+         and a closed lane is gone from it already, so neither has a row to
+         hide or bring back. */
+      if (pipeline.state === "draft" || pipeline.state === "closed") {
+        return { error: `a ${pipeline.state} pipeline has no board row to ${req.action === "dismiss" ? "hide" : "show"}`, status: 409 };
+      }
+      pipeline.dismissedAt = req.action === "dismiss" ? pipeline.dismissedAt ?? ports.now() : null;
     } else if (req.action === "delete") {
       if (pipeline.state !== "draft") return { error: "only draft pipelines can be deleted", status: 409 };
       discardDraft(pipeline, ports);
@@ -3934,8 +5466,24 @@ export async function patchPipeline(
           break;
         }
         const result = await ports.stopStageAgent(target);
-        if (result.outcome === "stopped") close.stopped.push(target);
-        else if (result.outcome === "failed") {
+        if (result.outcome === "unresolved") {
+          /* A signal was sent and the authorized tree did not all go. The
+             survivors ride the attempt with their identities: from here no
+             close may terminalize it on row or transcript evidence until each
+             of them is proven gone (#1501). */
+          rememberUnresolvedTermination(candidate.attempt, result, ports.now());
+          close.stillRunning.push({ ...target, error: unresolvedTerminationRefusal(candidate.attempt) ?? result.error });
+          continue;
+        }
+        const unresolved = unresolvedTerminationRefusal(candidate.attempt);
+        if (unresolved) {
+          close.stillRunning.push({ ...target, error: unresolved });
+          continue;
+        }
+        if (result.outcome === "stopped") {
+          close.stopped.push(target);
+          if (result.detail) close.notes.push({ ...target, detail: result.detail });
+        } else if (result.outcome === "failed") {
           const evidence = await closeStopFailureEvidence(candidate, ports);
           if (evidence) {
             const detail = `stop failed with "${result.error}"; terminalized from ${evidence}`;
@@ -3962,6 +5510,18 @@ export async function patchPipeline(
         } else {
           close.alreadyStopped.push(target);
           terminalizeAttemptForClose(candidate, "the stage host was already absent when the pipeline closed", ports);
+        }
+      }
+      /* Host deduplication and the teardown deadline can skip an attempt's
+         stop call. Its durable survivors still veto terminalization. */
+      for (const run of pipeline.runs) {
+        for (const pending of run.attempts) {
+          const unresolved = unresolvedTerminationRefusal(pending);
+          if (!unresolved || close.stillRunning.some((item) => item.stageId === run.stageId && item.attempt === pending.n)) continue;
+          close.stillRunning.push({
+            stageId: run.stageId, attempt: pending.n, conversationId: pending.conversationId,
+            agentPath: pending.agentPath, paneId: pending.paneId, error: unresolved,
+          });
         }
       }
       close.worktree = closeWorktreeReport(pipeline, ports);
@@ -4047,7 +5607,7 @@ export async function patchPipeline(
       return { error: "unknown pipeline action", status: 400 };
     }
     persist();
-    return { pipeline };
+    return graphEdit ? { pipeline, graphEdit } : { pipeline };
   });
 }
 

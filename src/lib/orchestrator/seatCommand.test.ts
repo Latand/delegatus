@@ -18,6 +18,8 @@ import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  orchestratorMandateForDelivery,
+  orchestratorMandateStale,
 } from "./prompt";
 import { setRetireManagerForTests } from "./retire";
 import {
@@ -654,9 +656,12 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   expect(result.body.rotatedFrom).toMatchObject({ conversationId: NEW_ID });
   const spawnedPrompt = String(recorded2[0]!.prompt);
   /* Successor mandate = incumbent mandate + bounded handoff naming the
-     predecessor, its transcript, the open tasks and the caller's notes. */
+     predecessor, its MCP read, the open tasks and the caller's notes. */
   expect(spawnedPrompt).toStartWith("own the board");
   expect(spawnedPrompt).toContain(NEW_ID);
+  expect(spawnedPrompt).toContain(`conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${NEW_ID}","conversationId":"${NEW_ID}","roles":["user","assistant"],"limit":40})`);
+  expect(spawnedPrompt).toContain("fresh clientRequestId");
+  expect(spawnedPrompt).not.toContain(`/tmp/${NEW_ID.slice(-4)}.jsonl`);
   expect(spawnedPrompt).toContain("[doing] Ship the handoff (task_1)");
   expect(spawnedPrompt).toContain("Prioritize the review queue.");
   expect(spawnedPrompt).toContain("all mandate missions are complete; standing by");
@@ -672,6 +677,81 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
     successorConversationId: SUCCESSOR,
   })]);
   expect(retiredHosts).toEqual([]);
+});
+
+/* #1452: the recorded version follows the TEXT. A stale seat rotated onto the
+   built-in default is on the current version; a rotation that names no
+   mandate keeps the incumbent's text AND version — the current-default
+   choice belongs to the callers (the dock, the sheet, `rotate_orchestrator`). */
+test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
+  const seeded = dependencies();
+  await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000031"),
+    mandate: "v3 rules: you do not talk to the user",
+    promptVersion: 3,
+  }, seeded.deps);
+  expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(3);
+
+  const successor = "conversation_66666666-6666-4666-8666-666666666666";
+  const { deps } = dependencies({
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } }),
+  });
+  const result = await executeOrchestratorRotation({
+    project: "proj-a",
+    clientRequestId: "req_00000032",
+    mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+  }, deps);
+
+  expect(result.status).toBe(200);
+  const active = orchestratorSeatFor("proj-a").active;
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
+  expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+});
+
+test("a rotation that names no mandate keeps the incumbent's text and version", async () => {
+  const seeded = dependencies();
+  await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000033"),
+    mandate: "v3 rules: you do not talk to the user",
+    promptVersion: 3,
+  }, seeded.deps);
+
+  const successor = "conversation_66666666-6666-4666-8666-666666666666";
+  const { deps } = dependencies({
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-kept.jsonl" } }),
+  });
+  const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000034" }, deps);
+
+  expect(result.status).toBe(200);
+  const active = orchestratorSeatFor("proj-a").active;
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: 3 });
+  expect(active?.mandate).toStartWith("v3 rules: you do not talk to the user");
+});
+
+test("an EDITED mandate over a stale seat records no version, so the successor is neither flagged stale nor prefilled over on the next rotation (#1452)", async () => {
+  const seeded = dependencies();
+  await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000035"),
+    mandate: "v3 rules: you do not talk to the user",
+    promptVersion: 3,
+  }, seeded.deps);
+
+  const successor = "conversation_66666666-6666-4666-8666-666666666666";
+  const { deps } = dependencies({
+    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-edited.jsonl" } }),
+  });
+  /* The dock posts the text without a version: the v13 default plus one line. */
+  const result = await executeOrchestratorRotation({
+    project: "proj-a",
+    clientRequestId: "req_00000036",
+    mandate: `${ORCHESTRATOR_SYSTEM_PROMPT}\n\nAlso: report in Ukrainian.`,
+  }, deps);
+
+  expect(result.status).toBe(200);
+  const active = orchestratorSeatFor("proj-a").active;
+  expect(active).toMatchObject({ conversationId: successor, promptVersion: null });
+  expect(orchestratorMandateStale(active?.promptVersion)).toBe(false);
+  expect(active?.mandate).toContain("Also: report in Ukrainian.");
 });
 
 test("a current-version rotation override receives one directive while its stored mandate stays raw", async () => {
@@ -1099,7 +1179,7 @@ test("spawn-mode seat creation rejects an explicit model outside the engine cata
 
   expect(result).toEqual({
     status: 400,
-    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna" },
+    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna" },
   });
   expect(recorded.spawns).toEqual([]);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
@@ -1203,6 +1283,14 @@ function handoffSection(index: number): string {
 
 function stackedMandate(core: string, count: number): string {
   return [core, ...Array.from({ length: count }, (_, index) => handoffSection(index + 1))].join("\n\n");
+}
+
+/** The core size that leaves exactly `reserveBytes` for the handoff once the
+    scaffold and everything delivery appends are accounted for. */
+function trimBandCoreBytes(reserveBytes: number): number {
+  const role = resolveSpawnRole({ role: "orchestrator", roleParams: { mode: "standard" } });
+  const scaffold = role.ok && role.value ? Buffer.byteLength(`${role.value.scaffold}\n\n`, "utf8") : 0;
+  return MAX_STRUCTURED_TEXT_BYTES - scaffold - Buffer.byteLength(orchestratorMandateForDelivery(""), "utf8") - reserveBytes;
 }
 
 /** What spawn mode actually asserts against the envelope: the orchestrator
@@ -1434,11 +1522,15 @@ test("AC4: rotation drops the history, then trims the notes, and refuses only wh
   const trimmed = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001036",
-    /* A core sized to leave room for the handoff after the ladder runs. The
-       headroom tracks what delivery appends around a mandate — the initial
-       status contract and, since #1245, the clock handover — so a core that
-       once trimmed to a fit now has ~1.8 KB less to play with. */
-    mandate: stackedMandate("c".repeat(27_000), 2),
+    /* A core sized to leave room for the handoff after the ladder runs, derived
+       rather than hand-tuned: whatever delivery appends around a mandate — the
+       initial-status contract, the clock handover (#1245), the task-ownership
+       section (#1720) — comes off the core, so a directive that grows moves
+       this fixture instead of leaving a stale byte count in a comment. The
+       reserve left over is enough for a TRIMMED handoff and not enough for the
+       history, which is the band this case has to land in; the assertions
+       below fail loudly in either direction if it does not. */
+    mandate: stackedMandate("c".repeat(trimBandCoreBytes(1_400)), 2),
     handoffNotes: "n".repeat(2_000),
   }, deps);
 
@@ -1811,3 +1903,29 @@ test("a pending launch that settles DURING summarization is seated, and the stal
   expect(activeOrchestratorSeats().map((seat) => seat.conversationId)).toEqual([newer]);
   expect(orchestratorRevocations().some((revocation) => revocation.conversationId === newer)).toBeFalse();
 });
+
+for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
+  test(`${model} seat rotation inherits its engine and model`, async () => {
+    const { deps, recorded } = dependencies();
+    const created = await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model, effort: "medium" }, deps);
+    expect(created.status).toBe(200);
+    deps.spawn = async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: OLD_ID, path: "/tmp/successor.jsonl" } };
+    };
+    const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotate_model" }, deps);
+    expect(rotated.status).toBe(200);
+    expect(recorded.spawns[1]).toMatchObject({ engine: "codex", model });
+    expect(orchestratorSeatFor("proj-a").active).toMatchObject({ engine: "codex", model, conversationId: OLD_ID, predecessorConversationId: NEW_ID });
+  });
+  for (const effort of ["max", "ultra"]) {
+    test(`${model} seat creation and explicit rotation accept ${effort}`, async () => {
+      const { deps, recorded } = dependencies();
+      const created = await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model, effort }, deps);
+      expect(created.status).toBe(200);
+      const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotate_effort", engine: "codex", model, effort }, deps);
+      expect(rotated.status).toBe(200);
+      expect(recorded.spawns[1]).toMatchObject({ engine: "codex", model, effort });
+    });
+  }
+}

@@ -2,14 +2,28 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON } from "@/lib/types";
 
 import type { ClaudeAccount } from "./claude";
-import { claudeValidityFromLimitRead, NoHealthyClaudeAccountError, selectHealthyClaudeAccount } from "./spawnHealth";
 
 const NOW = Date.parse("2026-07-14T09:00:00.000Z");
+const STATE_SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-health-state-"));
+const PREVIOUS_STATE = process.env.LLV_STATE_DIR;
+const PREVIOUS_HOME = process.env.LLV_CLAUDE_HOME;
+const PREVIOUS_FETCH = globalThis.fetch;
+let providerReads = 0;
+let providerReply: (() => Response) | null = null;
+process.env.LLV_STATE_DIR = path.join(STATE_SANDBOX, "state");
+process.env.LLV_CLAUDE_HOME = path.join(STATE_SANDBOX, "legacy-claude");
+globalThis.fetch = (async () => {
+  providerReads += 1;
+  if (providerReply) return providerReply();
+  return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 401, headers: { "content-type": "application/json" } });
+}) as unknown as typeof globalThis.fetch;
+const { claudeValidityFromLimitRead, NoHealthyClaudeAccountError, selectHealthyClaudeAccount } = await import("./spawnHealth");
+const { withAccountMutationLockAsync } = await import("./accountMutation");
 const homes: string[] = [];
 const current = () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null } as const);
 const lastKnown = () => ({ kind: "admissible", basis: "last-known", stale: true, retryAt: null } as const);
@@ -17,6 +31,15 @@ const unavailable = () => ({ kind: "unavailable", reason: "auth-failed", stale: 
 
 afterEach(() => {
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = PREVIOUS_STATE;
+  if (PREVIOUS_HOME === undefined) delete process.env.LLV_CLAUDE_HOME;
+  else process.env.LLV_CLAUDE_HOME = PREVIOUS_HOME;
+  globalThis.fetch = PREVIOUS_FETCH;
+  fs.rmSync(STATE_SANDBOX, { recursive: true, force: true });
 });
 
 function account(id: string, expiresAt: number, authPresent = true, refreshable = true): ClaudeAccount {
@@ -30,6 +53,140 @@ function account(id: string, expiresAt: number, authPresent = true, refreshable 
     },
   }), { mode: 0o600 });
   return { id, label: id, kind: "managed", home, projectsDir: path.join(home, "projects"), authPresent, createdAt: 0 };
+}
+
+for (const kind of ["legacy", "managed"] as const) {
+  for (const uncertainty of ["discovery", "metadata"] as const) {
+    test("production spawn caller refuses " + kind + " requested account uncertainty at " + uncertainty, async () => {
+      const store = await import("./claudeCredentials");
+      const originalRead = store.readClaudeCredentials;
+      const read = spyOn(store, "readClaudeCredentials").mockImplementation((home) => originalRead(home, {
+        platform: "linux", security: () => { throw new Error("unexpected Keychain access"); },
+      }));
+      const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+      const { resolveHealthySpawnAccount } = await import("./manager");
+      fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      fs.mkdirSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, mode: 0o700 });
+      const requested = kind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account A");
+      const fallback = createManagedClaudeAccount("Account B");
+      const document = { claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 3600_000 } };
+      let requestedReads = 0;
+      read.mockImplementation((home) => {
+        if (home === requested.home) {
+          requestedReads += 1;
+          // The manager discovers the catalog twice before metadata is read.
+          if (uncertainty === "discovery" || requestedReads > 2) return { state: "unknown" };
+        }
+        if (home === requested.home || home === fallback.home) return { state: "present", source: "keychain", document };
+        return { state: "absent" };
+      });
+      providerReply = () => Response.json({ five_hour: { utilization: 1, resets_at: new Date(Date.now() + 3600_000).toISOString() } });
+      try {
+        const outcome = await resolveHealthySpawnAccount("claude", requested.id).then(
+          (selected) => ({ selectedAccountId: selected.accountId }), (error: unknown) => ({ error }),
+        );
+        expect("error" in outcome).toBe(true);
+        expect((outcome as { error: Error }).error.name).toBe("ClaudeCredentialUnavailableError");
+        expect((outcome as { error: Error }).error.message).toContain("credential store is unavailable");
+        expect(requestedReads).toBe(uncertainty === "discovery" ? 2 : 3);
+
+        // Prove the alternate account really can pass the production caller.
+        const healthy = await resolveHealthySpawnAccount("claude", fallback.id);
+        expect(healthy.accountId).toBe(fallback.id);
+        expect(healthy.requestedAdmission).toMatchObject({ kind: "admissible", basis: "current" });
+
+        // Proven absence retains the existing fallback behavior.
+        read.mockImplementation((home) => home === fallback.home
+          ? { state: "present", source: "keychain", document } : { state: "absent" });
+        expect((await resolveHealthySpawnAccount("claude", requested.id)).accountId).toBe(fallback.id);
+
+        read.mockReturnValue({ state: "unknown" });
+        await expect(resolveHealthySpawnAccount("claude")).rejects.toThrow("credential store is unavailable");
+      } finally {
+        read.mockRestore();
+        providerReply = null;
+        fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"], ["managed", "managed"]] as const) {
+  for (const phase of ["discovery", "metadata", "probe", "refresh", "probe-before-refresh"] as const) {
+    test("production caller keeps " + healthyKind + " healthy despite unrelated " + kind + " uncertainty at " + phase, async () => {
+      const store = await import("./claudeCredentials");
+      const read = spyOn(store, "readClaudeCredentials").mockReturnValue({ state: "absent" });
+      const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+      const { resolveHealthySpawnAccount } = await import("./manager");
+      fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      fs.mkdirSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, mode: 0o700 });
+      const uncertain = kind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account B");
+      const healthy = healthyKind === "legacy" ? listClaudeAccounts()[0] : createManagedClaudeAccount("Account A");
+      const reads = new Map<string, number>();
+      let injectUnknown = false;
+      let healthyPresent = true;
+      let injectedReads = 0;
+      const expiry = Date.now() + 3600_000;
+      const document = { claudeAiOauth: {
+        ["access" + "Token"]: crypto.randomUUID(),
+        ["refresh" + "Token"]: crypto.randomUUID(),
+        expiresAt: expiry,
+      } };
+      read.mockImplementation((home) => {
+        if (home !== uncertain.home && home !== healthy.home) return { state: "absent" };
+        if (home === healthy.home && !healthyPresent) return { state: "absent" };
+        const count = (reads.get(home) ?? 0) + 1;
+        reads.set(home, count);
+        // Two catalog reads precede metadata. Probe/refresh first re-read the
+        // catalog under the mutation lock, then read this account's store.
+        const threshold = phase === "discovery" ? 0 : phase === "metadata" ? 2 : 3;
+        if (injectUnknown && home === uncertain.home && count > threshold) {
+          injectedReads += 1;
+          return { state: "unknown" };
+        }
+        // Expired at metadata, then concurrently rotated before refresh. This
+        // exercises the real refresh lock, store read and subsequent live probe.
+        const expired = (phase === "refresh" || (phase === "probe-before-refresh" && home === healthy.home)) && count <= 3;
+        return { state: "present", source: "keychain", document: {
+          claudeAiOauth: { ...document.claudeAiOauth, expiresAt: expired ? Date.now() - 60_000 : expiry },
+        } };
+      });
+      providerReply = () => Response.json({ five_hour: { utilization: 1, resets_at: new Date(expiry).toISOString() } });
+      const resolve = async (requested?: string) => {
+        reads.clear();
+        injectedReads = 0;
+        return resolveHealthySpawnAccount("claude", requested);
+      };
+      try {
+        // Control: both candidates can pass the same production caller.
+        expect((await resolve(healthy.id)).accountId).toBe(healthy.id);
+        expect((await resolve(uncertain.id)).accountId).toBe(uncertain.id);
+        injectUnknown = true;
+        const selected = await resolve(healthy.id);
+        expect(selected.accountId).toBe(healthy.id);
+        expect(selected.requestedAdmission).toMatchObject({ kind: "admissible", basis: "current" });
+        if (phase !== "refresh") expect(injectedReads).toBeGreaterThan(0);
+
+        // Automatic routing exercises the aggregate refresh pass as well as
+        // proving the unknown candidate cannot win an unpinned selection.
+        expect((await resolve()).accountId).toBe(healthy.id);
+        expect(injectedReads).toBeGreaterThan(0);
+
+        // The same uncertainty on the named account must refuse substitution.
+        await expect(resolve(uncertain.id)).rejects.toThrow("credential store is unavailable");
+        expect(injectedReads).toBeGreaterThan(0);
+
+        // With no healthy candidate left, preserve the uncertainty diagnosis.
+        healthyPresent = false;
+        await expect(resolve()).rejects.toThrow("credential store is unavailable");
+        expect(injectedReads).toBeGreaterThan(0);
+      } finally {
+        read.mockRestore();
+        providerReply = null;
+        fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+      }
+    });
+  }
 }
 
 test("spawn selection skips an unrefreshable expired preferred Claude account and probes a healthy fallback", async () => {
@@ -79,7 +236,8 @@ test("live usage evidence retains spawn validity classifications", () => {
   });
   expect(claudeValidityFromLimitRead({ source: "unavailable", reason: LIMITS_REAUTH_REQUIRED_REASON, data: null }, NOW)).toMatchObject({ kind: "unavailable", reason: "auth-failed" });
   expect(claudeValidityFromLimitRead({ source: "unavailable", reason: "credentials missing access token", data: null }, NOW)).toMatchObject({ kind: "unavailable", reason: "auth-failed" });
-  expect(claudeValidityFromLimitRead({ source: "unavailable", reason: "credentials unreadable: test fixture", data: null }, NOW)).toMatchObject({ kind: "unavailable", reason: "auth-failed" });
+  expect(() => claudeValidityFromLimitRead({ source: "unavailable", reason: "credentials unreadable: test fixture", data: null }, NOW)).toThrow("credential store is unavailable");
+  expect(() => claudeValidityFromLimitRead({ source: "unavailable", reason: "credential store unavailable", data: null }, NOW)).toThrow("credential store is unavailable");
   expect(claudeValidityFromLimitRead({ source: "unavailable", reason: "request timed out", data: null }, NOW)).toMatchObject({ kind: "admissible", basis: "last-known", stale: true });
   const retryAt = Math.floor(NOW / 1_000) + 900;
   expect(claudeValidityFromLimitRead({
@@ -187,6 +345,62 @@ test("spawn selection refreshes an expired preferred Claude account before admis
 
   expect(selected.account.id).toBe("expired");
   expect(refreshed).toEqual(["expired"]);
+});
+
+test("Claude provider checks waiting behind deletion re-resolve retired accounts before activity", async () => {
+  const stateFile = path.join(process.env.LLV_STATE_DIR!, "claude-accounts.json");
+  const managedAccount = (id: string, expiresAt: number): ClaudeAccount => {
+    const home = path.join(STATE_SANDBOX, "accounts", "claude", id);
+    fs.mkdirSync(path.join(home, "projects"), { recursive: true, mode: 0o700 });
+    fs.chmodSync(home, 0o700);
+    fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({
+      claudeAiOauth: {
+        ["access" + "Token"]: crypto.randomUUID(),
+        ["refresh" + "Token"]: crypto.randomUUID(),
+        expiresAt,
+      },
+    }), { mode: 0o600 });
+    return { id, label: id, kind: "managed", home, projectsDir: path.join(home, "projects"), authPresent: true, createdAt: 1 };
+  };
+  const observedNow = Date.now();
+  const expired = managedAccount("refresh-stale", observedNow - 1);
+  const currentAccount = managedAccount("probe-stale", observedNow + 60_000);
+  const activeRegistry = {
+    version: 1,
+    active: "default",
+    accounts: [expired, currentAccount].map(({ id, label, kind, createdAt }) => ({ id, label, kind, createdAt })),
+    retired: [],
+  };
+  const retiredRegistry = {
+    version: 1,
+    active: "default",
+    accounts: [],
+    retired: [expired, currentAccount].map(({ id, label }) => ({ id, label, retiredAt: 2 })),
+  };
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(stateFile, JSON.stringify(activeRegistry), { mode: 0o600 });
+  providerReads = 0;
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const acquired = new Promise<void>((resolve) => { entered = resolve; });
+  const holder = withAccountMutationLockAsync(async () => {
+    entered();
+    await held;
+    fs.writeFileSync(stateFile, JSON.stringify(retiredRegistry), { mode: 0o600 });
+  });
+  await acquired;
+
+  const refreshResult = selectHealthyClaudeAccount([expired], expired.id).then(() => null, (error: unknown) => error);
+  const probeResult = selectHealthyClaudeAccount([currentAccount], currentAccount.id).then(() => null, (error: unknown) => error);
+  await Bun.sleep(10);
+  expect(providerReads).toBe(0);
+  release();
+  await holder;
+
+  expect(await refreshResult).toBeInstanceOf(Error);
+  expect(await probeResult).toBeInstanceOf(Error);
+  expect(providerReads).toBe(0);
 });
 
 test("concurrent admissions coalesce refresh validation for one account", async () => {

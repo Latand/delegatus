@@ -78,7 +78,7 @@ export function useRuntimeSelector<T>(
  * until slice-one is switched on. Starts the singleton on first mount and
  * leaves it running for the tab (other consumers share it).
  */
-export function useRuntimeBusState(): RuntimeBusState {
+export function useRuntimeBusState(active = true): RuntimeBusState {
   const enabled = isRuntimeUiEnabled();
   const bus: RuntimeBus | null = enabled && typeof window !== "undefined" ? getRuntimeBus() : null;
 
@@ -87,8 +87,8 @@ export function useRuntimeBusState(): RuntimeBusState {
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus ? bus.subscribe(listener) : () => {}),
-    [bus],
+    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
+    [bus, active],
   );
   const getSnapshot = useCallback(() => (bus ? bus.getState() : INERT), [bus]);
   return useSyncExternalStore(subscribe, getSnapshot, () => INERT);
@@ -255,6 +255,7 @@ export function useRuntimeFlow(flowId: string | null): Flow | null {
 export interface CommandResult {
   ok: boolean;
   operationId?: string;
+  held?: true;
   receipt?: RuntimeReceipt;
   status?: number;
   error?: string;
@@ -267,9 +268,33 @@ async function postCommand(url: string, body: unknown): Promise<CommandResult> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const json = (await res.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
-    if (!res.ok) return { ok: false, status: res.status, error: json.error };
-    return { ok: true, operationId: json.operationId, receipt: json.receipt, status: res.status };
+    const payload: unknown = await res.json().catch(() => null);
+    const json = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown> : {};
+    const candidate = json.receipt;
+    const receipt = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+      && "operationId" in candidate && typeof candidate.operationId === "string"
+      && "idempotencyKey" in candidate && typeof candidate.idempotencyKey === "string"
+      && "conversationId" in candidate && typeof candidate.conversationId === "string"
+      && "status" in candidate && typeof candidate.status === "string"
+      ? candidate as RuntimeReceipt : undefined;
+    const request = body as { conversationId?: string; idempotencyKey?: string; operationId?: string };
+    const operationId = typeof json.operationId === "string" ? json.operationId : receipt?.operationId;
+    const contradictory = receipt && (receipt.conversationId !== request.conversationId
+      || (request.idempotencyKey !== undefined && receipt.idempotencyKey !== request.idempotencyKey)
+      || (request.operationId !== undefined && receipt.operationId !== request.operationId)
+      || (operationId !== undefined && receipt.operationId !== operationId));
+    if (contradictory) return { ok: false, status: res.status, error: "receipt-identity-mismatch" };
+    // HTTP failure can follow dispatch. Keep the complete receipt so callers
+    // can reconcile its original operation without treating the request as OK.
+    return {
+      ok: res.ok,
+      status: res.status,
+      operationId,
+      receipt,
+      ...(res.ok && json.held === true ? { held: true as const } : {}),
+      ...(!res.ok ? { error: typeof json.error === "string" ? json.error : undefined } : {}),
+    };
   } catch {
     return { ok: false, error: "network" };
   }
@@ -311,8 +336,70 @@ export function sendRuntimeMessage(options: SendOptions): Promise<CommandResult>
   });
 }
 
-export function interruptRuntime(conversationId: string, operationId: string): Promise<CommandResult> {
-  return postCommand("/api/runtime/interrupt", { conversationId, operationId });
+export interface InjectOptions {
+  conversationId: string;
+  text: string;
+  idempotencyKey: string;
+  /** The turn fence, evaluated again at actuation. A string requires that turn
+      to still be running; `null` requires an idle thread; omitted accepts
+      either placement, which is what the composer's action sends. */
+  turnId?: string | null;
+  files?: { name: string; base64: string }[];
+  selectedContext?: SelectedContextRef;
+}
+
+/**
+ * Append text to a Codex thread's model-visible input without answering it
+ * (#1560, native `thread/inject_items`).
+ *
+ * Its own endpoint rather than a `policy` on `sendRuntimeMessage`, because it
+ * is a different operation with a different receipt vocabulary: it starts no
+ * turn, interrupts none, and settles on whether the insertion was found in the
+ * thread rather than on whether an answer began. Replaying the same key returns
+ * the original receipt, exactly as a send does — which matters more here, since
+ * the engine itself does not deduplicate.
+ *
+ * No `images` and no `policy`: the route refuses both, and offering them here
+ * would only move the refusal later.
+ */
+export function injectRuntimeContext(options: InjectOptions): Promise<CommandResult> {
+  return postCommand("/api/runtime/inject", {
+    conversationId: options.conversationId,
+    text: options.text,
+    idempotencyKey: options.idempotencyKey,
+    ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+    ...(options.files?.length ? { files: options.files } : {}),
+    ...(options.selectedContext ? { selectedContext: options.selectedContext } : {}),
+  });
+}
+
+export async function interruptRuntime(conversationId: string, operationId: string): Promise<CommandResult> {
+  let result = await postCommand("/api/conversation-host", { conversationId, action: "interrupt", operationId });
+  if (!result.ok) return result;
+  // Composer callers keep their pending affordance until the control settles.
+  // Read the original operation only; never resend after a lost answer.
+  const deadline = Date.now() + 5_000;
+  while (result.receipt) {
+    const receipt = result.receipt;
+    if (receipt.conversationId !== conversationId || receipt.operationId !== operationId || receipt.kind !== "interrupt") {
+      return { ...result, ok: false, error: "interrupt receipt identity does not match" };
+    }
+    if (receipt.status === "interrupted" || receipt.status === "delivered") return result;
+    if (receipt.status === "failed" || receipt.status === "rejected") {
+      return { ...result, ok: false, error: receipt.reason ?? "interrupt failed" };
+    }
+    if (Date.now() >= deadline) return { ...result, ok: false, error: "Interrupt outcome is not yet confirmed. Check the conversation controls." };
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      const response = await fetch(`/api/runtime/operations/${encodeURIComponent(operationId)}`, { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) });
+      const body = await response.json() as { receipt?: RuntimeReceipt };
+      if (!response.ok || !body.receipt) return { ...result, ok: false, error: "Interrupt outcome is not yet confirmed. Check the conversation controls." };
+      result = { ...result, receipt: body.receipt };
+    } catch {
+      return { ...result, ok: false, error: "Interrupt outcome is not yet confirmed. Check the conversation controls." };
+    }
+  }
+  return result;
 }
 
 /** Force a fresh runtime snapshot into the tab-wide store (dead-host Re-check,

@@ -11,8 +11,8 @@
  * ITS OWN text; a retry of a failed submission replays the original key and
  * bytes exactly; an edited resend is a new message under a new key.
  */
-import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { act } from "react";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { act, useSyncExternalStore } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -20,6 +20,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
+import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
 
 const dom = new Window();
 installActEnv();
@@ -64,34 +65,26 @@ const structuredView: RuntimeSessionView = {
   structuredControlsEnabled: true,
 } as unknown as RuntimeSessionView;
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-/* Capture the real implementations BEFORE mock.module rewires the registry
-   (live bindings), and delegate for every other conversation so this file's
-   structured view never leaks into later-loaded suites. */
-const realUseRuntimeSession = actualRuntimeHooks.useRuntimeSession;
-const realUseRuntimeReceiptsForArtifact = actualRuntimeHooks.useRuntimeReceiptsForArtifact;
-mock.module("@/hooks/useRuntime", () => ({
-  ...actualRuntimeHooks,
-  useRuntimeSession: (conversationId: string | null) => {
-    const real = realUseRuntimeSession(conversationId);
-    return conversationId === "conv-stale-key" ? structuredView : real;
-  },
-  useRuntimeReceiptsForArtifact: (path: string | null, conversationId?: string | null) => {
-    const real = realUseRuntimeReceiptsForArtifact(path, conversationId);
-    return path === "/codex-stale-key.jsonl" || conversationId === "conv-stale-key" ? [] : real;
-  },
-  refreshRuntime: () => Promise.resolve(true),
-}));
-afterAll(() => {
-  mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-});
-
-const { TmuxComposer } = await import("./TmuxComposer");
-const { readOutbox, resetOutboxForTests, retryOutbox } = await import("./conversation/outbox");
+import { TmuxComposer } from "./TmuxComposer";
+import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
 
 const realFetch = globalThis.fetch;
 
+const runtimeListeners = new Set<() => void>();
+const subscribeRuntime = (listener: () => void) => {runtimeListeners.add(listener);return () => {runtimeListeners.delete(listener);};};
+function useReceipts() {return useSyncExternalStore(subscribeRuntime,()=>structuredView.receipts,()=>structuredView.receipts);}
+
+beforeEach(() => {
+  structuredView.receipts = [];
+  installTmuxComposerRuntimeForTests({
+    useRuntimeView: (candidate) => {useReceipts();return candidate.conversationId === "conv-stale-key" ? structuredView : null;},
+    refreshRuntime: async () => true,
+    useRuntimeReceipts: useReceipts,
+  });
+});
+
 afterEach(() => {
+  resetTmuxComposerRuntimeForTests();
   setLocale("en");
   globalThis.fetch = realFetch;
   document.body.replaceChildren();
@@ -188,9 +181,9 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
   await settle(() => composerControls(host).submit());
   expect(sends).toHaveLength(1);
   expect(sends[0]!.text).toBe("the message the dead host never received");
-  /* The unresolved generation is durable; the bubble is failed and retryable. */
+  /* The unresolved generation is durable and cannot be locally retried. */
   expect(sessionStorage.getItem("llvPendingSend:conv-stale-key")).toContain(sends[0]!.idempotencyKey);
-  expect(readOutbox("conv-stale-key").find((entry) => entry.state === "failed")?.id).toBe(sends[0]!.idempotencyKey);
+  expect(readOutbox("conv-stale-key").find((entry) => entry.deliveryUncertain)?.id).toBe(sends[0]!.idempotencyKey);
 
   /* The tab reloads: the composer rebuilds its outbox state from the durable
      records while the stale generation is still unresolved. */
@@ -205,9 +198,24 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
      key carrying ITS OWN text — never the stale generation's key or bytes. */
   await settle(() => composerControls(host).type("a brand new message"));
   await settle(() => composerControls(host).submit());
+  /* The stale generation no longer holds this browser's wire: no receipt can be
+     made to arrive for a request that may never have been admitted, so waiting
+     on it would mute the conversation permanently (outbox `holdsLocalWireFence`).
+     The new message therefore leaves at once — and what matters here is that it
+     leaves as ITSELF, under a fresh key with its own text. */
   expect(sends).toHaveLength(2);
   expect(sends[1]!.text).toBe("a brand new message");
   expect(sends[1]!.idempotencyKey).not.toBe(sends[0]!.idempotencyKey);
+  const fresh = readOutbox("conv-stale-key").find(entry => entry.text === "a brand new message")!;
+  expect(fresh.id).not.toBe(sends[0]!.idempotencyKey);
+  expect(fresh.id).toBe(sends[1]!.idempotencyKey);
+  /* The stale generation keeps its own key and its unknown fate, and a genuine
+     late receipt settles it without ever putting it back on the wire. */
+  const stale = readOutbox("conv-stale-key").find(entry => entry.id === sends[0]!.idempotencyKey)!;
+  expect(stale.deliveryUncertain).toBe(true);
+  structuredView.receipts = [delivered(sends[0]!).json.receipt as RuntimeSessionView["receipts"][number]];
+  await settle(() => {for (const listener of runtimeListeners) listener();});
+  expect(sends).toHaveLength(2);
 
   await act(async () => root.unmount());
 });
@@ -215,7 +223,11 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
 test("a retry replays the failed generation exactly while an edited resend is a new message", async () => {
   const sends: SendBody[] = [];
   mockWire(sends, [
-    () => ({ status: 503, json: { ok: false, error: "structured host ownership is unavailable; retry after runtime synchronization" } }),
+    body => ({ status: 503, json: { ok: false, receipt: {
+      operationId: "safe-original", conversationId: "conv-stale-key", idempotencyKey: body.idempotencyKey,
+      kind: "send", status: "failed", resend: "safe", reason: "pre-dispatch rejection",
+      at: new Date().toISOString(), revision: 1,
+    } } }),
     delivered,
   ]);
 

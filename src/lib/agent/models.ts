@@ -8,11 +8,13 @@ export type AgentModelOption = {
   use: "implement" | "review" | "general";
 };
 
+export const CODEX_ASTRA_MODEL = "gpt-6-astra";
 export const CODEX_SOL_MODEL = "gpt-5.6-sol";
 export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 const CODEX_IMAGE_INPUT_MODELS = new Set([
+  CODEX_ASTRA_MODEL,
   CODEX_SOL_MODEL,
   CODEX_TERRA_MODEL,
   CODEX_LUNA_MODEL,
@@ -35,6 +37,13 @@ export const ENGINE_MODELS: Record<"claude" | "codex", readonly AgentModelOption
     { id: "haiku", label: "Haiku", shortLabel: "Haiku", use: "general" },
   ],
   codex: [
+    // Astra leads the list because it is the account's own default, and the
+    // head is what runtimeProfile falls back to for a conversation on an
+    // uncatalogued model — it agrees with defaultModelFor below. Its `review`
+    // use is shared with Sol on purpose: the account describes Astra as its
+    // most capable model, and Sol keeps the role it already held, having been
+    // left in the list with no upgrade target.
+    { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_SOL_MODEL, label: "GPT-5.6-Sol", shortLabel: "5.6-Sol", use: "review" },
     { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
     { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
@@ -54,9 +63,10 @@ export function validateLaunchModel(engine: "claude" | "codex", model: string): 
   };
 }
 
-/** A fresh Codex conversation starts on the architecture/review profile. */
+/** A fresh Codex conversation starts on the architecture/review profile —
+    the model the account itself reports as default. */
 export function defaultModelFor(engine: "claude" | "codex"): string {
-  return engine === "codex" ? CODEX_SOL_MODEL : "opus";
+  return engine === "codex" ? CODEX_ASTRA_MODEL : "opus";
 }
 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;
@@ -76,6 +86,31 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     if (model === family || new RegExp(`(?:^|[-_.])${family}(?:[-_.]|$)`).test(model)) return family;
   }
   return null;
+}
+
+/** Claude launch families the provider meters on the flagship tier's own
+    weekly window (issue #1358). Opus and Fable both belong there: the bucket
+    Anthropic reports as `seven_day_opus` is the top-tier weekly, and a Fable
+    spawn is gated by it even when the general week is comfortable. */
+const CLAUDE_FLAGSHIP_FAMILIES: ReadonlySet<ClaudeLaunchModel> = new Set(["fable", "opus"]);
+
+/** Whether a Claude spawn of `model` draws on the flagship weekly window. An
+    unknown or absent model resolves to the launch default, which is flagship
+    class, so "no model chosen" is gated conservatively. */
+export function claudeModelGatedByFlagshipWeekly(model: string | null | undefined): boolean {
+  const family = normalizeClaudeLaunchModel(model);
+  if (family === null) return true;
+  return CLAUDE_FLAGSHIP_FAMILIES.has(family);
+}
+
+const CLAUDE_TIER_DISPLAY: Record<string, string> = { fable: "Fable", mythos: "Mythos", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
+
+/** Display name of a provider tier bucket (`opus` → "Opus"); unknown tiers
+    are capitalised as spelled so a new bucket still reads as a name. */
+export function claudeTierDisplayName(tier: string): string {
+  const key = tier.trim().toLowerCase();
+  if (CLAUDE_TIER_DISPLAY[key]) return CLAUDE_TIER_DISPLAY[key];
+  return key ? key.charAt(0).toUpperCase() + key.slice(1) : tier;
 }
 
 /** True when a model id is a valid codex launch model: a `gpt-*` id, printable

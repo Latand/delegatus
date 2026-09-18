@@ -4,6 +4,14 @@ import { agentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/ag
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
+import {
+  captureProcessIdentity,
+  processIdentityStatus,
+  sameRecordedProcessIdentity,
+  systemBootEpoch,
+  type ProcessIdentityProbe,
+  type ProcessIdentityStatus,
+} from "@/lib/processIdentity";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 import type { StructuredHostKillRef, StructuredHostRecord } from "@/lib/resources";
 
@@ -51,6 +59,7 @@ export function readStructuredHostRecords(dependencies: {
       sessionId: entry.key.sessionId,
       pid: process.pid,
       startIdentity: process.startIdentity,
+      bootEpoch: process.bootEpoch ?? null,
       cwd: entry.cwd || generation?.launchProfile.cwd || "",
       path: entry.artifactPath || null,
       conversationId: conversation?.id ?? null,
@@ -65,6 +74,111 @@ export function readStructuredHostRecords(dependencies: {
       owned: owned(entry.key),
     } satisfies StructuredHostRecord;
   });
+}
+
+/** The Viewer generation that claimed a host, as the registry recorded it in
+    `claimOwner` (`structured-host:<json identity>`, the format the registry's
+    own claim writer produces), and what the kernel says about it now. */
+export interface StructuredHostOwnerGeneration {
+  identity: ProcessIdentity | null;
+  status: ProcessIdentityStatus | "unrecorded";
+}
+
+const STRUCTURED_CLAIM_OWNER_PREFIX = "structured-host:";
+
+function structuredClaimOwnerIdentity(owner: string | null): ProcessIdentity | null {
+  if (!owner?.startsWith(STRUCTURED_CLAIM_OWNER_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(owner.slice(STRUCTURED_CLAIM_OWNER_PREFIX.length)) as Partial<ProcessIdentity>;
+    if (!Number.isInteger(parsed.pid) || parsed.pid! <= 0) return null;
+    return {
+      pid: parsed.pid!,
+      startIdentity: typeof parsed.startIdentity === "string" ? parsed.startIdentity : null,
+      ...(typeof parsed.bootEpoch === "string" ? { bootEpoch: parsed.bootEpoch } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** One line for a report: which generation started the host and whether it
+    is still there. */
+export function describeStructuredHostOwnerGeneration(owner: StructuredHostOwnerGeneration): string {
+  if (!owner.identity) return "the registry records no owner generation for this host";
+  const verdict = owner.status === "alive"
+    ? "is still running"
+    : owner.status === "dead"
+      ? "no longer exists"
+      : "cannot be verified";
+  return `the Viewer generation that started it (pid ${owner.identity.pid}) ${verdict}`;
+}
+
+export type StructuredHostRegistryRef =
+  | { ok: true; ref: StructuredHostKillRef; owner: StructuredHostOwnerGeneration }
+  /** The row cannot authorize a signal. Nothing has been signalled. */
+  | { ok: false; error: string; owner: StructuredHostOwnerGeneration };
+
+/**
+ * A kill reference taken from the durable registry row alone — never from
+ * process discovery — for a caller that has no channel to the runtime host
+ * generation the row names (#1501). The row is the association: the engine
+ * process the Viewer spawned or adopted (`structuredHost.process`, with its
+ * start identity and boot epoch) and the generation that claimed it
+ * (`claimOwner`). The ref binds to the conversation whose *current* generation
+ * is this session; a row that is not the current generation of any
+ * conversation is not a target. Missing identity fields refuse here, before
+ * the termination's own fence, so the report can say which field the row lacks.
+ */
+export function structuredHostKillRefFromRegistry(
+  key: SessionKey,
+  dependencies: {
+    snapshot?: () => RegistryFile;
+    owned?: (key: SessionKey) => boolean;
+    identityProbe?: ProcessIdentityProbe;
+  } = {},
+): StructuredHostRegistryRef {
+  const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
+  const entry = file.entries[sessionKeyId(key)] ?? null;
+  const ownerIdentity = structuredClaimOwnerIdentity(entry?.claimOwner ?? null);
+  const owner: StructuredHostOwnerGeneration = {
+    identity: ownerIdentity,
+    status: ownerIdentity ? processIdentityStatus(ownerIdentity, dependencies.identityProbe) : "unrecorded",
+  };
+  if (!entry) return { ok: false, error: "the registry has no row for this session", owner };
+  const process = entry.structuredHost?.process ?? null;
+  if (!process) return { ok: false, error: "the registry row names no host process", owner };
+  if (key.engine !== "claude" && key.engine !== "codex") {
+    return { ok: false, error: `a ${key.engine} session has no structured host to end`, owner };
+  }
+  if (typeof process.startIdentity !== "string" || process.startIdentity.length === 0) {
+    return { ok: false, error: `host process identity is unknown (pid ${process.pid} was recorded without a start identity)`, owner };
+  }
+  if (typeof process.bootEpoch !== "string" || process.bootEpoch.length === 0) {
+    return { ok: false, error: `host boot epoch is unknown (pid ${process.pid} was recorded without one)`, owner };
+  }
+  const conversation = Object.values(file.conversations)
+    .find((candidate) => candidate.generations.at(-1)?.id === key.sessionId) ?? null;
+  if (!conversation) {
+    return { ok: false, error: "the registry row is not the current generation of any conversation", owner };
+  }
+  const memberships = file.memberships[conversation.id] ?? [];
+  return {
+    ok: true,
+    owner,
+    ref: {
+      kind: "structured",
+      pid: process.pid,
+      startIdentity: process.startIdentity,
+      bootEpoch: process.bootEpoch,
+      engine: key.engine,
+      sessionId: key.sessionId,
+      conversationId: conversation.id,
+      seat: memberships.some((membership) => membership.kind === "orchestrator"),
+      turnBusy: conversation.turn.state === "unknown" ? null : conversation.turn.state === "busy",
+      owned: (dependencies.owned ?? hasStructuredDeliveryHost)(key),
+      lastActiveAt: entry.updatedAt,
+    },
+  };
 }
 
 /**
@@ -102,11 +216,7 @@ function currentStructuredHostState(
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
   const entry = file.entries[sessionKeyId(key)] ?? null;
   const process = entry?.structuredHost?.process ?? null;
-  if (process === null
-    || process.pid !== expected.pid) return null;
-  const currentIdentity = process.startIdentity
-    ?? (dependencies.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid)))(process.pid);
-  if (currentIdentity !== expected.startIdentity) return null;
+  if (process === null || !sameRecordedProcessIdentity(process, expected)) return null;
   const conversation = Object.values(file.conversations)
     .find((candidate) => candidate.generations.some((generation) => generation.id === key.sessionId)) ?? null;
   if (!entry && !conversation) return null;
@@ -148,7 +258,7 @@ export function structuredHostKillRefusal(
     ? null
     : currentStructuredHostState(
         { engine: ref.engine, sessionId: ref.sessionId },
-        { pid: ref.pid, startIdentity: ref.startIdentity },
+        { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
         dependencies,
       );
   /* A seat either side of the snapshot counts: one taken since collection is
@@ -196,6 +306,14 @@ export type StructuredHostTerminationOutcome =
       /** Pids that prevented completion: surviving authorized processes or a
           pid whose kernel identity changed before the next signal. */
       remaining: number[];
+      /** The identity each surviving authorized process carried when the tree
+          was snapshotted, so a caller can keep it and later prove the survivor
+          gone (or still there) without trusting the pid alone (#1501). Empty
+          when nothing authorized survived. */
+      survivors: ProcessIdentity[];
+      /** A runtime termination or signal was attempted; refusals must retain
+          its effects even when authority is subsequently lost. */
+      terminationStarted?: true;
       /** The authority this target carried is spent: the pid is no longer the
           process the snapshot listed, so the target is consumed, not retried. */
       stale?: true;
@@ -203,6 +321,7 @@ export type StructuredHostTerminationOutcome =
 
 export interface StructuredHostTerminationDependencies {
   processIdentity?(pid: number): string | null;
+  bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
   ppidMap?(): Map<number, number>;
   processGroupId?(pid: number): number | null;
@@ -210,6 +329,13 @@ export interface StructuredHostTerminationDependencies {
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity): void;
   protectedPids?(): Set<number>;
+  /** The caller's own authority over this target, asked again after every
+      asynchronous boundary and one step before each signal (#1501): a seat
+      taken, or the registry row rebound to another process, while the
+      runtime path or the grace period was awaited must refuse the signal that
+      follows. Returning a refusal ends the termination with nothing further
+      sent. */
+  authorize?(): { status: 403 | 409; error: string } | null;
   sleep?(ms: number): Promise<void>;
   graceMs?: number;
   deadlineMs?: number;
@@ -271,6 +397,8 @@ export async function terminateStructuredHostTree(
 ): Promise<StructuredHostTerminationOutcome> {
   const identityOf = dependencies.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
   const alive = dependencies.pidAlive ?? ((pid: number) => procBackend.pidAlive(pid));
+  const bootEpoch = dependencies.bootEpoch ?? systemBootEpoch;
+  const identityProbe: ProcessIdentityProbe = { processIdentity: identityOf, pidAlive: alive, bootEpoch };
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const groupOf = dependencies.processGroupId ?? linuxProcessGroupId;
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
@@ -282,25 +410,31 @@ export async function terminateStructuredHostTree(
   const deadlineMs = dependencies.deadlineMs ?? TERMINATION_DEADLINE_MS;
 
   const { pid } = ref;
-  if (!Number.isSafeInteger(pid) || pid <= 1) return { ok: false, status: 409, error: "host pid is invalid", remaining: [] };
+  if (!Number.isSafeInteger(pid) || pid <= 1) return { ok: false, status: 409, error: "host pid is invalid", remaining: [], survivors: [] };
   if (typeof ref.startIdentity !== "string" || ref.startIdentity.length === 0) {
-    return { ok: false, status: 409, error: "host process identity is unknown — refresh the resource list", remaining: [] };
+    return { ok: false, status: 409, error: "host process identity is unknown — refresh the resource list", remaining: [], survivors: [] };
+  }
+  if (typeof ref.bootEpoch !== "string" || ref.bootEpoch.length === 0) {
+    return { ok: false, status: 409, error: "host boot epoch is unknown — refresh the resource list", remaining: [], survivors: [] };
   }
   if ((dependencies.protectedPids ?? ownAncestry)().has(pid)) {
-    return { ok: false, status: 403, error: "this pid belongs to the viewer's own process chain", remaining: [] };
+    return { ok: false, status: 403, error: "this pid belongs to the viewer's own process chain", remaining: [], survivors: [] };
   }
   const key: SessionKey | null = ref.sessionId ? { engine: ref.engine, sessionId: ref.sessionId } : null;
-  const expected: ProcessIdentity = { pid, startIdentity: ref.startIdentity };
+  const expected: ProcessIdentity = { pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
 
-  const observed = identityOf(pid);
-  if (observed === null && !alive(pid)) {
+  const initialStatus = processIdentityStatus(expected, identityProbe);
+  if (initialStatus === "dead" && !alive(pid)) {
     if (key) retire(key, expected);
     return { ok: true, via: "already-exited", pids: [] };
   }
+  if (initialStatus === "unverified") {
+    return { ok: false, status: 409, error: "host process identity cannot be verified — refresh the resource list", remaining: [], survivors: [] };
+  }
   /* The fence the whole endpoint rests on: this pid must still be the process
      the snapshot listed, or the kernel handed it to something else. */
-  if (observed !== ref.startIdentity) {
-    return { ok: false, status: 409, error: "host has changed — refresh the resource list", remaining: [], stale: true };
+  if (initialStatus === "dead") {
+    return { ok: false, status: 409, error: "host has changed — refresh the resource list", remaining: [], survivors: [], stale: true };
   }
 
   /* Snapshot the tree before anything dies: a reparented child is invisible to
@@ -321,7 +455,7 @@ export async function terminateStructuredHostTree(
       }
     }
   }
-  const identities = new Map<number, string>();
+  const identities = new Map<number, ProcessIdentity>();
   for (const candidate of tree) {
     const candidateIdentity = identityOf(candidate);
     if (candidateIdentity !== null) {
@@ -331,10 +465,11 @@ export async function terminateStructuredHostTree(
           status: 409,
           error: "host process identity changed before signalling — refresh the resource list",
           remaining: [pid],
+          survivors: [],
           stale: true,
         };
       }
-      identities.set(candidate, candidateIdentity);
+      identities.set(candidate, captureProcessIdentity(candidate, identityProbe, candidateIdentity));
       continue;
     }
     if (alive(candidate)) {
@@ -343,110 +478,157 @@ export async function terminateStructuredHostTree(
         status: 409,
         error: `process ${candidate} identity is unknown — refresh the resource list`,
         remaining: [candidate],
+        survivors: [],
       };
     }
   }
+  let terminationStarted = false;
+  const partialEvidence = () => {
+    if (!terminationStarted) return { survivors: [] as ProcessIdentity[] };
+    const survivors = [...identities.values()].filter((identity) => {
+      try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
+      catch { return true; }
+    });
+    return { survivors, terminationStarted: true as const };
+  };
   const identityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
     for (const [candidate, expectedIdentity] of identities) {
-      const currentIdentity = identityOf(candidate);
-      if (currentIdentity === expectedIdentity || (currentIdentity === null && !alive(candidate))) continue;
+      const status = processIdentityStatus(expectedIdentity, identityProbe);
+      if (status === "alive" || (status === "dead" && !alive(candidate))) continue;
       return {
         ok: false,
         status: 409,
-        error: candidate === pid
-          ? "host process identity changed before signalling — refresh the resource list"
-          : `process ${candidate} identity changed before signalling — refresh the resource list`,
+        error: status === "unverified"
+          ? candidate === pid
+            ? "host process identity cannot be verified before signalling — refresh the resource list"
+            : `process ${candidate} identity cannot be verified before signalling — refresh the resource list`
+          : candidate === pid
+            ? "host process identity changed before signalling — refresh the resource list"
+            : `process ${candidate} identity changed before signalling — refresh the resource list`,
         remaining: [candidate],
+        ...partialEvidence(),
         ...(candidate === pid ? { stale: true as const } : {}),
       };
     }
     return null;
   };
+  /* Identity says the pid is still the process; authority says this caller may
+     still end it. Both are asked at the same points, and either refusal stops
+     the ladder before the next signal. */
+  const authorityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
+    const refused = dependencies.authorize?.() ?? null;
+    if (!refused) return null;
+    return { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() };
+  };
+  const survivors = () => tree.filter((candidate) => alive(candidate));
   /* Ownership is asked at kill time, never read off the snapshot: the seat may
      have been given up since it was taken, or given to a replacement host —
      which is why the process this kill was authorized for goes with the ask.
      False means nothing the runtime holds is ours to end through it: the
      released/orphaned case, which only the process group reaches. */
-  let via: "runtime" | "process-group" = "process-group";
-  let runtimeFailure = false;
-  if (key) {
-    try {
-      if (await terminateOwned(key, expected)) via = "runtime";
-    } catch {
-      runtimeFailure = true;
+  try {
+    const refusedBeforeRuntime = authorityRefusal();
+    if (refusedBeforeRuntime) return refusedBeforeRuntime;
+    let via: "runtime" | "process-group" = "process-group";
+    let runtimeFailure = false;
+    if (key) {
+      terminationStarted = true;
+      try {
+        if (await terminateOwned(key, expected)) via = "runtime";
+      } catch {
+        runtimeFailure = true;
+        const changed = identityRefusal();
+        if (changed) return changed;
+      }
+    }
+
+    /* The runtime path may await health/release work. The pid must cross the
+       kernel identity fence again after that boundary: a session key may have
+       been rebound while we waited, and a recycled group leader must never
+       receive the fallback signal. The caller's authority crosses it too. */
+    const changedAfterRuntime = identityRefusal();
+    if (changedAfterRuntime) return changedAfterRuntime;
+    const refusedAfterRuntime = authorityRefusal();
+    if (refusedAfterRuntime) return refusedAfterRuntime;
+
+    const refusals: string[] = [];
+    const signalOnce = (target: number, value: NodeJS.Signals) => {
+      terminationStarted = true;
+      try {
+        signal(target, value);
+      } catch (error) {
+        const code = signalErrorCode(error);
+        /* ESRCH is the process exiting between the check and the signal. */
+        if (code !== "ESRCH") refusals.push(`${value} on ${target < 0 ? `group ${-target}` : target}: ${code ?? "failed"}`);
+      }
+    };
+    /* Exactly one signal per process: the group signal already reaches every
+       member, so only the descendants that left it (a child that called
+       setsid, a reparented grandchild) are signalled individually. */
+    const sweep = (value: NodeJS.Signals): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
       const changed = identityRefusal();
       if (changed) return changed;
-    }
-  }
+      const refused = authorityRefusal();
+      if (refused) return refused;
+      const standing = survivors();
+      if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
+        signalOnce(-groupLeader, value);
+      }
+      for (const candidate of standing) {
+        if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
+        const changed = identityRefusal();
+        if (changed) return changed;
+        const refused = authorityRefusal();
+        if (refused) return refused;
+        signalOnce(candidate, value);
+      }
+      return null;
+    };
 
-  /* The runtime path may await health/release work. The pid must cross the
-     kernel identity fence again after that boundary: a session key may have
-     been rebound while we waited, and a recycled group leader must never
-     receive the fallback signal. */
-  const changedAfterRuntime = identityRefusal();
-  if (changedAfterRuntime) return changedAfterRuntime;
+    const changedBeforeTerm = sweep("SIGTERM");
+    if (changedBeforeTerm) return changedBeforeTerm;
+    const startedAt = Date.now();
+    let escalated = false;
+    while (survivors().length > 0) {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= deadlineMs) break;
+      if (!escalated && elapsed >= graceMs) {
+        escalated = true;
+        const changedBeforeKill = sweep("SIGKILL");
+        if (changedBeforeKill) return changedBeforeKill;
+      }
+      await sleep(TERMINATION_POLL_MS);
+    }
 
-  const survivors = () => tree.filter((candidate) => alive(candidate));
-  const refusals: string[] = [];
-  const signalOnce = (target: number, value: NodeJS.Signals) => {
-    try {
-      signal(target, value);
-    } catch (error) {
-      const code = signalErrorCode(error);
-      /* ESRCH is the process exiting between the check and the signal. */
-      if (code !== "ESRCH") refusals.push(`${value} on ${target < 0 ? `group ${-target}` : target}: ${code ?? "failed"}`);
+    const changedBeforeResult = identityRefusal();
+    if (changedBeforeResult) return changedBeforeResult;
+    const remaining = survivors();
+    if (remaining.length > 0 || refusals.length > 0) {
+      /* Partial is not success: the registry row keeps describing the host that
+         is still running, and the target keeps its authority for a retry. */
+      let error: string;
+      if (runtimeFailure) error = "the runtime host termination failed and the process tree survived";
+      else if (refusals.length > 0) error = `the kill was refused (${refusals[0]})`;
+      else error = `${remaining.length} process${remaining.length === 1 ? "" : "es"} outlived the kill`;
+      return {
+        ok: false,
+        status: 500,
+        error,
+        remaining,
+        ...partialEvidence(),
+      };
     }
-  };
-  /* Exactly one signal per process: the group signal already reaches every
-     member, so only the descendants that left it (a child that called
-     setsid, a reparented grandchild) are signalled individually. */
-  const sweep = (value: NodeJS.Signals): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
-    const changed = identityRefusal();
-    if (changed) return changed;
-    const standing = survivors();
-    if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
-      signalOnce(-groupLeader, value);
-    }
-    for (const candidate of standing) {
-      if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
-      signalOnce(candidate, value);
-    }
-    return null;
-  };
-
-  const changedBeforeTerm = sweep("SIGTERM");
-  if (changedBeforeTerm) return changedBeforeTerm;
-  const startedAt = Date.now();
-  let escalated = false;
-  while (survivors().length > 0) {
-    const elapsed = Date.now() - startedAt;
-    if (elapsed >= deadlineMs) break;
-    if (!escalated && elapsed >= graceMs) {
-      escalated = true;
-      const changedBeforeKill = sweep("SIGKILL");
-      if (changedBeforeKill) return changedBeforeKill;
-    }
-    await sleep(TERMINATION_POLL_MS);
-  }
-
-  const changedBeforeResult = identityRefusal();
-  if (changedBeforeResult) return changedBeforeResult;
-  const remaining = survivors();
-  if (remaining.length > 0 || refusals.length > 0) {
-    /* Partial is not success: the registry row keeps describing the host that
-       is still running, and the target keeps its authority for a retry. */
-    let error: string;
-    if (runtimeFailure) error = "the runtime host termination failed and the process tree survived";
-    else if (refusals.length > 0) error = `the kill was refused (${refusals[0]})`;
-    else error = `${remaining.length} process${remaining.length === 1 ? "" : "es"} outlived the kill`;
+    /* The runtime path already retired the row as part of its own lifecycle. */
+    if (key && via !== "runtime") retire(key, expected);
+    return { ok: true, via, pids: tree };
+  } catch (error) {
+    const evidence = partialEvidence();
     return {
       ok: false,
-      status: 500,
-      error,
-      remaining,
+      status: 409,
+      error: `termination evidence became unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      remaining: evidence.survivors.map((identity) => identity.pid),
+      ...evidence,
     };
   }
-  /* The runtime path already retired the row as part of its own lifecycle. */
-  if (key && via !== "runtime") retire(key, expected);
-  return { ok: true, via, pids: tree };
 }

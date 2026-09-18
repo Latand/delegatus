@@ -1,11 +1,12 @@
 /**
  * The #771 publication contract, driven through the real ProjectDashboard: the
- * canonical selection is one set that survives a MODE SWITCH, and every view
- * publishes it — the scheme board, the flat list, and both phone modes.
+ * canonical selection is one set that survives a view switch, and every view
+ * publishes it: the desktop Board (the kanban, #1695), Conversations, and the
+ * phone.
  *
- * Before the lift, `multi` was local state inside SchemeBoard: switching to the
- * list unmounted the board and destroyed the selection, and both non-scheme
- * publishers hardcoded `selectedPaths: []`.
+ * The desktop Board has no select mode yet, so the set is made through the
+ * selection store's own seam (`seedSelectionSessionForTest`) instead of the
+ * scheme's hover checks, which left with the scheme.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -16,6 +17,7 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
+import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
@@ -32,7 +34,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
   useConversationCatalog: () => ({ items: [], nextCursor: null, total: 0, loading: false, error: false, loadMore: () => {}, retry: () => {} }),
 }));
 const { viewBus } = await import("@/hooks/viewPresenceBus");
-const { resetSelectionSessionsForTest } = await import("@/hooks/useBoardState");
+const { resetSelectionSessionsForTest, seedSelectionSessionForTest } = await import("@/hooks/useBoardState");
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 
 const dom = new Window({ url: "http://localhost/" });
@@ -42,7 +44,7 @@ const G = globalThis as Record<string, unknown>;
    board and by the phone's focus view, so the tests flip this between mounts. */
 let mobile = false;
 const matchMediaFor = (query: string) => ({
-  matches: mobile && String(query).includes("max-width: 767px"),
+  matches: mobile && String(query) === MOBILE_LAYOUT_QUERY,
   media: String(query),
   onchange: null,
   addEventListener() {},
@@ -60,6 +62,7 @@ const matchMediaFor = (query: string) => ({
 let projectCounter = 0;
 let PROJECT = "selection-contract-0";
 let boards: Record<string, BoardProjectStateV1> = {};
+let tmuxCalls: Array<Record<string, unknown>> = [];
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1,
   revision: 0,
@@ -101,6 +104,10 @@ const OVERRIDES: Record<string, unknown> = {
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
+    if (url === "/api/tmux") {
+      tmuxCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "" };
+    }
     if (url.startsWith("/api/board")) {
       if (method === "GET") {
         const project = new URL(url, "http://x").searchParams.get("project")!;
@@ -150,6 +157,7 @@ beforeEach(() => {
   projectCounter += 1;
   PROJECT = `selection-contract-${projectCounter}`;
   boards = { [PROJECT]: seededBoard() };
+  tmuxCalls = [];
   resetSelectionSessionsForTest();
 });
 afterEach(() => {
@@ -183,8 +191,18 @@ const betaOf = () => file("/beta", "Beta", 1);
 const alpha = { path: "/alpha" };
 const beta = { path: "/beta" };
 
-function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[]): HTMLElement {
-  if (manual) boards = { [PROJECT]: { ...seededBoard(), explicitManual: manual, prefs: { ...seededBoard().prefs, manual } } };
+function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], expanded: string[] = []): HTMLElement {
+  if (manual || expanded.length) {
+    const seed = seededBoard();
+    const nextManual = manual ?? seed.prefs.manual;
+    boards = {
+      [PROJECT]: {
+        ...seed,
+        explicitManual: nextManual,
+        prefs: { ...seed.prefs, manual: nextManual, expanded },
+      },
+    };
+  }
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -212,128 +230,17 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[]): H
 }
 
 const slice = () => viewBus.getSlice();
-const checkIn = (host: HTMLElement, path: string) => host.querySelector(`[data-select-check="${path}"]`) as HTMLElement | null;
-const clickCheck = (host: HTMLElement, path: string) => {
-  const check = checkIn(host, path);
-  expect(check).not.toBeNull();
-  flushSync(() => check!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-};
-/** The list's own row order: quiet history is freshest-first by mtime. */
+const select = (...paths: string[]) => flushSync(() => seedSelectionSessionForTest(PROJECT, paths));
+const boardShown = (host: HTMLElement) => host.querySelector("[data-kanban-board]") !== null;
+/** Conversations' own order for these rows: freshest first by mtime. */
 const listOrder = [alpha.path, beta.path];
 
-/** The view toggle an operator actually clicks. */
-function clickViewTab(host: HTMLElement, view: "scheme" | "list") {
-  const label = view === "scheme" ? "scheme" : "conversations";
-  const tab = Array.from(host.querySelectorAll("button[aria-pressed]")).find(
-    (button) => (button.getAttribute("aria-label") ?? "") === label,
-  ) as HTMLButtonElement | undefined;
+/** The view tab an operator actually clicks. */
+function clickViewTab(host: HTMLElement, view: "kanban" | "list") {
+  const tab = host.querySelector(`button[data-view-tab="${view}"]`) as HTMLButtonElement | null;
   expect(tab).toBeTruthy();
   flushSync(() => tab!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 }
-
-test("a selection made in scheme mode is still published after switching to the list, and survives the round trip", async () => {
-  const host = mount();
-  expect(await waitFor(() => checkIn(host, "/beta") !== null)).toBe(true);
-  await settle();
-  expect(slice().mode).toBe("scheme");
-
-  clickCheck(host, "/beta");
-  await settle();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-
-  /* Switch to the list the way the operator does — the view tab, which PATCHes
-     the durable view mode and unmounts the board. */
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
-
-  /* THE REGRESSION: this used to be `[]`. The board is gone; the selection is not. */
-  expect(host.querySelector("[data-scheme-node]")).toBeNull();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-  /* Published in the LIST's own row order, and the list's rows are visible. */
-  expect(slice().visiblePaths).toEqual(listOrder);
-
-  /* Back to scheme: same set, no re-selection needed. */
-  clickViewTab(host, "scheme");
-  expect(await waitFor(() => slice().mode === "scheme")).toBe(true);
-  await settle();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-  expect(host.querySelector('[data-scheme-node="/beta"]')?.getAttribute("data-lasso-selected")).toBe("true");
-});
-
-test("a selected board card that the list has no row for is still published", async () => {
-  /* The real shape this was found in: the flat list only lists ROOT conversations,
-     so a selected non-root board card (a subagent leaf, or this compaction-chain
-     child) appears in no row. Projecting onto the list's rows and stopping there
-     published `[]` — indistinguishable, to the orchestrator, from the operator
-     having deselected everything. */
-  const leaf = { ...file("/alpha-child", "Child", 3), parent: "/alpha" };
-  const host = mount([alphaOf(), leaf], ["/alpha", leaf.path]);
-  expect(await waitFor(() => checkIn(host, leaf.path) !== null)).toBe(true);
-  await settle();
-  clickCheck(host, leaf.path);
-  await settle();
-  expect(slice().selectedPaths).toEqual([leaf.path]);
-
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
-  /* The leaf is in no list row, and is published anyway. */
-  expect(slice().visiblePaths).not.toContain(leaf.path);
-  expect(slice().selectedPaths).toEqual([leaf.path]);
-});
-
-test("the list publishes a multi-card selection in its own row order", async () => {
-  const host = mount();
-  expect(await waitFor(() => checkIn(host, "/beta") !== null)).toBe(true);
-  await settle();
-  clickCheck(host, "/beta");
-  clickCheck(host, "/alpha");
-  await settle();
-  expect([...slice().selectedPaths].sort()).toEqual(["/alpha", "/beta"]);
-
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
-  /* Same set, projected onto the list's freshest-first row order. */
-  expect(slice().selectedPaths).toEqual(listOrder);
-});
-
-test("the phone's focus and map modes publish the selection the desktop board made", async () => {
-  const desktop = mount();
-  expect(await waitFor(() => checkIn(desktop, "/beta") !== null)).toBe(true);
-  await settle();
-  clickCheck(desktop, "/beta");
-  await settle();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-
-  /* The desktop board goes away — the operator picked up their phone. Unmounting
-     it first is what makes this a real hand-off rather than two live publishers. */
-  flushSync(() => roots.pop()!.unmount());
-  await settle();
-
-  /* Same project, phone width: MobileFocusView takes over the slice. */
-  mobile = true;
-  const phone = mount();
-  expect(await waitFor(() => slice().mode === "mobile-focus" || slice().mode === "mobile-map")).toBe(true);
-  await settle();
-  expect(slice().mode).toBe("mobile-focus");
-  /* This used to be `[]`, so a selection vanished from the snapshot the moment
-     the phone view owned the slice. */
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-
-  /* The phone's OTHER mode: the map reports the whole board in its own layout
-     order — and the same selection. */
-  const mapButton = Array.from(phone.querySelectorAll("button")).find(
-    (button) => (button.getAttribute("aria-label") ?? "") === "Open the project map",
-  ) as HTMLButtonElement | undefined;
-  expect(mapButton).toBeTruthy();
-  flushSync(() => mapButton!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-  expect(await waitFor(() => slice().mode === "mobile-map")).toBe(true);
-  await settle();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-  expect(slice().visiblePaths).toEqual(["/alpha", "/beta"]);
-});
 
 /** Re-render the same dashboard root with a different scan. */
 function rescan(files: FileEntry[]) {
@@ -359,89 +266,129 @@ function rescan(files: FileEntry[]) {
   );
 }
 
-test("the phone publishes a member its own board order does not place", async () => {
-  const desktop = mount();
-  expect(await waitFor(() => checkIn(desktop, "/beta") !== null)).toBe(true);
+test("a selection published on the Board is still published after switching to Conversations, and survives the round trip", async () => {
+  const host = mount();
+  expect(await waitFor(() => boardShown(host))).toBe(true);
   await settle();
-  clickCheck(desktop, "/beta");
+  select("/beta");
+  await settle();
+  expect(slice().mode).toBe("scheme");
+  expect(slice().selectedPaths).toEqual(["/beta"]);
+
+  clickViewTab(host, "list");
+  expect(await waitFor(() => slice().mode === "list")).toBe(true);
+  await settle();
+  expect(boardShown(host)).toBe(false);
+  expect(slice().selectedPaths).toEqual(["/beta"]);
+  expect(slice().visiblePaths).toEqual(listOrder);
+
+  clickViewTab(host, "kanban");
+  expect(await waitFor(() => boardShown(host) && slice().mode === "scheme")).toBe(true);
+  await settle();
+  expect(slice().selectedPaths).toEqual(["/beta"]);
+});
+
+test("a selected board conversation that Conversations has no row for is still published", async () => {
+  /* Conversations lists root conversations, so a selected child appears in no row; it is published anyway. */
+  const leaf = { ...file("/alpha-child", "Child", 3), parent: "/alpha" };
+  const host = mount([alphaOf(), leaf], ["/alpha", leaf.path]);
+  expect(await waitFor(() => boardShown(host))).toBe(true);
+  await settle();
+  select(leaf.path);
+  await settle();
+  expect(slice().selectedPaths).toEqual([leaf.path]);
+
+  clickViewTab(host, "list");
+  expect(await waitFor(() => slice().mode === "list")).toBe(true);
+  await settle();
+  expect(slice().visiblePaths).not.toContain(leaf.path);
+  expect(slice().selectedPaths).toEqual([leaf.path]);
+});
+
+test("Conversations publishes a multi-conversation selection in its own row order", async () => {
+  const host = mount();
+  expect(await waitFor(() => boardShown(host))).toBe(true);
+  await settle();
+  select("/beta", "/alpha");
+  await settle();
+  expect([...slice().selectedPaths].sort()).toEqual(["/alpha", "/beta"]);
+
+  clickViewTab(host, "list");
+  expect(await waitFor(() => slice().mode === "list")).toBe(true);
+  await settle();
+  expect(slice().selectedPaths).toEqual(listOrder);
+});
+
+test("the phone's focus mode publishes the selection the desktop Board held", async () => {
+  const desktop = mount();
+  expect(await waitFor(() => boardShown(desktop))).toBe(true);
+  await settle();
+  select("/beta");
   await settle();
   expect(slice().selectedPaths).toEqual(["/beta"]);
 
-  /* Close /beta's window: it leaves the board layout while its conversation stays
-     in the scan, so the phone — whose order IS the board — has no position for it. */
-  const closeBeta = Array.from(desktop.querySelectorAll('[data-scheme-node="/beta"] button')).find(
-    (button) => (button.getAttribute("aria-label") ?? "").startsWith("Remove column"),
-  ) as HTMLButtonElement | undefined;
-  expect(closeBeta).toBeTruthy();
-  flushSync(() => closeBeta!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-  expect(await waitFor(() => desktop.querySelector('[data-scheme-node="/beta"]') === null)).toBe(true);
-  await settle();
-
+  /* The desktop board goes away: the operator picked up their phone. */
   flushSync(() => roots.pop()!.unmount());
   await settle();
+
+  mobile = true;
+  const phone = mount();
+  expect(await waitFor(() => slice().mode === "mobile-focus")).toBe(true);
+  await settle();
+  expect(slice().selectedPaths).toEqual(["/beta"]);
+
+  const row = phone.querySelector('[data-mobile2-row="conversation"]') as unknown as HTMLElement | null;
+  expect(row).not.toBeNull();
+  flushSync(() => row!.click());
+  await settle();
+  expect(await waitFor(() => slice().focusedPath !== null)).toBe(true);
+  expect(slice().mode).toBe("mobile-focus");
+  expect(slice().visiblePaths).toEqual([slice().focusedPath!]);
+  expect(slice().selectedPaths).toEqual(["/beta"]);
+});
+
+test("the phone publishes a member its own board order does not place", async () => {
+  /* /beta's window is closed: it is off the board layout while its conversation stays in the scan. */
+  boards = { [PROJECT]: { ...seededBoard(), explicitManual: ["/alpha"], prefs: { ...seededBoard().prefs, manual: ["/alpha"], hidden: ["/beta"] } } };
   mobile = true;
   mount();
   expect(await waitFor(() => slice().mode === "mobile-focus")).toBe(true);
   await settle();
-  /* Not on the phone's board, and published anyway — the set is what the
-     orchestrator needs, and this view is not the authority on membership. */
+  select("/beta");
+  await settle();
   expect(slice().visiblePaths).not.toContain("/beta");
   expect(slice().selectedPaths).toEqual(["/beta"]);
 });
 
 test("a conversation that disappears from the scan is dropped from the SET, not just from this view's order", async () => {
   const host = mount();
-  expect(await waitFor(() => checkIn(host, "/beta") !== null)).toBe(true);
+  expect(await waitFor(() => boardShown(host))).toBe(true);
   await settle();
-  clickCheck(host, "/beta");
-  clickCheck(host, "/alpha");
+  select("/beta", "/alpha");
   await settle();
   expect([...slice().selectedPaths].sort()).toEqual(["/alpha", "/beta"]);
 
-  /* /beta's conversation is gone. Its absence from the published order proves
-     nothing on its own — no view can list a card it does not render. */
   rescan([alphaOf()]);
   expect(await waitFor(() => slice().selectedPaths.length === 1)).toBe(true);
   expect(slice().selectedPaths).toEqual(["/alpha"]);
 
-  /* THE REAL ASSERTION: the conversation comes back. If it was only omitted
-     rather than pruned, it would resurrect as selected — the exact thing the
-     original prune existed to prevent. */
+  /* The conversation comes back. If it was only omitted rather than pruned, it would resurrect as selected. */
   rescan([alphaOf(), betaOf()]);
-  expect(await waitFor(() => host.querySelector('[data-scheme-node="/beta"]') !== null)).toBe(true);
   await settle();
   expect(slice().selectedPaths).toEqual(["/alpha"]);
-  expect(host.querySelector('[data-scheme-node="/beta"]')?.getAttribute("data-lasso-selected")).toBeNull();
 });
 
-test("a selected conversation the board stops PLACING stays in the set — pruning is not per-view", async () => {
+test("a selected conversation the board does not place stays in the set — pruning is not per-view", async () => {
+  /* /beta is off the board layout (a durable close) while its conversation stays in the scan and in Conversations. */
+  boards = { [PROJECT]: { ...seededBoard(), explicitManual: ["/alpha"], prefs: { ...seededBoard().prefs, manual: ["/alpha"], hidden: ["/beta"] } } };
   const host = mount();
-  expect(await waitFor(() => checkIn(host, "/beta") !== null)).toBe(true);
+  expect(await waitFor(() => boardShown(host))).toBe(true);
   await settle();
-  clickCheck(host, "/beta");
-  await settle();
-  expect(slice().selectedPaths).toEqual(["/beta"]);
-
-  /* Close /beta's window: it leaves the board LAYOUT (a durable tombstone) while
-     its conversation stays in the SCAN and in the list. Pruning against a layout
-     instead of the scan would delete the membership here — the mode-switch bug
-     wearing a different hat. */
-  const closeBeta = Array.from(host.querySelectorAll('[data-scheme-node="/beta"] button')).find(
-    (button) => (button.getAttribute("aria-label") ?? "").startsWith("Remove column"),
-  ) as HTMLButtonElement | undefined;
-  expect(closeBeta).toBeTruthy();
-  flushSync(() => closeBeta!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
-  expect(await waitFor(() => host.querySelector('[data-scheme-node="/beta"]') === null)).toBe(true);
+  select("/beta");
   await settle();
 
-  /* A scan tick with /beta still present — this is the moment a prune runs. The
-     conversation exists, the board just does not place it. */
   rescan([alphaOf(), betaOf()]);
   await settle();
-  expect(host.querySelector('[data-scheme-node="/beta"]')).toBeNull();
-
-  /* Observed through the LIST's projection, whose order is the scan's rows — so
-     a path the board does not place still shows up when it is still selected. */
   clickViewTab(host, "list");
   expect(await waitFor(() => slice().mode === "list")).toBe(true);
   await settle();
@@ -450,18 +397,15 @@ test("a selected conversation the board stops PLACING stays in the set — pruni
 
 test("an empty scan never prunes the selection", async () => {
   const host = mount();
-  expect(await waitFor(() => checkIn(host, "/beta") !== null)).toBe(true);
+  expect(await waitFor(() => boardShown(host))).toBe(true);
   await settle();
-  clickCheck(host, "/beta");
+  select("/beta");
   await settle();
   expect(slice().selectedPaths).toEqual(["/beta"]);
 
-  /* A failed poll reads as zero entries. Treating that as "every conversation
-     disappeared" would silently wipe the operator's selection. */
+  /* A failed poll reads as zero entries; it must not wipe the operator's selection. */
   rescan([]);
   await settle();
-  /* No view renders it now, so no view lists it — but it is still in the set, and
-     comes back with the conversation. */
   rescan([alphaOf(), betaOf()]);
   expect(await waitFor(() => slice().selectedPaths.length === 1)).toBe(true);
   expect(slice().selectedPaths).toEqual(["/beta"]);

@@ -1,10 +1,24 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
+import { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerHealthEvidence, ViewerHealthProbeObservation } from "@/lib/runtime/contracts";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
+import { HOT_STATE_BACKEND } from "@/lib/state/hotStateAuthority";
 import { proxy } from "@/proxy";
 import { GET as deploymentCapability } from "@/app/api/runtime/deployments/capabilities/v1/route";
-import { markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import {
+  markStructuredDeliveryControllerReady,
+  markStructuredDeliveryControllerUnavailable,
+  markStructuredHostStartupFailed,
+  markStructuredHostStartupProgress,
+  markStructuredHostStartupReady,
+} from "@/lib/runtime/startupStatus";
+import { RuntimeJournal } from "@/runtime-host/journal";
 
 import {
   candidateLogExcerpt,
@@ -14,12 +28,14 @@ import {
   viewerDeploymentReleaseReady,
   viewerDeploymentStructuredHostStartup,
   viewerHealthFailureDetail,
+  type ViewerHealthRequest,
   viewerHealthRequestPlan,
   waitForViewerReadiness,
 } from "./deploymentHealth";
 
 const originalToken = process.env.LLV_TOKEN;
 afterEach(() => {
+  markStructuredDeliveryControllerUnavailable();
   if (originalToken === undefined) delete process.env.LLV_TOKEN;
   else process.env.LLV_TOKEN = originalToken;
 });
@@ -35,6 +51,23 @@ function evidence(ok: boolean): ViewerHealthEvidence {
     assets: ok ? [{ path: "/_next/static/app.js", status: 200 }] : [],
     ok,
   };
+}
+
+function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
+  return {
+    snapshot: async () => journal.snapshot(),
+    events: async (after) => journal.replay(after),
+    waitEvents: async (after) => journal.replay(after),
+    append: async (event) => journal.append(event),
+    operation: async (event) => journal.append(event),
+    command: async (command) => journal.executeOperation(command),
+    operationStatus: async (operationId) => journal.operationResult(operationId),
+    retryOperation: async (operationId) => journal.retryOperation(operationId),
+    producerCursor: async (producerKind, eventKeyPrefix) => journal.producerCursor(producerKind, eventKeyPrefix),
+    effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+    transitionOperation: async (operationId, status, details) =>
+      journal.transitionOperation(operationId, status, details),
+  } as RuntimeHostClient;
 }
 
 test("candidate readiness polls through delayed startup until routes and assets pass", async () => {
@@ -69,6 +102,22 @@ test("candidate readiness stops immediately after container exit", async () => {
   expect(sleeps).toBe(0);
 });
 
+test("explicitly bounded readiness callers retain their wall-clock bound", async () => {
+  let now = 0;
+  const probe = (readyAt: number) => waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", inspect: async () => "running",
+    probe: async () => evidence(now >= readyAt),
+    now: () => now, sleep: async (delay) => { now += delay; },
+    timeoutMs: 300_000,
+  });
+  expect((await probe(200_000)).ok).toBe(true);
+  expect(now).toBe(200_000);
+  now = 0;
+  const timedOut = await probe(Infinity);
+  expect(timedOut.ok).toBe(false);
+  expect(now).toBe(300_000);
+});
+
 test("health request plan exercises remote authorization and rejection", () => {
   process.env.LLV_TOKEN = "viewer-token";
   const plan = viewerHealthRequestPlan("http://127.0.0.1:18001", "viewer-token");
@@ -77,7 +126,9 @@ test("health request plan exercises remote authorization and rejection", () => {
   const authorized = proxy(new NextRequest(plan.authenticated.url, { headers: plan.authenticated.headers }));
   const unauthorized = proxy(new NextRequest(plan.unauthorized.url, { headers: plan.unauthorized.headers }));
 
-  expect(plan.root.headers).toEqual({});
+  const bearer = plan.authenticated.headers.authorization;
+  expect(bearer?.startsWith("Bearer ")).toBe(true);
+  expect(plan.root).toEqual({ url: "http://127.0.0.1:18001/", headers: { authorization: bearer } });
   expect(plan.capability).toEqual({
     url: "http://127.0.0.1:18001/api/runtime/deployments/capabilities/v1",
     headers: plan.authenticated.headers,
@@ -87,6 +138,7 @@ test("health request plan exercises remote authorization and rejection", () => {
 });
 
 test("deployment capability requires the candidate-owned versioned endpoint", async () => {
+  markStructuredDeliveryControllerReady();
   const response = deploymentCapability();
   const body = await response.text();
 
@@ -113,6 +165,7 @@ test("deployment capability requires the candidate-owned versioned endpoint", as
 
 test("deployment capability publishes bounded structured-host adoption progress", async () => {
   try {
+    markStructuredDeliveryControllerReady();
     markStructuredHostStartupProgress({
       phase: "adopting Claude hosts",
       completedHosts: 7,
@@ -120,6 +173,7 @@ test("deployment capability publishes bounded structured-host adoption progress"
     });
     const response = deploymentCapability();
     const body = await response.text();
+    expect(viewerDeploymentReleaseReady(response.status, body)).toBe(false);
 
     expect(viewerDeploymentStructuredHostStartup(response.status, body)).toMatchObject({
       state: "pending",
@@ -139,6 +193,92 @@ test("deployment capability publishes bounded structured-host adoption progress"
     }))).toBeNull();
   } finally {
     markStructuredHostStartupReady();
+  }
+});
+
+test("issue 1268: a failed structured-host adoption pass makes the serving Viewer unhealthy", async () => {
+  try {
+    markStructuredDeliveryControllerReady();
+    markStructuredHostStartupProgress({
+      phase: "adopting Claude hosts",
+      completedHosts: 7,
+      totalHosts: 19,
+    });
+    markStructuredHostStartupFailed();
+
+    const response = deploymentCapability();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: "structured host startup adoption is retrying after a failed pass",
+      structuredDeliveryController: "ready",
+      structuredHostStartup: {
+        state: "failed",
+        phase: "adopting Claude hosts",
+        completedHosts: 7,
+        totalHosts: 19,
+      },
+    });
+  } finally {
+    markStructuredHostStartupReady();
+  }
+});
+
+test("issue 572: serving health follows the process delivery controller", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-controller-health-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const previousStateDirectory = process.env.LLV_STATE_DIR;
+  const previousPort = process.env.PORT;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    markStructuredHostStartupReady();
+
+    const absent = deploymentCapability();
+    expect(absent.status).toBe(503);
+    expect(await absent.json()).toMatchObject({
+      error: "structured delivery controller is unavailable",
+      structuredHostStartup: { state: "ready" },
+    });
+
+    await bindStructuredDeliveryQueue([], {
+      registry,
+      client: runtimeClient(journal),
+      deferStartupWork: true,
+    });
+    const recovered = deploymentCapability();
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toMatchObject({
+      capability: "viewer-deployments",
+      version: 1,
+      structuredDeliveryController: "ready",
+    });
+
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    expect(deploymentCapability().status).toBe(503);
+
+    process.env.LLV_STATE_DIR = directory;
+    process.env.PORT = "19002";
+    fs.writeFileSync(path.join(directory, "viewer-release.json"), JSON.stringify({
+      endpoint: "http://127.0.0.1:19001",
+      revision: "5".repeat(40),
+      hotStateBackend: HOT_STATE_BACKEND,
+    }));
+    const passiveCandidate = deploymentCapability();
+    expect(passiveCandidate.status).toBe(200);
+    expect(await passiveCandidate.json()).toMatchObject({
+      capability: "viewer-deployments",
+      structuredDeliveryController: "unavailable",
+    });
+  } finally {
+    if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDirectory;
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    markStructuredHostStartupReady();
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -300,4 +440,82 @@ test("probe bodies and candidate output stay bounded and printable", () => {
   expect(probeExcerpt("x".repeat(400))).toHaveLength(203);
   expect(candidateLogExcerpt("first\n\nsecond\nthird\n", { maxLines: 2 })).toEqual(["second", "third"]);
   expect(candidateLogExcerpt("y".repeat(300), { maxChars: 40 })).toEqual([`${"y".repeat(40)}...`]);
+});
+
+/** #1511: readiness required an unauthenticated 200 on `root`, and #1496 began
+    correctly refusing exactly that, so no token-configured candidate could ship.
+    Every probe the gate requires to answer 200 must carry credentials of its
+    own. `unauthorized` is excluded because the refusal *is* its expectation. */
+test("a token-configured readiness plan requires no unauthenticated success", () => {
+  process.env.LLV_TOKEN = "viewer-token";
+  const plan = viewerHealthRequestPlan("http://127.0.0.1:18001", "viewer-token");
+  if (!plan.authenticated || !plan.unauthorized) throw new Error("authenticated request plan is missing");
+  const mustSucceed: Array<[string, ViewerHealthRequest]> = [
+    ["root", plan.root],
+    ["authenticated", plan.authenticated],
+    ["capability", plan.capability],
+  ];
+
+  const refused = mustSucceed
+    .filter(([, request]) => proxy(new NextRequest(request.url, { headers: request.headers })).status === 403)
+    .map(([name]) => name);
+
+  expect(refused).toEqual([]);
+  expect(proxy(new NextRequest(plan.unauthorized.url, { headers: plan.unauthorized.headers })).status).toBe(403);
+});
+
+test("a tokenless readiness plan still requires a plain 200 on root", () => {
+  delete process.env.LLV_TOKEN;
+  const plan = viewerHealthRequestPlan("http://127.0.0.1:18001", null);
+
+  expect(plan.root).toEqual({ url: "http://127.0.0.1:18001/", headers: {} });
+  expect(plan.authenticated).toBeNull();
+  expect(plan.unauthorized).toBeNull();
+  expect(proxy(new NextRequest(plan.root.url, { headers: plan.root.headers }))
+    .headers.get("x-middleware-next")).toBe("1");
+});
+
+
+test("serving readiness can wait beyond all former total limits", async () => {
+  let now = 0;
+  const result = await waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", timeoutMs: null,
+    inspect: async () => "running", now: () => now,
+    probe: async () => evidence(now >= 900_000),
+    sleep: async (delay) => { now += delay; },
+  });
+  expect(result.ok).toBe(true);
+  expect(now).toBe(900_000);
+});
+
+
+test("unbounded readiness ends on candidate exit or explicit cancellation", async () => {
+  let checks = 0;
+  const result = await waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", timeoutMs: null,
+    inspect: async () => ++checks === 3 ? "exited" : "running",
+    probe: async () => evidence(false), sleep: async () => {},
+  });
+  expect(result).toMatchObject({ ok: false, processReady: false, detail: "candidate container exited before readiness" });
+  const abort = new AbortController();
+  await expect(waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", timeoutMs: null, signal: abort.signal,
+    inspect: async () => "running",
+    probe: async () => { abort.abort(new Error("operator cancelled")); return evidence(true); },
+  })).rejects.toThrow("operator cancelled");
+});
+
+
+test("transient inspection and probe errors keep serving pending", async () => {
+  let inspections = 0;
+  let probes = 0;
+  const progress: string[] = [];
+  const result = await waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", timeoutMs: null,
+    inspect: async () => { if (++inspections === 1) throw new Error("Docker unavailable"); return "running"; },
+    probe: async () => { if (++probes === 1) throw new Error("network unavailable"); return evidence(true); },
+    sleep: async () => {}, reportPending: (detail) => progress.push(detail),
+  });
+  expect(result.ok).toBe(true);
+  expect(progress).toEqual(["candidate inspection unavailable: Docker unavailable", "candidate probe unavailable: network unavailable"]);
 });

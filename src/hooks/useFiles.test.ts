@@ -12,11 +12,11 @@ import {
 import { createFilesClientCache, filesApiUrl, filesPollCadence, filesRequestHeaders, type FilesData } from "./useFiles";
 
 test("filesApiUrl keeps project switches on the bounded scheme feed", () => {
-  expect(filesApiUrl()).toBe("/api/files");
-  expect(filesApiUrl(null)).toBe("/api/files");
-  expect(filesApiUrl("example-dispatcher")).toBe("/api/files");
-  expect(filesApiUrl("space project")).toBe("/api/files");
-  expect(filesApiUrl("space project", "/sessions/quiet.jsonl")).toBe("/api/files?path=%2Fsessions%2Fquiet.jsonl");
+  expect(filesApiUrl()).toBe("/api/files?view=summary");
+  expect(filesApiUrl(null)).toBe("/api/files?view=summary");
+  expect(filesApiUrl("example-dispatcher")).toBe("/api/files?view=summary");
+  expect(filesApiUrl("space project")).toBe("/api/files?view=summary");
+  expect(filesApiUrl("space project", "/sessions/quiet.jsonl")).toBe("/api/files?view=summary&path=%2Fsessions%2Fquiet.jsonl");
 });
 
 test("global client cache serves stale rows while revalidation patches changed files", async () => {
@@ -46,6 +46,37 @@ test("global client cache serves stale rows while revalidation patches changed f
   expect(second.pipelines).toBe(first.pipelines);
   expect(second.workflows).toBe(first.workflows);
   expect(second.tasks).toBe(first.tasks);
+});
+
+test("an unfetched scope is answered by the global rows, uncertified and identity-stable, until its own fetch lands (#1432)", async () => {
+  const pin = "/archive/beyond-cap.jsonl";
+  const cache = createFilesClientCache(async (input) => {
+    const pinnedPath = new URL(String(input), "http://localhost").searchParams.get("path");
+    return new Response(JSON.stringify({
+      files: pinnedPath ? [file("/a", "A"), file(pinnedPath, "Pinned")] : [file("/a", "A")],
+      pinOverlayPaths: pinnedPath ? [pinnedPath] : [],
+    }), { status: 200 });
+  });
+  await cache.revalidate();
+
+  const standIn = cache.readScope(pin);
+  expect(standIn.requestScope).toBe(filesApiUrl(undefined, pin));
+  expect(standIn.loaded).toBe(true);
+  expect(standIn.scopeCertified).toBe(false);
+  expect(standIn.files.map((entry) => entry.path)).toEqual(["/a"]);
+  /* The same stand-in object comes back while nothing changed: a consumer
+     rendering it repeatedly must not see a fresh identity each time. */
+  expect(cache.readScope(pin)).toBe(standIn);
+
+  await cache.revalidate(pin);
+  const certified = cache.readScope(pin);
+  expect(certified.scopeCertified).toBe(true);
+  expect(certified.files.map((entry) => entry.path)).toEqual(["/a", pin]);
+  /* Another scope asked while the pinned one is the freshest: the pin-only
+     row stays with the request that admitted it. */
+  const other = cache.readScope("/archive/other.jsonl");
+  expect(other.scopeCertified).toBe(false);
+  expect(other.files.map((entry) => entry.path)).toEqual(["/a"]);
 });
 
 test("an ordinary hydration waits for an in-flight forced revision refresh", async () => {
@@ -83,10 +114,10 @@ test("an ordinary hydration waits for an in-flight forced revision refresh", asy
 test("URL-specific 304 responses restore the matching cached representation", async () => {
   const cache = createFilesClientCache(async (input, init) => {
     const headers = new Headers(init?.headers);
-    if (input === "/api/files" && headers.get("If-None-Match") === '"global"') {
+    if (input === "/api/files?view=summary" && headers.get("If-None-Match") === '"global"') {
       return new Response(null, { status: 304 });
     }
-    if (input === "/api/files") {
+    if (input === "/api/files?view=summary") {
       return new Response(JSON.stringify({ files: [file("/global", "Global")] }), {
         headers: { ETag: '"global"' },
       });
@@ -104,7 +135,7 @@ test("URL-specific 304 responses restore the matching cached representation", as
   const restored = await cache.revalidate();
 
   expect(restored.files.map((entry) => entry.path)).toEqual(["/global"]);
-  expect(restored.requestScope).toBe("/api/files");
+  expect(restored.requestScope).toBe("/api/files?view=summary");
   expect(cache.read()).toBe(restored);
 });
 
@@ -141,7 +172,7 @@ test("an unchanged generation-wait 304 keeps the mounted snapshot asleep", async
 test("client cache subscriptions receive updates only for their request scope", async () => {
   const pinnedPath = "/archive/scoped-pin.jsonl";
   const cache = createFilesClientCache(async (input) => {
-    const files = input === "/api/files"
+    const files = input === "/api/files?view=summary"
       ? [file("/global", "Global")]
       : [file("/global", "Global"), file(pinnedPath, "Pinned")];
     return new Response(JSON.stringify({ files }));
@@ -171,7 +202,7 @@ test("pipeline patches publish each cached URL representation without refetching
   let fetches = 0;
   const cache = createFilesClientCache(async (input) => {
     fetches += 1;
-    const pinned = input !== "/api/files";
+    const pinned = input !== "/api/files?view=summary";
     return new Response(JSON.stringify({
       files: pinned
         ? [file("/global", "Global"), file(pinnedPath, "Pinned")]
@@ -212,7 +243,7 @@ test("pipeline patches publish each cached URL representation without refetching
     },
     {
       listener: "global",
-      scope: "/api/files",
+      scope: "/api/files?view=summary",
       files: ["/global"],
       pins: [],
       task: "patched",
@@ -224,7 +255,7 @@ test("pipeline patches publish each cached URL representation without refetching
   expect(fetches).toBe(2);
   expect(notifications.map(({ listener, scope, task }) => ({ listener, scope, task }))).toEqual([
     { listener: "pinned", scope: filesApiUrl(undefined, pinnedPath), task: "server" },
-    { listener: "global", scope: "/api/files", task: "server" },
+    { listener: "global", scope: "/api/files?view=summary", task: "server" },
   ]);
 
   unsubscribePinned();
@@ -239,7 +270,7 @@ test("a pinned generation retry restores its ETag representation with the local 
   const pinnedUrl = filesApiUrl(undefined, pinnedPath);
   let pinnedRequests = 0;
   const cache = createFilesClientCache(async (input, init) => {
-    if (input === "/api/files") {
+    if (input === "/api/files?view=summary") {
       return new Response(JSON.stringify({
         files: [file("/global", "Global")],
         pipelines: [pipelineRow("p1", "server")],
@@ -318,7 +349,7 @@ test("active scoped representations survive LRU pressure during a pipeline patch
 test("a global 304 restores its exact cached membership and values", async () => {
   let globalRequests = 0;
   const cache = createFilesClientCache(async (input, init) => {
-    if (input === "/api/files") {
+    if (input === "/api/files?view=summary") {
       globalRequests += 1;
       if (globalRequests === 2) {
         expect(new Headers(init?.headers).get("If-None-Match")).toBe('"global-1"');
@@ -348,7 +379,7 @@ test("a global 304 restores its exact cached membership and values", async () =>
   expect(restored.files.map((entry) => entry.title)).toEqual(["Global 1", "Restored"]);
   expect(restored.flows.map((flow) => flow.id)).toEqual(["flow-restored"]);
   expect(restored.tasks.map((task) => task.id)).toEqual(["task-restored"]);
-  expect(restored.requestScope).toBe("/api/files");
+  expect(restored.requestScope).toBe("/api/files?view=summary");
 });
 
 test("releasing a migrated deep-link pin removes every pin-only closure row on a global 304", async () => {
@@ -357,7 +388,7 @@ test("releasing a migrated deep-link pin removes every pin-only closure row on a
   const closure = "/sessions/closure-parent.jsonl";
   let globalRequests = 0;
   const cache = createFilesClientCache(async (input, init) => {
-    if (input === "/api/files") {
+    if (input === "/api/files?view=summary") {
       globalRequests += 1;
       if (globalRequests === 2) {
         expect(new Headers(init?.headers).get("If-None-Match")).toBe('"global"');
@@ -383,7 +414,7 @@ test("releasing a migrated deep-link pin removes every pin-only closure row on a
   const released = await cache.revalidate();
 
   expect(released.files.map((entry) => entry.path)).toEqual(["/global"]);
-  expect(released.requestScope).toBe("/api/files");
+  expect(released.requestScope).toBe("/api/files?view=summary");
 });
 
 test("a global 304 restores an ordinary lineage row from its cached representation", async () => {
@@ -392,7 +423,7 @@ test("a global 304 restores an ordinary lineage row from its cached representati
   const sharedParent = "/sessions/shared-parent.jsonl";
   let globalRequests = 0;
   const cache = createFilesClientCache(async (input) => {
-    if (input === "/api/files") {
+    if (input === "/api/files?view=summary") {
       globalRequests += 1;
       if (globalRequests === 2) return new Response(null, { status: 304 });
       return new Response(JSON.stringify({
@@ -425,7 +456,7 @@ test("an out-of-cap #f target keeps its pinned representation through background
   const cache = createFilesClientCache(async (input) => {
     requests.push(input);
     version += 1;
-    const files = input === "/api/files"
+    const files = input === "/api/files?view=summary"
       ? [file("/global", "Global")]
       : [file("/global", "Global"), file(targetPath, `Target ${version}`)];
     return new Response(JSON.stringify({ files }), { headers: { ETag: `"${version}"` } });
@@ -440,8 +471,8 @@ test("an out-of-cap #f target keeps its pinned representation through background
   const refreshed = await cache.revalidate(filesRequestPin(null, active));
   expect(refreshed.files.find((entry) => entry.path === targetPath)?.title).toBe("Target 2");
   expect(requests).toEqual([
-    `/api/files?path=${encodeURIComponent(targetPath)}`,
-    `/api/files?path=${encodeURIComponent(targetPath)}`,
+    `/api/files?view=summary&path=${encodeURIComponent(targetPath)}`,
+    `/api/files?view=summary&path=${encodeURIComponent(targetPath)}`,
   ]);
 });
 
@@ -451,7 +482,7 @@ test("closing an out-of-cap #f card releases its pinned representation", async (
   const requests: string[] = [];
   const cache = createFilesClientCache(async (input) => {
     requests.push(input);
-    const files = input === "/api/files"
+    const files = input === "/api/files?view=summary"
       ? [file("/global", "Global")]
       : [file("/global", "Global"), file(targetPath, "Pinned")];
     return new Response(JSON.stringify({ files }));
@@ -465,8 +496,8 @@ test("closing an out-of-cap #f card releases its pinned representation", async (
 
   expect(refreshed.files.map((entry) => entry.path)).toEqual(["/global"]);
   expect(requests).toEqual([
-    `/api/files?path=${encodeURIComponent(targetPath)}`,
-    "/api/files",
+    `/api/files?view=summary&path=${encodeURIComponent(targetPath)}`,
+    "/api/files?view=summary",
   ]);
 });
 

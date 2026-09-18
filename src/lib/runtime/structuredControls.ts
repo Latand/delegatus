@@ -3,7 +3,14 @@ import { agentRegistry, type AgentRegistry, type ProcessIdentity } from "@/lib/a
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
+import {
+  attributeNamedAccountChoice,
+  type AccountChoiceActor,
+  type AccountOverrideNotice,
+} from "@/lib/accounts/accountOverrides";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { headCwd } from "@/lib/agent/transcript";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { newOperationId, runtimeCompactCapability, type RuntimeControlCapability, type RuntimeOperationCommand } from "./contracts";
@@ -14,12 +21,31 @@ import { recoverDeadStructuredConversation, structuredHostProcessAlive } from ".
 export type StructuredControlResult =
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "delivered" } }
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed"; spawned: boolean } }
-  | { status: 200 | 202; body: { ok: true; structured: true; target: string; operationId: string; receipt: { operationId: string; status: string } } }
+  | {
+      status: 200 | 202;
+      body: {
+        ok: true;
+        structured: true;
+        target: string;
+        operationId: string;
+        receipt: { operationId: string; status: string };
+        /** Present only when the named account is outside the project's pool:
+            the choice was carried out AND attributed, and the answer says so. */
+        accountOverride?: AccountOverrideNotice;
+      };
+    }
   /** A control this engine genuinely does not expose (#862). It is typed, so a
       caller can tell "this engine cannot" from "this attempt failed", and no
       prompt-based fallback is ever offered in its place. */
   | { status: 409; body: { error: string; code: "unsupported-capability"; capability: RuntimeControlCapability } }
+  /** The calling process has no structured control channel at all (no
+      `LLV_RUNTIME_HOST_SOCKET`): the command was never sent. Typed so a caller
+      can tell "this process cannot ask any host generation" from a host that
+      answered and refused (#1501). */
+  | { status: 503; body: { error: string; code: typeof RUNTIME_HOST_UNAVAILABLE_CODE } }
   | { status: 400 | 409 | 503; body: { error: string } };
+
+export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
 
 const STRUCTURED_CONTROL_ACTIONS = new Set(["interrupt", "kill", "reconfigure", "compact"]);
 
@@ -29,6 +55,10 @@ export interface StructuredControlRequest {
   action: string;
   operationId?: string;
   reconfiguration?: Partial<AgentReconfiguration>;
+  /** Who is making this request, for attributing an out-of-pool account choice.
+      Absent means the operator: an agent is the only caller that can name
+      itself here, exactly as `requireOperatorAuthority` reads a request. */
+  actor?: AccountChoiceActor;
 }
 
 export async function dispatchStructuredControl(
@@ -40,6 +70,7 @@ export async function dispatchStructuredControl(
     kick?: () => void;
     enabled?: () => boolean;
     accountExists?: (engine: "claude" | "codex", accountId: string) => boolean;
+    attributeAccountChoice?: typeof attributeNamedAccountChoice;
     recover?: typeof recoverDeadStructuredConversation;
     republish?: typeof republishStructuredDeliveryHost;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
@@ -58,6 +89,9 @@ export async function dispatchStructuredControl(
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (!entry) return null;
+  // Current legacy ownership wins over retained structured adapter metadata.
+  // The legacy executor revalidates its process fence immediately before acting.
+  if (entry.host) return null;
   /* Host teardown clears the structuredHost column before terminal kill
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
@@ -152,8 +186,16 @@ export async function dispatchStructuredControl(
   }
 
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
-  if (!client) return { status: 503, body: { error: "structured runtime host is unavailable" } };
+  if (!client) {
+    return { status: 503, body: { error: "structured runtime host is unavailable", code: RUNTIME_HOST_UNAVAILABLE_CODE } };
+  }
   const operationId = request.operationId ?? (dependencies.operationId ?? newOperationId)();
+  /* Set when the named account is outside the project's pool, and CALLED only
+     once the command has been accepted: what it produces rides both the
+     immediate answer and the durable journal the project view renders, and a
+     journal that only appends cannot take back a record written for a
+     reconfigure the host then refused. */
+  let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   try {
     const reconfiguration = request.action === "reconfigure"
       ? reconfigurationFromBody(conversation.engine, request.reconfiguration ?? {})
@@ -166,6 +208,35 @@ export async function dispatchStructuredControl(
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
       if (!accountExists(conversation.engine, reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
+      }
+      /* #1279: a reconfigure that MOVES this conversation onto another account
+         places its work there, so this path — which returned before ever
+         consulting the binding — now asks it. It asks in order to ATTRIBUTE,
+         not to refuse: the pool is the default the Viewer selects from on its
+         own, and a deliberate switch is a control the operator (or an agent
+         acting for them) is entitled to use, including onto an account outside
+         the pool. Inside the pool, and on an unbound project, nothing is
+         recorded and every line below is what it always was.
+
+         The same condition the legacy switch path uses — a reconfigure that
+         re-states the account it is already on moves nothing, and the two
+         paths answering the same gesture differently is the shape of the
+         defect this seam is fixing. */
+      if (reconfiguration.value.accountId !== generation.accountId) {
+        const accountId = reconfiguration.value.accountId;
+        attributeSwitch = () => (dependencies.attributeAccountChoice ?? attributeNamedAccountChoice)({
+          engine: conversation.engine,
+          project: conversationProjectKey(conversation.projectOwnership, generation.launchProfile, {
+            /* A getter, so the transcript is read only for a conversation that
+               names no project of its own — an ADOPTED one, whose launch
+               profile is empty and whose cwd is only in its transcript head. */
+            get cwd() { return headCwd(generation.path); },
+          }),
+          accountId,
+          conversationId: conversation.id,
+          actor: request.actor ?? { kind: "operator" },
+          via: "structured-reconfigure",
+        }) ?? undefined;
       }
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
@@ -199,6 +270,9 @@ export async function dispatchStructuredControl(
               turnId: entry.structuredHost?.activeTurnRef ?? null,
             };
     const result = await client.command(command);
+    /* The host holds a durable receipt for this reconfigure, so the switch is a
+       thing that happened and the record describes it. */
+    const accountOverride = attributeSwitch?.();
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
     return {
       status: result.receipt.status === "delivered" ? 200 : 202,
@@ -208,6 +282,7 @@ export async function dispatchStructuredControl(
         target: conversation.id,
         operationId,
         receipt: result.receipt,
+        ...(accountOverride ? { accountOverride } : {}),
       },
     };
   } catch (error) {
@@ -217,6 +292,9 @@ export async function dispatchStructuredControl(
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
+        /* The socket failed, the receipt did not: the command was accepted, so
+           this is the same acceptance the success path attributes. */
+        const accountOverride = attributeSwitch?.();
         (dependencies.kick ?? kickStructuredDeliveryQueue)();
         return {
           status: durable.receipt.status === "delivered" ? 200 : 202,
@@ -226,6 +304,7 @@ export async function dispatchStructuredControl(
             target: conversation.id,
             operationId: durable.operationId,
             receipt: durable.receipt,
+            ...(accountOverride ? { accountOverride } : {}),
           },
         };
       }

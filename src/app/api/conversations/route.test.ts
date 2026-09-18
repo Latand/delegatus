@@ -293,3 +293,98 @@ test("query results keep the registry-overlaid durable conversation id (#1040 re
   expect(unfilteredRow?.conversationId).toStartWith("conversation_");
   expect(filteredRow?.conversationId ?? null).toEqual(unfilteredRow?.conversationId ?? null);
 });
+
+test("project list rows carry the lineage the files response projects: a superseded round and an archived predecessor say so (#1671)", async () => {
+  /* Invented session ids, assembled from parts so no literal id sits here. */
+  const sessionId = (digit: string) => [digit.repeat(8), digit.repeat(4), `4${digit.repeat(3)}`, `8${digit.repeat(3)}`, digit.repeat(12)].join("-");
+  const transcript = (name: string) => {
+    const pathname = path.join(sandbox, `${name}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: name } }) + "\n");
+    return pathname;
+  };
+  const firstRound = transcript(`round-${sessionId("1")}`);
+  const secondRound = transcript(`round-${sessionId("2")}`);
+  const moved = transcript(`moved-${sessionId("3")}`);
+  const target = transcript(`target-${sessionId("4")}`);
+  replaceConversationCatalog([firstRound, secondRound, moved, target].map((pathname) => {
+    const stat = fs.statSync(pathname);
+    return {
+      path: pathname,
+      root: "codex-sessions" as const,
+      name: path.basename(pathname),
+      project: "lineage-project",
+      title: path.basename(pathname, ".jsonl"),
+      firstPrompt: "",
+      engine: "codex" as const,
+      kind: "session",
+      fmt: "codex" as const,
+      mtime: stat.mtimeMs / 1000,
+      size: stat.size,
+    };
+  }));
+
+  /* A retried round: the first is superseded by the second. */
+  const first = registry.ensureConversation("codex", firstRound, null);
+  const second = registry.ensureConversation("codex", secondRound, null);
+  registry.recordSupersedence(first.id, second.id, "stage-retry");
+  /* A conversation moved to another account: its first generation is archived. */
+  const moving = registry.ensureConversation("codex", moved, "source");
+  registry.setConversationMigration(moving.id, {
+    intentId: "catalog-lineage",
+    phase: "verifying",
+    targetId: "target",
+    revision: 1,
+    error: null,
+    operationId: "catalog-lineage-operation",
+    providerReceipt: {
+      operationId: "catalog-lineage-operation",
+      nativeId: sessionId("4"),
+      path: target,
+      continuityPaths: [],
+      historyHash: "catalog-lineage-history",
+      host: { kind: "codex-app-server", identity: sessionId("4"), epoch: 1, verifiedAt: "2026-07-20T12:00:00.000Z" },
+    },
+    updatedAt: "2026-07-10T12:00:00.000Z",
+  });
+  registry.commitSuccessor(moving.id, { id: sessionId("4"), path: target, accountId: "target" }, 1,
+    registry.conversation(moving.id)!.migration!.operationId, registry.conversation(moving.id)!.migration!.providerReceipt!);
+
+  const response = await GET(new Request("http://127.0.0.1/api/conversations?project=lineage-project"));
+  const body = await response.json() as { items: Array<{ path: string; migratedTo?: string; supersededBy?: { conversationId: string; path: string | null; at: string; reason: string; tailConversationId?: string; tailPath?: string | null } }> };
+  const byPath = new Map(body.items.map((item) => [item.path, item]));
+
+  expect(response.status).toBe(200);
+  expect([...byPath.keys()].sort()).toEqual([firstRound, secondRound, moved, target].sort());
+  const superseded = byPath.get(firstRound)?.supersededBy;
+  expect(superseded).toEqual({ conversationId: second.id, path: secondRound, at: expect.any(String), reason: "stage-retry", tailConversationId: second.id, tailPath: secondRound });
+  expect(byPath.get(secondRound)?.supersededBy).toBeUndefined();
+  expect(byPath.get(moved)?.migratedTo).toBe(target);
+  expect(byPath.get(target)?.migratedTo).toBeUndefined();
+});
+
+
+test("project search never opens unrelated transcript bodies", async () => {
+  const selected = path.join(sandbox, "selected.jsonl");
+  fs.writeFileSync(selected, JSON.stringify({ type: "user", message: { content: "Scoped keyword" } }) + "\n");
+  const stat = fs.statSync(selected);
+  const entry = { path: selected, root: "claude-projects" as const, name: "selected", project: "selected-project", title: "Selected", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: stat.mtimeMs / 1000, size: stat.size };
+  // Reading this directory as a transcript throws; metadata-only projection is safe.
+  replaceConversationCatalog([entry, { ...entry, path: sandbox, project: "other-project" }]);
+  const result = await GET(new Request("http://localhost/api/conversations?project=selected-project&q=keyword"));
+  expect((await result.json()).items.map((item: { path: string }) => item.path)).toEqual([selected]);
+});
+
+
+test("ordinary cursor pages still hydrate their own transcript titles", async () => {
+  const entries = [1, 2].map(n => {
+    const pathname = path.join(sandbox, `cursor-${n}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: `Actual title ${n}` } }) + "\n");
+    const stat = fs.statSync(pathname);
+    return { path: pathname, root: "claude-projects" as const, name: `cursor-${n}`, project: "cursor-project", title: "Unhydrated", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 3 - n, size: stat.size };
+  });
+  replaceConversationCatalog(entries);
+  const first = await (await GET(new Request("http://localhost/api/conversations?project=cursor-project&limit=1"))).json();
+  const second = await (await GET(new Request(`http://localhost/api/conversations?project=cursor-project&limit=1&cursor=${first.nextCursor}`))).json();
+  expect(first.items[0].title).toBe("Actual title 1");
+  expect(second.items[0].title).toBe("Actual title 2");
+});

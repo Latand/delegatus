@@ -35,7 +35,9 @@ jobs:
       # reach the kernel at all.
       - name: Require live kernel readers on this runner
         run: |
-          bun -e '
+          root="$(mktemp -d "$RUNNER_TEMP/kernel-proof-XXXXXX")"
+          mkdir -m 700 -p "$root/home" "$root/config" "$root/state" "$root/claude" "$root/codex" "$root/tmp"
+          env HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" LLV_CLAUDE_HOME="$root/claude" LLV_CODEX_HOME="$root/codex" TMPDIR="$root/tmp" LLV_RUNTIME_HOST_SOCKET="$root/runtime.sock" LLV_RUNTIME_HOST_CONTROL_SOCKET="$root/control.sock" bun -e '
           const { darwinProcessArgv } = await import("./src/lib/proc/darwinArgv.ts");
           const { darwinProcessIdentity } = await import("./src/lib/proc/darwinIdentity.ts");
 
@@ -47,11 +49,65 @@ jobs:
           console.log(`argv entries: ${argv.length}, identity token fields: ${token.split(":").length}`);
           '
 
-      - name: Verify the identity fence against the real macOS kernel
-        run: >
-          bun test
-          src/lib/proc/darwinArgv.test.ts
-          src/lib/proc/darwinIdentity.test.ts
-          src/lib/proc/portable.test.ts
-          src/lib/accounts/claudeLogin.test.ts
-          src/lib/accounts/claudeLoginIdentity.test.ts
+      - name: Install the pinned provider for native credential compatibility
+        run: |
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x64 ;;
+            *) exit 1 ;;
+          esac
+          npm install --prefix "$RUNNER_TEMP/claude-provider" --ignore-scripts --no-audit --no-fund --package-lock=false "@anthropic-ai/claude-code-darwin-$arch@2.1.263"
+          echo "LLV_TEST_CLAUDE_BINARY=$RUNNER_TEMP/claude-provider/node_modules/@anthropic-ai/claude-code-darwin-$arch/claude" >> "$GITHUB_ENV"
+
+      - name: Verify identity and credential recognition in isolated processes
+        run: |
+          python3 - <<'PYCODE'
+          import os, pathlib, subprocess, tempfile
+          tests = [
+              "src/lib/proc/darwinArgv.test.ts",
+              "src/lib/proc/darwinIdentity.test.ts",
+              "src/lib/proc/portable.test.ts",
+              "src/lib/accounts/claudeCredentials.test.ts",
+              "src/lib/accounts/claude.test.ts",
+              "src/lib/accounts/claudeLogin.test.ts",
+              "src/lib/accounts/claudeLoginIdentity.test.ts",
+              "src/lib/accounts/claudeOauth.test.ts",
+              "src/lib/accounts/spawnHealth.test.ts",
+              "src/lib/accounts/credentialIsolation.test.ts",
+              "src/lib/limits.test.ts",
+              "src/app/api/accounts/route.test.ts",
+              "src/lib/agent/cli.test.ts",
+          ]
+          failures = []
+          for test in tests:
+              root = pathlib.Path(tempfile.mkdtemp(prefix="claude-proof-", dir=os.environ["RUNNER_TEMP"]))
+              env = dict(os.environ)
+              for key in list(env):
+                  if key.startswith(("ANTHROPIC_", "CLAUDE_", "CODEX_", "LLV_")):
+                      env.pop(key)
+              for key, child in {"HOME": "home", "XDG_CONFIG_HOME": "config", "XDG_CACHE_HOME": "cache", "LLV_STATE_DIR": "state", "LLV_CLAUDE_HOME": "claude", "LLV_CODEX_HOME": "codex", "CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "TMPDIR": "tmp", "LLV_RUNTIME_SOCKET_DIR": "sockets"}.items():
+                  directory = root / child
+                  directory.mkdir(mode=0o700, exist_ok=True)
+                  env[key] = str(directory)
+              env["LLV_RUNTIME_HOST_SOCKET"] = str(root / "runtime.sock")
+              env["LLV_RUNTIME_HOST_CONTROL_SOCKET"] = str(root / "control.sock")
+              env["USER"] = "fixture-user"
+              env["LLV_REQUIRE_NATIVE_CREDENTIALS"] = "1"
+              env["LLV_TEST_CLAUDE_BINARY"] = os.environ["LLV_TEST_CLAUDE_BINARY"]
+              command = ["bun", "test", test]
+              # Removal traverses Linux /proc fd anchors and deliberately
+              # refuses macOS. Keep this job on credential recognition; the
+              # native Keychain test also exercises real catalog discovery.
+              if test.endswith("/claude.test.ts"):
+                  command += ["--test-name-pattern", "legacy Claude is Main|managed homes are distinct|credential symlinks|new account creation refuses"]
+              if test.endswith("/spawnHealth.test.ts"):
+                  command += ["--test-name-pattern", "^(?!Claude provider checks waiting behind deletion)"]
+              # The full CLI suite also invokes a locally installed Codex.
+              # This provider job exercises Claude account storage boundaries.
+              if test.endswith("/cli.test.ts"):
+                  command += ["--test-name-pattern", "^(managed Claude fresh and resume commands pin|Claude child environment keeps|legacy Claude fresh and resumed commands pin)"]
+              if subprocess.run(command, env=env).returncode:
+                  failures.append(test)
+          if failures:
+              raise SystemExit("Failed native gates: " + ", ".join(failures))
+          PYCODE

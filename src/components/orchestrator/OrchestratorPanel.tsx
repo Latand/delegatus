@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, LoaderCircle, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronUp, LoaderCircle, Lock, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -17,19 +17,23 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SPAWN_CONFIG,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  orchestratorMandateStale,
 } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
+import { ProcessStatusControls } from "../TaskHeader";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { OrchestratorConversation } from "./OrchestratorConversation";
 import {
   deriveOrchestratorPanelState,
   deriveRotateDraftState,
+  mandateSummaryOf,
   orchestratorQuietBannerEligible,
   resolveSeatFile,
+  rotateMandateBase,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatBindPending,
@@ -42,7 +46,7 @@ import {
   type SeatTransition,
 } from "./seatState";
 import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
-import { useOrchestratorSeat } from "./useOrchestratorSeat";
+import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
 
@@ -128,15 +132,28 @@ export function OrchestratorPanel({
   projectCwd,
   files,
   onClose,
+  variant = "dock",
+  collapsed = false,
+  seatRead,
 }: {
   project: string;
   projectName: string;
   projectCwd?: string;
   files: readonly FileEntry[];
+  /** The dock's close; on the seat, the Collapse/Expand toggle. */
   onClose: () => void;
+  /** `seat`: the kanban board's orchestrator above its columns (#1695), in the
+      approved prototype's header. The seat never hides, so its one header
+      control collapses the panel to that header instead of closing it. */
+  variant?: "dock" | "seat";
+  collapsed?: boolean;
+  /** A read of this project's seat its host already keeps (the kanban board,
+      for the same project and cwd): the panel uses it and polls nothing. */
+  seatRead?: OrchestratorSeatRead;
 }) {
   const { t } = useLocale();
-  const { status, failed, refresh } = useOrchestratorSeat(project, projectCwd);
+  const ownRead = useOrchestratorSeat(seatRead ? null : project, projectCwd);
+  const { status, failed, refresh } = seatRead ?? ownRead;
   const [formError, setFormError] = useState<string | null>(null);
   const [mandate, setMandateState] = useState(() => readDraftField(project, "mandate") || ORCHESTRATOR_SYSTEM_PROMPT);
   /* The conversation the open rotate draft is replacing. Non-null IS the rotate
@@ -353,6 +370,51 @@ export function OrchestratorPanel({
       data-orchestrator-mode={rotating ? "rotate" : "default"}
       aria-label={t("orchPanel.regionAria", { project: projectName })}
     >
+      {variant === "seat" ? (
+        <header className="seat-head">
+          <span className={`av ${file?.engine === "codex" ? "codex" : "claude"}`} aria-hidden>
+            <Bot />
+          </span>
+          <span className="seat-title">
+            <strong>{t("orchPanel.title")}</strong>
+            <span className="proj" title={projectName}>{projectName}</span>
+            <StateBadge state={state} file={file} word />
+          </span>
+          <span className="lock" title={t("orchPanel.seatStaysTitle")}>
+            <Lock aria-hidden />
+            <span>{t("orchPanel.seatStays")}</span>
+          </span>
+          {/* The seat is short on purpose: who holds it and its host control
+              ride this row instead of rows of their own under it. */}
+          {state.kind === "live" && !rotating && !collapsed ? (
+            <IncumbentHeader
+              inline
+              incumbent={incumbent}
+              file={file}
+              catalog={catalog}
+              predecessorConversationId={state.seat.predecessorConversationId}
+              promptVersion={state.seat.promptVersion}
+              rotating={rotating}
+              opening={rotateOpening}
+              onRotate={() => void openRotate(state.conversationId)}
+            />
+          ) : (
+            <span className="grow" />
+          )}
+          {state.kind === "live" && file && !collapsed ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          <button
+            type="button"
+            className="icon-btn"
+            data-seat-collapse
+            onClick={onClose}
+            aria-expanded={!collapsed}
+            aria-label={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
+            title={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
+          >
+            {collapsed ? <ChevronDown aria-hidden /> : <ChevronUp aria-hidden />}
+          </button>
+        </header>
+      ) : (
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
           <Bot className="h-4 w-4" />
@@ -372,6 +434,7 @@ export function OrchestratorPanel({
           <X className="h-4 w-4" aria-hidden />
         </button>
       </header>
+      )}
 
       {state.kind === "loading" ? (
         <Centered>
@@ -431,15 +494,18 @@ export function OrchestratorPanel({
         </Centered>
       ) : state.kind === "live" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <IncumbentHeader
-            incumbent={incumbent}
-            file={file}
-            catalog={catalog}
-            predecessorConversationId={state.seat.predecessorConversationId}
-            rotating={rotating}
-            opening={rotateOpening}
-            onRotate={() => void openRotate(state.conversationId)}
-          />
+          {variant === "seat" ? null : (
+            <IncumbentHeader
+              incumbent={incumbent}
+              file={file}
+              catalog={catalog}
+              predecessorConversationId={state.seat.predecessorConversationId}
+              promptVersion={state.seat.promptVersion}
+              rotating={rotating}
+              opening={rotateOpening}
+              onRotate={() => void openRotate(state.conversationId)}
+            />
+          )}
           {/* The transition banner is how a designation in flight — or one that
               failed — reaches an operator who is NOT looking at the draft. With
               the rotate draft open it would say the same thing twice, once with
@@ -495,7 +561,7 @@ export function OrchestratorPanel({
               onCancel={() => setRotateFrom(null)}
             />
           ) : file ? (
-            <OrchestratorConversation file={file} projectName={projectName} />
+            <OrchestratorConversation file={file} projectName={projectName} hostControls={variant !== "seat"} />
           ) : (
             <Centered>
               {state.bindFailure ? (
@@ -517,7 +583,6 @@ export function OrchestratorPanel({
           state={state}
           mandate={mandate}
           edited={mandate !== ORCHESTRATOR_SYSTEM_PROMPT}
-          baseVersion={ORCHESTRATOR_PROMPT_VERSION}
           formError={formError}
           submitting={create.submitting}
           projectName={projectName}
@@ -572,7 +637,17 @@ function RotateDraft({
 }) {
   const { t } = useLocale();
   const [formError, setFormError] = useState<string | null>(null);
-  const [mandate, setMandateState] = useState(() => readField("Rotate", project, "mandate") || seat.mandate);
+  /* The text starts from the CURRENT default when the incumbent's mandate is
+     based on an older version (#1452) — a seat created under v3 used to rotate
+     «you do not talk to the user» into every successor, headed as the built-in
+     rules. The incumbent's own text is one press away (`onKeepIncumbent`); a
+     seat on the current version, or on bespoke rules, keeps its text. */
+  const base = rotateMandateBase(seat);
+  const [mandate, setMandateState] = useState(() => readField("Rotate", project, "mandate") || base);
+  const setMandate = (value: string) => {
+    setMandateState(value);
+    writeField("Rotate", project, "mandate", value === base ? "" : value);
+  };
   /* «Prefilled» in the operator's words: what the incumbent is ACTUALLY running
      on, read through the launch module's own storage seam rather than by forking
      it. Only the initializers call `read`, so switching engine here is never
@@ -626,22 +701,17 @@ function RotateDraft({
       mode="rotate"
       state={state}
       mandate={mandate}
-      edited={mandate !== seat.mandate}
-      baseVersion={seat.promptVersion}
+      edited={mandate !== base}
+      incumbent={seat}
       formError={formError}
       submitting={flow.submitting}
       projectName={projectName}
       cwd={cwd}
       launch={launch}
       viewerMcpRegistered={status?.viewerMcpRegistered === true}
-      onMandate={(value) => {
-        setMandateState(value);
-        writeField("Rotate", project, "mandate", value === seat.mandate ? "" : value);
-      }}
-      onRestore={() => {
-        setMandateState(seat.mandate);
-        writeField("Rotate", project, "mandate", "");
-      }}
+      onMandate={setMandate}
+      onRestore={() => setMandate(base)}
+      onKeepIncumbent={() => setMandate(seat.mandate)}
       onConfirm={confirm}
       onCancel={onCancel}
     />
@@ -660,7 +730,7 @@ function OrchestratorDraft({
   state,
   mandate,
   edited,
-  baseVersion,
+  incumbent = null,
   formError,
   submitting,
   projectName,
@@ -669,17 +739,19 @@ function OrchestratorDraft({
   viewerMcpRegistered,
   onMandate,
   onRestore,
+  onKeepIncumbent,
   onConfirm,
   onCancel,
 }: {
   mode: "create" | "rotate";
   state: Extract<OrchestratorPanelState, { kind: "draft" } | { kind: "intent-error" }>;
   mandate: string;
+  /** The text differs from what the draft started with — the built-in default,
+      or the incumbent's text for a rotation on the current version. */
   edited: boolean;
-  /** The version of the mandate this draft STARTED from — the built-in prompt's
-      for a create, the incumbent's for a rotation. Only meaningful while the
-      text is untouched; an edited mandate is bespoke and claims no version. */
-  baseVersion: number | null;
+  /** The seat a rotation replaces: what its mandate is based on decides the
+      summary line, and whether its text is offered as the alternative. */
+  incumbent?: Pick<OrchestratorSeat, "mandate" | "promptVersion"> | null;
   formError: string | null;
   submitting: boolean;
   projectName: string;
@@ -688,12 +760,19 @@ function OrchestratorDraft({
   viewerMcpRegistered: boolean;
   onMandate: (value: string) => void;
   onRestore: () => void;
+  onKeepIncumbent?: () => void;
   onConfirm: () => void;
   onCancel?: () => void;
 }) {
   const { t } = useLocale();
   const errored = state.kind === "intent-error";
   const rotate = mode === "rotate";
+  /* A stale incumbent (#1452): the draft started from the current default, so
+     the incumbent's own text is offered explicitly, for as long as the text in
+     the box is not already it. */
+  const staleVersion = incumbent && orchestratorMandateStale(incumbent.promptVersion) ? incumbent.promptVersion : null;
+  const keepOffered = staleVersion !== null && incumbent !== null && mandate !== incumbent.mandate && onKeepIncumbent !== undefined;
+  const summary = mandateSummaryOf(mandate, incumbent);
   /* The rules are collapsed by default: they are the part an operator rarely
      changes, and 58 lines of them ahead of the pickers is what made this draft
      unreadable (#1163).
@@ -713,9 +792,6 @@ function OrchestratorDraft({
   useEffect(() => {
     if (errored && rules.current) rules.current.open = true;
   }, [errored]);
-  /* Only untouched text is a version of anything; an edited mandate is the
-     operator's own and says so instead of claiming a version it isn't. */
-  const version = edited ? null : baseVersion;
   return (
     <form
       className="flex min-h-0 flex-1 flex-col"
@@ -788,6 +864,27 @@ function OrchestratorDraft({
           <AgentLaunchControls draft={launch} disabled={submitting} stacked />
         </div>
 
+        {/* Said above the folded rules, where it is read: the incumbent's
+            mandate is behind the default, and its text is the one alternative
+            the operator may want (#1452). */}
+        {keepOffered ? (
+          <p
+            className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-control border border-warning/45 bg-warning-soft px-3 py-2 text-ui leading-4 text-secondary"
+            data-orchestrator-mandate-stale={String(staleVersion)}
+          >
+            <span>{t("orchPanel.rotateStaleMandate", { version: staleVersion, current: ORCHESTRATOR_PROMPT_VERSION })}</span>
+            <button
+              type="button"
+              data-orchestrator-keep-incumbent
+              onClick={onKeepIncumbent}
+              disabled={submitting}
+              className="inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            >
+              {t("orchPanel.keepIncumbentMandate", { version: staleVersion })}
+            </button>
+          </p>
+        ) : null}
+
         {/* Collapsed, the rules are one line the operator can ignore; open, they
             are the same textarea they have always been. Confirm posts what this
             field holds either way — the disclosure hides the text, it never
@@ -798,7 +895,7 @@ function OrchestratorDraft({
           data-orchestrator-mandate-details
         >
           <summary className="min-h-7 cursor-pointer select-none list-item px-3 py-1.5 text-label font-semibold text-secondary marker:text-muted hover:text-primary">
-            {version === null ? t("orchPanel.mandateSummaryCustom") : t("orchPanel.mandateSummary", { version })}
+            {t(summary.key, summary.params)} {t("orchPanel.mandateEdit")}
           </summary>
           <div className="flex flex-col gap-1 border-t border-border px-3 py-2">
             <div className="flex min-h-6 items-center gap-2">
@@ -809,7 +906,7 @@ function OrchestratorDraft({
                   disabled={submitting}
                   className="inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
                 >
-                  <RotateCcw className="h-3 w-3" aria-hidden /> {t(rotate ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault")}
+                  <RotateCcw className="h-3 w-3" aria-hidden /> {t(rotate && staleVersion === null ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault")}
                 </button>
               ) : null}
               <span className="ml-auto shrink-0 text-caption text-muted">{t("orchPanel.mandateSent")}</span>
@@ -893,6 +990,9 @@ const WARNING_BADGE = "border-warning/45 bg-warning-soft text-warning";
 const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
   "needs-you": { tone: WARNING_BADGE, key: "orchPanel.badgeNeedsYou" },
   live: { tone: "border-success/45 bg-success-soft text-success", key: "orchPanel.badgeLive" },
+  /* Hosted and idle. Not green: green is the word for a turn that is running,
+     and an agent awaiting input is a state the operator may want to act on. */
+  waiting: { tone: QUIET_BADGE, key: "orchPanel.badgeWaiting" },
   stalled: { tone: WARNING_BADGE, key: "orchPanel.badgeStalled" },
   resumable: { tone: QUIET_BADGE, key: "orchPanel.badgeResumable" },
   dead: { tone: DANGER_BADGE, key: "orchPanel.badgeDead" },
@@ -908,7 +1008,7 @@ const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
  * island popover read, so the dock can never name a wait differently from the
  * surfaces the operator reached it through.
  */
-function StateBadge({ state, file }: { state: OrchestratorPanelState; file: FileEntry | null }) {
+function StateBadge({ state, file, word = false }: { state: OrchestratorPanelState; file: FileEntry | null; word?: boolean }) {
   const { t, locale } = useLocale();
   const seatBadge = state.kind === "live" ? seatBadgeOf(state) : null;
   const badge = seatBadge ? SEAT_BADGE[seatBadge] : null;
@@ -932,6 +1032,16 @@ function StateBadge({ state, file }: { state: OrchestratorPanelState; file: File
      the decision behind it, and every other badge is already its own whole
      answer. */
   const decision = seatBadge === "needs-you" && file ? decisionLine(t, locale, file) : null;
+  if (word) {
+    /* The seat header's form: a dot and the word, toned the same way. */
+    const wordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";
+    return (
+      <span className={`state ${wordTone}`} data-orchestrator-badge={seatBadge ?? state.kind} title={decision ?? undefined}>
+        <i aria-hidden />
+        {label}
+      </span>
+    );
+  }
   return (
     <span
       data-orchestrator-badge={seatBadge ?? state.kind}

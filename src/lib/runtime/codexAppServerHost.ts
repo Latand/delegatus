@@ -1,8 +1,21 @@
+import { normalizeNativeQueueObservation } from "./nativeQueueContent";
+import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
+import type { NativeQueueInput } from "./nativeCodexQueue";
+import { StructuredSendRefusedError } from "./engineHost";
+import type { FirstDispatchEvidence } from "./engineHost";
+import { basename } from "node:path";
+import { isNonblockingCodexQuestion } from "./codexAttention";
+import { codexTurnProfile } from "./codexTurnProfile";
+import { StringDecoder } from "node:string_decoder";
+import { NativeCodexQueue, NativeQueueProtocolRefusal } from "./nativeCodexQueue";
+import { readCodexDeliveryHistory, findCodexHistoryDelivery, type CodexDeliveryHistoryResult } from "./codexHistoryReader";
+import type { NativeQueueHost } from "./nativeQueueExecutor";
+import type { NativeQueueRecord } from "./nativeQueueContracts";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
+import fs from "node:fs";
 
-import { isKnownEffortTier } from "@/lib/agent/efforts";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -39,12 +52,16 @@ import type {
   RuntimeCompactOutcome,
   RuntimeCompactRequest,
   RuntimeEvent,
+  RuntimeInjectOutcome,
+  RuntimeInjectRequest,
 } from "./engineHost";
 import {
   normalizeQueueEntry,
   RuntimeReplayGapError,
+  type SessionMaterializationEvidence,
   StructuredCompactError,
   StructuredHostAdoptionCleanupError,
+  StructuredInjectError,
 } from "./engineHost";
 import {
   FileRuntimeEventStore,
@@ -54,13 +71,9 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import {
-  canonicalVoicePersonaBootstrapExists,
-  legacyVoicePersonaBootstrapItemId,
-  voicePersonaBootstrap,
-  voicePersonaBootstrapIdentity,
-  type VoicePersonaBootstrap,
-  type VoicePersonaBootstrapIdentity,
-  type VoicePersonaBootstrapReceipt,
+  voiceSessionPersona,
+  type VoicePersonaVariant,
+  type VoiceSessionPersona,
 } from "./voicePersona";
 
 type JsonObject = Record<string, unknown>;
@@ -87,17 +100,13 @@ export type CodexRealtimeFailure = {
   realtimeSessionId: string | null;
 };
 type PendingRealtimeStart = {
-  resolve(result: CodexRealtimeWebRtcResult): void;
+  resolve(result: CodexRealtimeWebRtcAnswer): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout> | undefined;
   started: boolean;
   realtimeSessionId: string | null;
   sdp: string | null;
-  personaBootstrap: VoicePersonaBootstrapReceipt;
-};
-type VoicePersonaBootstrapInsertion = {
-  owner: PendingRealtimeStart;
-  promise: Promise<void>;
+  persona: VoiceSessionPersonaReceipt;
 };
 type PendingCompaction = {
   promise: Promise<RuntimeCompactOutcome>;
@@ -119,6 +128,7 @@ type PendingAttention = {
   rpcId: string | number;
   method: string;
   origin: "current" | "restored";
+  isBlocking?: boolean;
   answer?: PendingAnswer;
 };
 type ThreadStatus = {
@@ -184,9 +194,11 @@ export interface CodexAppServerHostOptions {
   approvalPolicy?: string;
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
-  realtimePersonaTimeoutMs?: number;
   realtimeStartTimeoutMs?: number;
   deliveryConfirmationTimeoutMs?: number;
+  /** How long an injection waits for its item to surface in canonical history
+      before reporting the insertion unobserved (#1560). */
+  injectObservationTimeoutMs?: number;
   compactEvidenceTimeoutMs?: number;
   shutdownGraceMs?: number;
   initialEventCursor?: number;
@@ -207,22 +219,25 @@ export interface CodexThreadIdentity {
   path: string | null;
 }
 
+/**
+ * Which persona the live call is running on (#1629).
+ *
+ * The persona is a parameter of `thread/realtime/start` now, so it either went
+ * out with the start or the start did not happen — there is no separate write to
+ * succeed or fail, and so no separate receipt to reject. What remains worth
+ * reporting is WHICH one, which the voice panel shows and the regression tests
+ * assert against.
+ */
+export interface VoiceSessionPersonaReceipt {
+  variant: VoicePersonaVariant;
+  personaId: string;
+}
+
 export interface CodexRealtimeWebRtcAnswer {
   sdp: string;
   realtimeSessionId: string | null;
-  personaBootstrap: VoicePersonaBootstrapReceipt;
+  persona: VoiceSessionPersonaReceipt;
 }
-
-export interface CodexRealtimeWebRtcRejection {
-  sdp: null;
-  realtimeSessionId: null;
-  personaBootstrap: VoicePersonaBootstrapReceipt & {
-    insertion: "rejected";
-    diagnostic: string;
-  };
-}
-
-export type CodexRealtimeWebRtcResult = CodexRealtimeWebRtcAnswer | CodexRealtimeWebRtcRejection;
 
 const CHILD_ENV_ALLOWLIST = [
   "PATH",
@@ -248,6 +263,11 @@ const CHILD_ENV_ALLOWLIST = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  /* The re-hosted Viewer MCP launcher resolves the current release and the
+     runtime host's stable listener from these non-secret inputs. */
+  "LLV_STATE_DIR",
+  "LLV_VIEWER_DEPLOY_TARGET",
+  "LLV_VIEWER_PORT",
 ] as const;
 /**
  * Desktop-session variables forwarded ONLY to a host that holds a plugin grant
@@ -283,6 +303,50 @@ const DEFAULT_DELIVERY_CONFIRMATION_TIMEOUT_MS = 5 * 60_000;
     past it the operation terminalizes visibly rather than hanging (#862). */
 const DEFAULT_COMPACT_EVIDENCE_TIMEOUT_MS = 5 * 60_000;
 const ACTIVE_THREAD_READ_TIMEOUT_MULTIPLIER = 3;
+/** How often the canonical transcript is re-read while waiting for an injected
+    item to surface (#1560). The scan is cached on size and mtime, so a poll
+    over an unchanged rollout costs a stat. */
+const INJECT_OBSERVATION_POLL_MS = 150;
+const INJECT_OBSERVATION_POLL_CEILING_MS = 2_000;
+/** The observed capability flag that lets the composer offer the injection
+    action (#1560). Absent = the action is not offered at all. */
+export const NATIVE_INJECT_CAPABILITY = "native-inject";
+/**
+ * How long an injection waits to SEE its item in the transcript.
+ *
+ * The same window an ordinary send's confirmation gets, and for the same
+ * reason. The active path's item is written when the turn reaches its next
+ * model request, so a turn sitting in one long tool call would blow a short
+ * window and settle `uncertain` — terminally, since that status is absorbing —
+ * for an insertion that lands and is consumed perfectly well a minute later.
+ * The wait almost never runs to this length: the idle flush is immediate, and
+ * an active injection stops as soon as its turn ends.
+ */
+export const DEFAULT_INJECT_OBSERVATION_TIMEOUT_MS = DEFAULT_DELIVERY_CONFIRMATION_TIMEOUT_MS;
+/** Exported beside it so a test can hold the two to the same value: the
+    equality IS the decision, and it is not observable from behaviour without a
+    multi-minute test. */
+export const CODEX_DELIVERY_CONFIRMATION_TIMEOUT_MS = DEFAULT_DELIVERY_CONFIRMATION_TIMEOUT_MS;
+
+/**
+ * Whether a failed injection request PROVED that nothing was written.
+ *
+ * Only one thing proves it: a JSON-RPC error the server articulated. The
+ * transport decodes those into `NativeQueueProtocolRefusal`, which carries the
+ * engine's own numeric code, and every other failure — a timeout, a closed
+ * socket, a child that exited, a writer fence, anything whose wording nobody
+ * has enumerated — arrives as a plain `Error` and means the request may have
+ * been applied with the answer lost.
+ *
+ * This is deliberately NOT a keyword list over error messages. Such a list
+ * decides the default for everything it fails to anticipate, and here the
+ * default it would pick is the dangerous one: `refused` tells the operator
+ * nothing was written, which is a claim no unrecognised failure supports.
+ * Defaulting the other way costs one operation reported as unverified.
+ */
+function injectionRefusalIsProven(error: unknown): boolean {
+  return error instanceof NativeQueueProtocolRefusal;
+}
 const LATE_THREAD_READ_RESPONSE_TTL_MULTIPLIER = 3;
 const MIN_LATE_THREAD_READ_RESPONSE_TTL_MS = 1_000;
 const MAX_LATE_THREAD_READ_RESPONSES = 32;
@@ -290,7 +354,6 @@ const DEFAULT_SHUTDOWN_GRACE_MS = 1_000;
 const REALTIME_START_TIMEOUT_MS = 90_000;
 /* First speech waits for the persona's durable insertion outcome. Keep that
    gate bounded when an app-server accepts the method and then stalls. */
-const REALTIME_PERSONA_TIMEOUT_MS = 3_000;
 /* Releasing the host must not block on a wedged app-server, but the hangup is
    worth a moment: skipping it strands the account's realtime slot. */
 const REALTIME_HANGUP_TIMEOUT_MS = 2_000;
@@ -310,6 +373,12 @@ const MAX_REALTIME_CONTEXT_ITEM_BYTES = 8 * 1024;
 const MAX_REALTIME_CONTEXT_BYTES = 24 * 1024;
 const MAX_REPLAY_ENVELOPE_BYTES = 256 * 1024;
 const MAX_LINE_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + MAX_REPLAY_ENVELOPE_BYTES;
+// A supported image envelope must fit alongside the bounded surrounding
+// history. Per-item pages keep each native response within MAX_LINE_BYTES.
+const DELIVERY_HISTORY_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + 16 * 1024 * 1024;
+// Single-item frames retain the nominal item coverage of 128 pages of 32
+// items. The byte budget and existing caller deadline still bound the read.
+const DELIVERY_HISTORY_PAGES = 128 * 32;
 /**
  * A `thread/resume` (or `thread/read`) response replays the whole thread
  * history as one JSONL frame, and history the operator legally accumulated can
@@ -343,6 +412,18 @@ const REPLAY_FRAME_BUDGETS: ReplayFrameBudgets = {
 };
 const MAX_STDERR_TAIL_BYTES = 16 * 1024;
 const MAX_PRE_RESTORE_FRAMES = 256;
+/** How many finished turns a host remembers for the voice ledger's retirement
+    check. Beyond this the oldest answers `unknown`, which retires nothing. */
+const MAX_TERMINATED_TURN_MEMORY = 512;
+
+/** The app-server notifications that carry the canonical realtime transcript. */
+const CANONICAL_REALTIME_TRANSCRIPT_METHODS: ReadonlySet<string> = new Set([
+  "thread/realtime/transcript/delta",
+  "thread/realtime/transcript/done",
+  "thread/realtime/item/transcript/delta",
+  "thread/realtime/item/started",
+  "thread/realtime/item/completed",
+]);
 const MAX_PRE_RESTORE_BYTES = 4 * 1024 * 1024;
 const MUTATING_RPC_METHODS = new Set([
   "thread/start",
@@ -457,6 +538,502 @@ function resumedTurns(value: unknown): JsonObject[] {
   if (Array.isArray(thread?.turns)) return thread.turns.map(record).filter((turn): turn is JsonObject => turn !== null);
   const page = record(thread?.initialTurnsPage);
   return Array.isArray(page?.data) ? page.data.map(record).filter((turn): turn is JsonObject => turn !== null) : [];
+}
+
+/** Codex 0.151+ deprecates `ThreadReadParams.includeTurns`: a paginated thread
+    refuses full-history hydration with "list_turns is not supported yet" and
+    expects `thread/turns/list` paging instead (#1332). */
+function hydrationUnsupported(reason: string): boolean {
+  return reason.startsWith("Codex app-server request failed:") && /not supported/i.test(reason);
+}
+
+/* The rollout is bounded before parsing so a very long thread cannot pull its
+   whole history into memory; the fallback consumers only need the window near
+   one end, and a partial leading line after the cut is skipped by JSON.parse. */
+const ROLLOUT_FALLBACK_READ_BYTES = 16 * 1024 * 1024;
+
+const ROLLOUT_TERMINAL_TURN_STATUS: Record<string, string> = {
+  turn_completed: "completed",
+  turn_complete: "completed",
+  turn_aborted: "interrupted",
+  turn_failed: "failed",
+};
+
+/** Turns reconstructed from the canonical rollout JSONL on disk. Codex 0.151
+    refuses full-history hydration on some threads and stubs the pagination
+    API it recommends instead ("list_turns is not supported yet"), so the
+    session store file is the one version-independent source of persisted
+    turns (#1332). Items are normalized to the wire shape the replay and
+    confirmation consumers expect (`clientId`, `userMessage`). */
+/* The fallback runs inside delivery-confirmation and materialization POLL
+   loops, so an uncached implementation re-reads and re-parses megabytes per
+   tick across every active lane — enough to storm the viewer process
+   (observed 2026-08-31: 380% CPU, data routes timing out). One entry per
+   rollout, invalidated by size+mtime, bounds that to one parse per change. */
+const ROLLOUT_TURNS_CACHE_LIMIT = 32;
+const ROLLOUT_DELIVERY_SCAN_CHUNK_BYTES = 1024 * 1024;
+const STRUCTURED_USER_MARKER_FRAGMENT = Buffer.from("llv:structured-user");
+
+function codexDeliveryDedup(operationId: string): string {
+  return createHash("sha256").update(operationId).digest("hex");
+}
+type RolloutStructuredUserDelivery =
+  | { payloadKind: "text" | "content"; payloadDigest: string }
+  | { payloadKind: "conflict"; payloadDigest: null };
+
+interface RolloutTurnsCacheEntry {
+  size: number;
+  mtimeMs: number;
+  fileIdentity: string | null;
+  turns: JsonObject[];
+  structuredUserDeliveries: Map<string, RolloutStructuredUserDelivery>;
+  readState: "readable" | "absent" | "unavailable";
+}
+
+interface RolloutDeliveryIndexEntry {
+  size: number;
+  mtimeMs: number;
+  fileIdentity: string | null;
+  /** Start of the only incomplete JSONL record, or EOF after a newline. */
+  scanOffset: number;
+  deliveries: Map<string, RolloutStructuredUserDelivery>;
+  readState: "readable" | "absent" | "unavailable";
+}
+
+const rolloutTurnsCache = new Map<string, RolloutTurnsCacheEntry>();
+const rolloutDeliveryIndexCache = new Map<string, RolloutDeliveryIndexEntry>();
+const rolloutDeliveryIndexRuns = new Map<string, Promise<RolloutDeliveryIndexEntry>>();
+
+function rememberRolloutStructuredUser(
+  deliveries: Map<string, RolloutStructuredUserDelivery>,
+  wireText: string,
+): void {
+  const decoded = decodeCodexStructuredUserText(wireText);
+  if (!decoded.deliveryDedup) return;
+  const current = deliveries.get(decoded.deliveryDedup);
+  const observed: RolloutStructuredUserDelivery = decoded.contentDigest
+    ? { payloadKind: "content", payloadDigest: decoded.contentDigest }
+    : { payloadKind: "text", payloadDigest: createHash("sha256").update(decoded.text).digest("hex") };
+  if (!current) {
+    deliveries.set(decoded.deliveryDedup, observed);
+    return;
+  }
+  if (current.payloadKind !== observed.payloadKind || current.payloadDigest !== observed.payloadDigest) {
+    deliveries.set(decoded.deliveryDedup, { payloadKind: "conflict", payloadDigest: null });
+  }
+}
+
+function rememberRolloutStructuredUsersFromRecord(
+  deliveries: Map<string, RolloutStructuredUserDelivery>,
+  value: unknown,
+): void {
+  const payload = record(record(value)?.payload);
+  if (!payload) return;
+  const payloadType = stringField(payload, "type");
+  if (payloadType === "user_message") {
+    const message = stringField(payload, "message");
+    if (message !== null) rememberRolloutStructuredUser(deliveries, message);
+  }
+  /* #1560: the RAW Responses form. An ordinary send is persisted through the
+     item lifecycle above, but `thread/inject_items` appends raw Responses items
+     and codex 0.154 writes those straight out as
+     `{"type":"response_item","payload":{"type":"message","role":"user",...}}`
+     — verified against real rollouts on disk. Without this branch the canonical
+     scan cannot see an injection at all, so every insertion would be reported
+     unverified and the pre-insertion dedup check would never find the record it
+     is meant to converge on.
+
+     `role` is checked against `user` and nothing else. The same rollout carries
+     `developer` and `assistant` messages in the identical shape, and a marker
+     appearing on one of those must never be read as the operator's input — the
+     role is the only thing separating them. Ordinary sends whose input is also
+     persisted this way simply agree with their lifecycle record: both decode
+     from the same marker text to the same digest, so the duplicate resolves
+     rather than conflicting. */
+  if (payloadType === "message" && stringField(payload, "role") === "user") {
+    const wireText = userMessageText(payload);
+    if (wireText !== null) rememberRolloutStructuredUser(deliveries, wireText);
+    return;
+  }
+  if (payloadType !== "item_completed") return;
+  const item = record(payload.item);
+  if (!item) return;
+  const itemType = stringField(item, "type");
+  const wireText = userMessageText(item);
+  if ((itemType === "UserMessage" || itemType === "userMessage") && wireText !== null) {
+    rememberRolloutStructuredUser(deliveries, wireText);
+  }
+}
+
+function rememberRolloutStructuredUsersFromLine(
+  deliveries: Map<string, RolloutStructuredUserDelivery>,
+  line: Buffer,
+): void {
+  /* Most rollout records carry no structured user marker. Checking the bytes
+     first keeps a large tool/result record out of JSON.parse and out of a
+     second string allocation while the recipient index walks old history. */
+  if (line.indexOf(STRUCTURED_USER_MARKER_FRAGMENT) < 0) return;
+  try {
+    rememberRolloutStructuredUsersFromRecord(deliveries, JSON.parse(line.toString("utf8")));
+  } catch (error) {
+    /* The candidate line may be the record that already owns this operation.
+       Unreadable evidence cannot authorize another recipient write. */
+    throw new Error("Codex recipient transcript contains a malformed structured-user record", { cause: error });
+  }
+}
+
+async function scanRolloutStructuredUserDeliveries(
+  pathname: string,
+  size: number,
+  fileIdentity: string,
+  previous: RolloutDeliveryIndexEntry | undefined,
+): Promise<{ deliveries: Map<string, RolloutStructuredUserDelivery>; offset: number }> {
+  const extendsPrevious = previous?.readState === "readable"
+    && previous.fileIdentity === fileIdentity
+    && size > previous.size
+    && previous.scanOffset <= previous.size;
+  const start = extendsPrevious ? previous.scanOffset : 0;
+  const deliveries = extendsPrevious
+    ? new Map(previous.deliveries)
+    : new Map<string, RolloutStructuredUserDelivery>();
+  const descriptor = await fs.promises.open(pathname, "r");
+  let position = start;
+  let completedOffset = start;
+  let lineChunks: Buffer[] = [];
+  let lineBytes = 0;
+  let markerTail = Buffer.alloc(0);
+  let lineContainsMarker = false;
+  let skippingOversizedLine = false;
+  const observeMarker = (chunk: Buffer) => {
+    if (lineContainsMarker || chunk.length === 0) return;
+    const probe = markerTail.length > 0 ? Buffer.concat([markerTail, chunk]) : chunk;
+    lineContainsMarker = probe.indexOf(STRUCTURED_USER_MARKER_FRAGMENT) >= 0;
+    const tailBytes = Math.min(STRUCTURED_USER_MARKER_FRAGMENT.length - 1, probe.length);
+    markerTail = Buffer.from(probe.subarray(probe.length - tailBytes));
+  };
+  const resetLine = () => {
+    lineChunks = [];
+    lineBytes = 0;
+    markerTail = Buffer.alloc(0);
+    lineContainsMarker = false;
+    skippingOversizedLine = false;
+  };
+  try {
+    while (position < size) {
+      const buffer = Buffer.allocUnsafe(Math.min(ROLLOUT_DELIVERY_SCAN_CHUNK_BYTES, size - position));
+      const { bytesRead: read } = await descriptor.read(buffer, 0, buffer.length, position);
+      if (read === 0) throw new Error("Codex recipient transcript changed during delivery deduplication");
+      let cursor = 0;
+      while (cursor < read) {
+        const newline = buffer.indexOf(0x0a, cursor);
+        const end = newline < 0 || newline >= read ? read : newline;
+        if (end > cursor) {
+          const chunk = buffer.subarray(cursor, end);
+          observeMarker(chunk);
+          if (skippingOversizedLine && lineContainsMarker) {
+            throw new Error("Codex recipient transcript contains an oversized structured-user record");
+          }
+          if (!skippingOversizedLine) {
+            lineChunks.push(chunk);
+            lineBytes += chunk.length;
+            if (lineBytes > MAX_LINE_BYTES) {
+              if (lineContainsMarker) {
+                throw new Error("Codex recipient transcript contains an oversized structured-user record");
+              }
+              /* Old tool/result rows may exceed the app-server frame budget.
+                 They cannot carry a dedup marker seen nowhere on the line, so
+                 retain only the marker overlap until its newline. */
+              lineChunks = [];
+              lineBytes = 0;
+              skippingOversizedLine = true;
+            }
+          }
+        }
+        if (newline < 0 || newline >= read) break;
+        if (!skippingOversizedLine) {
+          const line = lineChunks.length === 1
+            ? lineChunks[0]!
+            : Buffer.concat(lineChunks, lineBytes);
+          rememberRolloutStructuredUsersFromLine(deliveries, line);
+        }
+        completedOffset = position + newline + 1;
+        resetLine();
+        cursor = newline + 1;
+      }
+      position += read;
+    }
+    /* A valid last record need not end in a newline. Keep its start as the
+       incremental offset so an append that completes a torn record replays it. */
+    if (!skippingOversizedLine && lineBytes > 0) {
+      const line = lineChunks.length === 1
+        ? lineChunks[0]!
+        : Buffer.concat(lineChunks, lineBytes);
+      rememberRolloutStructuredUsersFromLine(deliveries, line);
+    }
+    return { deliveries, offset: completedOffset };
+  } finally {
+    await descriptor.close();
+  }
+}
+
+const EMPTY_ROLLOUT_CACHE_ENTRY: RolloutTurnsCacheEntry = {
+  size: 0,
+  mtimeMs: 0,
+  fileIdentity: null,
+  turns: [],
+  structuredUserDeliveries: new Map(),
+  readState: "absent",
+};
+
+const UNAVAILABLE_ROLLOUT_CACHE_ENTRY: RolloutTurnsCacheEntry = {
+  ...EMPTY_ROLLOUT_CACHE_ENTRY,
+  structuredUserDeliveries: new Map(),
+  readState: "unavailable",
+};
+
+const EMPTY_ROLLOUT_DELIVERY_INDEX: RolloutDeliveryIndexEntry = {
+  size: 0,
+  mtimeMs: 0,
+  fileIdentity: null,
+  scanOffset: 0,
+  deliveries: new Map(),
+  readState: "absent",
+};
+
+const UNAVAILABLE_ROLLOUT_DELIVERY_INDEX: RolloutDeliveryIndexEntry = {
+  ...EMPTY_ROLLOUT_DELIVERY_INDEX,
+  deliveries: new Map(),
+  readState: "unavailable",
+};
+
+function rolloutCacheEntryFromDisk(pathname: string | null | undefined): RolloutTurnsCacheEntry {
+  if (!pathname) return EMPTY_ROLLOUT_CACHE_ENTRY;
+  let raw: string;
+  let statSize = 0;
+  let statMtimeMs = 0;
+  let fileIdentity: string | null = null;
+  const structuredUserDeliveries = new Map<string, RolloutStructuredUserDelivery>();
+  try {
+    const stat = fs.statSync(pathname);
+    statSize = stat.size;
+    statMtimeMs = stat.mtimeMs;
+    fileIdentity = rolloutFileIdentity(stat);
+    if (!stat.isFile()) return UNAVAILABLE_ROLLOUT_CACHE_ENTRY;
+    const cached = rolloutTurnsCache.get(pathname);
+    if (cached
+      && cached.size === stat.size
+      && cached.mtimeMs === stat.mtimeMs
+      && cached.fileIdentity === fileIdentity) {
+      /* Refresh recency so hot rollouts survive the LRU trim. */
+      rolloutTurnsCache.delete(pathname);
+      rolloutTurnsCache.set(pathname, cached);
+      return cached;
+    }
+    if (stat.size > ROLLOUT_FALLBACK_READ_BYTES) {
+      const descriptor = fs.openSync(pathname, "r");
+      try {
+        // Include the preceding byte to distinguish a complete first record
+        // from a fragment created by our bounded read. The full delivery index
+        // still scans that record before absence can authorize a new send.
+        const buffer = Buffer.alloc(ROLLOUT_FALLBACK_READ_BYTES + 1);
+        const read = fs.readSync(descriptor, buffer, 0, buffer.length, stat.size - buffer.length);
+        const start = buffer[0] === 0x0a ? 1 : buffer.indexOf(0x0a, 1) + 1;
+        raw = start > 0 ? buffer.subarray(start, read).toString("utf8") : "";
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    } else {
+      raw = fs.readFileSync(pathname, "utf8");
+    }
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? EMPTY_ROLLOUT_CACHE_ENTRY
+      : UNAVAILABLE_ROLLOUT_CACHE_ENTRY;
+  }
+  const order: string[] = [];
+  const turns = new Map<string, { id: string; status?: string; items: JsonObject[] }>();
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      if (line.includes(STRUCTURED_USER_MARKER_FRAGMENT.toString("utf8"))) {
+        return UNAVAILABLE_ROLLOUT_CACHE_ENTRY;
+      }
+      continue;
+    }
+    const payload = record(record(parsed)?.payload);
+    if (!payload) continue;
+    rememberRolloutStructuredUsersFromRecord(structuredUserDeliveries, parsed);
+    const payloadType = stringField(payload, "type");
+    const turnId = stringField(payload, "turn_id") ?? stringField(payload, "turnId");
+    if (!payloadType || !turnId) continue;
+    let turn = turns.get(turnId);
+    if (!turn) {
+      turn = { id: turnId, items: [] };
+      turns.set(turnId, turn);
+      order.push(turnId);
+    }
+    const terminal = ROLLOUT_TERMINAL_TURN_STATUS[payloadType];
+    if (terminal) {
+      turn.status = terminal;
+      continue;
+    }
+    if (payloadType !== "item_completed") continue;
+    const item = record(payload.item);
+    if (!item) continue;
+    const itemType = stringField(item, "type");
+    const clientId = stringField(item, "client_id") ?? stringField(item, "clientId");
+    turn.items.push({
+      ...item,
+      ...(itemType ? { type: itemType === "UserMessage" ? "userMessage" : itemType } : {}),
+      ...(clientId ? { clientId } : {}),
+    });
+  }
+  const result = order.map((id) => {
+    const turn = turns.get(id)!;
+    return { id: turn.id, status: turn.status ?? "inProgress", items: turn.items } as JsonObject;
+  });
+  const cached: RolloutTurnsCacheEntry = {
+    size: statSize,
+    mtimeMs: statMtimeMs,
+    fileIdentity,
+    turns: result,
+    structuredUserDeliveries,
+    readState: "readable",
+  };
+  rolloutTurnsCache.set(pathname, cached);
+  while (rolloutTurnsCache.size > ROLLOUT_TURNS_CACHE_LIMIT) {
+    const oldest = rolloutTurnsCache.keys().next().value;
+    if (oldest === undefined) break;
+    rolloutTurnsCache.delete(oldest);
+  }
+  return cached;
+}
+
+export function rolloutTurnsFromDisk(pathname: string | null | undefined): JsonObject[] {
+  return [...rolloutCacheEntryFromDisk(pathname).turns];
+}
+
+function rememberRolloutDeliveryIndex(pathname: string, entry: RolloutDeliveryIndexEntry): RolloutDeliveryIndexEntry {
+  rolloutDeliveryIndexCache.delete(pathname);
+  rolloutDeliveryIndexCache.set(pathname, entry);
+  while (rolloutDeliveryIndexCache.size > ROLLOUT_TURNS_CACHE_LIMIT) {
+    const oldest = rolloutDeliveryIndexCache.keys().next().value;
+    if (oldest === undefined) break;
+    rolloutDeliveryIndexCache.delete(oldest);
+  }
+  return entry;
+}
+
+function sameRolloutFile(
+  stat: fs.Stats,
+  entry: Pick<RolloutDeliveryIndexEntry, "size" | "mtimeMs" | "fileIdentity">,
+): boolean {
+  return stat.size === entry.size
+    && stat.mtimeMs === entry.mtimeMs
+    && rolloutFileIdentity(stat) === entry.fileIdentity;
+}
+
+function rolloutFileIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+
+async function refreshRolloutDeliveryIndex(pathname: string): Promise<RolloutDeliveryIndexEntry> {
+  let previous = rolloutDeliveryIndexCache.get(pathname);
+  try {
+    /* A live rollout may append while its historical prefix is being indexed.
+       Converge across bounded snapshots; continuous change stays unavailable
+       and therefore cannot authorize a second recipient write. */
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = await fs.promises.stat(pathname);
+      if (!before.isFile()) return UNAVAILABLE_ROLLOUT_DELIVERY_INDEX;
+      if (previous && sameRolloutFile(before, previous)) {
+        return rememberRolloutDeliveryIndex(pathname, previous);
+      }
+      const fileIdentity = rolloutFileIdentity(before);
+      const scanned = await scanRolloutStructuredUserDeliveries(
+        pathname,
+        before.size,
+        fileIdentity,
+        previous,
+      );
+      const next: RolloutDeliveryIndexEntry = {
+        size: before.size,
+        mtimeMs: before.mtimeMs,
+        fileIdentity,
+        scanOffset: scanned.offset,
+        deliveries: scanned.deliveries,
+        readState: "readable",
+      };
+      const after = await fs.promises.stat(pathname);
+      if (sameRolloutFile(after, next)) return rememberRolloutDeliveryIndex(pathname, next);
+      previous = next;
+    }
+    return UNAVAILABLE_ROLLOUT_DELIVERY_INDEX;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? EMPTY_ROLLOUT_DELIVERY_INDEX
+      : UNAVAILABLE_ROLLOUT_DELIVERY_INDEX;
+  }
+}
+
+async function rolloutDeliveryIndexFromDisk(
+  pathname: string | null | undefined,
+): Promise<RolloutDeliveryIndexEntry> {
+  if (!pathname) return EMPTY_ROLLOUT_DELIVERY_INDEX;
+  const active = rolloutDeliveryIndexRuns.get(pathname);
+  if (active) {
+    await active;
+    return rolloutDeliveryIndexFromDisk(pathname);
+  }
+  const run = refreshRolloutDeliveryIndex(pathname).finally(() => {
+    rolloutDeliveryIndexRuns.delete(pathname);
+  });
+  rolloutDeliveryIndexRuns.set(pathname, run);
+  return run;
+}
+
+function rolloutDeliveryReceipt(
+  entry: QueueEntry,
+  delivery: RolloutStructuredUserDelivery | undefined,
+): DeliveryReceipt | null {
+  if (!delivery) return null;
+  let payloadMatches = false;
+  if (delivery.payloadKind === "content") {
+    payloadMatches = delivery.payloadDigest === entry.contentDigest;
+  } else if (delivery.payloadKind === "text") {
+    payloadMatches = delivery.payloadDigest === createHash("sha256")
+      .update(entry.text ?? entry.content?.text ?? "")
+      .digest("hex");
+  }
+  if (!payloadMatches) throw new Error("Codex queue entry id belongs to a different payload");
+  /* The legacy `event_msg/user_message` record carries no turn id. Its durable
+     dedup identity is enough to prove the recipient already owns this message;
+     the operation id is a stable historical turn reference for the receipt. */
+  return { outcome: "turn-started", turnId: entry.id };
+}
+
+function rolloutConfirmedDelivery(
+  pathname: string | null | undefined,
+  entry: QueueEntry,
+): DeliveryReceipt | null | Promise<DeliveryReceipt | null> {
+  const rollout = rolloutCacheEntryFromDisk(pathname);
+  if (rollout.readState === "unavailable") {
+    throw new Error("Codex recipient transcript is unavailable for delivery deduplication");
+  }
+  const dedup = codexDeliveryDedup(entry.id);
+  const delivery = rollout.structuredUserDeliveries.get(dedup);
+  if (delivery || rollout.size <= ROLLOUT_FALLBACK_READ_BYTES) {
+    return rolloutDeliveryReceipt(entry, delivery);
+  }
+  return rolloutDeliveryIndexFromDisk(pathname).then((index) => {
+    if (index.readState === "unavailable") {
+      throw new Error("Codex recipient transcript is unavailable for delivery deduplication");
+    }
+    return rolloutDeliveryReceipt(entry, index.deliveries.get(dedup));
+  });
 }
 
 function resumedActiveTurnId(value: unknown): string | null {
@@ -614,9 +1191,9 @@ export class CodexAppServerHost implements EngineHost {
 
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly requestTimeoutMs: number;
-  private readonly realtimePersonaTimeoutMs: number;
   private readonly realtimeStartTimeoutMs: number;
   private readonly deliveryConfirmationTimeoutMs: number;
+  private readonly injectObservationTimeoutMs: number;
   private readonly compactEvidenceTimeoutMs: number;
   private readonly shutdownGraceMs: number;
   private readonly eventStore: RuntimeEventStore;
@@ -637,6 +1214,7 @@ export class CodexAppServerHost implements EngineHost {
      what the backend actually said ("You have reached your usage limit."). */
   private realtimeFailure: CodexRealtimeFailure | null = null;
   private realtimeSessionId: string | null = null;
+  private readonly realtimeTranscript = new CodexRealtimeTranscript();
   private readonly lateThreadReadResponses = new Map<number, number>();
   private readonly replayEnvelopeRequestIds = new Set<number>();
   private replayReduction: CodexReplayFrameReducer | null = null;
@@ -651,17 +1229,30 @@ export class CodexAppServerHost implements EngineHost {
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
   private readonly realtimeDeliveries = new Map<string, RealtimeDeliveryState>();
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
-  /* A host's thread id is immutable, so one memo covers its one stable persona
-     item. Successor starts join the same insertion promise. */
-  private unresolvedVoicePersonaBootstrap: VoicePersonaBootstrap | null = null;
-  private voicePersonaBootstrapInsertion: VoicePersonaBootstrapInsertion | null = null;
-  private voicePersonaBootstrapAccepted = false;
+  /* KEYED BY VARIANT, because a thread has one identity PER VARIANT and not one
+     overall (#1615). While the coordinator persona was the only one, a single
+     boolean and a single payload were the whole memo; with two, sharing them
+     fails in both directions — a payload resolved for one variant gets injected
+     under the other's id, and one accepted variant reports the other as accepted
+     without ever injecting it, which is a false receipt that
+     `rejectStartedRealtimeContract` would otherwise have caught.
+     Successor starts of the SAME variant still join the same insertion promise. */
   private readonly pendingVoiceChunks = new Map<string, string>();
   private readonly cancelledVoiceTurns = new Set<string>();
   private readonly activeRealtimeDeliveries = new Map<string, {
     digest: string;
     promise: Promise<{ deliveryId: string; acknowledged: true }>;
   }>();
+  readonly supportsSteer = true;
+  nativeQueue?: NativeQueueHost;
+  private nativeQueueRevision = 0;
+  private readonly selectedExecutable: string;
+  private queueCapability: "unknown" | "supported" | "unsupported" = "unknown";
+  /** #1560. Fail-closed until the negotiated protocol is known to carry
+      `thread/inject_items`, and driven back to `unsupported` by a method-not-
+      found at the call site — the one answer that proves this engine lacks it. */
+  private injectCapability: "unknown" | "supported" | "unsupported" = "unknown";
+  private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly attentions = new Map<string, PendingAttention>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly preRestoreEvents: UnsequencedEvent[] = [];
@@ -675,7 +1266,13 @@ export class CodexAppServerHost implements EngineHost {
   private eventLedgerRestored = false;
   private cursor: number;
   private activeTurnId: string | null = null;
+  /** Turns this host saw end, newest last and bounded. The voice ledger's only
+      authoritative retirement evidence (#1629); absence is `unknown`, never
+      "finished". */
+  private readonly terminatedTurnIds = new Set<string>();
   private protocolVersion: string | null = null;
+  private modelCatalog: unknown = null;
+  private authRecovery: "unknown" | "started" | "completed-unverified" = "unknown";
   private account: HostState["account"] = null;
   private engineStatus: "active" | "idle" | "unhosted" | "dead" = "idle";
   private activeFlags: string[] = [];
@@ -706,10 +1303,11 @@ export class CodexAppServerHost implements EngineHost {
     this.child = child;
     this.identity = identity;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.realtimePersonaTimeoutMs = options.realtimePersonaTimeoutMs ?? REALTIME_PERSONA_TIMEOUT_MS;
     this.realtimeStartTimeoutMs = options.realtimeStartTimeoutMs ?? REALTIME_START_TIMEOUT_MS;
+    this.selectedExecutable = basename(options.binary ?? "codex");
     this.deliveryConfirmationTimeoutMs = options.deliveryConfirmationTimeoutMs
       ?? DEFAULT_DELIVERY_CONFIRMATION_TIMEOUT_MS;
+    this.injectObservationTimeoutMs = options.injectObservationTimeoutMs ?? DEFAULT_INJECT_OBSERVATION_TIMEOUT_MS;
     this.compactEvidenceTimeoutMs = options.compactEvidenceTimeoutMs ?? DEFAULT_COMPACT_EVIDENCE_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
@@ -727,7 +1325,7 @@ export class CodexAppServerHost implements EngineHost {
     });
     this.cursor = options.initialEventCursor ?? 0;
     this.reapedPromise = new Promise((resolve) => { this.resolveReaped = resolve; });
-    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(String(chunk)));
+    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk)));
     child.stderr.on("data", (chunk: Buffer | string) => this.acceptStderr(String(chunk)));
     child.stdin.on("error", (error) => {
       if (!this.releasing && !this.released) this.fail(new Error(`Codex app-server stdin failed: ${safeError(error)}`));
@@ -808,8 +1406,9 @@ export class CodexAppServerHost implements EngineHost {
       provisional.account = { type: accountType, planType: stringField(account, "planType") };
       provisional.requestedModel = options.model;
       try {
+        provisional.modelCatalog = await provisional.rpc("model/list", {});
         provisional.imageInputSupport = modelSupportsImageInput(
-          await provisional.rpc("model/list", {}),
+          provisional.modelCatalog,
           options.model,
         ) ? "supported" : "unsupported";
       } catch {
@@ -824,7 +1423,7 @@ export class CodexAppServerHost implements EngineHost {
         granted,
       );
       const result = threadId
-        ? await provisional.rpc("thread/resume", {
+        ? await provisional.resumeThreadTolerantly({
           threadId,
           ...(options.permissionProfile ? { permissions: options.permissionProfile } : {}),
           config,
@@ -853,6 +1452,7 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      await provisional.initializeNativeQueue();
       return provisional;
     } catch (error) {
       try {
@@ -939,7 +1539,120 @@ export class CodexAppServerHost implements EngineHost {
     if (this.imageInputSupport === "supported") this.setSessionStatus(this.engineStatus, this.activeFlags);
   }
 
-  async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+  private supportsNativeHistory(): boolean {
+    const version = this.protocolVersion?.match(/^(\d+)\.(\d+)\./);
+    return !!version && (Number(version[1]) > 0 || Number(version[2]) >= 153);
+  }
+
+  /**
+   * Injection capability, decided from the negotiated protocol rather than by
+   * probing (#1560).
+   *
+   * There is no read-only way to ask whether `thread/inject_items` exists: the
+   * method's only form is the mutating one, and calling it to find out would
+   * write into the operator's thread. So the same protocol floor the native
+   * queue uses decides it — `thread/inject_items` is part of that generation of
+   * the app-server API — and the authoritative correction comes from the call
+   * site, where a method-not-found flips this to `unsupported` for good and
+   * re-advertises the capability so the composer stops offering the action.
+   *
+   * Unknown stays unknown until the protocol version is known, and unknown is
+   * fail-closed: no action is offered and an admitted injection is refused.
+   */
+  private resolveInjectCapability(): void {
+    if (!this.protocolVersion) return;
+    if (this.injectCapability === "unsupported") return;
+    this.injectCapability = this.supportsNativeHistory() ? "supported" : "unsupported";
+  }
+
+  private async initializeNativeQueue(): Promise<void> {
+    this.resolveInjectCapability();
+    if (!this.supportsNativeHistory()) { if (this.protocolVersion) this.queueCapability = "unsupported"; return; }
+    const queue = new NativeCodexQueue({ rpc: (method, params, timeout) => {
+      if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) {
+        throw new StructuredSendRefusedError("native queue writer is unavailable");
+      }
+      return this.rpc(method, params, timeout, true);
+    } }, this.identity.threadId, { timeoutMs: this.requestTimeoutMs, pageSize: 1, maxPages: 2000 });
+    try { await queue.refresh(); }
+    catch (error) { queue.dispose(); this.queueCapability = error instanceof NativeQueueProtocolRefusal && error.code === -32601 ? "unsupported" : "unknown"; return; }
+    this.queueCapability = "supported";
+    this.nativeQueue = {
+      queue,
+      prepare: async (entry, version) => {
+        if (version.images.length && this.imageInputSupport !== "supported") throw new StructuredSendRefusedError("image input capability is unavailable");
+        return [
+          ...version.images.map(image => ({ type: "localImage" as const, path: this.resolveImagePath(image) })),
+          { type: "text", text: encodeCodexStructuredUserText(version.text,
+            version.images.length ? version.contentDigest : undefined, version.selectedContext, version.origin ?? { kind: "operator" },
+            codexDeliveryDedup(`${entry.entryId}-v${version.revision}`)) },
+        ];
+      },
+      evidence: (entry) => this.nativeQueueEvidence(entry),
+      evidenceBatch: async (entries) => {
+        if (!this.identity.path) return entries.map(() => null);
+        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
+        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
+      },
+      sendWithdrawn: async (entry, expectedTurnId) => {
+        if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
+        if (this.activeTurnId !== expectedTurnId || this.hasBlockingAttention()) throw new StructuredSendRefusedError("stale-turn or blocking attention");
+        const version = entry.versions.find(v => v.revision === entry.revision);
+        if (!version?.input) throw new StructuredSendRefusedError("native queue input is unavailable");
+        const result = await this.rpc(expectedTurnId === null ? "turn/start" : "turn/steer", {
+          threadId: this.identity.threadId, input: version.input, clientUserMessageId: entry.clientUserMessageId,
+          ...(expectedTurnId === null ? {} : { expectedTurnId }),
+        }, this.requestTimeoutMs, true);
+        const turnId = turnIdFromResult(result, expectedTurnId === null ? "turn/start" : "turn/steer");
+        if (expectedTurnId !== null && turnId !== expectedTurnId) throw new Error("native steer returned a different turn identity");
+        return { turnId };
+      },
+    };
+    this.notifyStateListeners();
+  }
+
+  private async readDeliveryHistory(clientIds: string[], timeoutMs = this.requestTimeoutMs,
+    accept?: (history: Extract<CodexDeliveryHistoryResult, {state: "observed"}>) => boolean): Promise<CodexDeliveryHistoryResult> {
+    if (!this.identity.path) return {state: "unknown", reason: "identity"};
+    return readCodexDeliveryHistory((method, params, timeout) => this.rpc(method, params, timeout, true),
+      {threadId: this.identity.threadId, path: this.identity.path},
+      {deadlineAt: Date.now() + timeoutMs, sortDirection: "desc", itemsPerPage: 1,
+        maxPages: DELIVERY_HISTORY_PAGES, maxBytes: DELIVERY_HISTORY_BYTES}, clientIds, accept);
+  }
+
+  private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
+    if (entry.binding.threadId !== this.identity.threadId || !this.identity.path) return null;
+    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    return this.nativeQueueProof(entry, history);
+  }
+
+  private nativeQueueProof(entry: NativeQueueRecord, history: CodexDeliveryHistoryResult) {
+    if (entry.binding.threadId !== this.identity.threadId || !this.identity.path) return null;
+    const targetHistory = history.state !== "complete" && history.state !== "observed" ? history : { ...history,
+      turns: history.turns.map(turn => ({ ...turn, items: turn.items.filter(item => item.type === "userMessage" && item.clientId === entry.clientUserMessageId) }))
+        .filter(turn => turn.items.length > 0),
+    };
+    for (const version of entry.versions) {
+      if (!version.input || (entry.dispatchedRevision !== null && entry.dispatchedRevision !== version.revision)) continue;
+      const normalizedHistory = targetHistory.state !== "complete" && targetHistory.state !== "observed" ? targetHistory : {
+        ...targetHistory,
+        turns: targetHistory.turns.map(turn => ({ ...turn, items: turn.items.map(item =>
+          item.type === "userMessage" && item.clientId === entry.clientUserMessageId
+            ? { ...item, content: normalizeNativeQueueObservation(version, item.content as NativeQueueInput[]) ?? item.content } : item) })),
+      };
+      const found = findCodexHistoryDelivery(normalizedHistory, { clientId: entry.clientUserMessageId, content: version.input, turnId: entry.dispatchedTurnId ?? null });
+      if (found.state === "found") return { threadId: found.identity.threadId, clientUserMessageId: entry.clientUserMessageId,
+        revision: version.revision, turnId: found.turnId, itemId: found.item.id, input: version.input };
+    }
+    return null;
+  }
+
+  private hasBlockingAttention(): boolean {
+    return [...this.attentions.values()].some(attention => attention.isBlocking !== false);
+  }
+
+  async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -964,7 +1677,8 @@ export class CodexAppServerHost implements EngineHost {
       ...(normalized.origin ? { origin: normalized.origin } : {}),
     };
     if (!entry.id) throw new Error("queue entry id is required");
-    const confirmed = await this.confirmedDelivery(entry);
+    const confirmed = await this.confirmedDelivery(entry, firstDispatch?.firstDispatch === true
+      && firstDispatch.operationId === entry.id && Boolean(firstDispatch.writerClaim));
     if (confirmed) return confirmed;
     const currentTurn = this.activeTurnId;
     if (entry.expectedTurnId !== undefined && entry.expectedTurnId !== currentTurn) {
@@ -984,10 +1698,12 @@ export class CodexAppServerHost implements EngineHost {
           /* #1117: authorship lands on the same record, so the feed can tell
              the operator's bubble from an inter-agent relay without a join. */
           normalized.origin,
+          codexDeliveryDedup(normalized.id),
         ),
       },
     ];
     if (currentTurn) {
+      if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {
         const result = await this.rpc("turn/steer", {
           threadId: this.identity.threadId,
@@ -1006,21 +1722,10 @@ export class CodexAppServerHost implements EngineHost {
         throw error;
       }
     }
-    /* Per-turn effort (issue #390 §5): the snapshot riding the durable entry
-       outranks the host-fixed default — the only axis `turn/start` accepts
-       (model and service tier are thread-level in this protocol, so the
-       negotiated capability advertises `perTurnModel: false`). A token outside
-       the CLI tier vocabulary falls back to the host default rather than
-       failing the turn over a settings blemish; model fit for an in-vocabulary
-       tier is the app server's own verdict (per-model scales exceed the base
-       engine list — sol/terra accept `ultra`). */
-    const perTurnEffort = entry.runtime?.effort && isKnownEffortTier(entry.runtime.effort)
-      ? entry.runtime.effort
-      : undefined;
-    const effort = perTurnEffort ?? this.effort;
+    const profile = codexTurnProfile(entry.runtime, { model: this.requestedModel, effort: this.effort }, this.modelCatalog);
     const result = await this.rpc("turn/start", {
       threadId: this.identity.threadId,
-      ...(effort ? { effort } : {}),
+      ...profile,
       input,
       clientUserMessageId: entry.id,
     });
@@ -1028,6 +1733,306 @@ export class CodexAppServerHost implements EngineHost {
     this.activeTurnId = turnId;
     this.notifyStateListeners();
     return this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
+  }
+
+  /** Persisted-thread snapshot for materialization evidence: full-history
+      hydration first; a paginated thread that refuses it yields the same
+      evidence through a metadata-only read plus one ascending full-items
+      turns page (#1332). Every other error propagates unchanged so the
+      caller's evidence classification stays intact. */
+  /** thread/resume with the #1332 fallback: a paginated thread refuses
+      full-history resume, so retry with excludeTurns (metadata plus
+      live-resume state) and synthesize the persisted turns from the rollout
+      on disk — codex 0.151 stubs the pagination API its own deprecation
+      notice recommends, so the session store file is the only
+      version-independent source. */
+  private async resumeThreadTolerantly(params: Record<string, unknown>): Promise<unknown> {
+    try {
+      return await this.rpc("thread/resume", params);
+    } catch (error) {
+      if (!hydrationUnsupported(safeError(error))) throw error;
+      const resumed = await this.rpc("thread/resume", { ...params, excludeTurns: true });
+      const outer = record(resumed) ?? {};
+      const thread = record(outer.thread) ?? {};
+      const turns = rolloutTurnsFromDisk(stringField(thread, "path") ?? this.identity.path);
+      return { ...outer, thread: { ...thread, turns } };
+    }
+  }
+
+  /** Delivery-scoped native evidence, with the established legacy hydration
+      fallback. Every caller names the input it is verifying; native history
+      never returns an unbounded full-turn response. Legacy windows stay
+      first/latest as before, and the returned turns are oldest-first. */
+  private async readThreadForDelivery(clientId: string, window: "first" | "latest", timeoutMs?: number): Promise<unknown> {
+    if (this.supportsNativeHistory() && this.identity.path) {
+      const history = await this.readDeliveryHistory([clientId], timeoutMs);
+      if (history.state === "complete" || history.state === "observed") return { thread: { id: history.identity.threadId, path: history.identity.path,
+        turns: [...history.turns].reverse() } };
+      if (history.state === "unknown") {
+        if (history.reason === "not-materialized") {
+          throw new Error("Codex thread is not materialized yet before first user message");
+        }
+        throw new Error(`Codex canonical history is unavailable: ${history.reason}`);
+      }
+    }
+    try {
+      return await this.rpc("thread/read", {
+        threadId: this.identity.threadId,
+        includeTurns: true,
+      }, timeoutMs);
+    } catch (error) {
+      if (!hydrationUnsupported(safeError(error))) throw error;
+      const result = await this.rpc("thread/read", { threadId: this.identity.threadId }, timeoutMs);
+      const thread = record(record(result)?.thread) ?? {};
+      const persisted = rolloutTurnsFromDisk(stringField(thread, "path") ?? this.identity.path);
+      const turns = window === "first" ? persisted.slice(0, 64) : persisted.slice(-64);
+      return { thread: { ...thread, turns } };
+    }
+  }
+
+  async sessionMaterializationEvidence(clientMessageId: string): Promise<SessionMaterializationEvidence> {
+    let result: unknown;
+    try {
+      result = await this.readThreadForDelivery(clientMessageId, "first");
+    } catch (error) {
+      const reason = safeError(error);
+      if (/not materialized yet/i.test(reason) && /before first user message/i.test(reason)) {
+        /* Codex 0.151 keeps giving this answer for threads whose rollout is
+           already on disk with the confirmed first message in it. The rollout
+           IS the session store, so it outranks the engine's claim (#1332). */
+        const persistedOnDisk = rolloutTurnsFromDisk(this.identity.path).some((turn) =>
+          Array.isArray(turn.items)
+          && turn.items.some((item) => stringField(item, "clientId") === clientMessageId));
+        if (persistedOnDisk) return { state: "materialized" };
+        const confirmed = this.confirmedDeliveries.get(clientMessageId);
+        const turnId = confirmed?.receipt.outcome !== "rejected"
+          ? confirmed?.receipt.turnId ?? null
+          : null;
+        const terminal = turnId
+          ? this.events.findLast((event): event is Extract<RuntimeEvent, { kind: "turn-ended" }> =>
+            event.kind === "turn-ended" && event.turnId === turnId)
+          : null;
+        /* Fresh Codex threads are in-memory placeholders until their first
+           turn persists a rollout. During a live turn this response is a
+           pending state. Once that same turn has ended, the app-server has
+           supplied the decisive contradiction: it accepted and completed the
+           first message while its session store still has no first message. */
+        if (terminal) {
+          return {
+            state: "failed",
+            reason: terminal.status === "completed"
+              ? "Codex app-server completed the confirmed first turn without materializing its session"
+              : `Codex app-server ended the confirmed first turn as ${terminal.status} without materializing its session`,
+          };
+        }
+        return {
+          state: "absent",
+          reason: "Codex app-server has not materialized the confirmed first message yet",
+        };
+      }
+      if (/thread\/read timed out/i.test(reason)) {
+        return { state: "unavailable", reason };
+      }
+      if (reason.startsWith("Codex app-server request failed:")) {
+        return /(?:thread|conversation).*(?:not found|unknown|does not exist)/i.test(reason)
+          ? { state: "failed", reason }
+          : { state: "unavailable", reason };
+      }
+      throw error;
+    }
+    let persistedIdentity: CodexThreadIdentity;
+    try {
+      persistedIdentity = threadFromResult(result, "thread/read");
+    } catch (error) {
+      return { state: "failed", reason: safeError(error) };
+    }
+    if (persistedIdentity.threadId !== this.identity.threadId) {
+      return { state: "failed", reason: "Codex app-server read back a different session identity" };
+    }
+    if (!persistedIdentity.path || persistedIdentity.path !== this.identity.path) {
+      return { state: "failed", reason: "Codex app-server did not confirm the canonical transcript path" };
+    }
+    /* Codex 0.151 can answer the hydrated read successfully while omitting
+       `thread.turns` entirely, so an empty reply is not absence evidence —
+       the rollout on disk decides before absent is ever reported (#1332). */
+    const turnHoldsFirstMessage = (turn: JsonObject): boolean =>
+      Array.isArray(turn.items)
+      && turn.items.some((item) => stringField(item, "clientId") === clientMessageId);
+    const persistedFirstMessage = resumedTurns(result).some(turnHoldsFirstMessage)
+      || rolloutTurnsFromDisk(this.identity.path).some(turnHoldsFirstMessage);
+    return persistedFirstMessage
+      ? { state: "materialized" }
+      : { state: "absent", reason: "Codex app-server did not read back the confirmed first message" };
+  }
+
+  /**
+   * Native history injection (#1560): `thread/inject_items`, the one
+   * app-server write that appends model-visible input to a thread WITHOUT
+   * interrupting the running turn and without starting a new one.
+   *
+   * The engine's two placements are genuinely different facts and are reported
+   * as such. With a turn running, the items land in that turn's pending input
+   * and are picked up at its next sampling request, inside the same turn. Idle,
+   * they are written to history and simply wait. Neither placement is a claim
+   * that the model read them.
+   *
+   * Three properties make this safe to run as a durable operation:
+   *
+   * - **The engine does not deduplicate.** A repeated request writes a second
+   *   record, which the prior probe observed directly. So the canonical
+   *   transcript is scanned for this operation's dedup marker BEFORE the
+   *   mutating request, and a hit returns that insertion instead of making
+   *   another one.
+   * - **The acknowledgement is empty.** `{}` proves the request was accepted
+   *   and nothing more — on the active path it can be answered while the items
+   *   are still only pending and the rollout flush has not happened. So the ack
+   *   never settles this operation on its own; the insertion has to be read
+   *   back out of canonical history before it is called observed.
+   * - **Injection is not a send.** Nothing here falls back to `turn/steer`,
+   *   `turn/start` or `turn/interrupt`. A host that cannot inject says so and
+   *   the operation fails with that reason; it is never quietly delivered as
+   *   something the operator did not ask for.
+   */
+  async inject(request: RuntimeInjectRequest): Promise<RuntimeInjectOutcome> {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredInjectError("Codex app-server host is unavailable", "refused");
+    }
+    if (request.threadId && request.threadId !== this.identity.threadId) {
+      throw new StructuredInjectError("injection target thread is not the thread this host owns", "refused");
+    }
+    if (this.injectCapability === "unsupported") {
+      throw new StructuredInjectError("this Codex app-server does not support history injection", "refused");
+    }
+    /* An unanswered approval owns the thread's input. Injecting underneath it
+       is the same hazard steering has, and is refused the same way. */
+    if (this.hasBlockingAttention()) {
+      throw new StructuredInjectError("blocking attention must be answered before injecting context", "refused");
+    }
+    /* The caller's fence, re-evaluated at actuation because the turn axis can
+       move between admission and here. `undefined` accepts either placement. */
+    if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
+      throw new StructuredInjectError("stale-turn", "refused");
+    }
+    const dedup = codexDeliveryDedup(request.operationId);
+    const entry: QueueEntry = { id: request.operationId, text: request.text, contentDigest: request.contentDigest };
+    /* Canonical lookup precedes insertion. A payload mismatch under the same
+       operation id throws out of here, which is what keeps one durable key
+       bound to one payload for ever.
+
+       Classified as REFUSED, and the wrapper is the whole point: this runs
+       BEFORE the request, so whatever it throws — an unreadable transcript, a
+       payload that does not match the one this key already carries — is a
+       failure in which `thread/inject_items` provably was never called. Left
+       unwrapped it reached the caller as a plain error and was reported
+       "issued, outcome unverified", which is untrue, and `uncertain` is
+       absorbing: retry is refused for this kind and the row is not editable, so
+       the operation stranded with nothing the operator could do. On the
+       `failed` path the wording is true and Edit comes back. */
+    let already;
+    try {
+      already = await rolloutConfirmedDelivery(this.identity.path, entry);
+    } catch (error) {
+      throw new StructuredInjectError(safeError(error), "refused");
+    }
+    if (already) {
+      /* Already in the transcript, so the evidence phase has nothing left to
+         wait for and answers immediately. */
+      return { placement: "history", turnId: null, observe: async () => true };
+    }
+    // The canonical read yielded. Recheck ownership and the turn immediately
+    // before the write, so a successor cannot inherit this admitted operation.
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredInjectError("stale-generation", "refused");
+    }
+    if (request.expectedTurnId !== undefined && request.expectedTurnId !== this.activeTurnId) {
+      throw new StructuredInjectError("stale-turn", "refused");
+    }
+    /* Read once, before the write, so the placement reported afterwards is the
+       one the request was actually issued against rather than whatever the turn
+       axis drifted to while the insertion was being observed. */
+    const turnAtActuation = this.activeTurnId;
+    const items = [{
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        /* The SAME structured-user envelope an ordinary send writes, so the
+           injected record is recognisably ours, keeps its authorship and its
+           selected-card reference, and — through `dedup` — is findable in the
+           rollout by the scan above. That marker is the whole idempotency
+           story here, because the engine supplies none. */
+        text: encodeCodexStructuredUserText(
+          request.text,
+          undefined,
+          request.selectedContext,
+          request.origin ?? { kind: "operator" },
+          dedup,
+        ),
+      }],
+    }];
+    try {
+      await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
+    } catch (error) {
+      const message = safeError(error);
+      if (error instanceof NativeQueueProtocolRefusal && error.code === -32601) {
+        this.injectCapability = "unsupported";
+        this.setSessionStatus(this.engineStatus, this.activeFlags);
+        throw new StructuredInjectError("this Codex app-server does not support history injection", "refused");
+      }
+      /* A transport failure after the request left is NOT a refusal: the
+         insertion may have landed. It is reported unverified so the caller
+         terminalizes it as unknown rather than offering a second write. */
+      throw new StructuredInjectError(message, injectionRefusalIsProven(error) ? "refused" : "unverified");
+    }
+    const placement = turnAtActuation ? "pending-input" as const : "history" as const;
+    /* The acknowledgement returns NOW. Reading the insertion back is a separate
+       phase the caller runs on its own schedule, because the active path's
+       evidence does not exist until the turn reaches its next model request. */
+    return {
+      placement,
+      turnId: turnAtActuation,
+      observe: () => this.observeInjectedItem(entry, turnAtActuation),
+    };
+  }
+
+  /**
+   * Waits, bounded, for an injected item to appear in the canonical transcript.
+   *
+   * This is the whole difference between "the engine accepted the request" and
+   * "the input is in the thread". The rollout scan is cached on size and mtime,
+   * so a poll over an unchanged file costs a stat; the deadline is what keeps
+   * an active injection whose flush never comes from waiting for ever. Coming
+   * back false is not a failure — it is the honest "not established yet", and
+   * the caller records it as exactly that.
+   */
+  private async observeInjectedItem(entry: QueueEntry, turnAtActuation: string | null): Promise<boolean> {
+    const deadline = Date.now() + this.injectObservationTimeoutMs;
+    let wait = INJECT_OBSERVATION_POLL_MS;
+    for (;;) {
+      if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return false;
+      /* Read the turn BEFORE the scan, so the final scan below happens after
+         the turn ended rather than racing the flush that ends with it. */
+      const turnEnded = turnAtActuation !== null && this.activeTurnId !== turnAtActuation;
+      try {
+        if (await rolloutConfirmedDelivery(this.identity.path, entry)) return true;
+      } catch {
+        /* An unreadable transcript establishes nothing either way, and must not
+           turn an insertion that may have landed into a reported failure. */
+        return false;
+      }
+      /* THE TURN THIS JOINED IS OVER. Its pending input was either consumed or
+         discarded, and the rollout has been flushed either way — so one more
+         scan cannot change, and waiting out the rest of the deadline would only
+         delay the verdict. The scan above already ran after the end. */
+      if (turnEnded) return false;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      /* Backs off toward the ceiling: an active turn can sit in one tool call
+         for minutes, and a 150 ms poll held for that long is thousands of stats
+         to learn nothing. Found-fast stays fast — the idle flush is immediate,
+         so it is seen on the first or second pass. */
+      wait = Math.min(wait * 2, INJECT_OBSERVATION_POLL_CEILING_MS);
+    }
   }
 
   async interrupt(turnRef: string): Promise<void> {
@@ -1215,7 +2220,16 @@ export class CodexAppServerHost implements EngineHost {
     ));
   }
 
-  async startRealtimeWebRtc(sdp: string): Promise<CodexRealtimeWebRtcResult> {
+  /**
+   * @param personaVariant which persona this call bootstraps into the thread.
+   *   Defaults to `modality`, the variant that assigns no role: a caller that did
+   *   not resolve the question has not established that this thread is the voice
+   *   front, and the coordinator mandate overwrites whatever role it finds.
+   */
+  async startRealtimeWebRtc(
+    sdp: string,
+    personaVariant: VoicePersonaVariant = "modality",
+  ): Promise<CodexRealtimeWebRtcAnswer> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new Error("Codex app-server host is unavailable");
     }
@@ -1231,10 +2245,11 @@ export class CodexAppServerHost implements EngineHost {
        be reported against this one. */
     this.realtimeFailure = null;
     this.realtimeSessionId = null;
-    const personaBootstrapIdentity = voicePersonaBootstrapIdentity(this.identity.threadId);
+    this.realtimeTranscript.end();
+    const persona = voiceSessionPersona(personaVariant);
 
     let pendingStart!: PendingRealtimeStart;
-    const answer = new Promise<CodexRealtimeWebRtcResult>((resolve, reject) => {
+    const answer = new Promise<CodexRealtimeWebRtcAnswer>((resolve, reject) => {
       pendingStart = {
         resolve,
         reject,
@@ -1242,36 +2257,16 @@ export class CodexAppServerHost implements EngineHost {
         started: false,
         realtimeSessionId: null,
         sdp: null,
-        personaBootstrap: { ...personaBootstrapIdentity, insertion: "accepted" },
+        persona: { variant: persona.variant, personaId: persona.personaId },
       };
     });
     this.pendingRealtimeStart = pendingStart;
     void answer.catch(() => undefined);
 
-    try {
-      const outcome = await this.ensureVoicePersonaBootstrap(personaBootstrapIdentity, pendingStart);
-      if (outcome === "superseded") return answer;
-    } catch (error) {
-      if (this.pendingRealtimeStart !== pendingStart) return answer;
-      const pending = pendingStart;
-      this.pendingRealtimeStart = null;
-      clearTimeout(pending.timer);
-      const rejected: CodexRealtimeWebRtcRejection = {
-        sdp: null,
-        realtimeSessionId: null,
-        personaBootstrap: {
-          ...personaBootstrapIdentity,
-          insertion: "rejected",
-          diagnostic: safeError(error),
-        },
-      };
-      pending.resolve(rejected);
-      return answer;
-    }
-    if (this.pendingRealtimeStart !== pendingStart) return answer;
     const realtimeContext = selectRealtimeContext(this.events);
     console.info("[realtime context] selected", {
       providerStartupContext: true,
+      personaVariant: persona.variant,
       durableTail: realtimeContext.diagnosticItems,
       truncated: realtimeContext.truncated,
     });
@@ -1289,6 +2284,20 @@ export class CodexAppServerHost implements EngineHost {
         clientManagedHandoffs: true,
         codexResponsesAsItems: true,
         includeStartupContext: true,
+        /* THE SPOKEN MODEL'S ONLY INSTRUCTIONS (#1629). Unset, the backend
+           gives it Codex's stock realtime persona — a general-purpose assistant
+           that knows nothing about this thread's role or tools — and no item
+           written into the thread ever reaches it. */
+        "prompt": persona.prompt,
+        /* THE BACKING MODEL'S FRAMING, scoped to this call. Paired with the end
+           instructions so hanging up withdraws it, which is what keeps a text
+           agent from inheriting spoken-delivery rules for the rest of its life. */
+        realtimeStartInstructions: persona.startInstructions,
+        realtimeEndInstructions: persona.endInstructions,
+        /* The last thing said before a hangup is said INTO the tail. Without
+           this it is dropped instead of routed through Codex, so an instruction
+           given on the way out never reaches the canonical thread. */
+        flushTranscriptTailOnSessionEnd: true,
         /* Current V3 clients carry initial items in call creation. Add the
            durable tail only when a streamed assistant response has no
            committed item; provider startup context owns the persisted history. */
@@ -1300,101 +2309,6 @@ export class CodexAppServerHost implements EngineHost {
     return answer;
   }
 
-  private async ensureVoicePersonaBootstrap(
-    identity: VoicePersonaBootstrapIdentity,
-    pendingStart: PendingRealtimeStart,
-  ): Promise<"accepted" | "superseded"> {
-    await this.ensureCanonicalTranscriptPath();
-    while (!this.voicePersonaBootstrapAccepted) {
-      const active = this.voicePersonaBootstrapInsertion;
-      if (active) {
-        try {
-          await active.promise;
-        } catch (error) {
-          if (this.pendingRealtimeStart !== pendingStart) return "superseded";
-          if (active.owner === pendingStart) throw error;
-          continue;
-        }
-        continue;
-      }
-
-      const canonicalExists = await this.scanVoicePersonaBootstrap(
-        identity.itemId,
-        "canonical scan unavailable; refusing insertion",
-      );
-      const legacyExists = canonicalExists ? false : await this.scanVoicePersonaBootstrap(
-        legacyVoicePersonaBootstrapItemId(this.identity.threadId),
-        "legacy canonical scan unavailable; refusing insertion",
-      );
-      if (canonicalExists || legacyExists) {
-        this.voicePersonaBootstrapAccepted = true;
-        this.unresolvedVoicePersonaBootstrap = null;
-        break;
-      }
-      if (this.pendingRealtimeStart !== pendingStart) return "superseded";
-      if (this.voicePersonaBootstrapInsertion) continue;
-
-      const bootstrap = this.unresolvedVoicePersonaBootstrap ?? voicePersonaBootstrap(identity);
-      this.unresolvedVoicePersonaBootstrap = bootstrap;
-      const promise = this.insertVoicePersonaBootstrap(bootstrap, identity.itemId);
-      const insertion = { owner: pendingStart, promise };
-      this.voicePersonaBootstrapInsertion = insertion;
-      const clearInsertion = () => {
-        if (this.voicePersonaBootstrapInsertion === insertion) this.voicePersonaBootstrapInsertion = null;
-      };
-      void promise.then(clearInsertion, clearInsertion);
-      try {
-        await promise;
-      } catch (error) {
-        if (this.pendingRealtimeStart !== pendingStart) return "superseded";
-        throw error;
-      }
-    }
-    return "accepted";
-  }
-
-  private async ensureCanonicalTranscriptPath(): Promise<void> {
-    if (this.identity.path) return;
-    const result = await this.rpc("thread/read", {
-      threadId: this.identity.threadId,
-      includeTurns: true,
-    });
-    const recovered = threadFromResult(result, "thread/read");
-    if (recovered.threadId !== this.identity.threadId) {
-      throw new Error("thread/read returned a different thread id");
-    }
-    if (!recovered.path) {
-      const error = new Error("canonical transcript path is unavailable") as NodeJS.ErrnoException;
-      error.code = "NO_TRANSCRIPT_PATH";
-      throw error;
-    }
-    this.identity.path = recovered.path;
-  }
-
-  private async insertVoicePersonaBootstrap(bootstrap: VoicePersonaBootstrap, itemId: string): Promise<void> {
-    try {
-      await this.rpc("thread/inject_items", {
-        threadId: this.identity.threadId,
-        items: [bootstrap.item],
-      }, this.realtimePersonaTimeoutMs);
-    } catch (error) {
-      if (!await this.scanVoicePersonaBootstrap(itemId, "recovery scan unavailable")) throw error;
-    }
-    this.voicePersonaBootstrapAccepted = true;
-    this.unresolvedVoicePersonaBootstrap = null;
-  }
-
-  private async scanVoicePersonaBootstrap(itemId: string, warning: string): Promise<boolean> {
-    try {
-      return await canonicalVoicePersonaBootstrapExists(this.identity.path, itemId);
-    } catch (error) {
-      console.warn(`[voice persona bootstrap] ${warning}`, {
-        code: (error as NodeJS.ErrnoException).code ?? "unknown",
-        diagnostic: safeError(error),
-      });
-      throw error;
-    }
-  }
 
   async appendRealtimeSpeech(text: string): Promise<void> {
     if (!text || Buffer.byteLength(text, "utf8") > MAX_REALTIME_SPEECH_BYTES) {
@@ -1676,6 +2590,7 @@ export class CodexAppServerHost implements EngineHost {
     /* An operator hanging up is not a failure to report back to them. */
     this.realtimeFailure = null;
     this.realtimeSessionId = null;
+    this.realtimeTranscript.end();
     for (const stream of this.voiceStreams.values()) {
       this.clearVoiceStreamTimer(stream);
       stream.fallbackToTerminal = true;
@@ -1687,6 +2602,7 @@ export class CodexAppServerHost implements EngineHost {
       throw new Error("Codex app-server host is unavailable");
     }
     const attention = this.attentions.get(attentionRef);
+    if (attention?.origin === "restored") throw new Error("attention belongs to a previous host generation; answer ownership is unavailable");
     if (!attention) throw new Error("attention request is missing or already answered");
     if (attention.answer) throw new Error("attention answer is already awaiting confirmation");
     await new Promise<void>((resolve, reject) => {
@@ -1727,7 +2643,7 @@ export class CodexAppServerHost implements EngineHost {
       : null;
     const status: HostState["status"] = this.dead ? "dead"
       : this.released ? "unhosted"
-      : this.attentions.size > 0 ? "attention"
+      : this.hasBlockingAttention() ? "attention"
       : this.activeTurnId ? "active"
       : this.engineStatus;
     return {
@@ -1740,13 +2656,16 @@ export class CodexAppServerHost implements EngineHost {
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
-      activeFlags: [...this.activeFlags],
+      nativeQueueRevision: this.nativeQueueRevision,
+      activeFlags: [...this.activeFlags, ...(this.nativeQueue ? ["native-queue"] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.supportsNativeHistory() && Array.isArray(record(this.modelCatalog)?.data) ? ["native-turn-profile"] : [])],
       account: this.account,
+      diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery },
     };
   }
 
   async release(): Promise<void> {
     if (this.released) return;
+    this.nativeQueue?.queue.dispose();
     if (!this.releasePromise) {
       const attempt = this.releaseAndReap();
       this.releasePromise = attempt;
@@ -1783,9 +2702,9 @@ export class CodexAppServerHost implements EngineHost {
       const hangup = this.rpc("thread/realtime/stop", { threadId: this.identity.threadId }, REALTIME_HANGUP_TIMEOUT_MS);
       await hangup.catch(() => undefined);
       this.realtimeSessionId = null;
+    this.realtimeTranscript.end();
     }
     this.releasing = true;
-    this.unresolvedVoicePersonaBootstrap = null;
     this.rejectRealtimeStart(new Error("Codex app-server host released"));
     this.rejectPendingAnswers(new Error("Codex app-server host released"));
     this.rejectPendingDeliveries(new Error("Codex app-server host released"));
@@ -1937,6 +2856,11 @@ export class CodexAppServerHost implements EngineHost {
 
   private emit(event: UnsequencedEvent): void {
     if (this.ledgerFailed) return;
+    /* Recorded here rather than at each call site, so every path that ends a
+       turn — a terminal notification, a resume that finds it already over, an
+       error that terminalizes it — leaves the same evidence for the voice
+       ledger. Bounded, because a long-lived host ends a great many turns. */
+    if (event.kind === "turn-ended") this.recordTerminatedTurn(event.turnId);
     if (!this.eventLedgerRestored) {
       if (this.preRestoreEvents.length + this.preRestoreMessages.length >= MAX_PRE_RESTORE_FRAMES) {
         this.ledgerFailed = true;
@@ -1970,6 +2894,20 @@ export class CodexAppServerHost implements EngineHost {
       subscriber.wake?.();
     }
     this.notifyStateListeners();
+  }
+
+  /** Bounded terminal-turn memory. The oldest is forgotten first, and forgetting
+      answers `unknown` rather than `completed` — the ledger then keeps its own
+      record instead of retiring work on missing evidence. */
+  private recordTerminatedTurn(turnId: string): void {
+    if (!turnId) return;
+    this.terminatedTurnIds.delete(turnId);
+    this.terminatedTurnIds.add(turnId);
+    while (this.terminatedTurnIds.size > MAX_TERMINATED_TURN_MEMORY) {
+      const oldest = this.terminatedTurnIds.values().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.terminatedTurnIds.delete(oldest);
+    }
   }
 
   private restoreEvents(): number {
@@ -2023,7 +2961,7 @@ export class CodexAppServerHost implements EngineHost {
         if (event.status !== "completed") this.cancelledVoiceTurns.add(event.turnId);
       }
       if (event.kind === "attention") {
-        this.attentions.set(event.id, { rpcId: "restored", method: event.method, origin: "restored" });
+        this.attentions.set(event.id, { rpcId: "restored", method: event.method, origin: "restored", isBlocking: !isNonblockingCodexQuestion(event.method, event.attention) });
       }
       if (event.kind === "attention-resolved") this.attentions.delete(event.id);
       if (event.kind === "realtime-delivery-progress") {
@@ -2049,7 +2987,6 @@ export class CodexAppServerHost implements EngineHost {
         this.activeFlags = [...(event.activeFlags ?? [])];
         if (event.status === "unhosted" || event.status === "dead") {
           this.activeTurnId = null;
-          this.attentions.clear();
         }
       }
     }
@@ -2077,8 +3014,9 @@ export class CodexAppServerHost implements EngineHost {
     }
     for (const [attentionId, attention] of [...this.attentions]) {
       if (attention.origin !== "restored") continue;
-      this.attentions.delete(attentionId);
-      this.emit({ kind: "attention-resolved", id: attentionId, resolution: "host-restarted" });
+      const previous = this.events.findLast(event => event.kind === "attention" && event.id === attentionId);
+      if (previous?.kind === "attention") this.emit({ kind: "attention", id: attentionId, method: attention.method,
+        attention: { ...(record(previous.attention) ?? {}), unowned: true } });
     }
     this.emitThreadStatus(resumedTurnTerminalized && !this.activeTurnId
       ? { type: "idle", activeFlags: [] }
@@ -2139,15 +3077,22 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  private async confirmedDelivery(entry: QueueEntry): Promise<DeliveryReceipt | null> {
+  private async confirmedDelivery(entry: QueueEntry, firstDispatch = false): Promise<DeliveryReceipt | null> {
     const known = this.confirmedDeliveries.get(entry.id);
     if (known) return this.confirmedReceipt(entry, known);
+    const persistedRead = rolloutConfirmedDelivery(this.identity.path, entry);
+    const persisted = persistedRead instanceof Promise ? await persistedRead : persistedRead;
+    if (persisted) return persisted;
+    // The journal already established this operation's first actuation. Keep
+    // local duplicate/collision checks, but do not scan unrelated native
+    // history to authorize a newly admitted message. Recovery remains below.
+    if (firstDispatch) return null;
     let thread: unknown;
     try {
       const timeoutMs = this.activeTurnId
         ? this.requestTimeoutMs * ACTIVE_THREAD_READ_TIMEOUT_MULTIPLIER
         : this.requestTimeoutMs;
-      thread = await this.rpc("thread/read", { threadId: this.identity.threadId, includeTurns: true }, timeoutMs);
+      thread = await this.readThreadForDelivery(entry.id, "latest", timeoutMs);
     } catch (error) {
       const message = safeError(error);
       if (/not materialized yet/i.test(message) && /before first user message/i.test(message)) return null;
@@ -2372,17 +3317,17 @@ export class CodexAppServerHost implements EngineHost {
     this.setSessionStatus(mapped, status.activeFlags);
   }
 
-  private rpc(method: string, params: JsonObject = {}, timeoutMs = this.requestTimeoutMs): Promise<unknown> {
+  private rpc(method: string, params: JsonObject = {}, timeoutMs = this.requestTimeoutMs, preserveHost = false): Promise<unknown> {
     if (this.dead || this.releasing || this.released) return Promise.reject(new Error("Codex app-server host is unavailable"));
     const id = this.nextRpcId++;
     if (REPLAY_ENVELOPE_METHODS.has(method)) this.trackReplayEnvelopeRequest(id);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        if (method === "thread/read") this.rememberLateThreadReadResponse(id, timeoutMs);
+        if (method === "thread/read" || preserveHost) this.rememberLateThreadReadResponse(id, timeoutMs);
         const error = new Error(`${method} timed out${MUTATING_RPC_METHODS.has(method) ? "; outcome is uncertain" : ""}`);
         reject(error);
-        if (MUTATING_RPC_METHODS.has(method)) this.fail(error);
+        if (MUTATING_RPC_METHODS.has(method) && !preserveHost) this.fail(error);
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.write({ jsonrpc: "2.0", id, method, params });
@@ -2586,18 +3531,35 @@ export class CodexAppServerHost implements EngineHost {
       this.pending.delete(id);
       clearTimeout(pending.timer);
       const error = record(message.error);
-      if (error) pending.reject(new Error(`Codex app-server request failed: ${safeError(error.message ?? "unknown error")}`));
+      if (error) {
+        const message = `Codex app-server request failed: ${safeError(error.message ?? "unknown error")}`;
+        pending.reject(typeof error.code === "number" && Number.isInteger(error.code)
+          ? new NativeQueueProtocolRefusal(error.code, message) : new Error(message));
+      }
       else pending.resolve(message.result);
       return;
     }
     if (!method) return this.fail(new Error("Codex app-server message has no method"));
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
-      const attentionId = `${method}:${String(id)}`;
-      this.attentions.set(attentionId, { rpcId: id, method, origin: "current" });
+      const baseAttentionId = `${method}:${String(id)}`;
+      const currentRequest = [...this.attentions].find(([, attention]) => attention.origin === "current" && attention.rpcId === id && attention.method === method);
+      const attentionId = currentRequest?.[0] ?? (this.attentions.get(baseAttentionId)?.origin === "restored"
+        ? `${baseAttentionId}:generation-${this.cursor + 1}` : baseAttentionId);
+      this.attentions.set(attentionId, { ...currentRequest?.[1], rpcId: id, method, origin: "current", isBlocking: !isNonblockingCodexQuestion(method, params) });
       const event = { kind: "attention" as const, id: attentionId, method, attention: params };
       if (!reconcileBufferedLifecycle || !this.consumeBufferedNotification(event)) this.emit(event);
       return;
+    }
+    if (method === "modelProvider/authRecoveryStarted" || method === "modelProvider/authRecoveryCompleted") {
+      const valid = params.threadId === this.identity.threadId && typeof params.turnId === "string" && params.turnId.length > 0
+        && typeof params.provider === "string" && typeof params.message === "string";
+      this.authRecovery = !valid ? "unknown" : method.endsWith("Started") ? "started" : "completed-unverified";
+      this.notifyStateListeners();
+    }
+    if (this.nativeQueue?.queue.handleNotification(method, params)) {
+      this.nativeQueueRevision++;
+      this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId });
     }
     this.acceptNotification(method, params, reconcileBufferedLifecycle);
   }
@@ -2635,12 +3597,32 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false): void {
+    /* #1629: the canonical transcript. These are the app-server's own
+       notifications, so they survive a data-channel drop and are what the
+       thread's committed timeline is built from. Answered before the pending
+       start check because they arrive throughout the call, not around it. */
+    if (CANONICAL_REALTIME_TRANSCRIPT_METHODS.has(method)) {
+      if (stringField(params, "threadId") !== this.identity.threadId) return;
+      const segment = this.realtimeTranscript.observe(method, params);
+      if (segment) {
+        this.emit({
+          kind: "voice-transcript",
+          realtimeSessionId: segment.realtimeSessionId,
+          segmentId: segment.id,
+          role: segment.role,
+          text: segment.text,
+          final: segment.final,
+        });
+      }
+      return;
+    }
     if (method === "thread/realtime/started") {
       const pending = this.pendingRealtimeStart;
       if (!pending || stringField(params, "threadId") !== this.identity.threadId) return;
       pending.started = true;
       pending.realtimeSessionId = stringField(params, "realtimeSessionId");
       this.realtimeSessionId = pending.realtimeSessionId;
+      this.realtimeTranscript.begin(pending.realtimeSessionId ?? "");
       this.resumeVoiceStreams();
       this.resolveRealtimeStart();
       return;
@@ -2677,7 +3659,7 @@ export class CodexAppServerHost implements EngineHost {
       const requestId = params.requestId;
       if (typeof requestId !== "number" && typeof requestId !== "string") return;
       const resolved = [...this.attentions.entries()].find(([, attention]) =>
-        String(attention.rpcId) === String(requestId));
+        attention.origin === "current" && String(attention.rpcId) === String(requestId));
       if (!resolved) return;
       const answer = resolved[1].answer;
       if (answer) {
@@ -2869,7 +3851,7 @@ export class CodexAppServerHost implements EngineHost {
     pending.resolve({
       sdp: pending.sdp,
       realtimeSessionId: pending.realtimeSessionId,
-      personaBootstrap: pending.personaBootstrap,
+      persona: pending.persona,
     });
   }
 
@@ -2881,6 +3863,37 @@ export class CodexAppServerHost implements EngineHost {
       the call. */
   currentRealtimeSessionId(): string | null {
     return this.realtimeSessionId;
+  }
+
+  /**
+   * The native thread this host runs (#1629).
+   *
+   * A tool call's `_meta` names the thread it came from. Comparing the two is
+   * what turns the caller's claim into evidence, so the voice ledger can refuse
+   * a request that names work on some other thread.
+   */
+  providerThreadId(): string | null {
+    return this.identity.threadId;
+  }
+
+  /** Whether a backing turn is running right now. */
+  hasActiveTurn(): boolean {
+    return this.activeTurnId !== null;
+  }
+
+  /**
+   * What this host can say about one backing turn (#1629).
+   *
+   * `completed` is the only authoritative retirement evidence the voice ledger
+   * accepts: it means this host saw that turn end. A turn it has no terminal
+   * record for is `unknown` — a host that restarted, or one whose ledger was
+   * replayed past the event, has MISSING evidence, and the ledger keeps what it
+   * holds rather than treating silence as an ending.
+   */
+  voiceWorkTurnState(turnId: string): "active" | "completed" | "unknown" {
+    if (!turnId) return "unknown";
+    if (this.activeTurnId === turnId) return "active";
+    return this.terminatedTurnIds.has(turnId) ? "completed" : "unknown";
   }
 
   lastRealtimeFailure(): CodexRealtimeFailure | null {

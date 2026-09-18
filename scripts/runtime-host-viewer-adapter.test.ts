@@ -33,6 +33,7 @@ import { flowStateCollectionSeed } from "../src/lib/flows/store";
 import { pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
 import { workflowStateCollectionSeed } from "../src/lib/workflows/store";
 import { initializeStateCollections } from "../src/lib/state/sqliteStateStore";
+import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
 import { mcpProbeEnvironment, runBootstrapRelease } from "./runtime-host-viewer-adapter";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -51,6 +52,26 @@ test("candidate MCP probes read through the candidate Viewer endpoint", () => {
 
   expect(environment.LLV_VIEWER_CONTROL_URL).toBe("http://candidate.invalid");
   expect(environment.LLV_VIEWER_DEPLOY_TARGET).toBe("/state/candidate-target.json");
+});
+
+/** #1511: the candidate authenticates every connection when a token is
+    configured (#1496), so the probe carries the credential of the endpoint it
+    was pinned to. A candidate with no token configured carries none. */
+test("a candidate MCP probe carries the candidate's own credential, and none when there is none", () => {
+  const credentialed = mcpProbeEnvironment(
+    "http://candidate.invalid",
+    "/state/candidate-target.json",
+    { NODE_ENV: "test" },
+    "candidate-key",
+  );
+  const bare = mcpProbeEnvironment(
+    "http://candidate.invalid",
+    "/state/candidate-target.json",
+    { NODE_ENV: "test" },
+  );
+
+  expect(credentialed[VIEWER_CONTROL_TOKEN_ENV]).toBe("candidate-key");
+  expect(bare).not.toHaveProperty(VIEWER_CONTROL_TOKEN_ENV);
 });
 
 test("a candidate MCP probe without a candidate endpoint refuses instead of reading the deployed Viewer", () => {
@@ -369,6 +390,10 @@ async function runAction(options: {
   const target = fs.existsSync(targetFile) ? JSON.parse(fs.readFileSync(targetFile, "utf8")) as unknown : null;
   const authority = readHotStateAuthority(state);
   const handoffIntentExists = fs.existsSync(path.join(state, "runtime-host-handoff-intent.json"));
+  const rollbackTargetFile = path.join(state, "runtime-host-rollback-target.json");
+  const rollbackTarget = fs.existsSync(rollbackTargetFile)
+    ? JSON.parse(fs.readFileSync(rollbackTargetFile, "utf8")) as unknown
+    : null;
   const releaseSwitchIntentExists = fs.existsSync(path.join(state, "viewer-release-switch-intent.json"));
   if (!options.preserveSandbox) fs.rmSync(sandbox, { recursive: true, force: true });
   return {
@@ -379,6 +404,7 @@ async function runAction(options: {
     target,
     authority,
     handoffIntentExists,
+    rollbackTarget,
     releaseSwitchIntentExists,
     sandbox,
     state,
@@ -939,7 +965,7 @@ exit 1
   }
 }, 15_000);
 
-test("fenced successor cleanup removes its predecessor and clears the durable handoff intent", async () => {
+test("issue 1270: fenced successor cleanup retains its predecessor as the rollback target", async () => {
   const generation = {
     image: "agent-log-viewer:deploy-cleanup",
     revision: "d".repeat(40),
@@ -952,13 +978,24 @@ test("fenced successor cleanup removes its predecessor and clears the durable ha
       ...generation,
       successorContainer: generation.container,
       predecessorId: "runtime-host-predecessor",
+      previousRelease: {
+        image: "agent-log-viewer:deploy-previous",
+        revision: "c".repeat(40),
+        container: "runtime-host-predecessor",
+        endpoint: "http://127.0.0.1:8898",
+        stagedAt: "2026-07-20T09:00:00.000Z",
+      },
+      successorRelease: {
+        ...generation,
+        endpoint: "http://127.0.0.1:8898",
+        stagedAt: "2026-07-21T09:00:00.000Z",
+      },
       recordedAt: "2026-07-21T09:00:00.000Z",
     },
     dockerScript: `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "container inspect" ]; then printf '[{"Id":"successor-id"}]\n'; exit 0; fi
-if [ "$1 $2" = "container rm" ]; then exit 0; fi
 exit 1
 `,
   });
@@ -966,9 +1003,14 @@ exit 1
   expect(result.code).toBe(0);
   expect(result.dockerCalls).toEqual([
     "container inspect llv-runtime-host-cleanup",
-    "container rm -f runtime-host-predecessor",
   ]);
   expect(result.handoffIntentExists).toBe(false);
+  expect(result.rollbackTarget).toMatchObject({
+    version: 1,
+    active: { container: "llv-runtime-host-cleanup", revision: "d".repeat(40) },
+    previous: { container: "runtime-host-predecessor", revision: "c".repeat(40) },
+    predecessorId: "runtime-host-predecessor",
+  });
 });
 
 test("retention stops the immediate rollback container and removes obsolete releases", async () => {

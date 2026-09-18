@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { claudeLoginErrKey, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, type ClaudeLoginPhase } from "./useEngineAccounts";
+import { claudeLoginErrKey, createEngineAccountsStore, NONTERMINAL_CLAUDE_LOGIN_PHASES, parseAccountLimits, parseClaudeLogin, parseResetCredits, type ClaudeLoginPhase } from "./useEngineAccounts";
 
 const advance = async () => {
   for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
@@ -26,7 +26,7 @@ const claudePayload = (over: Record<string, unknown> = {}) => ({
   claude: {
     active: "main",
     accounts: [
-      { id: "main", label: "Main", authPresent: true, auth: { state: "authenticated" }, loginPending: false, loginState: "authenticated", deviceAuth: null, effective: { percent: 12, window: "session", freshness: "fresh" } },
+      { id: "main", label: "Main", authPresent: true, auth: { state: "authenticated", plan: "Team" }, loginPending: false, loginState: "authenticated", deviceAuth: null, effective: { percent: 12, window: "session", freshness: "fresh" } },
       { id: "work", label: "Work", authPresent: true, auth: { state: "unknown" }, loginPending: false, loginState: "authenticated", deviceAuth: null },
     ],
     ...over,
@@ -49,6 +49,7 @@ test("a claude store reads body.claude, its engine endpoints, and parses migrati
   expect(calls[0].url).toBe("/api/accounts");
   expect(store.active).toBe("main");
   expect(store.accounts.map((account) => account.authHealth)).toEqual(["authenticated", "unknown"]);
+  expect(store.accounts.map((account) => account.plan)).toEqual(["Team", null]);
   expect(store.migration).toMatchObject({ intentId: "i1", origin: "auto", state: "draining", counts: { done: 1, total: 3 } });
   expect(store.autoBalance).toMatchObject({ enabled: true, state: "draining" });
   unsub();
@@ -530,8 +531,7 @@ test("a non-202 claude add keeps the add retry action with the draft label (C12g
   unsub();
 });
 
-test("managed account removal retries with force only after the API reports a safety blocker", async () => {
-  let removed = false;
+test("managed account removal never offers a force retry for safety blockers", async () => {
   const { calls, fetcher } = scripted((url, body) => {
     if (url === "/api/accounts") {
       return {
@@ -539,17 +539,13 @@ test("managed account removal retries with force only after the API reports a sa
           active: "main",
           accounts: [
             claudeMain,
-            ...(removed ? [] : [claudeAcct({ id: "work", label: "Work", login: null })]),
+            claudeAcct({ id: "work", label: "Work", login: null }),
           ],
         },
       };
     }
     if (url === "/api/accounts/claude" && (body as { id?: string }).id === "work") {
-      if ((body as { force?: boolean }).force !== true) {
-        return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
-      }
-      removed = true;
-      return new Response(JSON.stringify({ removed: { id: "work" } }));
+      return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["live_sessions"] }), { status: 409 });
     }
     return new Response(null, { status: 204 });
   });
@@ -558,15 +554,11 @@ test("managed account removal retries with force only after the API reports a sa
   await advance();
 
   expect(await store.remove("work")).toBeFalse();
-  expect(store.notice?.action).toMatchObject({ type: "retry", kind: "forceRemove", accountId: "work" });
-  expect(await store.retryNotice()).toBeTrue();
-  expect(store.notice).toBeNull();
+  expect(store.notice?.action).toBeNull();
   expect(calls.filter((call) => call.url === "/api/accounts/claude").map((call) => call.body)).toEqual([
     { id: "work", force: false },
-    { id: "work", force: true },
   ]);
-  expect(store.accounts.some((account) => account.id === "work")).toBeFalse();
-  expect(store.notice).toBeNull();
+  expect(store.accounts.some((account) => account.id === "work")).toBeTrue();
   unsub();
 });
 
@@ -634,7 +626,22 @@ test("current conversation blockers provide migration guidance without a force l
   unsub();
 });
 
-test("a blocked removal's force-remove notice survives the follow-up refresh failing", async () => {
+test("filesystem history blockers provide preservation guidance without a force loop", async () => {
+  const { fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return { claude: { active: "main", accounts: [claudeMain, claudeAcct({ id: "work", label: "Work", login: null })] } };
+    if (url === "/api/accounts/claude") return new Response(JSON.stringify({ code: "account_removal_blocked", blockers: ["filesystem_history"] }), { status: 409 });
+    return new Response(null, { status: 204 });
+  });
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+
+  expect(await store.remove("work")).toBeFalse();
+  expect(store.notice).toMatchObject({ messageKey: "accounts.removeHistoryBlocked", action: null });
+  unsub();
+});
+
+test("a blocked removal notice stays non-bypassable when the follow-up refresh fails", async () => {
   let accountsCalls = 0;
   const { fetcher } = scripted((url) => {
     if (url === "/api/accounts") {
@@ -654,7 +661,7 @@ test("a blocked removal's force-remove notice survives the follow-up refresh fai
   await advance();
 
   expect(await store.remove("work")).toBeFalse();
-  expect(store.notice?.action).toMatchObject({ type: "retry", kind: "forceRemove", accountId: "work" });
+  expect(store.notice?.action).toBeNull();
   unsub();
 });
 
@@ -730,4 +737,157 @@ test("copyTerminalCommand failures carry the route detail and never fire for una
 
   expect(await store.copyTerminalCommand("main")).toBeFalse();
   expect(store.notice).toMatchObject({ kind: "error", operation: "terminal", messageKey: "accounts.terminalFailed", detail: "claude account requires authentication" });
+});
+
+/* Issues #1418 and #1373: the per-card limits actions and the reset-credit
+   count. Every account in these fixtures is an invented "Account A"-style row. */
+const codexAccount = (over: Record<string, unknown> = {}) => ({
+  id: "account-a",
+  label: "Account A",
+  kind: "managed",
+  authPresent: true,
+  auth: { state: "authenticated", plan: "pro" },
+  loginPending: false,
+  loginState: "authenticated",
+  deviceAuth: null,
+  limits: { state: "fresh", session: null, weekly: { usedPercent: 100, resetsAt: 1_800_000_000, windowMinutes: 10_080 }, checkedAt: "2026-09-01T10:00:00.000Z" },
+  resetCredits: { availableCount: 1, expiresAt: 1_801_000_000 },
+  ...over,
+});
+const codexPayload = (accounts: unknown[] = [codexAccount()]) => ({ codex: { active: "account-a", accounts } });
+const refreshedAccount = {
+  id: "account-a",
+  auth: { state: "authenticated", plan: "pro" },
+  limits: { state: "fresh", session: null, weekly: { usedPercent: 0, resetsAt: 1_800_600_000, windowMinutes: 10_080 }, checkedAt: "2026-09-01T10:05:00.000Z" },
+  resetCredits: { availableCount: 0, expiresAt: null },
+};
+
+test("the accounts read carries each account's reset-credit count, and parseResetCredits drops garbage (#1373)", async () => {
+  const { fetcher } = scripted((url) => (url === "/api/accounts" ? codexPayload([codexAccount(), codexAccount({ id: "account-b", label: "Account B", resetCredits: null })]) : new Response(null, { status: 204 })));
+  const store = createEngineAccountsStore("codex", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  expect(store.accounts.map((account) => account.resetCredits)).toEqual([{ availableCount: 1, expiresAt: 1_801_000_000 }, null]);
+  expect(store.limitsBusy).toBeNull();
+  expect(store.limitsVersion).toBe(0);
+  unsub();
+  expect(parseResetCredits({ availableCount: 2 })).toEqual({ availableCount: 2, expiresAt: null });
+  expect(parseResetCredits({ availableCount: -1 })).toBeNull();
+  expect(parseResetCredits({ availableCount: "one" })).toBeNull();
+  expect(parseResetCredits(null)).toBeNull();
+});
+
+test("parseAccountLimits keeps a flagship tier window only when it names its tier (#1358)", () => {
+  const parsed = parseAccountLimits({
+    state: "fresh",
+    session: null,
+    weekly: { usedPercent: 40, resetsAt: null, windowMinutes: 10_080 },
+    flagship: { usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, tier: "opus" },
+  });
+  expect(parsed?.flagship).toEqual({ usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, observedAt: null, tier: "opus" });
+  expect(parseAccountLimits({ state: "fresh", session: null, weekly: { usedPercent: 40, resetsAt: null }, flagship: { usedPercent: 63, resetsAt: null } })?.flagship).toBeUndefined();
+  expect(parseAccountLimits({ state: "fresh", session: null, weekly: null, flagship: { usedPercent: 63, resetsAt: null, tier: "opus" } })).not.toBeNull();
+});
+
+test("refreshLimits posts the account id and merges the live reading into that card (#1418)", async () => {
+  const { calls, fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return codexPayload();
+    if (url === "/api/accounts/codex/limits") return { account: refreshedAccount };
+    return new Response(null, { status: 404 });
+  });
+  const store = createEngineAccountsStore("codex", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  expect(store.accounts[0]?.limits?.checkedAt).toBe("2026-09-01T10:00:00.000Z");
+
+  const outcome = store.refreshLimits("account-a");
+  expect(store.limitsBusy).toEqual({ accountId: "account-a", operation: "refreshLimits" });
+  await expect(outcome).resolves.toBeTrue();
+  const post = calls.find((call) => call.url === "/api/accounts/codex/limits")!;
+  expect(post.method).toBe("POST");
+  expect(post.body).toEqual({ id: "account-a" });
+  const account = store.accounts[0]!;
+  // The timestamp advanced and the provider's changed value is what the card shows.
+  expect(account.limits?.checkedAt).toBe("2026-09-01T10:05:00.000Z");
+  expect(account.limits?.weekly).toMatchObject({ usedPercent: 0, resetsAt: 1_800_600_000 });
+  expect(account.resetCredits).toEqual({ availableCount: 0, expiresAt: null });
+  expect(account.label).toBe("Account A");
+  expect(store.limitsBusy).toBeNull();
+  expect(store.limitsVersion).toBe(1);
+  expect(store.notice).toBeNull();
+  unsub();
+});
+
+test("a failed refreshLimits names the account and the route's detail, and a second click waits for the first (#1418)", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { calls, fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return codexPayload();
+    return new Response(null, { status: 404 });
+  });
+  const gated = async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/accounts/codex/limits") {
+      await gate;
+      calls.push({ url: String(input), method: init?.method ?? "GET", body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ error: "live limits read failed", code: "probe_failed", detail: "app-server unavailable" }), { status: 502, headers: { "content-type": "application/json" } });
+    }
+    return fetcher(input, init);
+  };
+  const store = createEngineAccountsStore("codex", { fetcher: gated });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  const first = store.refreshLimits("account-a");
+  await expect(store.refreshLimits("account-a")).resolves.toBeFalse();
+  release();
+  await expect(first).resolves.toBeFalse();
+  expect(calls.filter((call) => call.url === "/api/accounts/codex/limits")).toHaveLength(1);
+  expect(store.notice).toMatchObject({ kind: "error", operation: "refreshLimits", messageKey: "accounts.limitsRefreshFailed", target: "Account A", detail: "app-server unavailable" });
+  expect(store.limitsBusy).toBeNull();
+  unsub();
+});
+
+test("useResetCredit posts one idempotency key per click and shows the new window the route answers with (#1373)", async () => {
+  let reply: () => Response | Record<string, unknown> = () => ({ outcome: "reset", redeemed: true, recorded: true, account: refreshedAccount });
+  const { calls, fetcher } = scripted((url) => {
+    if (url === "/api/accounts") return codexPayload();
+    if (url === "/api/accounts/codex/reset-credits") return reply();
+    return new Response(null, { status: 404 });
+  });
+  const store = createEngineAccountsStore("codex", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+
+  const outcome = store.useResetCredit("account-a");
+  expect(store.limitsBusy).toEqual({ accountId: "account-a", operation: "resetCredit" });
+  await expect(outcome).resolves.toBeTrue();
+  const post = calls.find((call) => call.url === "/api/accounts/codex/reset-credits")!;
+  expect(post.method).toBe("POST");
+  expect((post.body as { id: string }).id).toBe("account-a");
+  expect(typeof (post.body as { idempotencyKey: unknown }).idempotencyKey).toBe("string");
+  expect(store.accounts[0]?.limits?.weekly).toMatchObject({ usedPercent: 0, resetsAt: 1_800_600_000 });
+  expect(store.accounts[0]?.resetCredits).toEqual({ availableCount: 0, expiresAt: null });
+  expect(store.notice).toMatchObject({ kind: "success", operation: "resetCredit", messageKey: "accounts.resetUsed", target: "Account A" });
+  expect(store.limitsVersion).toBe(1);
+
+  // A refusal still carries the reading the route took, so the card updates.
+  reply = () => new Response(JSON.stringify({ error: "No usage limit resets available.", code: "no_resets_available", outcome: "noCredit", refusedLocally: true, account: { ...refreshedAccount, resetCredits: { availableCount: 0, expiresAt: null } } }), { status: 409, headers: { "content-type": "application/json" } });
+  await expect(store.useResetCredit("account-a")).resolves.toBeFalse();
+  expect(store.notice).toMatchObject({ kind: "error", operation: "resetCredit", messageKey: "accounts.resetNone", target: "Account A" });
+  const keys = calls.filter((call) => call.url === "/api/accounts/codex/reset-credits").map((call) => (call.body as { idempotencyKey: string }).idempotencyKey);
+  expect(new Set(keys).size).toBe(2);
+
+  reply = () => new Response(JSON.stringify({ error: "the reset credit could not be redeemed", code: "consume_failed", detail: "app-server exited" }), { status: 502, headers: { "content-type": "application/json" } });
+  await expect(store.useResetCredit("account-a")).resolves.toBeFalse();
+  expect(store.notice).toMatchObject({ messageKey: "accounts.resetFailed", detail: "app-server exited" });
+  unsub();
+});
+
+test("useResetCredit is a Codex action: a Claude store refuses without a request", async () => {
+  const { calls, fetcher } = scripted((url) => (url === "/api/accounts" ? claudePayload() : new Response(null, { status: 404 })));
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  await expect(store.useResetCredit("main")).resolves.toBeFalse();
+  expect(calls.some((call) => call.url.includes("reset-credits"))).toBeFalse();
+  unsub();
 });

@@ -6,9 +6,16 @@ import { setVoiceConnected, setVoiceSpeaking } from "@/lib/audio/app";
 import type { Speaker } from "@/lib/audio/ambientLoop";
 import { speakingFromLines } from "@/lib/audio/speech";
 import { codexRealtimeClient, type CodexRealtimeLine, type CodexRealtimeSnapshot } from "@/lib/realtime/codexRealtimeClient";
-import type { RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
+import { projectVoiceDeliveryBodies } from "@/lib/runtime/voiceBodyProjection";
+import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "@/lib/runtime/voiceDelivery";
+import type { HostAxis, RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
 
-const IDLE = { phase: "idle" as const, lines: [], error: null, startedAt: null, micMuted: false, outputMuted: false };
+const EMPTY_ACKS: readonly string[] = [];
+
+const IDLE = {
+  phase: "idle" as const, lines: [], error: null, startedAt: null,
+  micMuted: false, outputMuted: false, notice: null, agentUnavailable: null,
+};
 
 /**
  * The part of the realtime client this hook consumes.
@@ -28,8 +35,14 @@ export interface RealtimeSurface {
   updateWorkerProgress(turnId: string, progress: string, running: boolean): void;
   reconcileWorkerDeliveries(
     deliveries: readonly RuntimeVoiceDelivery[],
-    options?: { authoritative?: boolean },
+    options?: { authoritative?: boolean; ready?: boolean },
   ): void;
+  /** #1629: the app-server's own transcript, merged into the panel beside what
+      the data channel delivered. */
+  reconcileCanonicalTranscript(segments: readonly RuntimeVoiceTranscriptSegment[]): void;
+  /** #1629: what the runtime says about the host behind this call, so a panel
+      never claims a working agent link the runtime has already contradicted. */
+  reportBackingHost(host: VoiceBackingHost): void;
   /** #691 §6: this call's credential, presented on every write into it and on every
       read of the inbox that carries its deploy nonces. */
   realtimeSession(): string | null;
@@ -37,6 +50,16 @@ export interface RealtimeSurface {
      the only signal that may advance the bridge's cursor. */
   onDeliveryAcknowledged(listener: (deliveryId: string) => void): () => void;
 }
+
+/**
+ * What the runtime says about the host behind a call (#1629).
+ *
+ * The runtime's own host axis, plus `unknown` for the window before any
+ * projection has arrived. `registering`, `recovering` and `conflict` are all
+ * states in which a call cannot be shown to reach an agent, so they are carried
+ * through as themselves rather than folded into "fine".
+ */
+export type VoiceBackingHost = HostAxis | "unknown";
 
 const NO_LINES: ReadonlySet<string> = new Set();
 
@@ -135,6 +158,15 @@ export function useCodexRealtime(
   workerProgress: string,
   workerRunning: boolean,
   workerDeliveries: readonly RuntimeVoiceDelivery[],
+  /* #1629: the canonical transcript the runtime carried over from the
+     app-server. Passed in like the deliveries above, from the same session
+     projection, so the client stays the one place that decides what a line is. */
+  canonicalTranscript: readonly RuntimeVoiceTranscriptSegment[] = [],
+  /* #1629: the runtime's own verdict on the host behind the call. `unknown`
+     while no projection has arrived, which asserts nothing either way. */
+  backingHost: VoiceBackingHost = "unknown",
+  deferredVoiceRevision?: number,
+  acknowledgedVoiceIds: readonly string[] = EMPTY_ACKS,
 ) {
   const client = useMemo(
     () => enabled && conversationId.startsWith("conversation_") ? clientFactory(conversationId) : null,
@@ -149,9 +181,83 @@ export function useCodexRealtime(
     if (!client || !workerTurnId || !workerProgress) return;
     client.updateWorkerProgress(workerTurnId, workerProgress, workerRunning);
   }, [client, snapshot.phase, workerProgress, workerRunning, workerTurnId]);
+  const [preparingVoice, setPreparingVoice] = useState<string | null>(null);
+  const startEpoch = useRef(0);
+  const startPending = useRef(false);
+  const bodyKey = `${conversationId}:${deferredVoiceRevision ?? "full"}`;
+  const [bodyState, setBodyState] = useState<{ key: string; deliveries: RuntimeVoiceDelivery[]; acknowledged: string[] } | null>(null);
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const requestRef = useRef<{ key: string; promise: Promise<{ deliveries: RuntimeVoiceDelivery[]; acknowledged: string[] }> } | null>(null);
+  const currentKey = useRef(bodyKey);
+  currentKey.current = bodyKey;
+  useEffect(() => () => { startEpoch.current += 1; startPending.current = false; }, [client, bodyKey]);
+  const latestVoice = useRef({ deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds });
+  latestVoice.current = { deliveries: workerDeliveries, acknowledged: acknowledgedVoiceIds };
+  const bodyProjection = useMemo(() => {
+    const acknowledged = new Set([...acknowledgedVoiceIds, ...(bodyState?.key === bodyKey ? bodyState.acknowledged : [])]);
+    if (deferredVoiceRevision === undefined) return {
+      deliveries: workerDeliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), complete: true,
+    };
+    return projectVoiceDeliveryBodies(workerDeliveries, bodyState?.key === bodyKey ? bodyState.deliveries : [], acknowledged);
+  }, [bodyKey, bodyState, workerDeliveries, acknowledgedVoiceIds, deferredVoiceRevision]);
+  const bodiesReady = deferredVoiceRevision === undefined || (bodyState?.key === bodyKey && bodyProjection.complete);
+  const hydrateBodies = () => {
+    if (deferredVoiceRevision === undefined) return Promise.resolve({ deliveries: [...workerDeliveries], acknowledged: [...acknowledgedVoiceIds] });
+    if (bodyState?.key === bodyKey && projectVoiceDeliveryBodies(
+      latestVoice.current.deliveries, bodyState.deliveries,
+      new Set([...latestVoice.current.acknowledged, ...bodyState.acknowledged]),
+    ).complete) return Promise.resolve(bodyState);
+    if (requestRef.current?.key === bodyKey) return requestRef.current.promise;
+    const promise = (async () => {
+      const response = await fetch(`/api/runtime/snapshot?voiceFor=${encodeURIComponent(conversationId)}`);
+      if (!response.ok) throw new Error("Voice delivery recovery is unavailable");
+      const value = await response.json() as { sessions?: Array<{ conversationId: string; revision: number; voiceDeliveries?: RuntimeVoiceDelivery[]; voiceDeliverySnapshotRevision?: number; acknowledgedVoiceDeliveryIds?: string[] }> };
+      const session = value.sessions?.find(session => session.conversationId === conversationId);
+      if (!session || session.voiceDeliverySnapshotRevision !== undefined || session.revision < deferredVoiceRevision)
+        throw new Error("Voice delivery recovery is incomplete");
+      const acknowledged = new Set(session.acknowledgedVoiceDeliveryIds ?? []);
+      const deliveries = normalizeVoiceDeliveries(session.voiceDeliveries).filter(delivery => !acknowledged.has(delivery.deliveryId));
+      if (currentKey.current === bodyKey) {
+        if (!projectVoiceDeliveryBodies(latestVoice.current.deliveries, deliveries,
+          new Set([...latestVoice.current.acknowledged, ...acknowledged])).complete)
+          throw new Error("Voice delivery recovery is incomplete");
+        setBodyState({ key: bodyKey, deliveries, acknowledged: [...acknowledged] });
+        setBodyError(null);
+      }
+      return { deliveries, acknowledged: [...acknowledged] };
+    })();
+    requestRef.current = { key: bodyKey, promise };
+    void promise.catch(error => { if (currentKey.current === bodyKey) setBodyError(error instanceof Error ? error.message : "Voice delivery recovery failed"); })
+      .finally(() => { if (requestRef.current?.promise === promise) requestRef.current = null; });
+    return promise;
+  };
   useEffect(() => {
-    client?.reconcileWorkerDeliveries(workerDeliveries, { authoritative: true });
-  }, [client, snapshot.phase, workerDeliveries]);
+    // An omitted body is unknown, never an authoritative empty queue. A
+    // reconnect snapshot re-arms hydration even for an already active call.
+    if (!bodiesReady) {
+      client?.reconcileWorkerDeliveries([], { ready: false });
+      if (snapshot.phase === "idle" || snapshot.phase === "error") return;
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let delay = 1000;
+      const recover = () => { void hydrateBodies().catch(() => {
+        if (cancelled) return;
+        timer = setTimeout(recover, delay);
+        delay = Math.min(30_000, delay * 2);
+      }); };
+      recover();
+      return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    }
+    client?.reconcileWorkerDeliveries(bodyProjection.deliveries, { authoritative: true, ready: true });
+    // hydrateBodies joins one request per snapshot identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, snapshot.phase, bodyKey, bodiesReady, bodyProjection]);
+  useEffect(() => {
+    client?.reconcileCanonicalTranscript(canonicalTranscript);
+  }, [canonicalTranscript, client]);
+  useEffect(() => {
+    client?.reportBackingHost(backingHost);
+  }, [backingHost, client, snapshot.phase]);
 
   /* The ambient lease deliberately does NOT live here any more: this hook is
      card-scoped and the card unmounts mid-call on board navigation. The music's
@@ -159,13 +265,45 @@ export function useCodexRealtime(
 
   return {
     ...snapshot,
+    phase: preparingVoice === bodyKey && startPending.current ? "connecting" as const : snapshot.phase,
+    error: snapshot.error ?? bodyError,
     /* Read at render time rather than stored: the stream appears with the
        `live` phase, which already re-renders this subtree. */
     micStream: client?.micStream() ?? null,
     toggleMic: () => client?.toggleMic(),
     toggleOutput: () => client?.toggleOutput(),
     realtimeSession: () => client?.realtimeSession() ?? null,
-    start: () => client?.start() ?? Promise.resolve(),
-    stop: () => client?.stop() ?? Promise.resolve(),
+    start: async () => {
+      if (!client || startPending.current || snapshot.phase === "connecting" || snapshot.phase === "live") return;
+      const key = bodyKey;
+      const epoch = ++startEpoch.current;
+      startPending.current = true;
+      setPreparingVoice(bodyKey);
+      try {
+        const recovered = await hydrateBodies();
+        if (currentKey.current !== key || startEpoch.current !== epoch) return;
+        // Events can acknowledge or append deliveries while the GET is in
+        // flight. Read the current id set here, never the start-click closure.
+        const current = latestVoice.current;
+        const acknowledged = new Set([...current.acknowledged, ...recovered.acknowledged]);
+        const projection = deferredVoiceRevision === undefined
+          ? { deliveries: current.deliveries.filter(delivery => !acknowledged.has(delivery.deliveryId)), complete: true }
+          : projectVoiceDeliveryBodies(current.deliveries, recovered.deliveries, acknowledged);
+        if (!projection.complete) {
+          client.reconcileWorkerDeliveries([], { ready: false });
+          throw new Error("Voice delivery recovery is incomplete");
+        }
+        client.reconcileWorkerDeliveries(projection.deliveries, { authoritative: true, ready: true });
+        await client.start();
+      } finally {
+        if (startEpoch.current === epoch) { startPending.current = false; setPreparingVoice(null); }
+      }
+    },
+    stop: () => {
+      startEpoch.current += 1;
+      startPending.current = false;
+      setPreparingVoice(null);
+      return client?.stop() ?? Promise.resolve();
+    },
   };
 }

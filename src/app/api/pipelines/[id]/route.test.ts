@@ -6,7 +6,7 @@ const pipeline = {
   id: "pipeline-1",
   task: "read one pipeline",
   spec: "Return the full durable record.",
-  stages: [{ id: "build", kind: "run", prompt: "Build the route", next: null }],
+  stages: [{ id: "build", kind: "run", prompt: "Build the route", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
   runs: [{
     stageId: "build",
     attempts: [{ attempt: 1, input: "Implement", output: "Complete", verdict: { status: "pass", findings: [] } }],
@@ -39,6 +39,12 @@ mock.module("@/lib/pipelines/engine", () => ({
     if ((body as { repoDir?: string }).repoDir === "/blocked") {
       return { error: "Git metadata is not writable: /blocked/.git", status: 403, code: "git_metadata_unwritable", field: "repoDir", path: "/blocked/.git" };
     }
+    if ((body as { expectedAttempt?: unknown }).expectedAttempt === -1) {
+      return { error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet", status: 400, field: "expectedAttempt" };
+    }
+    if ((body as { expectedStageDigest?: string }).expectedStageDigest === "0".repeat(64)) {
+      return { error: "the stage changed since it was read; read it again before overriding it", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
+    }
     if ((body as { action?: string }).action === "close") {
       if ((body as { stageId?: string }).stageId === "stuck") {
         return { error: "could not stop stage build attempt 1", status: 409, close: refusedClose };
@@ -50,6 +56,7 @@ mock.module("@/lib/pipelines/engine", () => ({
 }));
 
 const { DELETE, GET, PATCH } = await import("./route");
+const { graphDigest, stageDigest } = await import("@/lib/pipelines/stageDigest");
 const { GET: GET_COLLECTION } = await import("../route");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 
@@ -59,7 +66,41 @@ test("pipeline GET returns the full record for a known id", async () => {
     { params: Promise.resolve({ id: "pipeline-1" }) },
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ ok: true, pipeline });
+  /* #1695 C7 and graph slice 1: the stage digests and the plan's digest ride along, for guarded graph edits. */
+  expect(await response.json()).toEqual({ ok: true, pipeline, stageDigests: { build: stageDigest(pipeline.stages[0] as never) }, graphDigest: graphDigest(pipeline.stages as never) });
+});
+
+test("pipeline PATCH forwards a malformed guard's field without a code", async () => {
+  const response = await PATCH(
+    new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH",
+      headers: { host: "127.0.0.1" },
+      body: JSON.stringify({ action: "retry-stage", expectedStageId: "build", expectedAttempt: -1 }),
+    }),
+    { params: Promise.resolve({ id: "pipeline-1" }) },
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({
+    error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet",
+    field: "expectedAttempt",
+  });
+});
+
+test("pipeline PATCH forwards a guard refusal's code and field", async () => {
+  const response = await PATCH(
+    new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH",
+      headers: { host: "127.0.0.1" },
+      body: JSON.stringify({ action: "override-stage", stageId: "build", prompt: "x", expectedStageDigest: "0".repeat(64) }),
+    }),
+    { params: Promise.resolve({ id: "pipeline-1" }) },
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "the stage changed since it was read; read it again before overriding it",
+    code: "STAGE_CHANGED",
+    field: "expectedStageDigest",
+  });
 });
 
 test("pipeline GET returns 404 for an unknown id", async () => {

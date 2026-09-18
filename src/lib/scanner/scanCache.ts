@@ -12,6 +12,17 @@ import { coordinatedFileScan, resetFileScanCoordinatorForTests, runFileCatalogSc
 import type { Engine, FileEntry, PendingQuestion, TranscriptEngine } from "@/lib/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 
+type FileScanRunner = typeof runFileCatalogScan;
+let testFileScanRunner: FileScanRunner | null = null;
+
+export function setFileScanRunnerForTests(runner: FileScanRunner | null): void {
+  testFileScanRunner = runner;
+}
+
+function configuredFileScanRunner(...args: Parameters<FileScanRunner>): ReturnType<FileScanRunner> {
+  return (testFileScanRunner ?? runFileCatalogScan)(...args);
+}
+
 export type FileScanSnapshot = Awaited<ReturnType<typeof listFilesWithProjectCatalog>>;
 type FileScanRefresh = {
   generation: number;
@@ -76,7 +87,10 @@ const FILE_SCAN_PIN_CACHE_MAX = 8;
 // the `openclaw` engine/format, which a pre-#1207 validator rejects — and a
 // pre-#1207 snapshot has no OpenClaw rows at all, so it must be rescanned
 // rather than served as a complete inventory.
-const FILE_SCAN_CACHE_SCHEMA_VERSION = 10 as const;
+// v11: pre-#1718 snapshots lack lastAgentWorkAt. Recompute activity before
+// publishing either files representation; absence in a v11 row can still be
+// genuine unknown activity from a bounded tail.
+const FILE_SCAN_CACHE_SCHEMA_VERSION = 11 as const;
 const FILE_SCAN_SNAPSHOT_VERSION = 1 as const;
 const FILE_SCAN_SNAPSHOT_FILE = "files-scan-snapshot.json";
 const FILE_SCAN_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
@@ -476,7 +490,7 @@ function fileScanRefreshPromise(
      merge into the single trailing generation instead (#287). */
   const join = reason === "ordinary" || reason === "cold";
   return instrumentFileScan(slot, generation, reason, async () => {
-    const snapshot = await coordinatedFileScan({ fresh, join, signal }, (intent, generationSignal) => runFileCatalogScan(intent, {
+    const snapshot = await coordinatedFileScan({ fresh, join, signal }, (intent, generationSignal) => configuredFileScanRunner(intent, {
       persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
       ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
     }, generationSignal));
@@ -552,7 +566,7 @@ function beginPinnedFileScanRefresh(
        fences, never adopts a running scan, and never merges with other pending
        callers (their runners cannot reproduce the pin overlay); it still holds
        the process-wide single-generation lease through the coordinator (#287). */
-    const pinnedSnapshot = await coordinatedFileScan({ fresh, join: false, exclusive: true, signal: controller.signal }, (intent, signal) => runFileCatalogScan(intent, {
+    const pinnedSnapshot = await coordinatedFileScan({ fresh, join: false, exclusive: true, signal: controller.signal }, (intent, signal) => configuredFileScanRunner(intent, {
       persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
       pin: pinnedPath,
     }, signal));

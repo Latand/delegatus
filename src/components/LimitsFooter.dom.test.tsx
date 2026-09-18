@@ -47,8 +47,8 @@ const accounts = {
   claude: { active: "claude-a", accounts: [] },
 };
 
-// Bound before the component is imported so the singleton account stores read
-// this stub rather than the real endpoints.
+// The singleton account stores resolve the active global fetch at request time,
+// so this lifecycle-owned stub remains valid regardless of import order.
 globalThis.fetch = (async (input: RequestInfo | URL) => {
   const url = String(input);
   if (url === "/api/limits") return limitsUnavailable ? new Response(null, { status: 503 }) : Response.json(limits);
@@ -273,4 +273,55 @@ test("an account B limits payload cannot override account A at the rendering sea
   const text = host.textContent ?? "";
   expect(text).toContain("79%");
   expect(text).not.toContain("0%");
+});
+
+// ── Issue #1358 — the flagship tier's weekly as its own footer row ───────────
+
+const claudePayload = (flagship: number | null): LimitsPayload => ({
+  claude: {
+    session: { usedPercent: 12, resetsAt: NOW + 3_600, windowMinutes: 300 },
+    weekly: { usedPercent: 40, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 },
+    ...(flagship === null ? {} : { flagship: { usedPercent: flagship, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080, tier: "opus" } }),
+    plan: "max",
+    capturedAt: NOW,
+  },
+  codex: null,
+  claudeAccountId: "claude-a",
+  codexAccountId: "account-a",
+  provenance: {
+    claude: { source: "live", reason: null, staleSince: null },
+    codex: { source: "unavailable", reason: null, staleSince: null },
+  },
+  staleSince: null,
+});
+
+function claudeBlock(host: HTMLElement): HTMLElement {
+  const trigger = [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.includes("Claude"));
+  return trigger!.closest("div.relative") as HTMLElement;
+}
+
+test("no flagship bucket: the Claude block keeps its two rows and no placeholder", async () => {
+  limits = claudePayload(null);
+  const block = claudeBlock(await render());
+  expect(block.textContent).toContain("5h");
+  expect(block.textContent).toContain("Week");
+  expect(block.textContent).not.toContain("Opus · Week");
+  expect(block.textContent).toContain("60%"); // the general week binds the chip
+});
+
+test("a healthy flagship bucket renders as a third row named by the tier, and the general week still binds the chip", async () => {
+  limits = claudePayload(10);
+  const block = claudeBlock(await render());
+  expect(block.textContent).toContain("Opus · Week");
+  expect(block.textContent).toContain("90%");
+  expect(block.textContent).toContain("60%");
+  expect(block.textContent?.match(/reset/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+});
+
+test("a flagship bucket tighter than the general week binds the chip", async () => {
+  limits = claudePayload(80);
+  const block = claudeBlock(await render());
+  expect(block.textContent).toContain("Opus · Week");
+  const chip = block.querySelector("span.tabular-nums");
+  expect(chip?.textContent).toBe("20%");
 });

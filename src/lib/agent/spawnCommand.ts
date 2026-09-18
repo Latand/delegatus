@@ -6,21 +6,31 @@ import { after, NextRequest, NextResponse } from "next/server";
 
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountManager, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
-import { agentRegistry, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
-import { codexModelSupportsImages, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
+import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
-import { spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
+import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
 import { resolveSpawnLineage, SpawnParentError } from "@/lib/agent/spawnParent";
-import { SpawnAdmissionError, isSpawnDeniedRole } from "@/lib/agent/spawnAdmission";
+import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
+import {
+  SpawnAdmissionError,
+  SpawnAdmissionFenceConflictError,
+  SpawnAdmissionFenceError,
+  isSpawnDeniedRole,
+  readSpawnAdmissionFence,
+  recordSpawnAdmissionRejection,
+  type SpawnAdmissionFenceResult,
+} from "@/lib/agent/spawnAdmission";
 import { spawnRejectionResponse, spawnReplayStatus, spawnResponseForReceipt, type SpawnResponse } from "@/lib/agent/spawnResponse";
 import { applyClaudeSpawnPolicy, prepareManagedClaudeSpawnHome } from "@/lib/agent/spawnPolicy";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
@@ -38,6 +48,7 @@ import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { derivedSpawnTitle, durableSemanticTitle, firstPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentWithPrompt, verifyTmuxHostEvidence } from "@/lib/tmux";
@@ -47,8 +58,9 @@ import type { ApiError } from "@/lib/types";
 import { recordDirectOperatorWakatimeActivity } from "@/lib/wakatime/operatorActivity";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
-import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
+import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, mandatoryReviewsError, spawnLineageSelectorForCaller, type AuthenticatedSpawnCaller } from "@/app/api/spawn/admission";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
+import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
 
 const SUGGEST_SCAN_LIMIT = 80;
 const SUGGEST_MAX = 10;
@@ -122,6 +134,29 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
 };
 
+/** Record a request-bound pre-reservation refusal. The shared durable fence is
+    the authoritative downstream evidence; if it cannot be written, recovery
+    must retain unknown rather than trusting the HTTP error. */
+export function fenceSpawnAdmissionRejection(
+  body: Record<string, unknown>,
+  status: number,
+  error: string,
+  dependencies: Pick<SpawnCommandDependencies, "registry">,
+): SpawnAdmissionFenceResult | null {
+  const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
+  if (!clientAttemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(clientAttemptId)) return null;
+  try {
+    return recordSpawnAdmissionRejection({
+      clientAttemptId,
+      requestDigest: spawnAdmissionBodyDigest(body),
+      status,
+      error,
+    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId));
+  } catch {
+    return null;
+  }
+}
+
 interface SuggestResponse {
   dirs: string[];
   /** Working directory of the `src` transcript when one was requested. */
@@ -185,7 +220,7 @@ export async function executeSpawnRequest(
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown };
+  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -205,20 +240,45 @@ export async function executeSpawnRequest(
   const requestedPlugins = normalizeSpawnPlugins(body.plugins);
   if (!requestedPlugins.ok) return NextResponse.json({ error: requestedPlugins.error }, { status: 400 });
 
-  const lineageError = agentSpawnLineageError(req, body);
-  if (lineageError) return NextResponse.json({ error: lineageError }, { status: 400 });
+  /* The caller is established BEFORE the first refusal that writes a fence
+     (#1641). The 403 itself still waits until after validation, so a stranger
+     learns the ordinary refusal and no more — but an unauthenticated one can
+     never burn another caller's downstream key. */
   const agentInitiated = isAgentInitiatedSpawn(req);
+  let registryForCaller: ReturnType<SpawnCommandDependencies["registry"]> | null = null;
+  let authenticatedCaller: AuthenticatedSpawnCaller | null = null;
+  let authenticatedCallerError: { error: string; status?: number } | null = null;
+  if (agentInitiated) {
+    try {
+      registryForCaller = dependencies.registry();
+      const caller = authenticatedAgentSpawnCaller(req, body.src, registryForCaller);
+      if ("error" in caller) authenticatedCallerError = caller;
+      else authenticatedCaller = caller;
+    } catch (error) {
+      authenticatedCallerError = {
+        error: error instanceof Error ? error.message : String(error),
+        status: 503,
+      };
+    }
+  }
+  /* Every pre-reservation refusal below records the request-bound fence, so a
+     caller whose dispatch was interrupted can recover this exact key to a
+     terminal NOT_EXECUTED instead of an indefinite unknown (#1641). */
+  const refuse = (error: string): NextResponse<ApiError> => {
+    if (!authenticatedCallerError) {
+      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
+    }
+    return NextResponse.json({ error }, { status: 400 });
+  };
+  const lineageError = agentSpawnLineageError(req, body);
+  if (lineageError) return refuse(lineageError);
   if (body.allowSubagents !== undefined && typeof body.allowSubagents !== "boolean") {
     return NextResponse.json({ error: "allowSubagents must be a boolean" }, { status: 400 });
   }
   const role = resolveSpawnRole(body);
-  if (!role.ok) return NextResponse.json({ error: role.error }, { status: 400 });
-  if (role.value?.role === "reviewer" && (typeof body.reviews !== "string" || !body.reviews.trim())) {
-    return NextResponse.json({ error: "reviewer requires reviews" }, { status: 400 });
-  }
-  if (role.value?.role !== "reviewer" && body.reviews !== undefined) {
-    return NextResponse.json({ error: "reviews requires role: reviewer" }, { status: 400 });
-  }
+  if (!role.ok) return refuse(role.error);
+  const reviewsError = mandatoryReviewsError(role.value?.role ?? null, body);
+  if (reviewsError) return refuse(reviewsError);
   /* Reviewer isolation (#393): reviewer/verifier launch profiles always carry
      allowSubagents:false, so every engine denies native multi-agent tools on
      fresh launch, resume, and restart adoption. Even the operator lane cannot
@@ -235,6 +295,7 @@ export async function executeSpawnRequest(
 
   const reasoning = reasoningFromBody(engine, {
     ...body,
+    model: body.model ?? role.value?.config.model ?? defaultModelFor(engine),
     effort: body.effort === undefined ? role.value?.config.effort : body.effort,
   });
   if (reasoning.error) return NextResponse.json({ error: reasoning.error }, { status: 400 });
@@ -290,7 +351,7 @@ export async function executeSpawnRequest(
     }
   }
 
-  const registry = dependencies.registry();
+  const registry = registryForCaller ?? dependencies.registry();
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
   if (!explicitTitle && !existingAttempt) {
@@ -303,11 +364,8 @@ export async function executeSpawnRequest(
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }
 
-  let authenticatedCaller: AuthenticatedSpawnCaller | null = null;
-  if (agentInitiated) {
-    const caller = authenticatedAgentSpawnCaller(req, body.src, registry);
-    if ("error" in caller) return NextResponse.json({ error: caller.error }, { status: caller.status ?? 403 });
-    authenticatedCaller = caller;
+  if (agentInitiated && authenticatedCallerError) {
+    return NextResponse.json({ error: authenticatedCallerError.error }, { status: authenticatedCallerError.status ?? 403 });
   }
   if (agentInitiated && body.allowSubagents === true && authenticatedCaller?.kind !== "operator") {
     return NextResponse.json({ error: "allowSubagents requires an authenticated Viewer operator spawn" }, { status: 403 });
@@ -508,6 +566,12 @@ export async function executeSpawnRequest(
     const launchDisplay = (!reportClassGrant && (userPrompt.trim() || images.length))
       ? { ["prompt"]: userPrompt, images: images.length, echo: prompt }
       : null;
+    /* The explicit task of a band-local «+ Agent» (#1586): the only launch
+       target the HTTP body alone knows. It rides on the reservation, where the
+       registry validates it and commits the membership in the same step it
+       uses for every other launch, so a task that does not exist aborts the
+       launch before anything is actuated. */
+    const explicitTaskIds = typeof body.taskId === "string" && body.taskId.trim() ? [body.taskId.trim()] : null;
     /* Both a runnable launch and an explicit-account preflight failure reserve
        the same durable launch identity. Keep the request assembled at this
        seam so the terminal receipt retains the lineage, origin, grants and
@@ -542,6 +606,7 @@ export async function executeSpawnRequest(
       launchProfile,
       clientAttemptId,
       requestDigest,
+      ...(explicitTaskIds ? { taskIds: explicitTaskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
          draft and canonical delivered echo persist through scan lag. */
       launchDisplay,
@@ -605,12 +670,33 @@ export async function executeSpawnRequest(
       );
     }
     const requestedAccountId = typeof body.accountId === "string" ? body.accountId : null;
+    /* #1279: the project the launch belongs to, and nothing more. The rule
+       itself — which accounts this project allows, whether any of them has
+       capacity, and what a record nobody can read means — lives at the account
+       seam with every other automatic selection's copy of it, so this route
+       carries no second copy to drift from the first. */
+    const spawnProject = explicitProject ?? projectForCwd(cwd);
     let account: HealthySpawnAccountResolution;
     try {
       account = existingAttempt && existingAttempt.accountId !== null && !(existingAttempt.accountPin && requestedAccountId)
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
-        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId);
+        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject);
     } catch (error) {
+      /* The record needs the operator, and until it gets them this launch
+         selects nothing. A conflict, not a server fault: the request is well
+         formed and the state it addresses is what is wrong — the same answer
+         the reseat, the binding route and the task launch give for the same
+         record, so one repair clears all of them. */
+      if (error instanceof AccountProjectBindingsUnreadableError) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
+      }
+      /* A boundary somebody drew, answered as a boundary: the pin the project
+         forbids, and the pool with no account left to launch on. Answered
+         before any receipt exists, so there is nothing for a retry to replay
+         onto an account this project does not allow. */
+      if (error instanceof ProjectAccountRefusedError) {
+        return NextResponse.json({ error: error.message }, { status: 409 });
+      }
       if (body.accountId === undefined) throw error;
       if (engine === "claude" && requestedAccountId) {
         try {
@@ -709,14 +795,71 @@ export async function executeSpawnRequest(
     const receiptAccountId = pinFallback && typeof body.accountId === "string"
       ? body.accountId
       : account.accountId;
-    const begun = registry.beginSpawnRequest(canonicalSpawnRequest(
-      receiptAccountId,
-      spec.launchProfile,
-      digest,
-      existingAttempt?.accountPin ?? (body.accountId !== undefined),
-    ));
+    const begun = await withAccountMutationLockAsync(async () => {
+      if (!existingAttempt && clientAttemptId) {
+        /* The validation endpoint may have fenced this exact downstream key
+           while an older request was between validation and reservation. Both
+           checks run under the same account lock, so a fence either precedes
+           this reservation or observes the receipt that won before it. */
+        const admissionFence = readSpawnAdmissionFence(clientAttemptId);
+        if (admissionFence) {
+          if (admissionFence.requestDigest === spawnAdmissionBodyDigest(body as Record<string, unknown>)) {
+            throw new SpawnAdmissionFenceError(admissionFence);
+          }
+          throw new SpawnAdmissionFenceConflictError();
+        }
+      }
+      if (!existingAttempt) {
+        const current = dependencies.resolveSpawnAccount(engine, account.accountId);
+        if (current.accountId !== account.accountId || current.kind !== account.kind) {
+          throw new Error("spawn account changed during admission");
+        }
+      }
+      return registry.beginSpawnRequest(canonicalSpawnRequest(
+        receiptAccountId,
+        spec.launchProfile,
+        digest,
+        existingAttempt?.accountPin ?? (body.accountId !== undefined),
+      ));
+    });
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created") launchId = begun.receipt.launchId;
+    /* ATTRIBUTION, not a gate (#1279's rule, launch seam). The binding no
+       longer refuses a launch that NAMES an account outside the project's pool,
+       so the crossing has to be visible instead — the project view renders this
+       journal beside the pool, and an account carrying work it is not bound to
+       must read as a decision somebody made rather than as a fence that quietly
+       stopped holding. Recorded once the receipt exists, because that is the
+       point past which this account is what the work runs on, and only for the
+       account the request actually named: a degraded pin landed on a different
+       account and nobody chose that one. Within the pool it records nothing.
+
+       `created` ONLY. A replay of the same `clientAttemptId` — a lost response
+       retried, an existing attempt resumed — is the same launch arriving twice,
+       not a second choice, and the journal is capped: duplicates evict the
+       older crossings it exists to keep. */
+    const accountOverride = begun.kind === "created" && requestedAccountId && account.accountId === requestedAccountId
+      ? attributeNamedAccountChoice({
+        engine,
+        project: spawnProject,
+        accountId: requestedAccountId,
+        conversationId: begun.receipt.conversationId ?? null,
+        actor: authenticatedCaller?.kind === "agent"
+          ? { kind: "agent", conversationId: authenticatedCaller.conversationId }
+          : { kind: "operator" },
+        via: "launch",
+      }) ?? undefined
+      : undefined;
+    /* THE NOTICE RIDES THE ANSWER, as it does at the two switch seams
+       (`delivery.ts`, `structuredControls.ts`). It is the contract
+       `attributeNamedAccountChoice` states: a journal that would not take the
+       record answers `recorded: false` with the reason, and the caller's answer
+       carries it to whoever made the choice. That matters more here than there
+       — this journal is now the ONLY thing that makes an out-of-pool launch
+       visible, so a state directory that cannot be written to would otherwise
+       let the crossing happen behind a perfectly ordinary spawn response. */
+    const withAccountOverride = (body: SpawnResponse): SpawnResponse =>
+      (accountOverride ? { ...body, accountOverride } : body);
     let queuedReceipt = begun.receipt;
     if (queuedUntil && queuedTitle && requestedAccountId) {
       const existingQueue = begun.receipt.queuedPinnedSpawn;
@@ -863,9 +1006,7 @@ export async function executeSpawnRequest(
       });
     };
     if (begun.kind === "replay") {
-      const structured = queuedReceipt.transport === "structured"
-        || (queuedReceipt.transport === null
-          && Boolean(queuedReceipt.key && registry.readOnlySnapshot().entries[sessionKeyId(queuedReceipt.key)]?.structuredHost));
+      const structured = identityMaterializationFence(registry.readOnlySnapshot()).isStructured(queuedReceipt);
       let receipt = queuedReceipt;
       let initialMessage: SpawnResponse["initialMessage"] | undefined;
       const runtimeClient = structured ? dependencies.runtimeHostClient() : null;
@@ -893,11 +1034,14 @@ export async function executeSpawnRequest(
           deferStructuredSpawn(receipt, runtimeClient, imageRefs);
         }
       }
-      if (receipt.artifactPath) await adoptMaterializedAttempt(receipt, receipt.artifactPath);
-      const response = spawnResponseForReceipt(receipt, receipt.artifactPath, {
+      if (receipt.artifactPath
+        && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
+        await adoptMaterializedAttempt(receipt, receipt.artifactPath);
+      }
+      const response = withAccountOverride(spawnResponseForReceipt(receipt, receipt.artifactPath, {
         structured,
         initialMessage: queuedUntil ? "queued" : initialMessage,
-      });
+      }));
       return NextResponse.json(response, { status: spawnReplayStatus(response, structured) });
     }
     if (queuedUntil) {
@@ -906,10 +1050,10 @@ export async function executeSpawnRequest(
         ? registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt
         : queuedReceipt;
       return NextResponse.json(
-        spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
+        withAccountOverride(spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
           structured: transport === "structured",
           initialMessage: "queued",
-        }),
+        })),
         { status: 202 },
       );
     }
@@ -922,9 +1066,9 @@ export async function executeSpawnRequest(
       catch (error) { throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error)); }
       deferStructuredSpawn(begun.receipt, runtimeClient, imageRefs);
       return NextResponse.json(
-        spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
+        withAccountOverride(spawnResponseForReceipt(begun.receipt, begun.receipt.artifactPath, {
           structured: true,
-        }),
+        })),
         { status: 202 },
       );
     }
@@ -964,11 +1108,11 @@ export async function executeSpawnRequest(
     if (!pane.host || !await verifyTmuxHostEvidence(pane.host)) {
       agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API confirmation");
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(spawnResponseForReceipt(lost, childPath));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
     if (!childPath || !key || !pane.receipt) {
       const pending = agentRegistry().markSpawnPathPending(begun.receipt.launchId);
-      return NextResponse.json(spawnResponseForReceipt(pending, null));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(pending, null)));
     }
     const settled = agentRegistry().settleSpawn(pane.receipt.launchId, {
       key,
@@ -981,7 +1125,7 @@ export async function executeSpawnRequest(
       claimOwner: null,
       pendingAction: "spawn",
     });
-    if (settled.kind === "conflict") return NextResponse.json(spawnResponseForReceipt(settled.receipt));
+    if (settled.kind === "conflict") return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt)));
     recordActualLaunchAccount(settled.receipt, account.accountId, childPath);
     await adoptMaterializedAttempt(settled.receipt, childPath);
     if (runtimeClient && operationId) {
@@ -1008,9 +1152,9 @@ export async function executeSpawnRequest(
     if (!await verifyTmuxHostEvidence(pane.host)) {
       agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API response");
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
-      return NextResponse.json(spawnResponseForReceipt(lost, childPath));
+      return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
-    return NextResponse.json(spawnResponseForReceipt(settled.receipt, childPath));
+    return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt, childPath)));
   } catch (error) {
     const receipt = launchId ? registry.readOnlySnapshot().receipts[launchId] : null;
     if (!receipt || receipt.pane === null) {
@@ -1018,6 +1162,9 @@ export async function executeSpawnRequest(
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });

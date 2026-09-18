@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,6 +10,7 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-accounts-route-test-"
 const OLD_STATE = process.env.LLV_STATE_DIR;
 const OLD_HOME = process.env.LLV_CODEX_HOME;
 const OLD_CLAUDE_HOME = process.env.LLV_CLAUDE_HOME;
+
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
@@ -27,6 +28,8 @@ const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/
 const { setClaudeLoginSupervisorForTests } = await import("@/lib/accounts/claudeLogin");
 const { AgentRegistry, agentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+const { bindAccountToProject } = await import("@/lib/accounts/projectBindings");
+const credentialStore = await import("@/lib/accounts/claudeCredentials");
 
 class FakeChild extends EventEmitter {
   authenticated = false;
@@ -85,6 +88,110 @@ function authenticateCodex(account: { home: string }): void {
 function authenticateClaude(account: { home: string }): void {
   fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
 }
+
+for (const kind of ["legacy", "managed"] as const) {
+  test("Claude " + kind + " refresh and status preserve unknown through production callers", async () => {
+    const { POST: refresh } = await import("./claude/limits/route");
+    const { GET: status } = await import("./claude/[id]/status/route");
+    const { realClaudeLoginPorts } = await import("@/lib/accounts/claudeLogin");
+    const account = createManagedClaudeAccount("Account A");
+    const id = kind === "legacy" ? "default" : account.id;
+    const read = spyOn(credentialStore, "readClaudeCredentials").mockReturnValue({ state: "unknown" });
+    const providerStatus = spyOn(realClaudeLoginPorts, "status").mockResolvedValue({ loggedIn: true, method: "oauth", email: null, plan: "max" });
+    const statusRequest = (fresh = false) => new NextRequest("http://127.0.0.1/api/accounts/claude/" + id + "/status" + (fresh ? "?fresh=1" : ""));
+    try {
+      const response = await refresh(new NextRequest("http://127.0.0.1/api/accounts/claude/limits", {
+        method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id }),
+      }));
+      expect(response.status).toBe(200);
+      expect((await response.json()).account.auth.state).toBe("unknown");
+      expect(providerStatus).toHaveBeenCalledTimes(1);
+      const listed = await (await GET()).json();
+      expect(listed.claude.accounts.find((row: { id: string }) => row.id === id).auth.state).toBe("unknown");
+      expect((await (await status(statusRequest(), { params: Promise.resolve({ id }) })).json()).auth.state).toBe("unknown");
+      expect(providerStatus).toHaveBeenCalledTimes(1);
+      for (const loggedIn of [true, false]) {
+        providerStatus.mockResolvedValue({ loggedIn, method: "oauth", email: null, plan: "max" });
+        expect((await (await status(statusRequest(true), { params: Promise.resolve({ id }) })).json()).auth.state)
+          .toBe(loggedIn ? "authenticated" : "signed_out");
+      }
+      providerStatus.mockResolvedValue({ loggedIn: false, method: null, email: null, plan: null, indeterminate: true });
+      const uncertain = await (await status(statusRequest(true), { params: Promise.resolve({ id }) })).json();
+      expect(uncertain.auth.state).toBe("unknown");
+      expect(uncertain.auth.checkedAt).toBeNull();
+      providerStatus.mockRejectedValue(new Error("status unavailable"));
+      expect((await (await status(statusRequest(true), { params: Promise.resolve({ id }) })).json()).auth.state).toBe("error");
+    } finally { read.mockRestore(); providerStatus.mockRestore(); }
+  });
+
+  test("Claude " + kind + " refresh preserves authoritative quota evidence over an unknown store", async () => {
+    const { POST: refresh } = await import("./claude/limits/route");
+    const { realClaudeLoginPorts } = await import("@/lib/accounts/claudeLogin");
+    const limits = await import("@/lib/limits");
+    const account = createManagedClaudeAccount("Account A");
+    const id = kind === "legacy" ? "default" : account.id;
+    const read = spyOn(credentialStore, "readClaudeCredentials").mockReturnValue({ state: "unknown" });
+    const providerStatus = spyOn(realClaudeLoginPorts, "status").mockResolvedValue({ loggedIn: true, method: "oauth", email: null, plan: "max" });
+    const providerLimits = spyOn(limits, "fetchClaudeLimits");
+    try {
+      for (const authenticated of [true, false]) {
+        providerLimits.mockResolvedValue({
+          data: null, source: authenticated ? "live" : "unavailable",
+          reason: authenticated ? null : "oauth-reauthentication-required",
+        });
+        const response = await refresh(new NextRequest("http://127.0.0.1/api/accounts/claude/limits", {
+          method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id }),
+        }));
+        const expected = authenticated ? "authenticated" : "signed_out";
+        expect(response.status).toBe(200);
+        expect((await response.json()).account.auth.state).toBe(expected);
+        const listed = await (await GET()).json();
+        expect(listed.claude.accounts.find((row: { id: string }) => row.id === id).auth.state).toBe(expected);
+      }
+      expect(providerLimits).toHaveBeenCalledTimes(2);
+    } finally { read.mockRestore(); providerStatus.mockRestore(); providerLimits.mockRestore(); }
+  });
+}
+
+test("Claude store uncertainty stays unknown for legacy and managed accounts", async () => {
+  const account = createManagedClaudeAccount("Store uncertainty");
+  const read = spyOn(credentialStore, "readClaudeCredentials");
+  try {
+    for (const state of ["unknown", "absent", "unsafe"] as const) {
+      read.mockReturnValue({ state });
+      const body = await (await GET()).json();
+      for (const id of ["default", account.id]) {
+        expect(body.claude.accounts.find((item: { id: string }) => item.id === id)).toMatchObject({
+          authPresent: false,
+          loginState: "idle",
+          auth: { state: state === "unknown" ? "unknown" : "signed_out" },
+        });
+      }
+    }
+  } finally { read.mockRestore(); }
+});
+
+test("Claude store uncertainty preserves authoritative live authentication results", async () => {
+  const account = createManagedClaudeAccount("Live evidence");
+  const read = spyOn(credentialStore, "readClaudeCredentials").mockReturnValue({ state: "unknown" });
+  try {
+    for (const authenticated of [true, false]) {
+      const observedAt = new Date().toISOString();
+      agentRegistry().recordQuotaEvaluation({
+        engine: "claude",
+        observations: [{
+          engine: "claude", accountId: account.id, authenticated, authCheckedAt: observedAt,
+          limits: null, provenance: { source: "live", reason: null, staleSince: null },
+          observedAt, bootId: "store-route-test",
+        }],
+        signature: null, bootId: "store-route-test", now: observedAt, minimumGapMs: 0,
+      });
+      const body = await (await GET()).json();
+      expect(body.claude.accounts.find((item: { id: string }) => item.id === account.id).auth.state)
+        .toBe(authenticated ? "authenticated" : "signed_out");
+    }
+  } finally { read.mockRestore(); }
+});
 
 test("accounts GET is secret-free and leaves login reconciliation to the controller", async () => {
   const account = createManagedCodexAccount("Work");
@@ -575,4 +682,118 @@ test("GET projects the per-engine quick-switch catalog: active id plus secret-fr
   // A signed-out profile stays listed (history preserved) but is marked, so the
   // UI can offer it for sign-in instead of dropping it.
   expect(body.claude.accounts.find((row) => row.id === claudeSpare.id)).toEqual(expect.objectContaining({ label: "Claude Spare", authPresent: false }));
+});
+
+test("a damaged binding record leaves the accounts panel readable, and never claims an account is bound to nothing", async () => {
+  /* The one read of #1279's record on this route throws on damage, which is
+     what every SELECTING caller needs. This route selects nothing, and it is
+     where an operator goes to see their accounts — including on the way to
+     repairing the record — so an unreadable record must not answer it as a
+     server fault. */
+  const claude = createManagedClaudeAccount("Claude Main");
+  authenticateClaude(claude);
+  const codex = createManagedCodexAccount("Codex Work");
+  authenticateCodex(codex);
+  fs.writeFileSync(
+    path.join(process.env.LLV_STATE_DIR!, "account-project-bindings.json"),
+    '{"schemaVersion":1,"bindings":[{"engine":"claude","accountId":"acct-reserved"',
+    "utf8",
+  );
+
+  const response = await GET();
+  expect(response.status).toBe(200);
+  const body = await response.json() as {
+    bindingsUnreadable?: string;
+    claude: { accounts: { id: string; projects?: unknown }[] };
+    codex: { accounts: { id: string; projects?: unknown }[] };
+  };
+
+  /* The answer says what is wrong and names the record to repair. */
+  expect(body.bindingsUnreadable).toContain("account-project-bindings.json");
+  expect(body.bindingsUnreadable).toContain("repaired or removed");
+  /* And it makes no claim about what is bound: an empty list would say "this
+     account is bound to no project", which is the display half of reading a
+     damaged record as "nobody bound anything". */
+  expect(body.claude.accounts.find((row) => row.id === claude.id)?.projects).toBeUndefined();
+  expect(body.codex.accounts.find((row) => row.id === codex.id)?.projects).toBeUndefined();
+});
+
+test("a readable record still carries each account's bound projects, and says nothing about damage", async () => {
+  const claude = createManagedClaudeAccount("Claude Main");
+  authenticateClaude(claude);
+  expect(bindAccountToProject("claude", claude.id, "project-atlas").ok).toBe(true);
+
+  const body = await (await GET()).json() as {
+    bindingsUnreadable?: string;
+    claude: { accounts: { id: string; projects?: { project: string; displayName: string }[] }[] };
+  };
+  expect(body.bindingsUnreadable).toBeUndefined();
+  expect(body.claude.accounts.find((row) => row.id === claude.id)?.projects)
+    .toEqual([{ project: "project-atlas", displayName: "project-atlas" }]);
+});
+
+test("accounts GET projects each account's reset credits and flagship weekly from the durable observation (#1373, #1358)", async () => {
+  const codex = createManagedCodexAccount("Credited");
+  authenticateCodex(codex);
+  const claude = createManagedClaudeAccount("Flagship");
+  authenticateClaude(claude);
+  const observedAt = new Date().toISOString();
+  const nowS = Math.floor(Date.now() / 1000);
+  agentRegistry().recordQuotaEvaluation({
+    engine: "codex",
+    observations: [{
+      engine: "codex",
+      accountId: codex.id,
+      authenticated: true,
+      authCheckedAt: observedAt,
+      limits: { session: null, weekly: { usedPercent: 100, resetsAt: nowS + 5 * 86_400, windowMinutes: 10_080 }, plan: "pro", capturedAt: nowS },
+      provenance: { source: "live", reason: null, staleSince: null },
+      observedAt,
+      bootId: "route-test",
+      resetCredits: { availableCount: 1, expiresAt: nowS + 20 * 86_400 },
+    }],
+    signature: null,
+    bootId: "route-test",
+    now: observedAt,
+    minimumGapMs: 60_000,
+  });
+  agentRegistry().recordQuotaEvaluation({
+    engine: "claude",
+    observations: [{
+      engine: "claude",
+      accountId: claude.id,
+      authenticated: true,
+      authCheckedAt: observedAt,
+      limits: {
+        session: { usedPercent: 12, resetsAt: nowS + 3_600, windowMinutes: 300 },
+        weekly: { usedPercent: 40, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080 },
+        flagship: { usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" },
+        plan: "max",
+        capturedAt: null,
+      },
+      provenance: { source: "live", reason: null, staleSince: null },
+      observedAt,
+      bootId: "route-test",
+    }],
+    signature: null,
+    bootId: "route-test",
+    now: observedAt,
+    minimumGapMs: 60_000,
+  });
+
+  const body = await (await GET()).json() as {
+    codex: { accounts: { id: string; resetCredits: unknown; limits: { flagship: unknown } }[] };
+    claude: { accounts: { id: string; resetCredits: unknown; limits: { flagship: unknown }; effective: { percent: number; window: string } | null }[] };
+  };
+  const credited = body.codex.accounts.find((item) => item.id === codex.id)!;
+  expect(credited.resetCredits).toEqual({ availableCount: 1, expiresAt: nowS + 20 * 86_400 });
+  expect(credited.limits.flagship).toBeNull();
+  const flagship = body.claude.accounts.find((item) => item.id === claude.id)!;
+  expect(flagship.limits.flagship).toEqual({ usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" });
+  // The tighter flagship week binds the account's effective remaining.
+  expect(flagship.effective).toMatchObject({ percent: 37, window: "flagship" });
+  expect(flagship.resetCredits).toBeNull();
+  // An account never read carries "not checked yet", never a zero.
+  const unread = body.codex.accounts.find((item) => item.id === "default")!;
+  expect(unread.resetCredits).toBeNull();
 });

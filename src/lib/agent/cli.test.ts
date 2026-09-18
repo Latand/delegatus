@@ -14,7 +14,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
-const { freshSpecFor, resumeSpecFor, withSpawnCapability } = await import("./cli");
+const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, withSpawnCapability } = await import("./cli");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
@@ -532,6 +532,7 @@ test("managed Claude fresh and resume commands pin the transcript owner and scru
   expect(transcript.startsWith(account.projectsDir + path.sep)).toBe(true);
   expect(fresh.command).toContain("CLAUDE_CONFIG_DIR=");
   expect(fresh.command).toContain("-u ANTHROPIC_API_KEY");
+  expect(fresh.command).toContain("-u CLAUDE_SECURESTORAGE_CONFIG_DIR");
   expect(fresh.command).toContain("-u LLV_TOKEN");
   const sid = path.basename(transcript, ".jsonl");
   const settingsPath = path.join(account.home, ".llv", "spawn-settings", `${sid}.json`);
@@ -544,6 +545,33 @@ test("managed Claude fresh and resume commands pin the transcript owner and scru
   expect(resumed).toContain(`CLAUDE_CONFIG_DIR='${account.home}'`);
   expect(resumed).toContain(`'--strict-mcp-config' '--mcp-config' '${path.join(account.home, ".llv", "spawn-mcp", `resume-${sid}.json`)}'`);
   expect(resumed).toContain("--resume");
+  expect(resumed).toContain("-u CLAUDE_SECURESTORAGE_CONFIG_DIR");
+});
+
+test("Claude child environment keeps each account home and removes the inherited store override", () => {
+  for (const directory of [process.env.LLV_CLAUDE_HOME!, path.join(SANDBOX, "managed account")]) {
+    for (const grants of [[], ["telegram"]]) {
+      const probe = "test -z \"${CLAUDE_SECURESTORAGE_CONFIG_DIR+x}\" && test \"$CLAUDE_CONFIG_DIR\" = \"$EXPECTED_HOME\"";
+      const child = Bun.spawnSync(["sh", "-c", `${claudeEnvPrefix(directory, grants)} sh -c '${probe}'`], {
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: path.join(SANDBOX, "another-account"), EXPECTED_HOME: directory },
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(child.stderr.toString()).toBe("");
+      expect(child.exitCode).toBe(0);
+    }
+  }
+});
+
+test("legacy Claude fresh and resumed commands pin the same store as browser login", () => {
+  const home = process.env.LLV_CLAUDE_HOME!;
+  const fresh = freshSpecFor("claude", SANDBOX);
+  fs.mkdirSync(path.dirname(fresh.transcript!), { recursive: true });
+  fs.writeFileSync(fresh.transcript!, JSON.stringify({ cwd: SANDBOX }) + "\n");
+  const resumed = resumeSpecFor("claude-projects", fresh.transcript!)!;
+  for (const spec of [fresh, resumed]) {
+    expect(spec.command).toContain(`CLAUDE_CONFIG_DIR='${home}'`);
+    expect(spec.command).toContain("-u CLAUDE_SECURESTORAGE_CONFIG_DIR");
+  }
 });
 
 test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook", () => {

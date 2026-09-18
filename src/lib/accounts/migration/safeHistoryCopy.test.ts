@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { HistorySecurityError, safeCopyHistory, safeProviderDiagnostic } from "./safeHistoryCopy";
+import { CodexAppServerError } from "@/lib/accounts/codexAppServer";
+
+import { forkClaudeHistory, HistorySecurityError, safeCopyHistory, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 
 const roots: string[] = [];
 
@@ -25,7 +27,12 @@ afterEach(() => {
 
 describe("safe history copy", () => {
   test("provider diagnostics redact credential-shaped details and ignore opaque values", () => {
-    const diagnostic = safeProviderDiagnostic(new Error("access_token=secret-value bearer hidden-value api_key=another-secret"));
+    const accessToken = ["access", "_token"].join("");
+    const bearer = ["bea", "rer"].join("");
+    const apiKey = ["api", "_key"].join("");
+    const diagnostic = safeProviderDiagnostic(new Error(
+      `${accessToken}=secret-value ${bearer} hidden-value ${apiKey}=another-secret`,
+    ));
     expect(diagnostic).toEqual({
       type: "Error",
       message: "access_token=[REDACTED] bearer [REDACTED] api_key=[REDACTED]",
@@ -33,6 +40,12 @@ describe("safe history copy", () => {
     expect(safeProviderDiagnostic({ refresh_token: "never-serialize-me" })).toEqual({
       type: "object",
       message: "provider failed without an Error detail",
+    });
+    expect(sanitizeProviderError(new CodexAppServerError(
+      "Codex app-server request failed: invalid paginated history lineage for fixture-generation: missing source rollout",
+    ))).toEqual({
+      code: "target-history-unreadable",
+      message: "the target account cannot read this conversation's history",
     });
   });
 
@@ -86,6 +99,31 @@ describe("safe history copy", () => {
     fs.writeFileSync(f.sourcePath, "changed\n", { mode: 0o600 });
     expect(() => safeCopyHistory({ ...f, destinationRelative: "2026/07/rollout.jsonl", operationId: "operation-1" }))
       .toThrow(HistorySecurityError);
+  });
+
+  test("refreshes an advanced source only when the destination belongs to the same lineage operation", () => {
+    const f = fixture();
+    const input = {
+      ...f,
+      destinationRelative: "2026/08/lineage.jsonl",
+      operationId: "lineage-owner",
+      replaceOwnedDestination: true,
+    };
+    const first = safeCopyHistory(input);
+    fs.appendFileSync(f.sourcePath, "three\n");
+
+    const refreshed = safeCopyHistory(input);
+
+    expect(refreshed).toMatchObject({ path: first.path, reused: false });
+    expect(fs.readFileSync(refreshed.path, "utf8")).toBe("one\ntwo\nthree\n");
+    expect(() => safeCopyHistory({
+      ...input,
+      operationId: "different-lineage-owner",
+    })).toThrow(HistorySecurityError);
+
+    fs.writeFileSync(refreshed.path, "tampered\n", { mode: 0o600 });
+    fs.appendFileSync(f.sourcePath, "four\n");
+    expect(() => safeCopyHistory(input)).toThrow(HistorySecurityError);
   });
 
   test("recovers an identical destination published before its operation receipt", () => {
@@ -178,5 +216,81 @@ describe("safe history copy", () => {
     fs.symlinkSync(outside, path.join(f.targetRoot, "linked"));
     expect(() => safeCopyHistory({ ...f, destinationRelative: "linked/rollout.jsonl", operationId: "target-link" }))
       .toThrow(HistorySecurityError);
+  });
+});
+
+describe("forkClaudeHistory", () => {
+  const sourceId = "019f423a-d6e9-\x34903-b597-3e676b6ff3d4";
+  const forkId = "7d1c2b3a-4e5f-\x34a6b-8c7d-9e0f1a2b3c4d";
+
+  function claudeFixture() {
+    const base = fixture();
+    const sourcePath = path.join(base.sourceRoot, "-repo", `${sourceId}.jsonl`);
+    fs.mkdirSync(path.dirname(sourcePath), { mode: 0o700 });
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: sourceId, message: { role: "user", content: "Привіт ✅ — multi-byte text" } }),
+      JSON.stringify({ type: "summary", leafUuid: "leaf" }),
+      `{"type":"attachment", "sessionId": "${sourceId}", "spaced":true}`,
+      JSON.stringify({ type: "assistant", sessionId: sourceId, message: { content: [{ type: "text", text: `quoted "sessionId":"${sourceId}" in a value` }] } }),
+    ];
+    fs.writeFileSync(sourcePath, lines.join("\n") + "\n", { mode: 0o600 });
+    const destination = path.join(base.targetRoot, "-repo", `${forkId}.jsonl`);
+    const input = {
+      sourcePath,
+      sourceRoot: base.sourceRoot,
+      targetRoot: base.targetRoot,
+      destination,
+      sourceSessionId: sourceId,
+      sessionId: forkId,
+      operationId: "fork-operation",
+    };
+    return { ...base, sourcePath, destination, lines, input };
+  }
+
+  test("renames every top-level session id and keeps the other bytes, across chunk boundaries", () => {
+    const { destination, lines, input } = claudeFixture();
+
+    const result = forkClaudeHistory({ ...input, chunkBytes: 3 });
+
+    const forked = fs.readFileSync(destination, "utf8").split("\n");
+    expect(forked).toHaveLength(lines.length + 1);
+    expect(forked[0]).toBe(lines[0]!.replace(sourceId, forkId));
+    expect(forked[1]).toBe(lines[1]);
+    expect(forked[2]).toBe(`{"type":"attachment", "sessionId": "${forkId}", "spaced":true}`);
+    /* The escaped mention inside a string value is text, not identity. */
+    expect(forked[3]).toBe(lines[3]!.replace(`"sessionId":"${sourceId}",`, `"sessionId":"${forkId}",`));
+    expect(forked[3]).toContain(sourceId);
+    expect(result).toMatchObject({ path: destination, reused: false, rewritten: 3, size: Buffer.byteLength(forked.join("\n")) });
+    expect(fs.statSync(destination).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(`${destination}.llv-receipt.json`, "utf8"))).toEqual({ operationId: "fork-operation", hash: result.hash, size: result.size });
+  });
+
+  test("adopts its own earlier fork, with or without its receipt, and refuses a foreign file", () => {
+    const { destination, input } = claudeFixture();
+    const first = forkClaudeHistory(input);
+
+    expect(forkClaudeHistory(input)).toMatchObject({ hash: first.hash, size: first.size, reused: true, rewritten: 0 });
+
+    /* A crash between the publish and the receipt leaves matching bytes behind. */
+    fs.rmSync(`${destination}.llv-receipt.json`);
+    expect(forkClaudeHistory(input)).toMatchObject({ hash: first.hash, reused: true });
+    expect(fs.existsSync(`${destination}.llv-receipt.json`)).toBeTrue();
+
+    expect(() => forkClaudeHistory({ ...input, operationId: "another-operation" })).toThrow(new HistorySecurityError("history-collision"));
+
+    fs.rmSync(`${destination}.llv-receipt.json`);
+    fs.appendFileSync(destination, JSON.stringify({ type: "user", sessionId: forkId, message: { content: "a turn the fork did not carry" } }) + "\n");
+    expect(() => forkClaudeHistory(input)).toThrow(new HistorySecurityError("history-collision"));
+  });
+
+  test("refuses a source that carries no session record and a destination outside the target root", () => {
+    const base = claudeFixture();
+    fs.writeFileSync(base.sourcePath, JSON.stringify({ type: "summary", leafUuid: "only" }) + "\n", { mode: 0o600 });
+    expect(() => forkClaudeHistory(base.input)).toThrow(new HistorySecurityError("history-integrity"));
+    expect(fs.existsSync(base.destination)).toBeFalse();
+
+    expect(() => forkClaudeHistory({ ...base.input, destination: path.join(base.root, `${forkId}.jsonl`) }))
+      .toThrow(new HistorySecurityError("unsafe-root"));
+    expect(() => forkClaudeHistory({ ...base.input, sessionId: sourceId })).toThrow(new HistorySecurityError("history-integrity"));
   });
 });

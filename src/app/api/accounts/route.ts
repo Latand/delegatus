@@ -4,69 +4,20 @@ import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } 
 import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
+import { accountProjectRows } from "@/lib/accounts/projectAccountsView";
+import {
+  AccountProjectBindingsUnreadableError,
+  accountProjectBindings,
+  type AccountProjectBinding,
+} from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
-import { AUTO_BALANCE_FRESH_MS, AUTO_BALANCE_THRESHOLD, effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
-import type { DurableQuotaObservation, MigrationEngine } from "@/lib/accounts/migration/contracts";
+import { projectAliasSnapshot } from "@/lib/projects/aliases";
+import { accountProjection, liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { AUTO_BALANCE_THRESHOLD } from "@/lib/accounts/migration/quotaPolicy";
+import type { MigrationEngine } from "@/lib/accounts/migration/contracts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function currentObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
-  if (!observation) return false;
-  const observedAge = now - Date.parse(observation.observedAt);
-  const authAge = now - Date.parse(observation.authCheckedAt);
-  return Number.isFinite(observedAge) && Number.isFinite(authAge)
-    && observedAge >= 0 && authAge >= 0
-    && observedAge <= AUTO_BALANCE_FRESH_MS && authAge <= AUTO_BALANCE_FRESH_MS;
-}
-
-function currentLiveObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
-  return observation?.provenance.source === "live" && currentObservation(observation, now);
-}
-
-function liveFreshObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
-  return observation?.authenticated === true && currentLiveObservation(observation, now);
-}
-
-function accountProjection(observation: DurableQuotaObservation | undefined, authPresent: boolean, now: number) {
-  const eligible = liveFreshObservation(observation, now);
-  const authCurrent = currentObservation(observation, now);
-  const reauthenticationRequired = authCurrent && observation?.provenance.reason === "oauth-reauthentication-required";
-  let authState: "authenticated" | "signed_out" | "unknown" | "error" = "unknown";
-  if (eligible) authState = "authenticated";
-  else if (!authPresent || reauthenticationRequired) authState = "signed_out";
-  else if (authCurrent && observation?.authenticated === false) {
-    authState = observation.provenance.source === "live" ? "signed_out" : "error";
-  }
-  const effective = observation ? effectiveRemaining({
-    engine: observation.engine,
-    accountId: observation.accountId,
-    authenticated: observation.authenticated,
-    limits: observation.limits,
-    provenance: observation.provenance,
-    observedAt: Date.parse(observation.observedAt),
-    authCheckedAt: Date.parse(observation.authCheckedAt),
-  }, now) : null;
-  return {
-    auth: {
-      state: authState,
-      method: null,
-      email: null,
-      plan: observation?.limits?.plan ?? null,
-      checkedAt: observation?.authCheckedAt ?? null,
-    },
-    limits: {
-      state: eligible ? "fresh" : observation?.limits ? "stale" : "unavailable",
-      session: observation?.limits?.session ?? null,
-      weekly: observation?.limits?.weekly ?? null,
-      checkedAt: observation?.observedAt ?? null,
-    },
-    // No client parses this block any more — every capacity chip is reconciled
-    // from the window rows above. Dropping it from the wire is a route change
-    // this lane is scoped away from (issue #1018 follow-up).
-    effective: effective ? { ...effective, freshness: eligible ? "fresh" : "stale" } : null,
-  };
-}
 
 function migrationProjection(engine: MigrationEngine, snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>) {
   const intent = Object.values(snapshot.migrationIntents)
@@ -126,6 +77,29 @@ export async function GET() {
   const now = Date.now();
   const claudeObservations = snapshot.quotaObservations.claude;
   const codexObservations = snapshot.quotaObservations.codex;
+  /* #1279's accounts side: which projects each account is bound to. Read once
+     for the whole response — the record is one small file, and both engine
+     lists project from the same read.
+
+     The read throws on a damaged record, because nothing may SELECT an account
+     from a record it could not read. This response selects nothing: it is the
+     panel an operator opens to see their accounts, and it is also how they get
+     to the record that needs repairing, so a damaged record must not answer it
+     as a server fault. It answers with the accounts and names what is wrong.
+
+     The bound-projects rows are then OMITTED rather than sent empty. Empty is a
+     claim — "this account is bound to no project" — and a claim about what is
+     bound is the one thing a record this process could not read cannot support;
+     the panel already renders an absent list as no chips at all. */
+  let bindings: AccountProjectBinding[] | null = null;
+  let bindingsUnreadable: string | null = null;
+  try {
+    bindings = accountProjectBindings();
+  } catch (error) {
+    if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
+    bindingsUnreadable = error.message;
+  }
+  const projectDisplayNames = projectAliasSnapshot().displayNames;
   const codexAccountList = listCodexAccounts();
   const codexLogins = managedCodexRuntime().peekLogins(codexAccountList);
   const codexAccounts = codexAccountList.map((account) => {
@@ -141,6 +115,7 @@ export async function GET() {
       loginState: authenticated ? "authenticated" : compatibilityPending ? "pending" : login.state,
       attemptState: compatibilityPending ? "pending" : login.attemptState,
       deviceAuth: login.deviceAuth,
+      ...(bindings ? { projects: accountProjectRows("codex", account.id, bindings, projectDisplayNames) } : {}),
       ...accountProjection(codexObservations[account.id], account.authPresent, now),
     };
   });
@@ -157,7 +132,10 @@ export async function GET() {
       loginState: account.authPresent ? "authenticated" : "idle",
       attemptState: null,
       deviceAuth: null,
-      ...accountProjection(claudeObservations[account.id], account.authPresent, now),
+      ...(bindings ? { projects: accountProjectRows("claude", account.id, bindings, projectDisplayNames) } : {}),
+      // A denied or unavailable store cannot prove that credentials are absent.
+      // Keep durable live auth evidence authoritative in either direction.
+      ...accountProjection(claudeObservations[account.id], account.authPresent || account.credentialState === "unknown", now),
       login,
     };
   });
@@ -182,5 +160,8 @@ export async function GET() {
     mutationLocked: { codex: codexAccountsMutationLocked(), claude: claudeAccountsMutationLocked() },
     migration: { codex: codexMigration, claude: claudeMigration },
     autoBalance: { codex: codexAuto, claude: claudeAuto },
+    /* Present only when the binding record could not be read, so the answer
+       says why the accounts carry no bound projects. */
+    ...(bindingsUnreadable ? { bindingsUnreadable } : {}),
   });
 }

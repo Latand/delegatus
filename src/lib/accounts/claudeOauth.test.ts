@@ -2,11 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import type { ClaudeAccount } from "./claude";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
 
+const fixture = () => crypto.randomUUID();
 const NOW = Date.parse("2026-07-17T09:00:00.000Z");
 const homes: string[] = [];
 
@@ -22,7 +23,7 @@ function account(id: string): ClaudeAccount {
   homes.push(home);
   fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({
     claudeAiOauth: {
-      accessToken: crypto.randomUUID(),
+      accessToken: fixture(),
       refreshToken: crypto.randomUUID(),
       expiresAt: NOW - 1,
       scopes: ["user:inference"],
@@ -41,7 +42,7 @@ test("a successful bounded OAuth refresh persists current launch metadata", asyn
     fetch: async (_input, init) => {
       signal = init?.signal ?? null;
       return Response.json({
-        access_token: crypto.randomUUID(),
+        access_token: fixture(),
         refresh_token: crypto.randomUUID(),
         expires_in: 3_600,
         scope: "user:inference",
@@ -81,7 +82,7 @@ test("an OAuth redirect cannot forward refresh credentials to another origin", a
 
     expect(result).toBe("unknown");
     expect(redirectedRequests).toBe(0);
-    expect(claudeOauthMetadata(candidate)?.expiresAt).toBe(NOW - 1);
+    expect(claudeOauthMetadata(candidate)).toMatchObject({ expiresAt: NOW - 1 });
   } finally {
     await upstream.stop(true);
     await destination.stop(true);
@@ -121,8 +122,8 @@ test("only positive invalid_grant evidence is fenced while other failures remain
     fetch: async () => Response.json({ error: "invalid_scope" }, { status: 400 }),
   })).resolves.toBe("unknown");
 
-  expect(claudeOauthMetadata(unclassified401)?.expiresAt).toBe(NOW - 1);
-  expect(claudeOauthMetadata(transient)?.expiresAt).toBe(NOW - 1);
+  expect(claudeOauthMetadata(unclassified401)).toMatchObject({ expiresAt: NOW - 1 });
+  expect(claudeOauthMetadata(transient)).toMatchObject({ expiresAt: NOW - 1 });
 });
 
 test("HTTP 401 invalid_client remains a transient compatibility failure", async () => {
@@ -134,7 +135,7 @@ test("HTTP 401 invalid_client remains a transient compatibility failure", async 
   });
 
   expect(result).toBe("unknown");
-  expect(claudeOauthMetadata(candidate)?.expiresAt).toBe(NOW - 1);
+  expect(claudeOauthMetadata(candidate)).toMatchObject({ expiresAt: NOW - 1 });
 });
 
 test("a first-party invalid_scope response retries with the stored inference scopes", async () => {
@@ -149,7 +150,7 @@ test("a first-party invalid_scope response retries with the stored inference sco
       if (requestedScopes.length === 1) {
         return Response.json({ error: "invalid_scope" }, { status: 400 });
       }
-      return Response.json({ access_token: crypto.randomUUID(), expires_in: 3_600, scope: body.scope });
+      return Response.json({ access_token: fixture(), expires_in: 3_600, scope: body.scope });
     },
   });
 
@@ -168,7 +169,7 @@ test("a late refresh rejection observes a concurrent native credential rotation"
     fetch: async () => {
       fs.writeFileSync(path.join(candidate.home, ".credentials.json"), JSON.stringify({
         claudeAiOauth: {
-          accessToken: crypto.randomUUID(),
+          accessToken: fixture(),
           refreshToken: crypto.randomUUID(),
           expiresAt: NOW + 60_000,
           scopes: ["user:inference"],
@@ -179,7 +180,7 @@ test("a late refresh rejection observes a concurrent native credential rotation"
   });
 
   expect(result).toBe("refreshed");
-  expect(claudeOauthMetadata(candidate)?.expiresAt).toBe(NOW + 60_000);
+  expect(claudeOauthMetadata(candidate)).toMatchObject({ expiresAt: NOW + 60_000 });
 });
 
 test("a native refresh lock bounds Viewer admission without starting duplicate refresh work", async () => {
@@ -251,7 +252,7 @@ test("Viewer reuses a native rotation completed while waiting for the refresh lo
   setTimeout(() => {
     fs.writeFileSync(path.join(candidate.home, ".credentials.json"), JSON.stringify({
       claudeAiOauth: {
-        accessToken: crypto.randomUUID(),
+        accessToken: fixture(),
         refreshToken: crypto.randomUUID(),
         expiresAt: NOW + 60_000,
         scopes: ["user:inference"],
@@ -283,7 +284,7 @@ test("custom OAuth credentials stay on a CLI-approved issuer", async () => {
       now: () => NOW,
       fetch: async (input) => {
         requestedUrl = String(input);
-        return Response.json({ access_token: crypto.randomUUID(), expires_in: 3_600 });
+        return Response.json({ access_token: fixture(), expires_in: 3_600 });
       },
     });
 
@@ -315,4 +316,30 @@ test("an unapproved custom OAuth origin never receives credential content", asyn
     if (previous === undefined) delete process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL;
     else process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL = previous;
   }
+});
+
+
+test("Keychain metadata and refresh use the same backend without a credentials file", async () => {
+  const store = await import("./claudeCredentials");
+  const candidate = account("keychain-refresh");
+  const file = path.join(candidate.home, ".credentials.json");
+  let stored = JSON.parse(fs.readFileSync(file, "utf8")); fs.unlinkSync(file);
+  const originalRead = store.readClaudeCredentials;
+  const originalReplace = store.replaceClaudeCredentials;
+  const ports: import("./claudeCredentials").ClaudeCredentialPorts = { platform: "darwin", security: (_args, input) => {
+    if (input) stored = JSON.parse(Buffer.from(input.match(/-X "([a-f0-9]+)"/)![1], "hex").toString());
+    return { status: 0, stdout: JSON.stringify(stored) };
+  } };
+  const read = spyOn(store, "readClaudeCredentials").mockImplementation((home) => originalRead(home, ports));
+  const write = spyOn(store, "replaceClaudeCredentials").mockImplementation((home, previous, document) => originalReplace(home, previous, document, ports));
+  try {
+    expect(claudeOauthMetadata(candidate)).toMatchObject({ refreshable: true });
+    expect(await refreshClaudeOauth(candidate, { now: () => NOW, fetch: async () => Response.json({ access_token: "fixture", expires_in: 3600 }) })).toBe("refreshed");
+    expect(claudeOauthMetadata(candidate)).toMatchObject({ expiresAt: NOW + 3600_000 });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(file)).toBe(false);
+    read.mockReturnValue({ state: "unknown" });
+    expect(claudeOauthMetadata(candidate)).toBe("unknown");
+    expect(await refreshClaudeOauth(candidate, { now: () => NOW, fetch: async () => { throw new Error("must not refresh an unknown store"); } })).toBe("unknown");
+  } finally { read.mockRestore(); write.mockRestore(); }
 });
