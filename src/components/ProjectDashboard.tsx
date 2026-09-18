@@ -1580,7 +1580,6 @@ function ProjectDashboardView({
     openBoardRow(file);
   };
 
-
   /* Undo a close: reopen the card through the shared restore path so #199's
      durable membership rebinds it to its pipeline/review zone automatically. When
      the file entry is known we go through `openSwitchboardFile` (same role-based

@@ -122,6 +122,8 @@ function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
 
 /** A stage id that names nothing the role does not already say. */
 const GENERIC_STAGE_ID = /^(?:stage|step|s|run|task)[-_ ]?\d*$/i;
+/** A stage id that is an identifier rather than a word: never drawn as a name. */
+const OPAQUE_STAGE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{8,}$|^\d+$/i;
 
 /**
  * A stage's name: its own id where the id says more than the role — `critique`,
@@ -132,9 +134,10 @@ const GENERIC_STAGE_ID = /^(?:stage|step|s|run|task)[-_ ]?\d*$/i;
 export function stageDisplayName(t: TFunction, stage: PipelineStage): string {
   const role = stageChipLabel(t, stage);
   const words = stage.id.replace(/[-_]+/g, " ").trim();
-  if (!words || GENERIC_STAGE_ID.test(stage.id)) return role;
+  if (!words || GENERIC_STAGE_ID.test(stage.id) || OPAQUE_STAGE_ID.test(stage.id)) return role;
   const humanized = words[0]!.toUpperCase() + words.slice(1);
-  if (humanized.toLowerCase() === role.toLowerCase()) return role;
+  /* An id that IS the role (however it is cased) says nothing more; a role-less
+     stage falls back to its own id anyway, and reads better capitalized. */
   if (stage.role?.roleId && stage.id.toLowerCase() === stage.role.roleId.toLowerCase()) return role;
   return humanized;
 }
