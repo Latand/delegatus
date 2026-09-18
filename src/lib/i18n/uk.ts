@@ -499,6 +499,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "outbox.cancel": "Скасувати це повідомлення",
   "outbox.retry": "Повторити надсилання цього повідомлення",
   "outbox.reattach": "Не надіслано — додайте файли знову та надішліть",
+  "outbox.clearParked": "Повернути це повідомлення в редактор",
 
   // Agent control strip (issue #241)
   "strip.live": "наживо",
@@ -3381,6 +3382,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.unstartedTask": "незапущене завдання",
   "seatTick.reason.interval": "інтервал",
   "seatTick.reason.childTerminal": "воркер завершився",
+  "seatTick.reason.ownLaneSettled": "твоя гілка завершилась",
   "seatTick.outcome.landed": "доставлено",
   "seatTick.outcome.deferred": "відкладено, спроба в очікуванні",
   "seatTick.outcome.queued": "у черзі",

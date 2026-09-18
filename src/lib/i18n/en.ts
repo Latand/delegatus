@@ -577,6 +577,7 @@ export const en = {
   "outbox.cancel": "Cancel this message",
   "outbox.retry": "Retry sending this message",
   "outbox.reattach": "Not sent — attach the files again and send",
+  "outbox.clearParked": "Take this message back to the composer",
 
   "draft.readPrompt": "Read the agent conversation in file {src} and continue from there: ",
   "draft.needDir": "specify a working directory",
@@ -3470,6 +3471,7 @@ export const en = {
   "seatTick.reason.unstartedTask": "unstarted task",
   "seatTick.reason.interval": "interval",
   "seatTick.reason.childTerminal": "finished worker",
+  "seatTick.reason.ownLaneSettled": "your lane settled",
   "seatTick.outcome.landed": "landed",
   "seatTick.outcome.deferred": "deferred, an attempt outstanding",
   "seatTick.outcome.queued": "queued",

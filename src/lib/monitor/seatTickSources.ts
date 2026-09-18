@@ -64,6 +64,7 @@ import {
   type SeatTickChildrenGap,
   type SeatTickEventInput,
   type SeatTickOutstandingWake,
+  type SeatTickOwnLaneInput,
   type SeatTickPipelineInput,
   type SeatTickPolicy,
   type SeatTickProjectState,
@@ -100,6 +101,14 @@ const PULL_REQUEST_TITLE_LIMIT = 120;
 const LIVENESS_LIMIT = 60;
 /** Bounded child title carried into a wake item. */
 const CHILD_TITLE_LIMIT = 120;
+/** Bounded title of a settled lane the seat launched (#1749). */
+const OWN_LANE_TITLE_LIMIT = 120;
+/** Settled lanes of the seat's own one check carries. The decision bounds the
+    agenda again at {@link SeatTickPolicy.itemsPerWake}; this bounds the READ,
+    so a seat that launched two hundred lanes in its epoch projects a page of
+    them rather than all of them. Newest settlement first, because the lane the
+    seat just finished is the one it is standing next to. */
+const OWN_LANE_LIMIT = 20;
 
 /**
  * What became of a wake the delivery layer accepted and kept.
@@ -583,6 +592,80 @@ function pipelineSummary(pipeline: Pipeline): PipelineSummary {
   };
 }
 
+/**
+ * What settled about a lane, or nothing (#1749).
+ *
+ * Read off the lane's own record rather than the lifecycle journal, because the
+ * journal entry for a lane that has since finished is history the check seals
+ * away without a wake — which is exactly how a pipeline that completed inside
+ * the minute before a tick reached the seat as no item at all.
+ *
+ * A lane the seat CLOSED is not here: closing it is the seat saying it has
+ * taken the outcome, and it is the discharge the reason needs. Nor is a hidden
+ * one, nor one the operator dismissed off the board.
+ */
+function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | null {
+  if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.closedAt || pipeline.state === "closed") return null;
+  if (pipeline.state === "completed") return "completed";
+  if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") return "needs_decision";
+  /* Otherwise the lane is still open, and only its newest attempt can say it
+     stopped: a stage that failed — a spawn that never came up among them —
+     leaves the lane holding an attempt in that state with nothing after it. A
+     lane whose newest attempt is running or pending is simply working. */
+  const attempts = pipeline.runs.flatMap((run) => run.attempts);
+  const newest = attempts.reduce<typeof attempts[number] | null>((held, attempt) => {
+    const at = Date.parse(attempt.completedAt ?? attempt.startedAt ?? "");
+    const heldAt = held ? Date.parse(held.completedAt ?? held.startedAt ?? "") : Number.NEGATIVE_INFINITY;
+    return Number.isFinite(at) && at >= heldAt ? attempt : held;
+  }, null);
+  if (newest?.state === "failed") return "failed";
+  if (newest?.state === "needs_decision") return "needs_decision";
+  return null;
+}
+
+/** Newest movement instant of a lane, for the backlog bound the decision
+    applies; `createdAt` when nothing has moved since. */
+function laneMovedAt(pipeline: Pipeline): string | null {
+  const summary = pipelineSummary(pipeline);
+  const newest = summary.activityAt.reduce<string | null>((held, at) =>
+    !held || Date.parse(at) > Date.parse(held) ? at : held, null);
+  return newest ?? pipeline.createdAt ?? null;
+}
+
+/**
+ * The seat's own settled lanes (#1749).
+ *
+ * `srcConversationId` is what makes a lane the seat's: the pipeline store
+ * records the transcript that created it, so a lane the operator or another
+ * agent opened settles onto their board and never onto this seat's wake.
+ */
+function ownSettledLanes(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickOwnLaneInput[] {
+  if (!seat) return [];
+  /* The HOT store only, and deliberately: a settled lane lives there for three
+     days, which is the same window the decision's backlog bound keeps this
+     reason inside. A lane old enough to have been archived is past the bound
+     before it could be read, so paying for cold storage on every check would
+     buy nothing — and the archive read is the one #1289 kept behind a check
+     that had already decided to pay for a subprocess. */
+  const lanes: SeatTickOwnLaneInput[] = [];
+  for (const pipeline of sources.pipelines()) {
+    if (canonicalOrchestratorProject(pipeline.project) !== project) continue;
+    if (pipeline.srcConversationId !== seat.conversationId) continue;
+    const settled = laneSettlement(pipeline);
+    if (!settled) continue;
+    lanes.push({
+      id: pipeline.id,
+      title: redactBounded(pipeline.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT),
+      settled,
+      updatedAt: laneMovedAt(pipeline),
+    });
+  }
+  const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
+  return lanes
+    .sort((left, right) => (at(right) || 0) - (at(left) || 0) || left.id.localeCompare(right.id))
+    .slice(0, OWN_LANE_LIMIT);
+}
+
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
   return {
     id: task.id,
@@ -652,7 +735,18 @@ async function seatInput(project: string, policy: SeatTickPolicy, sources: SeatT
       activity = null;
     }
   }
-  return { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, path: seat.path, turn, activity };
+  return {
+    conversationId: seat.conversationId,
+    seatEpoch: seat.seatEpoch,
+    path: seat.path,
+    /* The instant this epoch was designated (#1749), which is the clock a
+       child's terminal instant is stale against. It comes off the seat row the
+       rotation wrote, so it is the successor's own designation rather than the
+       predecessor's — the difference the whole staleness rule rests on. */
+    designatedAt: typeof seat.designatedAt === "string" ? seat.designatedAt : null,
+    turn,
+    activity,
+  };
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
@@ -738,6 +832,7 @@ function changeFingerprint(
   children: readonly SeatTickChildInput[],
   pullRequests: readonly SeatTickPullRequestInput[],
   pullRequestsUnavailable: SeatTickPullRequestGap | null,
+  ownLanes: readonly SeatTickOwnLaneInput[],
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -748,6 +843,11 @@ function changeFingerprint(
     ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}`),
     ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}`),
     ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
+    /* The seat's own settled lanes decide a wake reason of their own (#1749),
+       so the guard has to see them move: closing the lane out is the discharge,
+       and a guard blind to it would suppress the reason while a second lane
+       settled behind the first. */
+    ...ownLanes.map((lane) => `o:${lane.id}:${lane.settled}:${lane.updatedAt ?? ""}`),
   ].sort();
   /* The set of unmerged pull requests, for the same reason the card's movement
      instant is in the half above: it decides a wake reason, so a guard keyed on
@@ -1351,7 +1451,13 @@ async function childWork(
       const page = seatChildren(child.owner, null, 1, [child.rowKey]);
       if (!page) break;
       if (!classify(page, child.rowKey) || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { accounting.defer(outcome); gaps.add("child-departed"); continue; }
-      children.push(outcome.input);
+      /* The harvest stamp travels with the outcome (#1749). The row is the
+         child's, the outcome is one turn of one generation of it, and the
+         decision needs both to tell a result nobody has taken from a fresh
+         projection of one a retired seat took weeks ago. */
+      children.push(child.harvestedEpoch === undefined
+        ? outcome.input
+        : { ...outcome.input, harvestedEpoch: child.harvestedEpoch });
     }
   } catch { gaps.add("registry-unreadable"); }
   return { children, unavailable: worstChildrenGap(gaps) };
@@ -1393,6 +1499,8 @@ export async function gatherSeatTickInput(
     updatedAt: task.updatedAt ?? null,
   }));
 
+  const ownLanes = ownSettledLanes(canonical, seat, sources);
+
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
      terminal because it is not in this project's slice would be the same claim
@@ -1433,9 +1541,10 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     signals: signals(canonical, seat, sources),
+    ownLanes,
     children,
     childrenUnavailable,
-    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable),
+    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.

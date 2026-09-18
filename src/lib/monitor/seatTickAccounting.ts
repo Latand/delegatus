@@ -20,7 +20,14 @@ export type AccountingOwner = Base & { kind: "owner"; conversationId: string; ep
 /** A discovered child. `pollKey` is its one ticket in the poll queue and
     `runningKey` its ticket in the running window while it runs; each is the
     row's own pointer, so a ticket moves in one keyed transaction. */
-export type AccountingChild = Base & { kind: "child"; identity: string; rowKey: string; owner: string; launchId: string; input: SeatTickChildInput; generationIndex: number; runningKey: string | null; pollKey: string | null };
+export type AccountingChild = Base & { kind: "child"; identity: string; rowKey: string; owner: string; launchId: string; input: SeatTickChildInput; generationIndex: number; runningKey: string | null; pollKey: string | null;
+  /** The seat epoch whose landed wake last took an outcome of this child
+      (#1749). Kept on the CHILD rather than on the outcome because an outcome
+      identity is one turn of one ledger generation: a fresh cursor over the
+      same conversation mints a new owed outcome for a result that was consumed
+      under a seat two rotations ago, which is how the same child reached one
+      wake twice, as failed and as finished. */
+  harvestedEpoch?: number };
 export type AccountingSource = Base & { kind: "source"; identity: string; child: string; engine: string; generation: string; legacyBoundary?: { identity: string; bytes: number }; cursor: LedgerCursor };
 export type AccountingOutcome = Base & { kind: "outcome"; identity: string; child: string; tuple: string[]; input: SeatTickChildInput; status: "owed" | "acknowledged"; landingKey: string | null; readyKey: string; gap: string | null };
 type Ticket = Base & { kind: "poll" | "ready" | "owner-poll" | "running"; target: string };
@@ -139,6 +146,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
     }
     case "child": return string(row.identity) && string(row.rowKey) && string(row.owner) && string(row.launchId) && childInput(row.input)
       && integer(row.generationIndex) && nullableString(row.runningKey) && (row.pollKey === undefined || nullableString(row.pollKey))
+      && (row.harvestedEpoch === undefined || integer(row.harvestedEpoch))
       ? { ...row, pollKey: row.pollKey ?? null } : null;
     case "source": return string(row.identity) && string(row.child) && string(row.engine) && string(row.generation)
       && row.cursor && integer(row.cursor.offset) && integer(row.cursor.seq) && integer(row.cursor.settledThrough)
@@ -727,6 +735,14 @@ export class SeatTickAccounting {
         if (outcome.kind !== "outcome") throw new Error("invalid frozen outcome");
         tx.put({ ...outcome, status: "acknowledged", landingKey: expectedKey });
         tx.delete(outcome.readyKey);
+        /* Stamp the child this landing harvested (#1749). The epoch is the
+           wake's own, so a successor reading the row later can tell "I took
+           this" from "the seat before me took this", which is the whole of the
+           rule that stops a rotation re-listing a fortnight of history. */
+        const child = tx.get(outcome.child);
+        if (child?.kind === "child" && (child.harvestedEpoch ?? -1) < wake.seatEpoch) {
+          tx.put({ ...child, harvestedEpoch: wake.seatEpoch });
+        }
       }
       const current = disposition === "landed" ? seatTickWakeCommit(row.state, wake.commit, Date.parse(state.lastWakeAt!)) : row.state;
       /* A release carries the marker the next wake's identity is derived from
