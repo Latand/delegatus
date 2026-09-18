@@ -25,7 +25,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { readStructuredHostRecords, terminateStructuredHostTree } from "./structuredHostControl";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
-import { INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
+import { INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTURED_SPAWN_TIMEOUT_MS, STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS, reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, spawnStructuredConversation, StructuredInitialMessageTimeoutError, claudeHostLaunchPaths, structuredClaudeLaunchForm, structuredClaudePermissionMode, structuredClaudeSpawnPolicyBaseSettingsPath, waitForStructuredInitialMessage, withRuntimeAdmissionRetry, type SpawnedStructuredHost } from "./structuredSpawn";
 import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -148,6 +148,26 @@ test("fresh managed Claude structured spawns select the shared settings snapshot
     .toBe("/shared/claude/settings.json");
   expect(structuredClaudeSpawnPolicyBaseSettingsPath(legacy, () => "/shared/claude/settings.json"))
     .toBeNull();
+});
+
+test("every Claude host launch reads its MCP configuration from the owning account (#1732)", () => {
+  const managed = { kind: "managed", home: "/accounts/claude/managed-a" } as AccountContext;
+  const legacy = { kind: "legacy", home: "/operator/.claude" } as AccountContext;
+  const shared = () => "/shared/claude/settings.json";
+
+  expect(claudeHostLaunchPaths(managed, shared)).toEqual({
+    claudeConfigDir: "/accounts/claude/managed-a",
+    mcpStatePath: "/accounts/claude/managed-a/.claude.json",
+    spawnPolicyBaseSettingsPath: "/shared/claude/settings.json",
+  });
+  /* The legacy account answers a config dir too. Without one the CLI is
+     launched with a bare `--strict-mcp-config` and the session has no viewer
+     connector at all (#1732). */
+  expect(claudeHostLaunchPaths(legacy, shared)).toEqual({
+    claudeConfigDir: "/operator/.claude",
+    mcpStatePath: "/operator/.claude.json",
+    spawnPolicyBaseSettingsPath: null,
+  });
 });
 
 test("attempt e9e8a4b4 terminalizes a queued initial message after the bounded host timeout", async () => {

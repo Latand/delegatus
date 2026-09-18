@@ -1451,6 +1451,34 @@ export function structuredClaudeSpawnPolicyBaseSettingsPath(
   return account.kind === "managed" ? sharedSettingsPath() : null;
 }
 
+/**
+ * Where one Claude host launch reads its configuration from (#1732).
+ *
+ * `claudeConfigDir` is what reaches `--mcp-config`. A launch without it is
+ * handed a bare `--strict-mcp-config` and no server file at all, so the viewer
+ * connector its launch profile granted is dropped without a word and the
+ * session's next turn retracts every `mcp__viewer__*` tool as
+ * `not_configured`. Boot adoption used to answer this for managed accounts
+ * only, which is how a legacy-owned seat re-hosted across its own deploy came
+ * back authorised and tool-less while a fresh spawn of the same account kept
+ * its connector. Every launch — fresh, boot re-host, migration successor —
+ * answers it from the owning account now, whatever its kind.
+ */
+export function claudeHostLaunchPaths(
+  account: Pick<AccountContext, "kind" | "home">,
+  sharedSettingsPath: () => string | null = claudeSettingsPath,
+): { claudeConfigDir: string; mcpStatePath: string; spawnPolicyBaseSettingsPath: string | null } {
+  return {
+    claudeConfigDir: account.home,
+    /* A managed home keeps its own `.claude.json`; the legacy home's sits
+       beside it, one level up. */
+    mcpStatePath: account.kind === "managed"
+      ? path.join(account.home, ".claude.json")
+      : path.join(path.dirname(account.home), ".claude.json"),
+    spawnPolicyBaseSettingsPath: structuredClaudeSpawnPolicyBaseSettingsPath(account, sharedSettingsPath),
+  };
+}
+
 async function defaultStartHost(input: StructuredSpawnInput, capability: string): Promise<SpawnedStructuredHost> {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const resumeSessionId = structuredResumeSessionId(input);
@@ -1488,14 +1516,10 @@ async function defaultStartHost(input: StructuredSpawnInput, capability: string)
   const form = structuredClaudeLaunchForm(input);
   const options = {
     cwd: input.spec.cwd,
-    claudeConfigDir: input.account.home,
     claudeProjectsDir: input.account.transcriptRoot,
-    spawnPolicyBaseSettingsPath: structuredClaudeSpawnPolicyBaseSettingsPath(input.account),
+    ...claudeHostLaunchPaths(input.account),
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
-    mcpStatePath: input.account.kind === "managed"
-      ? path.join(input.account.home, ".claude.json")
-      : path.join(path.dirname(input.account.home), ".claude.json"),
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: profile.model ?? undefined,

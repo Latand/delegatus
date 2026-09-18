@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import path from "node:path";
 
 import { accountManager } from "@/lib/accounts/manager";
-import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
@@ -34,7 +32,7 @@ import {
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
-import { materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 
@@ -817,12 +815,58 @@ export interface StructuredStartupDependencies {
   adopt?: typeof adoptCodexRegistryHosts;
   adoptClaude?: typeof adoptClaudeRegistryHosts;
   resolveCodexOwner?: (entry: AgentRegistryEntry) => { home: string; kind: "legacy" | "managed" } | null;
-  resolveClaudeOwner?: (entry: AgentRegistryEntry) => {
-    home: string;
-    kind: "legacy" | "managed";
-    transcriptRoot: string;
-    env: NodeJS.ProcessEnv;
-  } | null;
+  resolveClaudeOwner?: (entry: AgentRegistryEntry) => ClaudeStartupOwner | null;
+}
+
+/** The account a boot re-host resumes one Claude row under. */
+export type ClaudeStartupOwner = {
+  home: string;
+  kind: "legacy" | "managed";
+  transcriptRoot: string;
+  env: NodeJS.ProcessEnv;
+};
+
+/**
+ * The launch options a boot re-host hands the Claude broker for one row.
+ *
+ * Exported because the guarantee lives here rather than in the adopter. The
+ * #1346 fix asserted the relaunched viewer connector against a hand-written
+ * option object, so nothing ever ran this builder, and the managed-only
+ * `claudeConfigDir` it used to answer went unseen until a legacy-owned seat
+ * re-hosted across its own deploy came back with every `mcp__viewer__*` tool
+ * retracted as `not_configured` (#1732). An owner of any kind now answers the
+ * same launch paths a fresh spawn of that account would use.
+ */
+export function claudeStartupHostOptions(
+  entry: AgentRegistryEntry,
+  owner: ClaudeStartupOwner | null,
+  capability: string | null,
+  startupEnvironment: NodeJS.ProcessEnv,
+) {
+  const access = materializeStructuredHostAccess(
+    structuredHostAccessPolicy(entry.launchProfile),
+    withoutWakatimeCredential(owner?.env ?? startupEnvironment),
+    capability,
+  );
+  /* No owner means no account answered for this transcript, so there is no
+     home to read a server definition out of and none is invented here. */
+  const launchPaths = owner ? claudeHostLaunchPaths(owner) : null;
+  return {
+    cwd: entry.cwd,
+    claudeConfigDir: launchPaths?.claudeConfigDir,
+    claudeProjectsDir: owner?.transcriptRoot,
+    spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
+    allowSubagents: entry.launchProfile?.allowSubagents ?? false,
+    mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
+    mcpStatePath: launchPaths?.mcpStatePath,
+    readOnly: launchProfileEngineReadOnly(entry.launchProfile),
+    restricted: entry.launchProfile?.sandbox === "restricted",
+    env: access.env,
+    ...access.host,
+    model: entry.launchProfile?.model ?? undefined,
+    effort: entry.launchProfile?.effort ?? undefined,
+    permissionMode: effectiveClaudePermissionMode(entry.launchProfile ?? {}),
+  };
 }
 
 /** Called once by Next instrumentation before the Node server accepts requests. */
@@ -988,32 +1032,25 @@ export async function adoptStructuredHostsAtStartup(
     const claude = await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
       (entry) => {
-        const owner = resolveClaudeOwner(entry);
-        const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
-        const env = withoutWakatimeCredential(owner?.env ?? startupEnvironment);
-        const access = materializeStructuredHostAccess(
-          structuredHostAccessPolicy(entry.launchProfile),
-          env,
-          capability,
+        const options = claudeStartupHostOptions(
+          entry,
+          resolveClaudeOwner(entry),
+          registry.rotateSpawnCapabilityForPath(entry.artifactPath),
+          startupEnvironment,
         );
-        return {
-          cwd: entry.cwd,
-          claudeConfigDir: owner?.kind === "managed" ? owner.home : undefined,
-          claudeProjectsDir: owner?.transcriptRoot,
-          spawnPolicyBaseSettingsPath: owner?.kind === "managed" ? claudeSettingsPath() : null,
-          allowSubagents: entry.launchProfile?.allowSubagents ?? false,
-          mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
-          mcpStatePath: owner?.kind === "managed"
-            ? path.join(owner.home, ".claude.json")
-            : owner ? path.join(path.dirname(owner.home), ".claude.json") : undefined,
-          readOnly: launchProfileEngineReadOnly(entry.launchProfile),
-          restricted: entry.launchProfile?.sandbox === "restricted",
-          env: access.env,
-          ...access.host,
-          model: entry.launchProfile?.model ?? undefined,
-          effort: entry.launchProfile?.effort ?? undefined,
-          permissionMode: effectiveClaudePermissionMode(entry.launchProfile ?? {}),
-        };
+        /* A transcript no live account answers for — a retired account's rows,
+           say — gets no config dir, so no `--mcp-config` is written and the
+           grant it carries is dropped. Inventing a home would be worse than
+           dropping it, but the session only finds out a turn later, when its
+           tools are already gone. Say it here instead (#1732). */
+        if (!options.claudeConfigDir && options.mcpServers.length > 0) {
+          console.error("[structured hosts] resuming a Claude row without the MCP grant it carries", {
+            host: sessionKeyId(entry.key),
+            mcpServers: options.mcpServers,
+            reason: "no Claude account owns this transcript",
+          });
+        }
+        return options;
       },
       startupEnvironment,
       shouldAdopt,
