@@ -30,6 +30,7 @@ import {
   type HandoffParts,
 } from "./handoffDigest";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery, orchestratorMandateStale } from "./prompt";
+import { isViewerOwnProject } from "./viewerProject";
 import {
   activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
@@ -463,6 +464,11 @@ export async function executeOrchestratorSeatRequest(
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
   const project = canonicalOrchestratorProject(namedProject);
+  /* #1745: whether this seat may be told how to deploy the Viewer. Resolved
+     once, from the project, and then carried into every measurement and every
+     delivery this request makes, so the bytes counted and the bytes delivered
+     can never disagree. */
+  const viewerSeat = isViewerOwnProject(project);
   const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
   if (!mandate.trim()) return { status: 400, body: { error: "mandate is required" } };
   const clientRequestId = text(rawBody.clientRequestId);
@@ -483,7 +489,7 @@ export async function executeOrchestratorSeatRequest(
      could never be delivered and never stopped being pending. Measured here,
      before either begin, so no durable intent can exist for a mandate that
      cannot be delivered. */
-  const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams);
+  const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams, { viewerSeat });
   if (!preflight.ok) return { status: 413, body: mandateTooLargeBody(preflight) };
 
   const reconciliation = reconcilePendingSeatIntent(project, dependencies);
@@ -562,7 +568,7 @@ export async function executeOrchestratorSeatRequest(
       clientMessageId: `orchmandate_${clientRequestId}`,
       /* On a pending replay the ORIGINAL intent's mandate is what completes:
          a retry that recomposed its text must not deliver a second variant. */
-      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate),
+      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, { viewerSeat }),
     });
     if (!delivery.ok) {
       const error = delivery.error ?? "mandate delivery failed";
@@ -657,7 +663,7 @@ export async function executeOrchestratorSeatRequest(
   /* A pending replay spawns the ORIGINAL intent's mandate: the spawn receipt is
      matched by clientAttemptId AND request digest, so a recomposed retry would
      otherwise conflict with its own first attempt. */
-  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate);
+  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, { viewerSeat });
 
   const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
@@ -1037,12 +1043,15 @@ function renderRotationMandate(
   reason: string | null,
 ): RotationMandate {
   const overhead = launchOverheadBytes("spawn", input.roleParams);
+  /* Resolved once: compose measures the delivered text many times over while it
+     trims, and the answer is the same at every one of them. */
+  const viewerSeat = isViewerOwnProject(input.project);
   const composed = composeSuccessorMandate({
     core,
     history,
     handoff: input.handoff,
     budgetBytes: MAX_STRUCTURED_TEXT_BYTES - overhead,
-    deliver: orchestratorMandateForDelivery,
+    deliver: (text) => orchestratorMandateForDelivery(text, { viewerSeat }),
   });
   if (composed.kind === "too_large") {
     return {

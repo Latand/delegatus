@@ -15,6 +15,8 @@ import {
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
+  ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE,
+  ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
 } from "./prompt";
@@ -91,13 +93,13 @@ test("bridge reports survive as the second channel, for the operator away from t
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 14, and a v13 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(14);
-  /* #1720 — a seat already running keeps the mandate it was delivered, so the
-     version bump is the only thing that surfaces the missing section until its
-     next spawn, adoption or rotation. */
-  expect(orchestratorMandateStale(13)).toBe(true);
-  expect(orchestratorMandateStale(14)).toBe(false);
+test("the default mandate is at version 15, and a v14 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(15);
+  /* #1720, and again #1745 — a seat already running keeps the mandate it was
+     delivered, so the version bump is the only thing that surfaces a changed
+     section until its next spawn, adoption or rotation. */
+  expect(orchestratorMandateStale(14)).toBe(true);
+  expect(orchestratorMandateStale(15)).toBe(false);
 });
 
 /* #1428 v13 — agents kept re-solving what an earlier conversation had already
@@ -346,21 +348,36 @@ test("the prompt carries the directive trailer contract in the exact wire form",
 });
 
 /* #795 (superseding contract) — the designated agent decides the deploy and
-   executes it directly. The prompt must say where the authority comes from
+   executes it directly. The contract must say where the authority comes from
    (the server-attributed seat), that the SHA is resolved internally, and that
-   nothing is ever routed back through the user for approval. */
-test("the prompt encodes the designated-agent deploy contract and its refusals", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("YOU decide when to deploy, and you execute it yourself");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Your authority is your designated seat, attributed server-side");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a seat acts only for its own project");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Resolve origin/main to a full 40-hex commit SHA yourself");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never route it through the user");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Deployments serialize");
+   nothing is ever routed back through the user for approval. It reads off the
+   directive rather than the shared body since #1745 scoped it to the Viewer's
+   own seat. */
+test("the deploy directive encodes the designated-agent contract and its refusals", () => {
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("YOU decide when to deploy, and you execute it yourself");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Your authority is your designated seat, attributed server-side");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("a seat acts only for its own project");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Resolve origin/main to a full 40-hex commit SHA yourself");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("never route it through the user");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Deployments serialize");
 });
 
-test("the prompt forbids any user-facing confirmation step outright", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("ever asks the user to confirm, approve, repeat, or say a commit hash");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("There is no confirmation step for the user, anywhere");
+test("the deploy directive forbids any user-facing confirmation step outright", () => {
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("ever asks the user to confirm, approve, repeat, or say a commit hash");
+  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("There is no confirmation step for the user, anywhere");
+  /* And the general form of that rule stays with every project: starting the
+     work the operator asked for needs no confirmation either. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("without a confirmation step or draft");
+});
+
+/* #1745 — the section describes deploying the Viewer itself, so the shared body
+   every project's manager receives must not carry it, and neither must the
+   conveyor line promise it as the step after the merge bar. */
+test("the shared mandate body says nothing about deploying the Viewer", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === ORCHESTRATOR_VIEWER_DEPLOYS_HEADING))
+    .toHaveLength(0);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("deploy_exact_sha");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("batched deploy");
 });
 
 test("the prompt tells the manager to re-derive board state rather than accumulate it", () => {
