@@ -5667,6 +5667,58 @@ export type StageCompletionResult = {
   slots?: StageCompletionSlot[];
 };
 
+type StageCompletionTarget = { pipeline: Pipeline; stageId: string; attempt: PipelineStageAttempt };
+
+/** Which attempt a completion call is about, decided from the conversation the
+    server attributed the call to. Nothing the caller says takes part beyond
+    `stageId`, which only narrows the attempts it already holds. */
+function resolveStageCompletionTarget(
+  pipelines: readonly Pipeline[],
+  conversationId: string,
+  requestedStageId: string | null,
+): { target: StageCompletionTarget } | { refusal: StageCompletionResult } {
+  const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
+    .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
+    .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
+  const slots = (entries: readonly StageCompletionTarget[]): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
+    ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
+  if (held.length === 0) {
+    return { refusal: {
+      error: "this conversation is not running a pipeline stage, so it has no stage completion to report",
+      status: 403,
+      code: "STAGE_REPORT_NOT_AN_ATTEMPT",
+    } };
+  }
+  const named = requestedStageId ? held.filter(({ stageId }) => stageId === requestedStageId) : held;
+  if (named.length === 0) {
+    return { refusal: {
+      error: `this conversation does not hold stage ${requestedStageId}`,
+      status: 403,
+      code: "STAGE_REPORT_NOT_HELD",
+      slots: slots(held),
+    } };
+  }
+  const live = named.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
+  if (live.length === 0) {
+    const settled = named.at(-1)!;
+    return { refusal: {
+      error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
+      status: 409,
+      code: "STAGE_REPORT_SETTLED",
+      slots: slots(named),
+    } };
+  }
+  if (live.length > 1) {
+    return { refusal: {
+      error: "this conversation holds more than one live stage; name the one being reported in stageId",
+      status: 409,
+      code: "STAGE_REPORT_AMBIGUOUS",
+      slots: slots(live),
+    } };
+  }
+  return { target: live[0]! };
+}
+
 /**
  * A stage attempt reports its own completion (graph slice 2, #1730).
  *
@@ -5681,7 +5733,13 @@ export type StageCompletionResult = {
  *
  * Provenance is never taken from the caller. The head, the branch's pull
  * request and the declared outputs are read by the server at the moment of the
- * call, so what the attempt shows is what the server observed.
+ * call, so what the attempt shows is what the server observed. Those reads —
+ * one of them the forge, over the network — are made BEFORE the record lease
+ * is taken, the way creation resolves its base commit: a refused call never
+ * reads git at all, and no forge latency is spent holding the lease the
+ * controller tick needs. The attempt is resolved a second time under the
+ * lease, and that read is the authority: an attempt that settled in between is
+ * refused with nothing written.
  */
 export async function reportStageCompletion(
   request: StageCompletionRequest,
@@ -5697,52 +5755,30 @@ export async function reportStageCompletion(
     };
   }
   const requestedStageId = typeof request.stageId === "string" && request.stageId.trim() ? request.stageId.trim() : null;
-  return withPipelineMutation((pipelines, persist) => {
-    const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
-      .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
-      .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
-    const slots = (entries: typeof held): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
-      ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
-    if (held.length === 0) {
-      return {
-        error: "this conversation is not running a pipeline stage, so it has no stage completion to report",
-        status: 403,
-        code: "STAGE_REPORT_NOT_AN_ATTEMPT",
-      };
-    }
-    const named = requestedStageId ? held.filter(({ stageId }) => stageId === requestedStageId) : held;
-    if (named.length === 0) {
-      return {
-        error: `this conversation does not hold stage ${requestedStageId}`,
-        status: 403,
-        code: "STAGE_REPORT_NOT_HELD",
-        slots: slots(held),
-      };
-    }
-    const live = named.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
-    if (live.length === 0) {
-      const settled = named.at(-1)!;
-      return {
-        error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
-        status: 409,
-        code: "STAGE_REPORT_SETTLED",
-        slots: slots(named),
-      };
-    }
-    if (live.length > 1) {
-      return {
-        error: "this conversation holds more than one live stage; name the one being reported in stageId",
-        status: 409,
-        code: "STAGE_REPORT_AMBIGUOUS",
-        slots: slots(live),
-      };
-    }
-    const normalized = normalizeStageCompletion(request);
-    if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
+  const previewed = resolveStageCompletionTarget(loadPipelines(), conversationId, requestedStageId);
+  if ("refusal" in previewed) return previewed.refusal;
+  const normalized = normalizeStageCompletion(request);
+  if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
+  const preview = previewed.target;
+  const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
+  const provenance = collectStageProvenance(
+    preview.pipeline,
+    previewStage ? attemptStage(previewStage, preview.attempt).outputs ?? [] : [],
+    ports.exec,
+  );
 
-    const { pipeline, stageId, attempt } = live[0]!;
-    const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
-    const declaredOutputs = stage ? attemptStage(stage, attempt).outputs ?? [] : [];
+  return withPipelineMutation((pipelines, persist) => {
+    const resolved = resolveStageCompletionTarget(pipelines, conversationId, requestedStageId);
+    if ("refusal" in resolved) return resolved.refusal;
+    const { pipeline, stageId, attempt } = resolved.target;
+    if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n) {
+      return {
+        error: `the attempt changed while its provenance was read; it is now ${pipeline.id} stage ${stageId} attempt ${attempt.n}. Report it again`,
+        status: 409,
+        code: "STAGE_REPORT_CHANGED",
+        slots: [{ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }],
+      };
+    }
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;
@@ -5752,7 +5788,7 @@ export async function reportStageCompletion(
       actor,
       verdict: normalized.verdict,
       summary: normalized.summary,
-      provenance: collectStageProvenance(pipeline, declaredOutputs, ports.exec),
+      provenance,
       calls: (prior?.calls ?? 0) + 1,
     };
     attempt.report = report;

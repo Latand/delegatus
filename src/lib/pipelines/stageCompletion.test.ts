@@ -36,10 +36,17 @@ function harness() {
   const spawnedStages: string[] = [];
   /* What the mocked worktree answers the server's own provenance reads. */
   const worktree = { status: "", knownPaths: "docs/report.html\0", pullRequest: PULL_REQUEST };
+  const provenanceReads: string[] = [];
+  /* Runs once, while the server is reading provenance and holds no lease. */
+  let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
     exec: (command, rawArgs) => {
       if (command === "timeout") {
+        provenanceReads.push([command, ...rawArgs].join(" "));
+        const race = duringProvenance;
+        duringProvenance = null;
+        race?.();
         const bounded = rawArgs.slice(rawArgs.findIndex((argument) => argument === "git" || argument === "gh"));
         if (bounded[0] === "gh") return { code: 0, stdout: worktree.pullRequest, stderr: "" };
         return ports.exec("git", bounded.slice(1), "");
@@ -102,7 +109,10 @@ function harness() {
   };
   const report = (n: number, request: StageCompletionRequest) =>
     reportStageCompletion(request, agent(`conversation_stage_${n}`), ports);
-  return { ports, worktree, spawnedStages, endTurn, report };
+  return {
+    ports, worktree, spawnedStages, endTurn, report, provenanceReads,
+    raceDuringProvenance: (race: () => void) => { duringProvenance = race; },
+  };
 }
 
 const stage = (id: string, next: string | null, extra: Record<string, unknown> = {}) =>
@@ -315,4 +325,47 @@ test("a report whose worktree the server could not read is still accepted, and s
   const accepted = await h.report(1, { verdict: "pass", summary: "Left work uncommitted." });
   expect(accepted.report!.provenance).toMatchObject({ uncommitted: ["src/lib/x.ts"], pullRequest: null });
   expect(accepted.error).toBeUndefined();
+});
+
+test("a refused call reads neither the worktree nor the forge, and holds no record lease to do it", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  h.provenanceReads.length = 0;
+
+  expect(await reportStageCompletion({ verdict: "pass" }, agent("conversation_stranger"), h.ports))
+    .toMatchObject({ code: "STAGE_REPORT_NOT_AN_ATTEMPT" });
+  expect(await h.report(1, { verdict: "pass", stageId: "verify" })).toMatchObject({ code: "STAGE_REPORT_NOT_HELD" });
+  expect(await h.report(1, { verdict: "pass", findings: [{ severity: "P1", text: "still open" }] }))
+    .toMatchObject({ code: "STAGE_REPORT_CONTRADICTORY" });
+  expect(h.provenanceReads).toEqual([]);
+
+  /* The accepted call is what reads the forge, bounded, in the worktree. */
+  expect((await h.report(1, { verdict: "pass" })).error).toBeUndefined();
+  expect(h.provenanceReads).toHaveLength(1);
+  expect(h.provenanceReads[0]).toStartWith("timeout --signal=KILL 10s gh pr list --head ");
+});
+
+test("an attempt that moved on while its provenance was read is refused, and keeps the record it had", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  /* The window the two reads open: between them, this stage's live attempt
+     becomes a different one under the same conversation. */
+  h.raceDuringProvenance(() => {
+    const records = loadPipelines();
+    const attempts = records[0]!.runs[0]!.attempts;
+    attempts[0]!.state = "failed";
+    attempts.push({ ...structuredClone(attempts[0]!), n: 2, state: "running", report: null } as never);
+    savePipelines(records);
+  });
+
+  const refused = await h.report(1, { verdict: "pass", summary: "Reported against attempt 1." });
+  expect(refused).toMatchObject({ code: "STAGE_REPORT_CHANGED", status: 409 });
+  expect(refused.slots).toEqual([{ pipelineId: current().id, stageId: "build", attempt: 2, state: "running" }]);
+  expect(attemptsOf("build").map((attempt) => attempt.report ?? null)).toEqual([null, null]);
+  expect(current().stageReports).toBeUndefined();
+
+  /* Reported again, the call lands on the attempt that is actually live. */
+  const accepted = await h.report(1, { verdict: "pass", summary: "Reported against attempt 2." });
+  expect(accepted).toMatchObject({ attempt: 2, replaced: false });
+  expect(attemptsOf("build")[1]!.report).toMatchObject({ summary: "Reported against attempt 2." });
 });
