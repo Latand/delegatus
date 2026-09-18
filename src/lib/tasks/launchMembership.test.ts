@@ -92,6 +92,18 @@ test("a reviewer inherits the reviewed conversation's task: flow rounds keep the
   expect(launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "a2" }, receipt, noPipelines, projectFor).inherit).toBeUndefined();
 });
 
+/* #1720 — a reviewer spawn that names its caller as parent carries BOTH
+   identities into the commit, so it joins the caller's task beside the reviewed
+   work's (membership.test.ts pins the join); an explicit taskId skips
+   inheritance altogether. */
+test("a reviewer with a named parent inherits from both the reviewed and the parent conversation; an explicit task skips both", () => {
+  const reviewer = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "r1", reviewsConversationId: "conversation_impl", parentConversationId: "conversation_seat" }, receipt, noPipelines, projectFor);
+  expect(reviewer.inherit).toEqual([{ conversationId: "conversation_impl", path: null }, { conversationId: "conversation_seat", path: null }]);
+  const pinned = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "r2", reviewsConversationId: "conversation_impl", parentConversationId: "conversation_seat", taskIds: ["outcome-card"] }, receipt, noPipelines, projectFor);
+  expect(pinned.explicitTaskIds).toEqual(["outcome-card"]);
+  expect(pinned.inherit).toBeUndefined();
+});
+
 test("a recovered receipt re-establishes membership from its durable fields before its first execution", () => {
   const commits: MembershipInput[] = [];
   const result = admitRecoveredLaunch(

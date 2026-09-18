@@ -84,6 +84,80 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(byConversation.ok && byConversation.tasks[0]!.assignments[0]!.path).toBe("/fixture/new.jsonl");
 });
 
+/* #1720 — what a spawn that carries NO task admits onto. When the launch HAS a
+   lineage parent, `launchMembershipInput` puts it into `inherit` and the launch
+   joins the task that parent holds, minting nothing. Whether there is a parent
+   depends on the path: an agent-capability POST to /api/spawn always makes the
+   caller the parent, while MCP spawn_agent sets one only from a body selector
+   (pinned end to end in spawnRecovery.integration.test.ts). With no parent, or
+   a parent holding no task, the launch gets a placeholder card of its own. */
+test("a launch carrying only a lineage parent joins the parent's task and creates nothing", () => {
+  const seat = task("seat", "fixture", {
+    assignments: [{ conversationId: "conversation_manager", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const inheritParent = { conversationId: "conversation_manager", path: null };
+
+  const joined = ensureTaskMembership([seat], { project: "fixture", origin: { kind: "launch", key: "spawn-child" }, title: "Implement the export retry", identity: { clientAttemptId: "spawn-child", conversationId: "conversation_child" }, inherit: [inheritParent] }, deps);
+  expect(joined.ok).toBe(true);
+  expect(joined.ok && joined.taskIds).toEqual(["seat"]);
+  expect(joined.ok && joined.created).toEqual([]);
+
+  /* Only when nothing inherited holds a task does a placeholder appear — and
+     it binds the parent beside the launch, so the pair stays on one card. */
+  const orphan = ensureTaskMembership([], { project: "fixture", origin: { kind: "launch", key: "spawn-orphan" }, title: "Implement the export retry", identity: { clientAttemptId: "spawn-orphan", conversationId: "conversation_orphan" }, inherit: [inheritParent] }, deps);
+  expect(orphan.ok && orphan.created.length).toBe(1);
+  expect(orphan.ok && orphan.tasks[0]!.origin?.refinement).toBe("pending");
+});
+
+/* #1720 — a reviewer spawn that names a parent. The lineage resolver makes the
+   named caller the parent and records the reviewed conversation beside it, so
+   the launch inherits from BOTH and joins every task either holds: the
+   manager's seat card and the outcome's card. Only an explicit taskId, which
+   wins over inheritance, keeps the reviewer on the outcome alone — which is
+   why the mandate tells a seat to pass taskId on reviewer spawns too. */
+test("a reviewer carrying both a parent and a reviewed conversation joins both of their tasks, and an explicit id wins", () => {
+  const seat = task("seat-card", "fixture", {
+    assignments: [{ conversationId: "conversation_manager", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const outcome = task("outcome-card", "fixture", {
+    assignments: [{ conversationId: "conversation_implementer", path: null, panePid: null, state: "linked", error: null, at: now }],
+  });
+  const inherit = [{ conversationId: "conversation_implementer", path: null }, { conversationId: "conversation_manager", path: null }];
+
+  const both = ensureTaskMembership([seat, outcome], { project: "fixture", origin: { kind: "launch", key: "review-1" }, identity: { clientAttemptId: "review-1", conversationId: "conversation_reviewer" }, inherit }, deps);
+  expect(both.ok && both.taskIds.slice().sort()).toEqual(["outcome-card", "seat-card"]);
+  expect(both.ok && both.created).toEqual([]);
+
+  const pinned = ensureTaskMembership([seat, outcome], { project: "", origin: { kind: "launch", key: "review-2" }, identity: { clientAttemptId: "review-2", conversationId: "conversation_reviewer_2" }, explicitTaskIds: ["outcome-card"], inherit }, deps);
+  expect(pinned.ok && pinned.taskIds).toEqual(["outcome-card"]);
+});
+
+/* #1720 — what a spawn's explicit `taskId` actually admits. An explicit target
+   carries its own project, so `launchMembershipInput` hands the commit an EMPTY
+   project (the operator chose the task, and the launch directory may derive
+   another), and with no project to compare against, a single id from another
+   project is admitted. The cross-project refusal exists for a set that spans
+   two projects, and for `create_pipeline`, which validates against the
+   pipeline's project at the store seam. The mandate and the `spawn_agent`
+   schema describe it exactly this way; this pins the behaviour they describe. */
+test("a spawn-shaped explicit target from another project is admitted, and a mixed set is refused", () => {
+  const tasks = [task("here", "fixture"), task("there", "elsewhere")];
+  const foreignAlone = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-1" }, identity: { clientAttemptId: "spawn-1" }, explicitTaskIds: ["there"] }, deps);
+  expect(foreignAlone.ok).toBe(true);
+  expect(foreignAlone.ok && foreignAlone.taskIds).toEqual(["there"]);
+  expect(foreignAlone.ok && foreignAlone.created).toEqual([]);
+
+  const mixed = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-2" }, identity: { clientAttemptId: "spawn-2" }, explicitTaskIds: ["here", "there"] }, deps);
+  expect(mixed.ok).toBe(false);
+  expect(!mixed.ok && mixed.status).toBe(409);
+
+  /* An id naming no task refuses on either shape — the half of the published
+     contract that IS true for a spawn. */
+  const unknown = ensureTaskMembership(tasks, { project: "", origin: { kind: "launch", key: "spawn-3" }, identity: { clientAttemptId: "spawn-3" }, explicitTaskIds: ["no-such-task"] }, deps);
+  expect(unknown.ok).toBe(false);
+  expect(!unknown.ok && unknown.status).toBe(404);
+});
+
 test("explicit targets are validated together: a missing or foreign task refuses the whole request and writes nothing", () => {
   const tasks = [task("a", "fixture"), task("b", "fixture"), task("c", "elsewhere")];
   const missing = ensureTaskMembership(tasks, { project: "fixture", origin: { kind: "launch", key: "k" }, identity: { clientAttemptId: "k" }, explicitTaskIds: ["a", "gone"] }, deps);

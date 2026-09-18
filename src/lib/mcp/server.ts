@@ -2679,6 +2679,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Viewer-managed agent conversation and return its durable conversation and launch ids.",
+    "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   send_message: [
@@ -2697,6 +2698,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: "Update a durable board task.",
   create_pipeline: [
     "Create a Viewer pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
+    "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail`. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review-loop stage reviews the session of the run stage that reaches it, so it must be pass-reachable from a run stage through `next` edges — array order alone reaches nothing. review-loop stages are always read-only, may not define `onFail`, and take their engine/model/effort from their role (the registry reviewer preset runs on Codex) unless the stage overrides them.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
@@ -2929,6 +2931,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     cwd: z.string().min(1).describe("Existing working directory for the new agent."),
     "prompt": z.string().describe("First instruction sent to the agent."),
     title: z.string().min(1).describe("Semantic conversation title required for every new spawn."),
+    /* Blank is refused HERE because nothing downstream refuses it: the spawn
+       route reads a blank taskId as absent and admits the launch anyway — onto
+       the tasks of whatever parent or reviewed conversation the call names, or
+       onto a fresh placeholder card when it names none. Either way the
+       outcome's card records nothing and the caller is told nothing, so the
+       boundary is the only place that can answer. This dispatch reaches
+       /api/spawn same-origin with the operator capability, so the route never
+       infers the caller as parent; only body selectors set one. The
+       create_pipeline half of this contract is refused by the engine, with its
+       own named violation, so that schema leaves the entries to it. */
+    taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
+      .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. An explicit id carries its own project, so an id from ANOTHER project is taken as given and binds the agent to that project's card — pass the id this project's board gave you. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a placeholder task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
     engine: z.enum(["claude", "codex"]).optional(),
     model: z.string().optional(),
     effort: z.string().optional(),
@@ -2992,6 +3006,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   create_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
     task: z.string().min(1).describe("Board title for the pipeline."),
+    taskIds: z.array(z.string()).optional()
+      .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),

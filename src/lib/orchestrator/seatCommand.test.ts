@@ -18,6 +18,7 @@ import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
+  orchestratorMandateForDelivery,
   orchestratorMandateStale,
 } from "./prompt";
 import { setRetireManagerForTests } from "./retire";
@@ -1284,6 +1285,14 @@ function stackedMandate(core: string, count: number): string {
   return [core, ...Array.from({ length: count }, (_, index) => handoffSection(index + 1))].join("\n\n");
 }
 
+/** The core size that leaves exactly `reserveBytes` for the handoff once the
+    scaffold and everything delivery appends are accounted for. */
+function trimBandCoreBytes(reserveBytes: number): number {
+  const role = resolveSpawnRole({ role: "orchestrator", roleParams: { mode: "standard" } });
+  const scaffold = role.ok && role.value ? Buffer.byteLength(`${role.value.scaffold}\n\n`, "utf8") : 0;
+  return MAX_STRUCTURED_TEXT_BYTES - scaffold - Buffer.byteLength(orchestratorMandateForDelivery(""), "utf8") - reserveBytes;
+}
+
 /** What spawn mode actually asserts against the envelope: the orchestrator
     role scaffold, a blank line, and the mandate. */
 function launchBytes(prompt: string): number {
@@ -1513,11 +1522,15 @@ test("AC4: rotation drops the history, then trims the notes, and refuses only wh
   const trimmed = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00001036",
-    /* A core sized to leave room for the handoff after the ladder runs. The
-       headroom tracks what delivery appends around a mandate — the initial
-       status contract and, since #1245, the clock handover — so a core that
-       once trimmed to a fit now has ~1.8 KB less to play with. */
-    mandate: stackedMandate("c".repeat(27_000), 2),
+    /* A core sized to leave room for the handoff after the ladder runs, derived
+       rather than hand-tuned: whatever delivery appends around a mandate — the
+       initial-status contract, the clock handover (#1245), the task-ownership
+       section (#1720) — comes off the core, so a directive that grows moves
+       this fixture instead of leaving a stale byte count in a comment. The
+       reserve left over is enough for a TRIMMED handoff and not enough for the
+       history, which is the band this case has to land in; the assertions
+       below fail loudly in either direction if it does not. */
+    mandate: stackedMandate("c".repeat(trimBandCoreBytes(1_400)), 2),
     handoffNotes: "n".repeat(2_000),
   }, deps);
 
