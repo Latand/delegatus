@@ -23,7 +23,7 @@ import {
   mandatePreflight,
   type HandoffDigestRuntime,
 } from "./handoffDigest";
-import { ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE, orchestratorMandateForDelivery } from "./prompt";
+import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "./prompt";
 
 /* Issue #1067. Every test here runs against an isolated LLV_STATE_DIR and an
    injected runtime: nothing spawns a process, opens a socket, reads an account
@@ -433,9 +433,7 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
    rotation carries into the successor's core. One bound decides delivery, and
    it is measured on the DELIVERED text plus the launch scaffold — so the
    growth is checked here rather than discovered as a silently trimmed digest
-   or a refused designation. This is the every-project delivery; the Viewer's
-   own seat receives one section more (#1745), and its larger delivery is
-   measured against the same bound in `viewerProject.test.ts`. */
+   or a refused designation. */
 test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
   const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
   expect(preflight.ok).toBe(true);
@@ -454,20 +452,14 @@ test("the delivered default mandate fits the delivery bound with room for a rota
 /* What delivery appends is a fixed cost every bespoke mandate pays, so it is
    the number worth pinning: a mandate is only deliverable in the room left
    after it. This ceiling is the budget the delivered directives are allowed to
-   occupy — under a third of the envelope — and a directive that grows past it
+   occupy — a quarter of the envelope — and a directive that grows past it
    fails HERE, naming the budget, rather than as a 413 on a live seat's
    adoption or rotation. Raising it is a deliberate edit with the remaining
-   headroom in view; #1745 raised it from 8000 by moving the deploy section out
-   of the default body and into delivery, which is new cost for a bespoke
-   Viewer-project mandate and none at all for the default one. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 10_000;
+   headroom in view. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 8_000;
 
 test("what delivery appends stays inside its share of the envelope", () => {
-  /* The largest delivery there is: the every-project directives plus the
-     section only the Viewer's own seat receives (#1745), which is the seat that
-     pays the most for a bespoke mandate. */
-  const appended = Buffer.byteLength(orchestratorMandateForDelivery(""))
-    + Buffer.byteLength(`\n\n${ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE}`);
+  const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
   expect(appended).toBeLessThanOrEqual(DELIVERED_DIRECTIVE_BUDGET_BYTES);
   /* And the budget itself leaves a bespoke mandate the room the rotation
      ladder needs: core, plus a history section, plus a fresh handoff. */
