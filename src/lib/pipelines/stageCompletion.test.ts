@@ -36,14 +36,14 @@ function harness() {
   const spawnedStages: string[] = [];
   /* What the mocked worktree answers the server's own provenance reads. */
   const worktree = { status: "", knownPaths: "docs/report.html\0", pullRequest: PULL_REQUEST };
-  const provenanceReads: string[] = [];
+  const execCalls: string[] = [];
   /* Runs once, while the server is reading provenance and holds no lease. */
   let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
     exec: (command, rawArgs) => {
+      execCalls.push([command, ...rawArgs].join(" "));
       if (command === "timeout") {
-        provenanceReads.push([command, ...rawArgs].join(" "));
         const race = duringProvenance;
         duringProvenance = null;
         race?.();
@@ -110,7 +110,7 @@ function harness() {
   const report = (n: number, request: StageCompletionRequest) =>
     reportStageCompletion(request, agent(`conversation_stage_${n}`), ports);
   return {
-    ports, worktree, spawnedStages, endTurn, report, provenanceReads,
+    ports, worktree, spawnedStages, endTurn, report, execCalls,
     raceDuringProvenance: (race: () => void) => { duringProvenance = race; },
   };
 }
@@ -327,22 +327,25 @@ test("a report whose worktree the server could not read is still accepted, and s
   expect(accepted.error).toBeUndefined();
 });
 
-test("a refused call reads neither the worktree nor the forge, and holds no record lease to do it", async () => {
+test("a refused call runs no command at all, so no forge latency is ever spent on one", async () => {
   const h = harness();
   await started(h.ports, [stage("build", null)]);
-  h.provenanceReads.length = 0;
+  h.execCalls.length = 0;
 
   expect(await reportStageCompletion({ verdict: "pass" }, agent("conversation_stranger"), h.ports))
     .toMatchObject({ code: "STAGE_REPORT_NOT_AN_ATTEMPT" });
   expect(await h.report(1, { verdict: "pass", stageId: "verify" })).toMatchObject({ code: "STAGE_REPORT_NOT_HELD" });
   expect(await h.report(1, { verdict: "pass", findings: [{ severity: "P1", text: "still open" }] }))
     .toMatchObject({ code: "STAGE_REPORT_CONTRADICTORY" });
-  expect(h.provenanceReads).toEqual([]);
+  expect(h.execCalls).toEqual([]);
 
-  /* The accepted call is what reads the forge, bounded, in the worktree. */
+  /* The accepted call reads the worktree and then the forge, bounded. */
   expect((await h.report(1, { verdict: "pass" })).error).toBeUndefined();
-  expect(h.provenanceReads).toHaveLength(1);
-  expect(h.provenanceReads[0]).toStartWith("timeout --signal=KILL 10s gh pr list --head ");
+  expect(h.execCalls).toEqual([
+    "git status --porcelain",
+    "git rev-parse HEAD",
+    `timeout --signal=KILL 10s gh pr list --head ${current().branch} --state all --limit 1 --json url,number,state`,
+  ]);
 });
 
 test("an attempt that moved on while its provenance was read is refused, and keeps the record it had", async () => {
