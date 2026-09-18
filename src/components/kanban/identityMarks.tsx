@@ -113,7 +113,8 @@ function NextPill({ next, expanded }: { next: StageRunValues; expanded: boolean 
  *
  * Fill versus outline carries the verdict without colour: a fail count is
  * filled, a pass count is an outline. An exhausted budget inverts the pill it
- * sits in, which is a luminance cue rather than a hue one.
+ * sits in, which is a luminance cue rather than a hue one; where there is no
+ * pill to invert, {@link FiredMark} draws the ring instead.
  */
 export function CountCircle({ n, tone, filled, label, className }: {
   n: number | string;
