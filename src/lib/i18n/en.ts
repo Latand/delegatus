@@ -1658,7 +1658,6 @@ export const en = {
   "pipelineHub.attempt": "attempt {n}",
   "pipelineHub.openDashboard": "Open dashboard strip",
 
-
   "dash.pipeline": "Pipeline",
   "dash.newPipeline": "New pipeline",
 
@@ -2129,52 +2128,11 @@ export const en = {
   "branch.favorite": "Mark as favorite",
   "branch.unfavorite": "Remove from favorites",
 
-  // TreeAside
-  "tree.quiet": "Quiet conversations and tasks",
-
-  // WorkerStacks (issue #112): auto-collapsed worker-class cards
+  // Scheme task cards
   "taskStacks.collapse": "Fold the card back into its status stack",
-  // TaskReadinessStrip (issue #290): readiness Kanban sections over ALL project tasks
-  "readiness.title": "Task readiness",
-  "readiness.aria": "Readiness sections for every project task",
-  "readiness.legend": "Now — assigned into work · Review — a review is running or has a verdict · Blocked — needs a decision · Planned — inbox/backlog · Done — finished",
-  "readiness.section.now": "Now",
-  "readiness.section.review": "In review",
-  "readiness.section.blocked": "Blocked",
-  "readiness.section.planned": "Planned",
-  "readiness.section.done": "Done",
-  "readiness.sectionAria": "“{section}” tasks · {count}",
-  "readiness.open": "Open task on the board: {title}",
-  "readiness.place": "Place task on the map: {title}",
-  "readiness.issueAria": "Open issue #{issue} on GitHub",
-  "readiness.agent": "agent",
-  "readiness.agentAria": "Open the assigned agent: {title}",
-  "readiness.pipeline": "pipeline",
-  "readiness.pipelineAria": "Open the linked pipeline stage: {title}",
-  "readiness.review": "review",
-  "readiness.reviewAria": "Open the linked review: {title}",
-  "readiness.state.live": "live",
-  "readiness.state.gone": "gone",
-  "readiness.state.failed": "failed",
-  "launchHistory.title": "Launch history",
-  "launchHistory.aria": "Terminal launch receipts",
-  "launchHistory.failed": "failed",
-  "launchHistory.recovered": "recovered",
-  "launchHistory.retryLabel": "Retry",
-  "launchHistory.retry": "Retry launch: {title}",
-  "workerStack.title": "Collapsed workers",
-  "workerStack.idle": "{count} idle",
-  "workerStack.noVerdict": "no verdict",
-  "workerStack.aria": "Collapsed worker conversations",
-  "workerStack.expandGroup": "Expand review group on the board",
-  "workerStack.flow": "Flow",
-  "workerStack.pipeline": "Pipeline",
-  "workerStack.origin": "Spawned",
-  "workerStack.worktree": "Workers",
 
-  // CornerStatus
-  "corner.waitingCount": "· {count} waiting",
-  "corner.openSwitchboard": "Open the agent switchboard",
+  // Launch retry on a conversation's launch chips
+  "launchHistory.retryLabel": "Retry",
 
   // TaskHeader
   "task.working": ", working",
@@ -2972,7 +2930,11 @@ export const en = {
   "kanban.memberState.returned": "turn finished",
   "kanban.memberState.done": "idle",
   "kanban.pipeline": "Pipeline",
-  "kanban.pipelineAria": "Pipeline: {progress}",
+  "kanban.pipelineAria": "{title}: {progress}",
+  "kanban.actor.agent": "an agent",
+  "kanban.pipelines.completed": { one: "{count} completed", other: "{count} completed" },
+  "kanban.pipelines.completedShow": { one: "Show the completed pipeline of this task", other: "Show the {count} completed pipelines of this task" },
+  "kanban.pipelines.completedHide": { one: "Hide the completed pipeline of this task", other: "Hide the {count} completed pipelines of this task" },
   "kanban.progress.provisioning": "provisioning the worktree · no stage started",
   "kanban.progress.needs": "{stage} needs you",
   "kanban.progress.live": "{stage} {state}",
@@ -3121,7 +3083,10 @@ export const en = {
   "kanban.graph.edit.set-edge": "rewired {stage}",
   "kanban.graph.edit.override-stage": "changed {stage}",
   "kanban.graph.edit.nextAttempt": "applies from attempt {n}",
-  "kanban.stageReport.reported": "{stage} reported {verdict} by {who} {age}",
+  "kanban.stageReport.line": "{who} {outcome} · {age}",
+  "kanban.stageReport.outcome.pass": "passed",
+  "kanban.stageReport.outcome.fail": "failed",
+  "kanban.stageReport.outcome.needs_decision": "needs a decision",
   "kanban.stageReport.unranked": "—",
   "kanban.stageReport.moreFindings": { one: "{count} more finding", other: "{count} more findings" },
   "kanban.graph.roundTitle": "Round {n}: {verdict}",

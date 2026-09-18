@@ -11,18 +11,15 @@ import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
-import type { ActionEvent, FileEntry } from "@/lib/types";
+import type { FileEntry } from "@/lib/types";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 
 import { projectKey } from "./projectModel";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { CornerStatus } from "./CornerStatus";
 import { EngineAccountSwitch } from "./EngineAccountSwitch";
 import { FlipRow } from "./FlipRow";
 import { SwitchCard, type SwitchCardTone } from "./SwitchCard";
-
-const EMPTY_EVENTS: ActionEvent[] = [];
 
 interface Props {
   files: FileEntry[];
@@ -104,7 +101,6 @@ export function Switchboard({ files, flows, project, loaded, catalogFailures = 0
   const { archivedPaths, archive, unarchive } = useArchivedPaths(files);
   const data = useSwitchboardData(files, timeline.events, query, now, archivedPaths, flows, open);
   const catalogSearch = useConversationCatalog({ query, enabled: loaded && open && Boolean(query.trim()) });
-  const cornerData = useSwitchboardData(files, EMPTY_EVENTS, "", now, archivedPaths, flows);
   const archivedItems = useMemo(
     () =>
       (open ? files : [])
@@ -139,7 +135,6 @@ export function Switchboard({ files, flows, project, loaded, catalogFailures = 0
 
   return (
     <>
-      <CornerStatus data={cornerData} onOpen={() => setOpen(true)} />
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary/28 p-[2.5vh]" onMouseDown={() => setOpen(false)}>
           <div
