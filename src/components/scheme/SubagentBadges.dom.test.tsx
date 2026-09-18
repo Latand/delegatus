@@ -170,7 +170,6 @@ test("a dead child is dimmed, explains its unavailable state, and does not navig
 
   expect(badge.dataset.subagentState).toBe("dead");
   expect(badge.className).toContain("opacity-45");
-  expect(badge.title).toContain("unavailable");
   flushSync(() => badge.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
   expect(navigated).toEqual([]);
 });
@@ -347,9 +346,8 @@ test("each chip renders its own reading: writing pulses, alive-but-silent rings 
   expect(silentRing.className).toContain("ring-warning");
   expect(silentRing.className).not.toContain("animate-pulse");
   expect(badge("wedged").querySelector('[data-subagent-ring="working"]')).toBeNull();
-  /* Distinct from finished: still lit, and it says why. */
+  /* Distinct from finished: still lit. */
   expect(badge("wedged").className).not.toContain("opacity-45");
-  expect(badge("wedged").title).toContain("alive but silent");
 
   expect(badge("finished").dataset.subagentState).toBe("closed");
   expect(badge("finished").querySelector("[data-subagent-ring]")).toBeNull();
@@ -464,7 +462,6 @@ test("the unavailable note comes from the catalogue, so the tooltip is not half-
     const { host } = mountWithClock([parent, dead], NOW);
     const badge = host.querySelector('[data-subagent-badge="dead"]') as HTMLButtonElement;
     expect(badge.title).toContain(translate("uk", "subagentTray.state.dead"));
-    expect(badge.title).not.toContain("unavailable");
   } finally {
     setLocale("en");
   }

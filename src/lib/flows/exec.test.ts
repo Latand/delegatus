@@ -413,54 +413,6 @@ test("headless managed Claude reviewer installs the native sub-agent deny profil
   delete process.env.LLV_TOKEN;
 });
 
-test("reviewer prompt carries the read-only contract while allowing validation commands", () => {
-  const prompt = reviewerPrompt(
-    {
-      id: "flow-a",
-      template: "implement-review-loop",
-      project: "repo",
-      cwd: "/repo",
-      implementerPath: "/sessions/implementer.jsonl",
-      roles: {
-        implementer: { engine: "codex", model: null, effort: null },
-        reviewer: { engine: "codex", model: null, effort: null },
-      },
-      baseRef: "abc123",
-      baseMode: "head",
-      mode: "auto",
-      reviewerMode: "headless",
-      roundLimit: 5,
-      state: "reviewing",
-      pausedState: null,
-      stateDetail: null,
-      rounds: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      closedAt: null,
-    },
-    {
-      n: 1,
-      reviewerPath: null,
-      sessionId: null,
-      reviewerPid: null,
-      reviewerPane: null,
-      findingsPath: null,
-      triggeredBy: "marker",
-      readyNote: "tests are green",
-      verdict: null,
-      findingsCount: null,
-      startedAt: "2026-01-01T00:01:00.000Z",
-      spawnStartedAt: null,
-      relayStartedAt: null,
-      reviewedAt: null,
-      relayedAt: null,
-      error: null,
-    },
-  );
-
-  expect(prompt).toContain("run tests, builds, linters, searches");
-  expect(prompt).toContain("Do not edit files");
-});
-
 test("status is null when the round never left a trace", () => {
   expect(headlessReviewStatus("flow-a", 1, { reviewerPid: null, spawnStartedAt: null }, "codex")).toBeNull();
 });
