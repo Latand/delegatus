@@ -69,11 +69,22 @@ const setValue = (page: Page, value: string) => page.evaluate(({ selector, next 
   field.dispatchEvent(new Event("input", { bubbles: true }));
 }, { selector: FIELD, next: value });
 
-const sample = (page: Page) => page.evaluate(({ field, frame, scroller }) => ({
-  fieldHeight: document.querySelector<HTMLTextAreaElement>(field)?.offsetHeight ?? -1,
-  frameTop: Number((document.querySelector<HTMLElement>(frame)?.getBoundingClientRect().top ?? Number.NaN).toFixed(2)),
-  scrollTop: Number((document.querySelector<HTMLElement>(scroller)?.scrollTop ?? Number.NaN).toFixed(2)),
-}), { field: FIELD, frame: FRAME, scroller: SCROLLER }) as Promise<Sample>;
+/* A missing element is a failure and never a sentinel: a NaN reading would
+   deduplicate to one value for the green assertion and compare unequal to
+   itself for the red one, so a renamed selector would satisfy both checks
+   while measuring nothing. */
+const sample = (page: Page) => page.evaluate(({ field, frame, scroller }) => {
+  const found = <T extends HTMLElement>(selector: string) => {
+    const element = document.querySelector<T>(selector);
+    if (!element) throw new Error(`nothing matches ${selector} — this test measures what is not there`);
+    return element;
+  };
+  return {
+    fieldHeight: found<HTMLTextAreaElement>(field).offsetHeight,
+    frameTop: Number(found(frame).getBoundingClientRect().top.toFixed(2)),
+    scrollTop: Number(found(scroller).scrollTop.toFixed(2)),
+  };
+}, { field: FIELD, frame: FRAME, scroller: SCROLLER }) as Promise<Sample>;
 
 /**
  * The shortest pair of drafts either side of the composer's first wrap, found
