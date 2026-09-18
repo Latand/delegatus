@@ -7,6 +7,11 @@ import { NextRequest } from "next/server";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { reconcileSeatTick } from "@/lib/monitor/seatTickController";
+import { DEFAULT_SEAT_TICK_POLICY } from "@/lib/monitor/seatTick";
+import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
+import type { SeatTickRunRecord } from "@/lib/monitor/types";
 
 import {
   setSeatCommandDependenciesForTests,
@@ -70,6 +75,7 @@ interface Answer {
 
 let sandbox = "";
 let previousStateDir: string | undefined;
+let previousOrchestratorCwd: string | undefined;
 let listener: ReturnType<typeof Bun.serve> | null = null;
 let origin = "";
 
@@ -77,6 +83,9 @@ let spawns: Record<string, unknown>[] = [];
 let spawnAnswer: (body: Record<string, unknown>) => Promise<{ status: number; body: Record<string, unknown> }>;
 let settlement: LaunchSettlement = { kind: "unknown" };
 let turnsByConversation: Map<string, number> = new Map();
+/* The launch checkout a conversation still has, when a test cares. `null` is a
+   checkout that has been deleted while the conversation went on running. */
+let cwdByConversation: Map<string, string | null> = new Map();
 
 beforeAll(() => {
   listener = Bun.serve({
@@ -108,11 +117,13 @@ afterAll(() => {
 
 beforeEach(() => {
   previousStateDir = process.env.LLV_STATE_DIR;
+  previousOrchestratorCwd = process.env.LLV_ORCHESTRATOR_CWD;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rotation-settlement-"));
   process.env.LLV_STATE_DIR = sandbox;
   spawns = [];
   settlement = { kind: "unknown" };
   turnsByConversation = new Map();
+  cwdByConversation = new Map();
   /* The launch this rotation's successor comes from: durably ACCEPTED, with a
      reserved conversation id and no transcript yet — the exact 202 the incident
      activated on. */
@@ -127,6 +138,8 @@ afterEach(() => {
   setSeatCommandDependenciesForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
+  if (previousOrchestratorCwd === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
+  else process.env.LLV_ORCHESTRATOR_CWD = previousOrchestratorCwd;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -157,20 +170,25 @@ function dependencies(): SeatCommandDependencies {
       return spawnAnswer(body);
     },
     deliver: async () => ({ ok: true, outcome: "delivered" }),
-    /* Resolvable means the same thing it means in production: a registry row
-       AND a transcript the Viewer can read. A conversation whose launch never
-       materialized has neither, which is the whole shape of the incident. */
+    /* ADOPTION eligibility, refusing exactly what production refuses: no
+       transcript, or no launch cwd on disk. The second one is why this is not
+       the seam the handover asks — a conversation can be perfectly readable and
+       still fail here. */
     conversationTarget: (conversationId) => {
       if (!conversationId) return null;
       const transcript = transcriptFor(conversationId);
       if (!fs.existsSync(transcript)) {
         return { kind: "ineligible", code: "missing_transcript", error: "conversation transcript is unavailable" };
       }
+      const cwd = cwdByConversation.has(conversationId) ? cwdByConversation.get(conversationId) ?? null : sandbox;
+      if (!cwd) {
+        return { kind: "ineligible", code: "invalid_cwd", error: "conversation cwd is unavailable" };
+      }
       return {
         kind: "eligible",
         conversationId,
         path: transcript,
-        cwd: sandbox,
+        cwd,
         project: PROJECT,
         engine: "claude",
       };
@@ -180,9 +198,22 @@ function dependencies(): SeatCommandDependencies {
     launchSettlement: () => settlement,
     stampRegistryIdentity: () => {},
     runtimeIdentity: () => ({ engine: "claude", model: "opus" }),
-    /* The one question the handover's lineage walk asks. Unlisted conversations
-       hold nothing — which is what a stillborn link answers. */
-    conversationTurns: ({ conversationId }) => turnsByConversation.get(conversationId) ?? 0,
+    /* What the VIEWER can resolve, which is what both the handover's lineage
+       walk and the rollback's predecessor check ask. A transcript on disk is
+       the whole bar — no cwd is consulted, exactly as `conversation_messages`
+       consults none — and a conversation nobody listed holds no turns, which is
+       what a stillborn link answers. */
+    resolvedConversation: (conversationId) => {
+      if (!conversationId) return null;
+      const transcript = transcriptFor(conversationId);
+      if (!fs.existsSync(transcript)) return null;
+      return {
+        conversationId,
+        path: transcript,
+        holdsTurns: (turnsByConversation.get(conversationId) ?? 0) > 0,
+        cwd: cwdByConversation.has(conversationId) ? cwdByConversation.get(conversationId) ?? null : sandbox,
+      };
+    },
     now: () => AT,
   };
 }
@@ -216,6 +247,59 @@ async function rotate(body: Record<string, unknown>): Promise<Answer> {
     body: JSON.stringify({ project: PROJECT, ...body }),
   });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+const EMPTY_REGISTRY_SNAPSHOT = {
+  entries: {}, receipts: {}, lineageEdges: {}, memberships: {},
+  conversations: {}, conversationAliases: {}, heldDeliveries: {}, deliveryOperationOwners: {},
+};
+
+/**
+ * The seat tick's sources, reading the REAL seat store in this sandbox and
+ * answering nothing from anywhere else: no board, no pipelines, no lifecycle
+ * journal, no `gh`. The tick has nothing to wake anyone about here, which is
+ * the point — what is under test is the reconciliation it runs BEFORE it reads
+ * a seat at all.
+ */
+function tickSources(): SeatTickSources {
+  return {
+    seatFor: orchestratorSeatFor,
+    activeSeats: () => [PROJECT],
+    pipelines: () => [],
+    archivedPipelines: () => [],
+    tasks: () => [],
+    registry: () => ({
+      pageSeatChildren: () => ({ file: EMPTY_REGISTRY_SNAPSHOT, keys: [], after: null, complete: true, evidenceGap: false }),
+      seatTickConversation: () => null,
+      conversation: () => null,
+      conversationForPath: () => null,
+      readOnlySnapshot: () => EMPTY_REGISTRY_SNAPSHOT,
+    }) as never,
+    liveness: async () => [],
+    lifecycleJournal: () => ({ version: 1, lastSeq: 0, events: [], retired: [] }) as never,
+    latestDeployment: () => ({ state: "unreadable", error: "no ledger" }) as never,
+    retirementReport: () => null,
+    settings: () => defaultSeatTickSettings(PROJECT),
+    openPullRequests: async () => ({ ok: true, pullRequests: [] }),
+    wakeState: async () => "absent",
+    withdrawWake: async () => "unknown",
+    now: () => Date.parse(AT),
+  };
+}
+
+/** One sweep of the production tick over this project, journaling in memory. */
+async function tick(): Promise<SeatTickRunRecord[]> {
+  const journal: SeatTickRunRecord[] = [];
+  const records = await reconcileSeatTick({
+    policy: DEFAULT_SEAT_TICK_POLICY,
+    sources: tickSources(),
+    ownsTraffic: () => true,
+    appendRecord: (record) => { journal.push(record); },
+    ensureCard: () => true,
+    deliver: async () => { throw new Error("the tick must send nothing while reconciling a stillborn seat"); },
+    proposalIssues: async () => [],
+  });
+  return records.length ? records : journal;
 }
 
 /** The successor's launch prompt, which IS the mandate the handover composed. */
@@ -397,6 +481,38 @@ test("REGRESSION (#1757): the handover names the last predecessor that HOLDS TUR
   expect(spawns.at(-1)?.cwd).toBe(sandbox);
 });
 
+test("REGRESSION (#1757): a predecessor whose CHECKOUT was deleted is still the conversation the handover names", async () => {
+  /* The layout the issue reports for the seat it found: an orchestrator running
+     with its cwd inside a worktree checkout, and the checkout removed while it
+     went on running. Its transcript is untouched and holds hundreds of turns,
+     and `conversation_messages` — which never looks at a cwd — reads it. */
+  seatSeeded(INCUMBENT_ID, "req_seed_00000001");
+  turnsByConversation.set(INCUMBENT_ID, 300);
+  cwdByConversation.set(INCUMBENT_ID, null);
+  /* Somewhere to run that is NOT the deleted checkout, which is what the
+     generic resolver answers in production — and a different directory, so the
+     assertion below can tell an inherited checkout from a resolved one. */
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rotation-elsewhere-"));
+  process.env.LLV_ORCHESTRATOR_CWD = elsewhere;
+  spawnAnswer = settledSpawn(SUCCESSOR_ID, "launch_successor");
+
+  const rotated = await rotate({ clientRequestId: "req_rotation_0001" });
+
+  expect(rotated.status).toBe(200);
+  const mandate = lastSpawnPrompt();
+  /* The handover names it, as it did before any of this — losing a readable
+     predecessor to a missing directory would be a new way to lose exactly what
+     the issue is about. */
+  expect(mandate).toContain("Your predecessor's recent turns");
+  expect(mandate).toContain(`"conversationId":"${INCUMBENT_ID}"`);
+  expect(mandate).not.toContain("holds no readable turns");
+  /* ...and the rotation inherits no checkout from a directory that is gone,
+     falling through to the generic resolver rather than refusing: the missing
+     directory is a fact about the filesystem, and not about the handover. */
+  expect(spawns.at(-1)?.cwd).toBe(elsewhere);
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+});
+
 test("REGRESSION (#1757): a lineage with no readable turns anywhere says so, instead of naming a conversation nobody can read", async () => {
   seatSeeded(INCUMBENT_ID, "req_seed_00000001");
   spawnAnswer = settledSpawn(SUCCESSOR_ID, "launch_successor");
@@ -421,4 +537,97 @@ test("a rotation from an incumbent that holds turns still names the incumbent �
   expect(mandate).toContain("Your predecessor's recent turns");
   expect(mandate).toContain(`"conversationId":"${INCUMBENT_ID}"`);
   expect(mandate).not.toContain("holds no readable turns");
+});
+
+test("REGRESSION (#1757): the SEAT TICK rolls back a stillborn seat, with no route call in between", async () => {
+  /* The incident's own window: the rotation was accepted, the seat activated on
+     a reserved conversation, and then nobody called a route again for hours
+     while the board went on showing that seat's composer. */
+  seatSeeded(INCUMBENT_ID, "req_seed_00000001");
+  const seededEpoch = orchestratorSeatFor(PROJECT).active?.seatEpoch ?? 0;
+  turnsByConversation.set(INCUMBENT_ID, 120);
+  expect((await rotate({ clientRequestId: "req_rotation_0001" })).status).toBe(202);
+  expect(orchestratorSeatFor(PROJECT).active).toMatchObject({ conversationId: SUCCESSOR_ID, path: null });
+
+  settlement = { kind: "failed", error: "structured spawn transport failed: runtime host timed out" };
+
+  /* The clock the release already runs, sweeping the projects that hold seats.
+     Nothing else happens: no rotation, no designation, no send. */
+  const records = await tick();
+
+  const afterwards = orchestratorSeatFor(PROJECT);
+  expect(afterwards.active).toMatchObject({ conversationId: INCUMBENT_ID, state: "active" });
+  expect(afterwards.active?.seatEpoch).toBeGreaterThan(seededEpoch);
+  const stillborn = afterwards.history.find((entry) => entry.seat.conversationId === SUCCESSOR_ID);
+  expect(stillborn?.reason).toBe("terminal_error");
+  expect(stillborn?.seat.intent.error).toContain("runtime host timed out");
+  /* ...and the tick's own journal line says what it repaired, so the record the
+     operator reads is not only the seat file. */
+  expect(records.map((record) => record.detail ?? "").join(" ")).toContain("was stillborn and has been rolled back");
+  expect(spawns).toHaveLength(1);
+});
+
+test("REGRESSION (#1757): the seat tick leaves an UNSETTLED launch alone — a boot window is not a failure", async () => {
+  seatSeeded(INCUMBENT_ID, "req_seed_00000001");
+  turnsByConversation.set(INCUMBENT_ID, 120);
+  expect((await rotate({ clientRequestId: "req_rotation_0001" })).status).toBe(202);
+
+  /* No terminal receipt: the launch is still in flight. */
+  settlement = { kind: "unknown" };
+
+  await tick();
+
+  const afterwards = orchestratorSeatFor(PROJECT);
+  expect(afterwards.active).toMatchObject({ conversationId: SUCCESSOR_ID, path: null, state: "active" });
+  expect(afterwards.history.filter((entry) => entry.seat.conversationId === SUCCESSOR_ID)).toEqual([]);
+});
+
+test("REGRESSION (#1757): a rollback whose PREDECESSOR is no longer resolvable leaves the project undesignated, and says why", async () => {
+  seatSeeded(INCUMBENT_ID, "req_seed_00000001");
+  turnsByConversation.set(INCUMBENT_ID, 120);
+  expect((await rotate({ clientRequestId: "req_rotation_0001" })).status).toBe(202);
+
+  /* Both ends fail inside the provisional window: the launch died, and the
+     predecessor it superseded stopped being resolvable while it waited — its
+     card closed, its transcript gone. Designating the project back onto it
+     would reach the very state this recovery exists to prevent. */
+  settlement = { kind: "failed", error: "structured spawn transport failed: runtime host timed out" };
+  fs.rmSync(transcriptFor(INCUMBENT_ID), { force: true });
+
+  await tick();
+
+  const afterwards = orchestratorSeatFor(PROJECT);
+  expect(afterwards.active).toBeNull();
+  const stillborn = afterwards.history.find((entry) => entry.seat.conversationId === SUCCESSOR_ID);
+  expect(stillborn?.seat.intent.error).toContain(INCUMBENT_ID);
+  expect(stillborn?.seat.intent.error).toContain("is no longer resolvable either");
+  expect(stillborn?.seat.intent.error).toContain("left undesignated");
+});
+
+test("REGRESSION (#1757): a seat that was ALREADY provisional rolls back to the predecessor its revocation names", async () => {
+  seatSeeded(INCUMBENT_ID, "req_seed_00000001");
+  turnsByConversation.set(INCUMBENT_ID, 120);
+  expect((await rotate({ clientRequestId: "req_rotation_0001" })).status).toBe(202);
+
+  /* The shape a seat standing on a stillborn conversation when this recovery
+     ships has: an active provisional seat, a revocation naming the predecessor
+     it superseded, and no `rollbacks` entry — because nothing wrote one. */
+  const file = path.join(sandbox, "orchestrator-seats.json");
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { rollbacks: Record<string, unknown> };
+  expect(Object.keys(parsed.rollbacks)).toContain(PROJECT);
+  parsed.rollbacks = {};
+  fs.writeFileSync(file, JSON.stringify(parsed), "utf8");
+
+  settlement = { kind: "failed", error: "structured spawn transport failed: runtime host timed out" };
+
+  await tick();
+
+  const afterwards = orchestratorSeatFor(PROJECT);
+  /* The lineage carried the recovery the map had lost: the predecessor holds
+     the project again, at an epoch strictly newer than the revocation that
+     ended it. */
+  expect(afterwards.active).toMatchObject({ conversationId: INCUMBENT_ID, state: "active" });
+  expect(afterwards.active?.seatEpoch).toBeGreaterThan(2);
+  expect(revokedOrchestratorSeatConversationsOrUnknown()?.has(INCUMBENT_ID)).toBe(false);
+  expect(afterwards.history.find((entry) => entry.seat.conversationId === SUCCESSOR_ID)?.reason).toBe("terminal_error");
 });

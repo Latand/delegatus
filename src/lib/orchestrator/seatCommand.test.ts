@@ -97,9 +97,15 @@ function dependencies(overrides: Partial<SeatCommandDependencies> = {}): { deps:
     },
     launchSettlement: () => ({ kind: "unknown" }),
     runtimeIdentity: () => ({ engine: null, model: null }),
-    /* Predecessors hold turns unless a test says otherwise: the handover's
-       lineage walk (#1757) asks this before naming a conversation to read. */
-    conversationTurns: () => 12,
+    /* Predecessors resolve and hold turns unless a test says otherwise: the
+       handover's lineage walk (#1757) asks this before naming a conversation to
+       read, and asks it WITHOUT requiring a cwd. */
+    resolvedConversation: (conversationId) => ({
+      conversationId,
+      path: `/tmp/${conversationId.slice(-4)}.jsonl`,
+      holdsTurns: true,
+      cwd: "/workspace",
+    }),
     now: () => AT,
     ...overrides,
   };
@@ -410,8 +416,11 @@ test("a restarted caller replays the accepted launch from the durable seat recei
       throw new Error("a completed accepted launch must replay from durable state");
     },
     /* Still launching: the reserved conversation has no transcript yet, which
-       is what «accepted» means and what the answer below reports. */
+       is what «accepted» means and what the answer below reports. The Viewer
+       cannot resolve it either — that is the same fact, asked the way the
+       reconciler asks it. */
     conversationTarget: () => null,
+    resolvedConversation: () => null,
   });
 
   const replay = await executeOrchestratorSeatRequest(spawnRequest("req_00000015"), resumed);

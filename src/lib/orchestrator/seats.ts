@@ -115,6 +115,13 @@ export interface OrchestratorSeatTerminalization {
   terminalizedAt: string;
 }
 
+/** What a stillborn seat's rollback did: the attempt it terminalized, and the
+    predecessor — if any survived the check — that holds the project now. */
+export interface StillbornSeatRollback {
+  terminalized: OrchestratorSeatTerminalization;
+  restored: OrchestratorSeat | null;
+}
+
 /** Newest-last bound on terminalized history, so the file cannot grow without
     limit; the oldest entries are trimmed first. */
 export const ORCHESTRATOR_SEAT_HISTORY_CAP = 50;
@@ -733,6 +740,18 @@ export function failOrchestratorSeatIntent(
  * record leaves the project undesignated, which is the honest answer and the
  * one `create_orchestrator` exists for.
  *
+ * Two things the restoration is not allowed to assume, both of them ways the
+ * repair would reach the state it exists to prevent:
+ *
+ *  - that the recorded predecessor is STILL reachable. It can stop being so
+ *    inside the provisional window, so `resolvable` is asked before the project
+ *    is designated onto it again, and a predecessor that fails leaves the
+ *    project undesignated with that said in the terminalization reason.
+ *  - that a `rollbacks` entry exists at all. A seat already standing on a
+ *    stillborn conversation when this shipped has none, so the revocation
+ *    lineage — which names the predecessor each successor superseded — is the
+ *    fallback, and `restorableSeat` composes the row from that identity.
+ *
  * Refuses (null) unless the active seat is the one named, is still provisional
  * and came from a spawn: a seat that has proved readable is a live
  * orchestrator, and nothing here may unseat one of those.
@@ -742,7 +761,14 @@ export function abandonStillbornOrchestratorSeat(input: {
   clientRequestId: string;
   error: string;
   now?: string;
-}): { terminalized: OrchestratorSeatTerminalization; restored: OrchestratorSeat | null } | null {
+  /** Whether the Viewer can still resolve a conversation. Absent means the
+      caller is not asking — only this store's own tests pass nothing. */
+  resolvable?: (conversationId: string) => boolean;
+  /** Compose the row for a predecessor the lineage names and `rollbacks` does
+      not hold. The store supplies the identity; naming a mandate and reading a
+      transcript belong to the caller. */
+  restorableSeat?: (input: { conversationId: string; stillborn: OrchestratorSeat }) => OrchestratorSeat | null;
+}): StillbornSeatRollback | null {
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
@@ -751,7 +777,19 @@ export function abandonStillbornOrchestratorSeat(input: {
     if (active.state !== "active" || active.intent.mode !== "spawn" || active.path !== null) return null;
     if (!active.conversationId) return null;
     const now = input.now ?? new Date().toISOString();
-    const predecessor = file.rollbacks[project] ?? null;
+    const recorded = file.rollbacks[project] ?? null;
+    /* Newest-first, so a project rotated more than once follows the revocation
+       that actually seated the stillborn conversation. */
+    const lineagePredecessor = recorded
+      ? null
+      : [...file.revocations].reverse().find((revocation) =>
+        revocation.project === project && revocation.successorConversationId === active.conversationId)?.conversationId ?? null;
+    const candidate = recorded
+      ?? (lineagePredecessor ? input.restorableSeat?.({ conversationId: lineagePredecessor, stillborn: active }) ?? null : null);
+    const unresolvable = Boolean(
+      candidate?.conversationId && input.resolvable && !input.resolvable(candidate.conversationId),
+    );
+    const predecessor = unresolvable ? null : candidate;
     let restored: OrchestratorSeat | null = null;
     if (predecessor?.conversationId) {
       restored = {
@@ -780,8 +818,14 @@ export function abandonStillbornOrchestratorSeat(input: {
       triggeredBy: active.triggeredBy ?? null,
     });
     delete file.rollbacks[project];
+    /* WHY the project ends undesignated, on the row the operator reads. A bare
+       «the launch failed» beside an empty seat reads as a second, unexplained
+       failure. */
+    const reason = unresolvable
+      ? `${input.error}; the predecessor ${candidate!.conversationId} it would have been rolled back to is no longer resolvable either, so the project is left undesignated`
+      : input.error;
     const terminalized = recordTerminalization(file, {
-      seat: { ...active, intent: { ...active.intent, error: input.error.slice(0, 500) } },
+      seat: { ...active, intent: { ...active.intent, error: reason.slice(0, 500) } },
       reason: "terminal_error",
       terminalizedAt: now,
     });

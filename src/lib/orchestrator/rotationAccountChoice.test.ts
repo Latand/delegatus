@@ -235,7 +235,7 @@ function dependencies(): { asks: SpawnAsk[]; resolved: string[] } {
     launchSettlement: () => ({ kind: "unknown" }),
     stampRegistryIdentity: () => {},
     runtimeIdentity: () => ({ engine: "codex", model: "gpt-6-astra" }),
-    conversationTurns: () => 12,
+    resolvedConversation: (conversationId) => ({ conversationId, path: `/tmp/${conversationId.slice(-4)}.jsonl`, holdsTurns: true, cwd: "/workspace" }),
     now: () => AT,
   };
   setSeatCommandDependenciesForTests(deps);

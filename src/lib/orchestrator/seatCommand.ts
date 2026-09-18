@@ -11,7 +11,8 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { readSession } from "@/lib/session/reader";
+import { pathAllowed } from "@/lib/scanner/roots";
+import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
@@ -45,6 +46,7 @@ import {
   repairOrchestratorSeatRuntimeIdentity,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
+  type StillbornSeatRollback,
   type OrchestratorSeatTrigger,
 } from "./seats";
 
@@ -104,13 +106,35 @@ export interface SeatCommandDependencies {
   stampRegistryIdentity(seat: OrchestratorSeat): void;
   /** Durable runtime identity for legacy seats that predate engine/model. */
   runtimeIdentity(conversationId: string): { engine: string | null; model: string | null };
-  /** How many turns a candidate predecessor's transcript actually holds, for
-      choosing WHICH conversation the handoff tells the successor to read
-      (#1757). Zero for a transcript that exists but records nothing, and zero
-      for one that cannot be read — both mean "there is nothing here to hand
-      over", which is the only question this answers. */
-  conversationTurns(input: { conversationId: string; path: string; engine: "claude" | "codex" }): number;
+  /** WHAT THE VIEWER CAN RESOLVE about a conversation, asked exactly the way
+      the tools that read one ask it (#1757): a registry row, and a transcript
+      generation under a scanner root.
+
+      Deliberately NOT {@link SeatCommandDependencies.conversationTarget}, whose
+      eligibility also requires the launch cwd to exist on disk and to resolve
+      to a project. `get_conversation` and `conversation_messages` never look at
+      a cwd, so an orchestrator whose worktree was deleted while it ran is
+      perfectly readable — and judging it by the stricter bar would drop a live
+      predecessor out of a handover, which is the same harm the issue is about.
+      The cwd travels here for the checkout a rotation inherits, and its absence
+      is never a reason to call a transcript unreadable.
+
+      `holdsTurns` is the extra question only the handover asks, answered by a
+      bounded scan that stops at the first turn rather than parsing a transcript
+      that may be the longest-lived on the machine. */
+  resolvedConversation(conversationId: string): ResolvedConversation | null;
   now(): string;
+}
+
+/** One conversation as the Viewer can actually resolve it (#1757). */
+export interface ResolvedConversation {
+  conversationId: string;
+  /** The transcript generation `conversation_messages` would page. */
+  path: string;
+  /** Whether that transcript records at least one turn to hand over. */
+  holdsTurns: boolean;
+  /** The launch checkout, when it is still on disk; null is not a defect. */
+  cwd: string | null;
 }
 
 export type LaunchSettlement =
@@ -280,13 +304,22 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
       model: receipt.launchProfile.model,
     };
   },
-  conversationTurns: ({ path, engine }) => {
-    try {
-      return readSession(path, engine).messages.length;
-    } catch {
-      /* An unreadable transcript holds no turns anyone can hand over. */
-      return 0;
-    }
+  resolvedConversation: (conversationId) => {
+    if (!conversationId) return null;
+    const conversation = agentRegistry().conversation(conversationId as `conversation_${string}`);
+    if (!conversation) return null;
+    const transcriptPath = conversation.generations.at(-1)?.path?.trim();
+    /* `pathAllowed` resolves the real path before comparing it with the scanner
+       roots, so a transcript that has been removed fails here too — the same
+       two refusals `conversation_messages` answers with, and no others. */
+    if (!transcriptPath || !pathAllowed(transcriptPath)) return null;
+    const cwd = conversation.generations.at(-1)?.launchProfile?.cwd?.trim();
+    return {
+      conversationId: conversation.id,
+      path: transcriptPath,
+      holdsTurns: hasUserAuthoredMessage(transcriptPath, conversation.engine),
+      cwd: cwd && isDirectory(cwd) ? cwd : null,
+    };
   },
   runtimeIdentity: (conversationId) => {
     const conversation = agentRegistry().conversation(conversationId as `conversation_${string}`);
@@ -303,6 +336,14 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
   },
   now: () => new Date().toISOString(),
 };
+
+function isDirectory(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 const CLIENT_REQUEST_ID = /^[A-Za-z0-9_-]{8,128}$/;
 
@@ -460,21 +501,25 @@ function reconcileCompletedSeatReplay(
 function reconcileActiveSeatLaunch(
   project: string,
   dependencies: SeatCommandDependencies,
-): OrchestratorSeatTerminalization | null {
+): StillbornSeatRollback | null {
   const active = orchestratorSeatFor(project).active;
   if (!active?.conversationId || active.intent.mode !== "spawn" || active.path !== null) return null;
   /* READABLE OUTRANKS EVERY RECEIPT. An admitted receipt names a conversation
      long before a transcript exists under it, and a receipt can read terminal
      while the conversation it launched is alive and answering. So the question
      asked first is the one the operator would ask: can the Viewer resolve this
-     conversation? If it can, the seat is real — confirmed, never rolled back. */
-  const target = dependencies.conversationTarget(active.conversationId);
-  if (target?.kind === "eligible") {
+     conversation? If it can, the seat is real — confirmed, never rolled back.
+     Asked through the resolution seam rather than adoption eligibility: a live
+     orchestrator whose checkout was deleted is still one, and unseating it for
+     a missing directory would be this recovery causing the outage it exists to
+     end. */
+  const resolved = dependencies.resolvedConversation(active.conversationId);
+  if (resolved) {
     confirmOrchestratorSeatMaterialization({
       project,
       clientRequestId: active.intent.clientRequestId,
       conversationId: active.conversationId,
-      path: target.path,
+      path: resolved.path,
     });
     return null;
   }
@@ -490,11 +535,86 @@ function reconcileActiveSeatLaunch(
     clientRequestId: active.intent.clientRequestId,
     error: `the accepted launch failed before its conversation became readable: ${settlement.error}`,
     now: dependencies.now(),
+    /* The predecessor is TESTED before the project is designated onto it again.
+       During the provisional window it can stop being resolvable — the card
+       closed, the transcript removed, its host retired after the rotation
+       revoked it — and restoring one the Viewer cannot read would reach the
+       state this recovery exists to prevent, by way of the repair. */
+    resolvable: (conversationId) => dependencies.resolvedConversation(conversationId) !== null,
+    restorableSeat: (input) => restorableSeatFromLineage(input, dependencies),
   });
   if (rolledBack) {
     console.warn(`orchestrator seat for ${project} was rolled back: its accepted launch failed before the conversation became readable (${settlement.error})`);
   }
-  return rolledBack?.terminalized ?? null;
+  return rolledBack;
+}
+
+/**
+ * The predecessor of a seat that was ALREADY provisional when this recovery
+ * shipped (#1757).
+ *
+ * `rollbacks` is written at a provisional activation, so exactly the incident's
+ * own shape — a seat standing on a stillborn conversation before this code
+ * existed — has no entry to roll back to, and would end undesignated. The
+ * revocation that seated it names the predecessor it superseded, which is the
+ * lineage the handover already walks, so the store hands that identity here and
+ * this composes the row to restore.
+ *
+ * One field cannot be recovered: the mandate that conversation ran under lived
+ * on the seat row the rotation replaced, and nothing keeps a copy. The restored
+ * row therefore carries the approved default at its current version rather than
+ * a guess — the next rotation composes its handover from something true, and
+ * the board reads a version it can check.
+ */
+function restorableSeatFromLineage(
+  input: { conversationId: string; stillborn: OrchestratorSeat },
+  dependencies: SeatCommandDependencies,
+): OrchestratorSeat | null {
+  const resolved = dependencies.resolvedConversation(input.conversationId);
+  if (!resolved) return null;
+  const runtime = dependencies.runtimeIdentity(input.conversationId);
+  return {
+    project: input.stillborn.project,
+    /* Placeholder only: the store mints the fresh epoch that lifts the
+       revocation, exactly as it does for a recorded rollback. */
+    seatEpoch: input.stillborn.seatEpoch,
+    conversationId: resolved.conversationId,
+    path: resolved.path,
+    engine: runtime.engine,
+    model: runtime.model,
+    runtimeIdentityFrozen: false,
+    mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+    promptVersion: ORCHESTRATOR_PROMPT_VERSION,
+    predecessorConversationId: null,
+    triggeredBy: null,
+    state: "active",
+    /* An adoption, which is what this is: the conversation exists and is being
+       designated again. The key is derived from the attempt being rolled back,
+       so a replayed rollback writes the same row. */
+    intent: { clientRequestId: `restored-${input.stillborn.intent.clientRequestId}`.slice(0, 128), mode: "existing", launchId: null, error: null },
+    designatedAt: input.stillborn.designatedAt,
+    activatedAt: null,
+  };
+}
+
+/**
+ * Reconcile ONE project's active seat against the launch it was activated on,
+ * for a caller that is not serving a request (#1757).
+ *
+ * The provisional window has to be bounded by something that comes round on its
+ * own: a seat activated on an accepted launch that then died would otherwise
+ * hold the project until the next POST to the seat or rotate route — a call
+ * that may never come, while the board goes on showing that seat's composer.
+ * The seat tick is that driver, and it already visits every seated project.
+ *
+ * Reconciles only. It starts nothing, sends nothing, and never waits on a
+ * launch: an unsettled one is left exactly where it is.
+ */
+export function reconcileActiveOrchestratorSeat(
+  project: string,
+  dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+): StillbornSeatRollback | null {
+  return reconcileActiveSeatLaunch(canonicalOrchestratorProject(project), dependencies);
 }
 
 /**
@@ -908,29 +1028,29 @@ function predecessorReadCall(conversationId: string): string {
  * «conversation not found», and the successor was left with a lineage of one
  * dead link and no way to know the real predecessor was one hop further back.
  *
- * Each hop is checked the same way the adoption path checks a target — a
- * registry row, a transcript on disk, a resolvable project — and then asked
- * the only question a handover cares about: does it hold turns? A stillborn
- * link answers no on both counts and is skipped, never followed.
+ * Each hop is judged by WHAT THE CALL THE HANDOVER PRESCRIBES NEEDS, and by
+ * nothing else: `conversation_messages` wants a registry row and a transcript
+ * generation under a scanner root, so those are the two facts asked for, plus
+ * the one question a handover cares about — does it hold turns? A stillborn
+ * link answers no to all three and is skipped, never followed.
+ *
+ * What is deliberately NOT asked is whether the launch cwd still exists. An
+ * orchestrator that ran in a worktree somebody has since deleted reads its own
+ * transcript perfectly well, and dropping it from the handover would lose the
+ * story for the same reason the incident did.
  */
 function readablePredecessor(
   project: string,
   incumbent: OrchestratorSeat,
-  incumbentTarget: Extract<ExistingConversationTarget, { kind: "eligible" }> | null,
   dependencies: SeatCommandDependencies,
-): { conversationId: string; turns: number; cwd: string } | null {
-  const holdsTurns = (target: Extract<ExistingConversationTarget, { kind: "eligible" }>): { conversationId: string; turns: number; cwd: string } | null => {
-    const turns = dependencies.conversationTurns({
-      conversationId: target.conversationId,
-      path: target.path,
-      engine: target.engine,
-    });
-    return turns > 0 ? { conversationId: target.conversationId, turns, cwd: target.cwd } : null;
+): { conversationId: string; cwd: string | null } | null {
+  const holdsTurns = (conversationId: string | null): { conversationId: string; cwd: string | null } | null => {
+    if (!conversationId) return null;
+    const resolved = dependencies.resolvedConversation(conversationId);
+    return resolved?.holdsTurns ? { conversationId: resolved.conversationId, cwd: resolved.cwd } : null;
   };
-  if (incumbentTarget) {
-    const held = holdsTurns(incumbentTarget);
-    if (held) return held;
-  }
+  const incumbentHolds = holdsTurns(incumbent.conversationId);
+  if (incumbentHolds) return incumbentHolds;
   /* Newest-first: each revocation names the seat that ended and the successor
      that replaced it, so following `successorConversationId` backwards from the
      incumbent walks the lineage without trusting any single seat row to carry
@@ -944,9 +1064,7 @@ function readablePredecessor(
     if (!candidate || seen.has(candidate)) return null;
     seen.add(candidate);
     current = candidate;
-    const target = dependencies.conversationTarget(candidate);
-    if (target?.kind !== "eligible") continue;
-    const held = holdsTurns(target);
+    const held = holdsTurns(candidate);
     if (held) return held;
   }
   return null;
@@ -1062,10 +1180,14 @@ async function runOrchestratorRotation(
   const rollbackReport = rolledBack
     ? {
       rolledBack: {
-        conversationId: rolledBack.seat.conversationId,
-        seatEpoch: rolledBack.seat.seatEpoch,
-        error: rolledBack.seat.intent.error,
-        terminalizedAt: rolledBack.terminalizedAt,
+        conversationId: rolledBack.terminalized.seat.conversationId,
+        seatEpoch: rolledBack.terminalized.seat.seatEpoch,
+        error: rolledBack.terminalized.seat.intent.error,
+        terminalizedAt: rolledBack.terminalized.terminalizedAt,
+        /* WHICH conversation holds the project now, so the caller reads the
+           whole outcome of the repair rather than only what died. Null is the
+           honest answer when nothing restorable was left. */
+        restoredConversationId: rolledBack.restored?.conversationId ?? null,
       },
     }
     : {};
@@ -1090,7 +1212,7 @@ async function runOrchestratorRotation(
      one, and when a rotation seated a conversation that never drew a breath
      they are not: the handover named that stillborn link anyway, and the
      successor's one instruction was to read a transcript that does not exist. */
-  const readable = readablePredecessor(project, incumbent, predecessor, dependencies);
+  const readable = readablePredecessor(project, incumbent, dependencies);
   const tasks = dependencies.projectTasks(project).slice(0, HANDOFF_TASK_CAP);
   const notes = text(rawBody.handoffNotes).slice(0, HANDOFF_NOTES_CAP);
   const handoff: HandoffParts = {
@@ -1191,7 +1313,7 @@ async function runOrchestratorRotation(
       ? { cwd: rawBody.cwd }
       : predecessor
         ? { cwd: predecessor.cwd }
-        : readable
+        : readable?.cwd
           ? { cwd: readable.cwd }
           : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),

@@ -345,7 +345,7 @@ test("Viewer draft and per-project orchestrator seat pass public spawn admission
       summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
       launchSettlement: () => ({ kind: "unknown" }),
       runtimeIdentity: () => ({ engine: null, model: null }),
-      conversationTurns: () => 0,
+      resolvedConversation: () => null,
       stampRegistryIdentity: () => {},
       now: () => "2026-08-25T00:00:00.000Z",
     };
