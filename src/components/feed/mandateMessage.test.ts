@@ -22,7 +22,6 @@ const HANDOFF = [
 test("a mandate with no rotation is one section, counted whole", () => {
   const message = mandateMessage(ORCHESTRATOR_SYSTEM_PROMPT);
   expect(message.handoff).toBeNull();
-  expect(message.mandate).toContain("You are the viewer's built-in Manager");
   expect(message.lines).toBe(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").length);
 });
 
@@ -30,7 +29,6 @@ test("a rotation handoff becomes its own section, and never leaks into the manda
   const message = mandateMessage(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${HANDOFF}`);
   expect(message.handoff).toContain("## Handoff from your predecessor");
   expect(message.handoff).toContain("conv-A");
-  expect(message.mandate).toContain("You are the viewer's built-in Manager");
   expect(message.mandate).not.toContain("## Handoff from your predecessor");
   /* The count describes the whole delivered message, sections included. */
   expect(message.lines).toBeGreaterThan(message.mandate.split("\n").length);

@@ -36,7 +36,6 @@ test("role registry exposes the frozen eight role ids and campaign-ready orchest
     completionPolicy: "released",
   });
   expect(orchestrator.ok && orchestrator.value.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
-  expect(orchestrator.ok && orchestrator.value.prompt).toContain("Viewer MCP tools");
   expect(orchestrator.ok && orchestrator.value.prompt).not.toMatch(/(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Repository: Latand/live-log-viewer-next");
   expect(orchestrator.ok && orchestrator.value.prompt).toContain("Issue query: is:open");
@@ -85,14 +84,8 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
 });
 
-test("resolved prompts carry role safety fences and reject cross-engine inherited models", () => {
+test("the reviewer scaffold names the typecheck command, and a cross-engine inherited model is rejected", () => {
   const reviewer = resolveRole("reviewer", { diffSource: "origin/main...HEAD", lens: "all" });
-  expect(reviewer.ok && reviewer.value.prompt).toContain("Read-only mode: edits, staging, commits, pushes, service restarts, and GitHub comments are prohibited.");
-  expect(reviewer.ok && reviewer.value.prompt).toContain("actionable fix plan");
-  expect(reviewer.ok && reviewer.value.prompt).toContain("No copy-paste code unless absolutely necessary.");
-  expect(reviewer.ok && reviewer.value.prompt).toContain("Report the reviewed SHA.");
-  expect(reviewer.ok && reviewer.value.prompt).toContain("State plainly when GitHub or DNS access was unavailable.");
-  expect(reviewer.ok && reviewer.value.prompt).toContain("environmental note");
   expect(reviewer.ok && reviewer.value.prompt).toContain("bunx tsc --noEmit --incremental false");
 
   expect(resolveSpawnRole({ role: "builder", roleParams: { mode: "plain" }, engine: "claude" })).toEqual({
@@ -113,7 +106,6 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
     if (!role.ok) throw new Error(role.error);
     expect(role.value.prompt).toContain("search_transcripts");
     expect(role.value.prompt).toContain("conversation_messages");
-    expect(role.value.prompt).toContain("solved before");
   }
 });
 

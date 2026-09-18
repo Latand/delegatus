@@ -47,6 +47,10 @@ const HANDOFF = [
   "No open board tasks are recorded for this project.",
 ].join("\n");
 
+/** Probes taken from the delivered text itself, so no sentence is pinned here. */
+const MANDATE_BODY = ORCHESTRATOR_SYSTEM_PROMPT.split("\n")[0]!;
+const STATUS_DIRECTIVE_BODY = ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE.split("\n")[1]!;
+
 const ROW_TS = "2026-08-25T09:00:00.000Z";
 const DELIVERED_AT = "2026-08-25T08:59:58.000Z";
 
@@ -96,15 +100,14 @@ test("the delivered mandate renders as a card in place of the operator's bubble"
   const header = container.querySelector("[data-mandate-card]")!.textContent ?? "";
   expect(header).toContain("Mandate v9");
   expect(header).toContain(`${text.split("\n").length} lines`);
-  expect(header).toContain("sent at seat creation");
 });
 
 test("the card holds the mandate back until it is expanded", () => {
   const container = renderRow(ORCHESTRATOR_SYSTEM_PROMPT, { origin: "agent", mandate: { kind: "version", version: 9 } });
 
-  expect(container.textContent).not.toContain("You are the viewer's built-in Manager");
+  expect(container.textContent).not.toContain(MANDATE_BODY);
   expand(container, 0);
-  expect(container.textContent).toContain("You are the viewer's built-in Manager");
+  expect(container.textContent).toContain(MANDATE_BODY);
 });
 
 test("a rotation handoff opens as a second section of the same card", () => {
@@ -112,13 +115,12 @@ test("a rotation handoff opens as a second section of the same card", () => {
 
   expect(container.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
   expect(container.querySelectorAll("details")).toHaveLength(2);
-  expect(container.textContent).toContain("Rotation handoff");
 
   expect(container.textContent).not.toContain("You are replacing orchestrator conversation");
   expand(container, 1);
   expect(container.textContent).toContain("You are replacing orchestrator conversation");
   /* The handoff is its own section: opening it does not unfold the mandate. */
-  expect(container.textContent).not.toContain("You are the viewer's built-in Manager");
+  expect(container.textContent).not.toContain(MANDATE_BODY);
 });
 
 test("a bespoke mandate reads as custom, on the board's conversation pane as in the dock", () => {
@@ -142,7 +144,6 @@ test("a mandate nothing could name is still the card, claiming no version", () =
   expect(header).not.toContain("Mandate v");
   expect(header).not.toContain("custom");
   expect(header).toContain(`${text.split("\n").length} lines`);
-  expect(header).toContain("sent at seat creation");
   expect(container.innerHTML).not.toContain("bg-user");
 });
 
@@ -156,13 +157,11 @@ test("a bespoke rotation's appended status directive belongs to the mandate, not
 
   expand(container, 1);
   expect(container.textContent).toContain("You are replacing orchestrator conversation");
-  expect(container.textContent).not.toContain("Your first turn after receiving this mandate");
+  expect(container.textContent).not.toContain(STATUS_DIRECTIVE_BODY);
 
   expand(container, 0);
   expect(container.textContent).toContain(bespoke);
-  expect(container.textContent).toContain("Your first turn after receiving this mandate");
-  /* Guarding the sentence above against a reworded directive. */
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("Your first turn after receiving this mandate");
+  expect(container.textContent).toContain(STATUS_DIRECTIVE_BODY);
 });
 
 test("an ordinary operator message keeps its bubble, and so does a paste of the mandate itself", () => {

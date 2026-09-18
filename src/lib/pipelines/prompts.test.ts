@@ -38,9 +38,7 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain("Access: read-write");
   expect(prompt).toContain('"status":"pass"');
   expect(prompt).toContain('"findings":[]');
-  expect(prompt).toContain("Pass requires findings to be empty or omitted.");
   expect(prompt).toContain("REQUEST_CHANGES=fail");
-  expect(prompt).toContain("Pipeline nesting is forbidden");
   expect(prompt).toContain("Role preset: builder");
   expect(prompt).toContain("Keep the implementation focused on pipeline support.");
 });

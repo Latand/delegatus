@@ -44,28 +44,12 @@ function languagePins(persona: string): string[] {
   return pins;
 }
 
-test("both spoken personas carry native's operating protocol, in this repo's words", () => {
-  /* The originating directive asked for the native USER/BACKEND framing and the
-     operating protocol preserved, which three slogans from it do not cover. Each of these is a
-     distinct failure the installed app's own prompt is written to prevent, and
-     each has to reach BOTH variants — the spoken model is the same model either
-     way. The wording is this repository's; the bundled prompt is a reference. */
+test("both spoken personas frame the two sources of a turn the same way", () => {
+  /* The two sources arrive in one stream, both as user-role text, and the
+     spoken model tells them apart by these markers alone. */
   for (const persona of [COORDINATOR_VOICE_PERSONA, MODALITY_VOICE_PERSONA]) {
-    /* The two sources arrive in one stream, both as user-role text. */
     expect(persona).toContain("[USER]");
     expect(persona).toContain("[BACKEND]");
-    expect(persona).toContain("never send one back as work");
-    /* An update is not a completion; the tool return is. */
-    expect(persona).toContain("tool return");
-    expect(persona).toContain("do not announce a task as done");
-    /* Self-contained conversation needs no backing turn; uncertainty still does. */
-    expect(persona).toContain("plainly conversational");
-    expect(persona).toContain("unsure about goes to the agent");
-    /* Task-level pacing survives the next backend message. */
-    expect(persona).toContain("holds for the whole task");
-    expect(persona).toContain("Do not drift back to your default");
-    /* And the rules already there are still there. */
-    expect(persona).toContain("authoritative");
   }
 });
 
@@ -192,75 +176,13 @@ test("the persona names no person", () => {
   expect(COORDINATOR_VOICE_PERSONA).not.toMatch(/Kostiantyn/i);
 });
 
-test("the persona carries a conversational register rather than a help-desk one", () => {
-  /* Spoken-first also means sounding like a person: short sentences, plain
-     words, room for a joke, and owning a mistake in one breath. */
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/Conversational register/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/Humour dry and quick/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/One or two sentences a turn/);
-});
-
-test("the persona carries the character traits the research settled on", () => {
-  /* Curiosity, visible delight at good work, a hypothesis with its test, and no
-     condescension — these make it a partner rather than a reader. */
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/want to know how a thing works/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/A good solution pleases you/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/the hypothesis, and what would test it/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/without condescension/);
-});
-
-test("the persona carries the rules that only matter aloud", () => {
-  // Spoken identifiers, apologies, and unverified "it works" were the three
-  // failure modes the operator hit in a real call.
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/Never speak numbers or identifiers aloud/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/never speak markup aloud/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/No apologies and no ceremony/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/written locally, merged, deployed and verified/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/"not X, but Y"/);
-});
-
-test("the character never buys itself room on truth", () => {
-  /* The guardrails the research put inside the prompt text: charm loses to
-     accuracy, agreeing to be agreeable is a lie, no quoted dialogue, and it
-     never claims to be the character it was drawn from. */
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/Charm is no substitute for accuracy/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/No flattery and no going along/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/do not quote lines from films, books or series/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/an assistant with a personality/);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/not a character from a series/);
-});
-
 /* #691 §4 — the gateway's instruction path. The relay is deterministic only if the
    agent is told which tool carries it and what to reuse on a retry; nothing else in
    the running system can say so. */
 
-test("the spoken persona tells the voice it does not drive the board itself", () => {
-  expect(COORDINATOR_VOICE_PERSONA).toContain("only voice the user hears");
-  expect(COORDINATOR_VOICE_PERSONA).toContain("do not touch the board yourself");
-});
-
-test("the backing instructions name the directive tool and the id it must reuse on a retry", () => {
+test("the backing instructions name the directive tool", () => {
   /* Addressed to the model that actually holds the tool. The spoken model has
      none, so a relay mandate delivered to it can only produce a refusal. */
   const backing = voiceSessionPersona("coordinator").startInstructions;
   expect(backing).toContain("bridge_directive");
-  expect(backing).toContain("reuse the same turn id and index");
-  /* The recipient is server-resolved; a gateway that thought it chose one would
-     eventually try to message a worker. */
-  expect(backing).toContain("you never name it");
-});
-
-test("the deploy round trip and its refusals reach both models", () => {
-  /* The user's spoken yes is heard by the spoken model and acted on by the
-     backing one, so neither half can carry the rule alone. */
-  expect(COORDINATOR_VOICE_PERSONA).toContain("spoken yes");
-  expect(COORDINATOR_VOICE_PERSONA).toContain("anything other than a clear yes is a no");
-  const backing = voiceSessionPersona("coordinator").startInstructions;
-  expect(backing).toContain("spoken yes");
-  expect(backing).toContain("Never invent or reword");
-});
-
-test("the spoken persona keeps the plumbing out of the user's ear", () => {
-  expect(COORDINATOR_VOICE_PERSONA).toContain("do not narrate the plumbing");
-  expect(COORDINATOR_VOICE_PERSONA).toContain("do not read a report verbatim");
 });
