@@ -870,8 +870,9 @@ test("the queue yields to the conversation above the composer, and scrolls its o
      controls never scroll away. The measurement itself — input and send inside
      the pane and pressable, the conversation keeping room, the last row
      reachable at 4/16/128 rows, on a real phone viewport and on the board's own
-     card heights — is `scripts/capture-issue-1629-queue-height.ts`, in a real
-     browser, because only a browser has a layout.
+     card heights — was a one-shot browser script, deleted in #1761; a new
+     measurement of this goes through `scripts/capture-board-geometry.ts`,
+     because only a browser has a layout.
 
      Sized from the viewport alone the panel could be taller than the whole
      phone composer, which put the textarea and the send control below the

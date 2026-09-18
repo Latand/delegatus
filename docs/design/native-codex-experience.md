@@ -216,13 +216,14 @@ named runtime, queue, history, status, MCP and Voice checks, then the browser
 half in its own process (each of those installs its own document over the same
 globals, so they cannot share one). CI runs the same script.
 
-`bun run build && bun scripts/capture-issue-1629-queue-panel.ts` renders the
-panel in a real browser against the build's own stylesheet and measures what the
-DOM tests cannot: that the controls are reachable and inside the panel, that a
-row which cannot be changed offers none and says why, that a refusal is legible
-and distinct from an ordinary row status, and that the panel stays inside its
-width. It then reintroduces each of those defects in the page and fails if the
-reading still holds.
+The #1629 queue-panel capture script (deleted in #1761) rendered the panel in a
+real browser against the build's own stylesheet and measured what the DOM tests
+cannot: that the controls are reachable and inside the panel, that a row which
+cannot be changed offers none and says why, that a refusal is legible and
+distinct from an ordinary row status, and that the panel stays inside its width.
+It then reintroduced each of those defects in the page and failed if the reading
+still held. A new measurement of this panel goes through
+`scripts/capture-board-geometry.ts`.
 
 Responsiveness is measured on production-shaped fixtures, each at the size its
 own surface has to survive. A control press commits the row's busy state inside

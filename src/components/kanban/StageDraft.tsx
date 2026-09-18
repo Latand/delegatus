@@ -12,6 +12,8 @@ import { BranchGlyph, ChevronRight, CloseGlyph, CollapseGlyph, ExpandGlyph, More
 import { graphOrder } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { stageDraftKey, type StageDraft, type StageDrafts } from "./stageDrafts";
+import { stageIdentity } from "./stageIdentity";
+import { StageIdentity } from "./identityMarks";
 import { draftFacts, draftOutcome, neverLaunched, pipelineEnded, stageDraftable, stageNotStarted, stageWiringIndex } from "./stagesModel";
 
 /*
@@ -321,7 +323,6 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
   const order = graphOrder(pipeline);
   const k = order.findIndex((entry) => entry.id === stage.id) + 1;
   const roleId = stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
-  const engine = stage.effectiveRole.engine;
   const title = `${name} · ${cardTitle}`;
   const stored = stagePromptExtra(stage.prompt);
   const stateWord = pipelineEnded(pipeline) ? t("kanban.draft.stateEnded") : started ? t("kanban.draft.stateStarted") : t("kanban.draft.state");
@@ -359,8 +360,7 @@ export function StageDraftPanel({ panelKey, cardTitle, pipeline, stage, names, f
         {folded ? null : (
           <div className="ch-meta">
             <span className="ch-state">{stateWord}</span>
-            <span className={`ch-engine ${engine}`}>{engine === "codex" ? "Codex" : "Claude"}</span>
-            {stage.effectiveRole.model ? <span className="ch-model">{stage.effectiveRole.effort ? `${stage.effectiveRole.model} · ${stage.effectiveRole.effort}` : stage.effectiveRole.model}</span> : null}
+            <StageIdentity identity={stageIdentity(pipeline, stage)} density="header" showWord />
             <StageAccountChip pipeline={pipeline} stage={stage} />
             {started ? null : <span className="ch-ctx">{t("kanban.draft.noContext")}</span>}
             {pipeline.branch ? (

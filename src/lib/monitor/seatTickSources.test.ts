@@ -4,12 +4,20 @@ import os from "node:os";
 import path from "node:path";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
-const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR };
+const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
+process.env.OPENCLAW_STATE_DIR = path.join(SANDBOX, "openclaw");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+/* A scanner root this sandbox owns, and where a fixture child's transcript
+   goes (#1783): a child whose transcript the Viewer cannot resolve is never
+   projected as harvestable, so a transcript written nowhere the scanner looks
+   stops exercising the projection. `OPENCLAW_STATE_DIR` is resolved per call;
+   `os.homedir()` does not read `HOME`, so the other roots stay the machine's. */
+const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
+fs.mkdirSync(SESSIONS, { recursive: true });
 
 const { gatherSeatTickInput: gatherProduction, repoDirForProject, runtimeWakeState, seatTickProjects, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
@@ -1504,7 +1512,8 @@ function childRegistry(name: string): ChildRegistry {
     now,
     spawn(options) {
       const childCwd = options.cwd ?? cwd;
-      const childPath = path.join(dir, `${crypto.randomUUID()}.jsonl`);
+      const childPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
+      fs.writeFileSync(childPath, "");
       const observed = options.unobserved ? null : registry.ensureConversation("claude", childPath, null);
       const begun = registry.beginSpawnRequest({
         engine: "claude",

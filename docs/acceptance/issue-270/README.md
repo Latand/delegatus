@@ -12,13 +12,10 @@ is unknown (the follow-up review finding: the engine-badge fallback now carries
 Production build (`next start`, NODE_ENV=production) against a disposable
 deterministic fixture home, driven by Playwright 1.61.1 chromium. The full
 harness — fixture materialization, server boot, DOM assertions, screenshots —
-is [`capture.ts`](./capture.ts):
-
-```sh
-bun install && bun run build
-mkdir -p /tmp/llv-pw && (cd /tmp/llv-pw && bun add playwright@1.61.1)
-bun docs/acceptance/issue-270/capture.ts
-```
+was this directory's own `capture.ts`, deleted with the other per-issue
+capture scripts in #1761. The frames and `evidence.json` beside this README are
+the record; a new capture of this surface goes through
+`scripts/capture-board-geometry.ts`.
 
 The fixture contains two sessions in one project:
 

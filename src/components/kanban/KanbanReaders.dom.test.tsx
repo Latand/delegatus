@@ -177,7 +177,10 @@ test("a tile opens its conversation as a reader in the card, in the prototype's 
   expect(reader?.closest(".card")?.getAttribute("data-id")).toBe("task:a");
   expect(reader?.querySelector(".conv-head .ch-title")?.textContent).toBe("Conversation 1");
   expect(reader?.querySelector(".ch-meta .ch-engine")?.textContent).toBe("Claude");
-  expect(reader?.querySelector(".ch-meta .ch-model")?.textContent).toBe("claude-opus · high");
+  /* Model as text, reasoning as the shared five-step ladder beside its word (#1743). */
+  expect(reader?.querySelector(".ch-meta .ch-model span")?.textContent).toBe("claude-opus");
+  expect(reader?.querySelector(".ch-meta .ch-model [data-effort-pills]")?.getAttribute("data-effort-step")).toBe("3");
+  expect(reader?.querySelector(".ch-meta .ch-effort")?.textContent).toBe("high");
   expect(reader?.querySelector("[data-reader-close]")).toBeTruthy();
   expect(cardEl(first.host, "task:a")?.querySelector(".tile")).toBeNull();
   expect(remembered()).toEqual([{ key: "conversation_fixture_1", path: file.path, folded: false } as never]);

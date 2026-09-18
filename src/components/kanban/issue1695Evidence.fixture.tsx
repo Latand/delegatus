@@ -45,6 +45,11 @@ const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
    a card's rows can be read for what each pipeline actually does. */
 const MANY = SCENARIO === "issue1765";
+/* #1743: one task whose pipelines exercise the whole identity/edge vocabulary —
+   a fail edge fired twice of three, one whose budget is spent, mixed engines,
+   all five effort levels, a long uncatalogued model, a stage edited after its
+   launch, and a stage that has never started. */
+const MARKS = SCENARIO === "issue1743";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -174,7 +179,66 @@ const manyPipelines: Pipeline[] = MANY ? ([
   });
 }) : [];
 
+/* #1743. `role()` gives every stage the engine default; these stages name their
+   own engine, model and effort, and their attempts record what actually ran. */
+const runRole = (roleId: string, engine: string, model: string, effort: string) =>
+  ({ roleId, engine, model, effort, access: "read-write", promptScaffold: null });
+const marksStage = (id: string, roleId: string, next: string | null, engine: string, model: string, effort: string, over: Record<string, unknown> = {}) =>
+  stage(id, roleId, next, { effectiveRole: runRole(roleId, engine, model, effort), ...over });
+
+const marksPipelines: Pipeline[] = MARKS ? (() => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
+  const plan = conv("marks-plan", "Plan the retry banner", { mtime: now - 300 * MIN, model: "fable" });
+  const build1 = conv("marks-build-1", "First pass at the banner", { mtime: now - 260 * MIN, model: "sonnet" });
+  const build2 = conv("marks-build-2", "Second pass after the first critique", { mtime: now - 180 * MIN, model: "sonnet" });
+  const build3 = conv("marks-build-3", "Third pass after the second critique", working({ model: "sonnet", plan: { current: "Rewriting the banner copy" } }));
+  const crit1 = conv("marks-crit-1", "Sent it back: the banner hides the retry", { mtime: now - 220 * MIN });
+  const crit2 = conv("marks-crit-2", "Sent it back again: still no count", { mtime: now - 140 * MIN });
+  const spentBuild = conv("marks-spent-build", "Reworked the limit notice", { mtime: now - 90 * MIN });
+  const spentRev = conv("marks-spent-rev", "Out of returns", { mtime: now - 40 * MIN, engine: "codex", model: "gpt-6-astra" });
+  return [
+    /* The fail edge fired twice of three: a circled 2 on the arrow, one return left. */
+    pipeline("p-marks", "Rework the retry banner until the critique passes", "t-marks", "running", [
+      marksStage("plan", "architect", "build", "claude", "fable", "low"),
+      /* Edited to Codex after it last ran on Claude: the node keeps the launched
+         values and marks that the next attempt differs. */
+      marksStage("build", "builder", "critique", "codex", "gpt-5.6-terra", "medium"),
+      marksStage("critique", "architect", "verify", "claude", "opus", "high", { onFail: { to: "build", maxRounds: 3 } }),
+      marksStage("verify", "verifier", "ship", "codex", "gpt-6-astra", "xhigh"),
+      /* Never started: its configuration reads as configuration, muted. */
+      marksStage("ship", "cleaner", null, "claude", "claude-opus-5-20260101-preview", "max"),
+    ], [
+      { stageId: "plan", attempts: [attempt(1, "passed", plan, { effectiveRole: runRole("architect", "claude", "fable", "low"), startedAt: iso(300 * MIN) })] },
+      { stageId: "build", attempts: [
+        attempt(1, "passed", build1, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(260 * MIN), activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } }),
+        attempt(2, "passed", build2, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(200 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
+        attempt(3, "running", build3, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(120 * MIN), activatedBy: { stageId: "critique", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", crit1, { effectiveRole: runRole("architect", "claude", "opus", "high"), startedAt: iso(220 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", crit2, { effectiveRole: runRole("architect", "claude", "opus", "high"), startedAt: iso(140 * MIN), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } }),
+      ] },
+    ], { stageId: "build", state: "running", input: null, activatedBy: null }),
+    /* The same edge with nothing left: two of two used, drawn as exhausted. */
+    pipeline("p-marks-spent", "Show the account limit reset on the card", "t-marks", "running", [
+      marksStage("fix", "builder", "review", "claude", "opus", "max"),
+      marksStage("review", "verifier", null, "codex", "gpt-6-astra", "xhigh", { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", spentBuild, { effectiveRole: runRole("builder", "claude", "opus", "max"), startedAt: iso(90 * MIN) }),
+        attempt(2, "passed", spentBuild, { effectiveRole: runRole("builder", "claude", "opus", "max"), startedAt: iso(70 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(3, "running", spentBuild, { effectiveRole: runRole("builder", "claude", "opus", "max"), startedAt: iso(50 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(80 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", spentRev, { effectiveRole: runRole("verifier", "codex", "gpt-6-astra", "xhigh"), startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
 const pipelines: Pipeline[] = [
+  ...marksPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
@@ -345,6 +409,7 @@ const tasks: BoardTask[] = [
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
+  ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -844,6 +909,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 localStorage.setItem("llvProject", PROJECT);
-localStorage.setItem("llv_lang", "en");
+/* The harness may seed a language before this module runs (`openFixture`), so
+   English is only the DEFAULT here — writing it unconditionally turned every
+   requested Ukrainian frame back into an English render (#1743). */
+if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash) location.hash = `#p=${PROJECT}`;
 createRoot(document.getElementById("root")!).render(<Viewer />);

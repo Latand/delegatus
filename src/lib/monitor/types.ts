@@ -217,9 +217,37 @@ export interface SeatTickWakeReason {
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
   outcomeId?: string;
+  /** Every owed outcome this ONE line stands for (#1783). A child's outcome
+      identity is a turn of a ledger generation, so a worker the seat spawned
+      once holds as many owed rows as it has ended turns — sixty-three, on the
+      board this was filed from — and one line per row is how the same child
+      reached a single wake five times. The line names the child once with its
+      latest state, and a landing acknowledges every row behind it: what the
+      seat was shown, it was shown all of. */
+  outcomeIds?: readonly string[];
   kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child";
   id: string;
   label: string;
+}
+
+/**
+ * The terminal children a wake deliberately did NOT list, by reason (#1783).
+ *
+ * Counted rather than named, and each count says why: a wake that names them
+ * is the wake both #1749 and #1783 were filed on. The reasons are separate
+ * because the seat can act on one of them — a stale outcome is a predecessor's
+ * board and needs nothing — while an unresolvable transcript is a child the
+ * Viewer can never read, which is a fact about this machine's scanner roots
+ * and not about the seat's work.
+ */
+export interface SeatTickSkippedChildren {
+  /** Outcomes recorded before this seat's designation, or taken by an earlier
+      seat epoch. */
+  stale: number;
+  /** Children whose transcript the Viewer cannot resolve — outside every
+      scanner root, or gone from disk — so their outcome can never be read or
+      harvested, whoever is seated. */
+  unreadable: number;
 }
 
 export type SeatTickVerdict =
@@ -236,11 +264,11 @@ export type SeatTickVerdict =
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
     deferred: number;
-    /** Terminal children this wake deliberately did NOT list (#1749): their
-        outcomes predate the seat's own designation, or an earlier epoch
-        already harvested them. Counted rather than named — the wake says how
-        many it skipped and nothing else about them. */
-    staleChildren: number;
+    /** Terminal children this wake deliberately did NOT list (#1749, #1783),
+        by reason and as counts of CHILDREN rather than of owed outcomes.
+        Counted rather than named — the wake says how many it skipped, why,
+        and nothing else about them. */
+    skippedChildren: SeatTickSkippedChildren;
     /** Evidence this check could not read (#1298). The reasons above stand
         without it; this is what the wake says it could not see. */
     gaps: SeatTickEvidenceGap[];
@@ -552,8 +580,20 @@ export interface SeatTickChildInput {
   status: "running" | "terminal" | "unknown";
   outcome: "finished" | "failed" | null;
   /** When the terminal outcome was recorded, for ordering the harvest oldest
-      first. Null while the child is not terminal. */
+      first and for the staleness test. Null while the child is not terminal.
+
+      Its provenance is load-bearing (#1783): the child's own recorded terminal
+      instant, or the last record of its transcript when the registry has none.
+      NEVER the instant the registry last observed the turn or last rewrote the
+      conversation — a rescan and a host-retirement sweep stamp hundreds of
+      conversations with one instant, which is what made the #1749 age test a
+      no-op against children whose work ended weeks earlier. */
   terminalAt: string | null;
+  /** Whether the Viewer can resolve this child's transcript at all (#1783):
+      `unresolvable` is a path outside every scanner root, or one no longer on
+      disk. Such a child can never be read or harvested by any seat, so it is
+      never listed as harvestable and only counted. Absent is readable. */
+  transcript?: "readable" | "unresolvable";
   /** The seat epoch whose landed wake last harvested an outcome of this child
       (#1749). An earlier epoch's harvest is what makes an outcome that predates
       this seat history rather than work, however the identity was re-minted:

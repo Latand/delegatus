@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronRight, Command, Crown, MessageCircle, Mic, Sparkle } from "@/components/icons";
+import { EngineMark } from "@/components/EngineMark";
+import { ChevronRight, Crown, Mic } from "@/components/icons";
 import { Fragment, useLayoutEffect, useRef } from "react";
 import type { ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { captureCatalogPosition, MobileCatalogTail, restoreCatalogPosition, type CatalogPosition } from "./MobileInlineCatalog";
@@ -78,15 +79,8 @@ function Section({ label, count, id }: { label: string; count?: number; id?: str
   );
 }
 
-/** The engine mark: a 16 px glyph in secondary colour. The only avatar left. */
-function EngineMark({ engine }: { engine: string }) {
-  const Glyph = engine === "codex" ? Command : engine === "openclaw" ? MessageCircle : Sparkle;
-  return (
-    <span className="inline-grid h-4 w-4 shrink-0 place-items-center text-secondary" data-mobile2-engine={engine}>
-      <Glyph className="h-[13px] w-[13px]" aria-hidden />
-    </span>
-  );
-}
+/* The engine mark is the Viewer's one shared mark (#1743): a 16 px glyph in the
+   engine's own colour. The only avatar left. */
 
 function Badge({ tone, children }: { tone: "warning" | "danger"; children: React.ReactNode }) {
   return (
@@ -200,7 +194,9 @@ function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
           {row.file.model ? (
             <>
               <span aria-hidden className="shrink-0 opacity-60">·</span>
-              <EngineMark engine={row.file.engine} />
+              <span data-mobile2-engine={row.file.engine} className="inline-flex shrink-0">
+                <EngineMark engine={row.file.engine} size={16} />
+              </span>
               <span data-mobile2-model className="shrink-0">{row.file.model}</span>
             </>
           ) : null}

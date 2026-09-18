@@ -37,8 +37,17 @@ export async function serveEvidenceFixture(outDir: string): Promise<{ base: stri
   return { base: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
 }
 
-export async function openFixture(browser: Browser, url: string, viewport: { width: number; height: number }, scheme: "light" | "dark") {
+export async function openFixture(
+  browser: Browser,
+  url: string,
+  viewport: { width: number; height: number },
+  scheme: "light" | "dark",
+  /* The Viewer reads its language from `llv_lang` in localStorage, so a case
+     that gates both languages seeds it before the first render (#1743). */
+  lang?: "en" | "uk",
+) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: "no-preference" });
+  if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));

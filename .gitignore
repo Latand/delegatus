@@ -64,14 +64,14 @@ docs/screenshots/issue-499/geometry.list
 # The conversation-window visual evidence: the objective geometry manifest
 # (geometry.json — overflow/proportions/control-placement measurements) is
 # COMMITTED so the review can inspect it directly (round-1 P2#7); the
-# browser-rendered PNGs and intermediate HTML are regenerated on demand by
-# conversationWindowEvidence.browser.test.tsx and are NOT committed (a raw
+# browser-rendered PNGs and intermediate HTML were regenerated on demand by a
+# driver deleted in #1761 and are NOT committed (a raw
 # browser render is not byte-deterministic, so it cannot carry the deterministic
 # privacy-manifest hash the publication gate requires).
 evidence/**/*.html
 evidence/**/*.png
 
 # issue-1086 UI captures: browser renders are not byte-deterministic, so they
-# carry no privacy-manifest provenance and stay out of the commit. Regenerate
-# with `bun run build && bun evidence/issue-1086/drive.ts`.
+# carry no privacy-manifest provenance and stay out of the commit. Its one-shot
+# driver was deleted in #1761.
 /.artifacts/

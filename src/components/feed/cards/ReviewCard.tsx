@@ -1,6 +1,10 @@
+import type { CSSProperties } from "react";
+
 import type { ReviewCardItem, ReviewSeverity } from "@/lib/review";
 
-import { Ban, ChevronRight, CircleCheck, Command, MessageCircle } from "../../icons";
+import { EngineMark } from "@/components/EngineMark";
+
+import { Ban, ChevronRight, CircleCheck, MessageCircle } from "../../icons";
 import { hhmm } from "../../utils";
 import { md, mdBlocks } from "../markdown";
 import { tr } from "../parse";
@@ -36,8 +40,14 @@ export function ReviewCard({ item }: { item: ReviewCardItem }) {
   return (
     <div className="my-3 ml-9 overflow-hidden rounded-surface border border-codex/20 bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-codex-soft text-codex">
-          <Command className="h-3.5 w-3.5" aria-hidden />
+        {/* The last ad-hoc engine glyph in the feed: the Viewer's one mark now
+            (#1743). The cut strokes take the tile's own fill, so the prompt
+            inside the disc stays a hole. */}
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-codex-soft"
+          style={{ "--engine-mark-cut": "var(--color-codex-soft)" } as CSSProperties}
+        >
+          <EngineMark engine="codex" size={14} />
         </span>
         <span className="text-[13px] font-bold">Codex review</span>
         {item.verdict ? (

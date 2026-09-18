@@ -9,6 +9,8 @@ import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
 import { stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { EffortScale } from "@/components/EffortPills";
+import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
 import { useProcessKill } from "@/components/TaskHeader";
@@ -16,6 +18,7 @@ import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { cleanTitle, fmtAge } from "@/components/utils";
 
 import { ConversationAccountChip } from "./AccountPicker";
+import { engineWord } from "./identityMarks";
 import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
 
@@ -217,8 +220,19 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
   const identity = (
     <>
-      {engine ? <span className={`ch-engine ${engine}`}>{engine === "claude" ? "Claude" : "Codex"}</span> : null}
-      {file.model ? <span className="ch-model" title={t("kanban.readerModelTitle")}>{file.effort ? `${file.model} · ${file.effort}` : file.model}</span> : null}
+      {engine ? (
+        <span className="ch-engine" data-engine={engine}>
+          <EngineMark engine={engine} size={12} />
+          <span>{engineWord(engine)}</span>
+        </span>
+      ) : null}
+      {file.model ? (
+        <span className="ch-model" title={t("kanban.readerModelTitle")}>
+          <span>{file.model}</span>
+          <EffortScale effort={file.effort} />
+          {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
+        </span>
+      ) : null}
       {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
       {/* Supersedence lineage (#383), as the pane's own header carries it: the retired predecessor's history is one

@@ -1,3 +1,5 @@
+import { EngineMark } from "@/components/EngineMark";
+
 import {
   AlarmClock,
   Archive,
@@ -121,6 +123,8 @@ export type GlyphName =
   | "spawn"
   | "clock";
 
+/* `claude` and `codex` are served by `EngineMark` in `GlyphIcon` below; the
+   entries here keep the map total. */
 const GLYPHS: Record<GlyphName, LucideIcon> = {
   shell: ChevronRight,
   tool: Wrench,
@@ -144,6 +148,9 @@ const GLYPHS: Record<GlyphName, LucideIcon> = {
 };
 
 export function GlyphIcon({ name, className }: { name: GlyphName; className?: string }) {
+  /* The two engine names go through the Viewer's one engine mark (#1743), so a
+     feed row and a stage node never draw Claude two different ways. */
+  if (name === "claude" || name === "codex") return <EngineMark engine={name} size={14} className={className} />;
   const Icon = GLYPHS[name];
   return <Icon className={className ?? "h-3.5 w-3.5"} aria-hidden />;
 }

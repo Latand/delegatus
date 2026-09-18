@@ -110,6 +110,23 @@
   --color-claude-soft: #faeee9;
   --color-openclaw: #b3407a;
   --color-openclaw-soft: #fbeaf3;
+  /* Engine MARK colours (#1743): the identity tints above are chip fills, and
+     Claude's orange falls under the 3:1 floor for a graphical mark on the light
+     tinted surfaces. The mark tokens are the stroke/fill of the shared engine
+     mark and of the filled effort steps beside it; the dark theme reuses the
+     identity tints, which already clear 5.6:1 there. */
+  --color-claude-mark: #c96442;
+  --color-codex-mark: var(--color-codex);
+  /* The ink a mark takes INSIDE a filled engine avatar (#1743). White on the
+     dark theme's engine tints measures 2.6:1 — under the 3:1 floor a graphical
+     object has — because those tints are light by design there. */
+  /* The UNLIT steps of the effort ladder (#1743). The border token measures
+     1.2:1 on the card, so at low effort the ladder read as one short bar with
+     no denominator behind it: the five-step scale was invisible. This is the
+     3:1 floor a graphical object has (3.08:1 light, 3.03:1 dark), still well
+     under the lit steps' own ~5.2:1, so lit and unlit stay two readings. */
+  --engine-fill-ink: #ffffff;
+  --effort-empty: #93939d;
 
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
   --motion-fast: 120ms; /* hover, press, chip state         */
@@ -191,6 +208,10 @@
     --color-claude-soft: #2b1c15;
     --color-openclaw: #e888b6;
     --color-openclaw-soft: #2e1622;
+    --color-claude-mark: var(--color-claude);
+    --color-codex-mark: var(--color-codex);
+    --engine-fill-ink: #121620;
+    --effort-empty: #64646f;
 
     --color-user: #2a2a33;
 
@@ -248,6 +269,10 @@
   --color-claude-soft: #2b1c15;
   --color-openclaw: #e888b6;
   --color-openclaw-soft: #2e1622;
+  --color-claude-mark: var(--color-claude);
+  --color-codex-mark: var(--color-codex);
+  --engine-fill-ink: #121620;
+  --effort-empty: #64646f;
 
   --color-user: #2a2a33;
 

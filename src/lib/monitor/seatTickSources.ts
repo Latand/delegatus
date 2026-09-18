@@ -38,6 +38,7 @@ import {
   type SendResendGuidance,
 } from "@/lib/runtime/sendSettlement";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
@@ -1126,6 +1127,29 @@ export const POLL_VISITS = 40;
 /** Lineage edges one discovery page reads. */
 const DISCOVERY_PAGE = 20;
 
+/**
+ * The last record of a transcript the Viewer can actually resolve (#1783).
+ *
+ * Two things at once, because they are one read. The instant is the child's
+ * own — a transcript is appended to by the child and by nothing else — where
+ * `turn.observedAt` and the conversation's `updatedAt` are the registry's, and
+ * a rescan or a host-retirement sweep stamps hundreds of conversations with a
+ * single one of those. Reading them as a terminal time is what left the #1749
+ * age test excluding nothing. And null is the other half: a path outside every
+ * scanner root, or one no longer on disk, is a child the Viewer can never read
+ * or harvest, whichever seat is asked to.
+ *
+ * The roots are passed in, read once per check: enumerating them walks the
+ * account homes, and this runs once per projected child.
+ */
+function transcriptRecordAt(transcriptPath: string, roots: readonly string[]): string | null {
+  if (!roots.some((root) => transcriptPath === root || transcriptPath.startsWith(root.endsWith(path.sep) ? root : root + path.sep))) return null;
+  try {
+    const stat = fs.statSync(transcriptPath);
+    return stat.isFile() ? new Date(stat.mtimeMs).toISOString() : null;
+  } catch { return null; }
+}
+
 /** The registry entries that could be hosting this child, by every session key
     the records tie to it. */
 function childHostEntries(file: RegistryFile, edge: SpawnLineageEdge, receipt: SpawnReceipt | null, transcriptKey: SessionKey | null): AgentRegistryEntry[] {
@@ -1161,6 +1185,7 @@ function projectChild(
   edge: SpawnLineageEdge,
   project: string,
   now: number,
+  roots: readonly string[],
 ): ProjectedChild | null {
   if (edge.source !== "viewer-spawn") return null;
   const childId = lookup.canonicalConversationId(edge.childConversationId);
@@ -1183,16 +1208,25 @@ function projectChild(
   );
   const hosted = childHosted(receipt, entries, now);
   const turn = conversation?.turn.state ?? "unknown";
-  const base = { conversationId: childId, title, activity: null };
+  /* The child's own instants, and the only ones a terminal time may come from
+     (#1783): its recorded terminal instant, else the last record of its
+     transcript. A transcript the Viewer cannot resolve says so here and is
+     never offered as harvestable work. */
+  const record = generation ? transcriptRecordAt(generation.path, roots) : null;
+  const settledAt = conversation?.turn.terminalAt ?? record;
+  const base = { conversationId: childId, title, activity: null, transcript: record === null ? "unresolvable" as const : "readable" as const };
   const createdAt = edge.createdAt;
   /* A launch that failed or conflicted before it ran: terminal, outcome
      failed. The receipt is the whole record of it. */
   if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) {
-    return { input: { ...base, status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
+    /* A launch that failed before it ran has no transcript and needs none: the
+       receipt is the whole record, and its instant is the receipt's own, so
+       the transcript test does not apply to it (#1783). */
+    return { input: { ...base, transcript: "readable", status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
   }
   if (!conversation) return { input: { ...base, status: "unknown", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   if (turn === "terminal") {
-    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: conversation.turn.terminalAt ?? conversation.turn.observedAt ?? conversation.updatedAt }, turn, hosted, createdAt };
+    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: settledAt }, turn, hosted, createdAt };
   }
   if (hosted) return { input: { ...base, status: "running", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   /* No host anywhere. A settled turn with nothing running it is a worker that
@@ -1201,7 +1235,7 @@ function projectChild(
      it is reported as such, never as finished. A turn the registry never
      observed is unknown, and stays unknown. */
   if (turn === "idle") {
-    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: conversation.turn.observedAt ?? conversation.updatedAt }, turn, hosted, createdAt };
+    return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: settledAt }, turn, hosted, createdAt };
   }
   if (turn === "busy") {
     return {
@@ -1280,10 +1314,13 @@ async function childWork(
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
   const children: SeatTickChildInput[] = [];
+  /* Enumerated once per check and handed to every projection (#1783): the
+     roots decide whether a child's transcript is one this Viewer can read. */
+  const roots = scanRootEntries().map(([, root]) => root);
   const classify = (page: SeatChildrenPage, id: string) => {
     const edge = page.file.lineageEdges[id];
     if (!edge) return null;
-    return projectChild(page.file, readOnlyConversationLookupFromSnapshot(page.file), edge, project, now);
+    return projectChild(page.file, readOnlyConversationLookupFromSnapshot(page.file), edge, project, now, roots);
   };
   const pages = new Map<string, SeatChildrenPage>();
   let projectedRows = 0;
@@ -1450,14 +1487,27 @@ async function childWork(
       if (!child || child.kind !== "child") throw new Error("missing ready child");
       const page = seatChildren(child.owner, null, 1, [child.rowKey]);
       if (!page) break;
-      if (!classify(page, child.rowKey) || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { accounting.defer(outcome); gaps.add("child-departed"); continue; }
+      const projected = classify(page, child.rowKey);
+      if (!projected || page.file.lineageEdges[child.rowKey]?.parentConversationId !== child.owner) { accounting.defer(outcome); gaps.add("child-departed"); continue; }
       /* The harvest stamp travels with the outcome (#1749). The row is the
          child's, the outcome is one turn of one generation of it, and the
          decision needs both to tell a result nobody has taken from a fresh
-         projection of one a retired seat took weeks ago. */
-      children.push(child.harvestedEpoch === undefined
-        ? outcome.input
-        : { ...outcome.input, harvestedEpoch: child.harvestedEpoch });
+         projection of one a retired seat took weeks ago.
+
+         The terminal time and the transcript come off the projection this
+         check just made, not off the frozen row (#1783). An outcome is minted
+         the moment its ledger yields an ended turn, which is routinely a
+         check where the child's own turn had not settled yet: the row froze
+         `terminalAt: null` then, and 130 of the 209 owed rows on the board
+         this was filed from carry exactly that — a null the age test cannot
+         test. The child as it stands now is what the test must read. */
+      const { terminalAt, transcript } = projected.input;
+      children.push({
+        ...outcome.input,
+        terminalAt,
+        transcript,
+        ...(child.harvestedEpoch === undefined ? {} : { harvestedEpoch: child.harvestedEpoch }),
+      });
     }
   } catch { gaps.add("registry-unreadable"); }
   return { children, unavailable: worstChildrenGap(gaps) };
