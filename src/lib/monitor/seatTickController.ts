@@ -4,6 +4,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 import { statePath } from "@/lib/configDir";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
+import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, runtimeIdempotencyKeyAdmissible } from "@/lib/runtime/contracts";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { mutateTasksFile } from "@/lib/tasks/store";
 
@@ -329,6 +330,20 @@ function deliveryOutcomeLabel(outcome: DeliveryOutcome): string {
   return outcome.ok ? outcome.outcome ?? "delivered" : "failed";
 }
 
+/**
+ * What the delivery layer said when it would not take the wake (#1771), or
+ * null when it took it.
+ *
+ * The layer's own words, redacted and bounded like every other reason the
+ * monitor writes down. It goes on the check's journal line, which is what the
+ * seat surface reads back as the last run's detail — so a refusal is legible
+ * where the mute tick is noticed, without asking the seat.
+ */
+function sendRefusalDetail(outcome: DeliveryOutcome): string | null {
+  if (outcome.ok) return null;
+  return `the delivery layer would not take the wake: ${redactBounded(outcome.error || "no reason was returned", REASON_LIMIT)}`;
+}
+
 function verdictDetail(verdict: SeatTickVerdict): string | null {
   if (verdict.kind === "skipped") return "the seat's turn is progressing; the tick is dropped, never queued";
   if (verdict.kind === "wake") {
@@ -372,9 +387,39 @@ function wakeClientMessageId(
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
     : "proposal";
-  return `seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${context.fingerprint}`
+  return boundedWakeIdentity(`seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${context.fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
-    + releasedWakeIdentity(context.releasedWake ?? null);
+    + releasedWakeIdentity(context.releasedWake ?? null), project, seatEpoch);
+}
+
+/**
+ * THE SAME IDENTITY, INSIDE THE BOUND THE DELIVERY LAYERS ENFORCE (#1771).
+ *
+ * The composition above is readable on purpose — every part of it is a fact an
+ * operator reads straight off the key — and it grew one clause at a time
+ * (#1280's prompt digest, #1672's released-wake digest) while nothing measured
+ * it. The runtime journal refuses a key over
+ * {@link RUNTIME_IDEMPOTENCY_KEY_LIMIT} characters inside its own admission,
+ * before it writes an operation, an outbox effect or a ledger entry. So a
+ * project whose name, stamp, reason list and two digests together crossed that
+ * bound had every wake refused at the journal: nothing reached the seat,
+ * nothing landed, `lastWakeAt` never moved, and the age-bound retirement then
+ * appended the released-wake digest — making the replacement key LONGER than
+ * the key it replaced. That loop cost a live seat a day of wakes.
+ *
+ * So the readable form is kept wherever it fits, byte for byte, and an
+ * outstanding wake prepared under it still replays under it. A composition
+ * that does not fit collapses into a digest of ITSELF behind the two parts an
+ * operator needs to find the row at all — the project and the seat epoch. It
+ * is derived from the whole composition, so two wakes are the same message
+ * here exactly when they were the same message before, and the project name is
+ * truncated rather than the digest when even that does not fit.
+ */
+function boundedWakeIdentity(identity: string, project: string, seatEpoch: number): string {
+  if (runtimeIdempotencyKeyAdmissible(identity)) return identity;
+  const tail = `:${seatEpoch}:digest-${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
+  const head = `seat-tick:${project}`;
+  return `${head.slice(0, Math.max(0, RUNTIME_IDEMPOTENCY_KEY_LIMIT - tail.length))}${tail}`;
 }
 
 /**
@@ -815,6 +860,10 @@ async function reconcileOutstandingWake(context: {
   let reason = observation.reason;
   let settlement: WakeSettlement | null = null;
   let redispatched: string | null = null;
+  /* And why, when the re-dispatch was refused (#1771): the same-key recovery
+     answering "failed" check after check with nothing saying what refused it
+     is the silence this issue was filed for. */
+  let redispatchReason: string | null = null;
   /* A landing is asked about before a replacement, so a wake that reaches a
      conversation the project has since replaced still commits here — the stamp,
      the cursor and every child it named. That is not what the retired path
@@ -884,8 +933,10 @@ async function reconcileOutstandingWake(context: {
       outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
         clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: { kind: "agent", role: "seat-tick" } });
       redispatched = deliveryOutcomeLabel(outcome);
-    } catch {
+      redispatchReason = sendRefusalDetail(outcome);
+    } catch (error) {
       redispatched = "unreturned";
+      redispatchReason = `the transport call did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
     }
     if (outcome) {
       accounting.returnedDispatch(wake.clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
@@ -946,7 +997,7 @@ async function reconcileOutstandingWake(context: {
   const lapsesAt = seatTickFenceLapsesAt(wake.preparedAt ?? null, context.wakeIntervalMs);
   if (kept && (overdue || observed === "uncertain")) {
     const detail = `A wake prepared ${wake.preparedAt!.slice(0, 16).replace("T", " ")} UTC for ${replaced ? "a seat that has since been replaced" : "this seat"}`
-      + ` is still unresolved under its original key; the layer holding it last ${holderAnswer(observation)}${redispatched ? `, and a re-dispatch under the same key answered "${redispatched}"` : ""}.`
+      + ` is still unresolved under its original key; the layer holding it last ${holderAnswer(observation)}${redispatched ? `, and a re-dispatch under the same key answered "${redispatched}"${redispatchReason ? ` — ${redispatchReason}` : ""}` : ""}.`
       + (retired
         ? (retirement!.reason === "seat-superseded"
           ? " The attempt is kept under that seat, never re-sent and crediting nothing, and it no longer holds back this project's wakes."
@@ -1157,6 +1208,12 @@ async function check(
      a quiet board (#1746). A mute tick and a quiet one wrote the same line
      before this. */
   let fenceDetail: string | null = null;
+  /* Why a wake this check DID dispatch reached nobody (#1771). A layer that
+     refuses a send answers with its reason, and the controller used to throw
+     that reason away: the journal line said "failed", the card said the
+     attempt was unresolved, and nothing anywhere said what had refused it or
+     why. A refusal an operator cannot read is a refusal nobody acts on. */
+  let sendDetail: string | null = null;
   const verdict = decision.verdict;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
 
@@ -1288,9 +1345,11 @@ async function check(
             outcome = await deliver({ pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
               clientMessageId, text, images: [], origin: { kind: "agent", role: "seat-tick" } });
             delivery = { clientMessageId, outcome: deliveryOutcomeLabel(outcome) };
-          } catch {
+            sendDetail = sendRefusalDetail(outcome);
+          } catch (error) {
             delivery = { clientMessageId, outcome: "unreturned" };
             // Missing receipts do not authorize forgetting a prepared attempt.
+            sendDetail = `the transport call for the wake did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
           }
           if (accounting && token && outcome) {
             accounting.returnedDispatch(clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
@@ -1334,7 +1393,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail, sendDetail].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
