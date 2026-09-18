@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,13 +28,12 @@ import {
  * The mobile-v2 capture harness (issue #1439, lane 0) is the evidence tool
  * every later lane's reviewer uses, so what this file pins is that the tool
  * can say NO: each gate goes red on the one geometry it exists to refuse, each
- * §3.3 flow goes red on the one contract breach it exists to catch, the
- * strictness switch turns those reds into an exit code, and the run allocates
- * its own directory before it renders anything (the #979 refusal-by-name).
+ * §3.3 flow goes red on the one contract breach it exists to catch, and the
+ * strictness switch turns those reds into an exit code. The capture directory
+ * the run allocates is a shared helper, proven once in
+ * `scripts/capture-directory.test.ts` (#1761).
  */
 
-const REPO_ROOT = path.resolve(import.meta.dir, "..");
-const SCRIPT = path.join(REPO_ROOT, "scripts", "capture-mobile-v2.ts");
 const ids = (failures: { gate: string }[]) => failures.map((f) => f.gate);
 
 /* ── screens ─────────────────────────────────────────────────────────────── */
@@ -357,67 +355,6 @@ describe("seedHome", () => {
       expect(fs.statSync(home.outDir).isDirectory()).toBe(true);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
-    }
-  });
-});
-
-/* ── directory allocation (the #979 refusal-by-name) ─────────────────────── */
-
-function runCapture(sandbox: string, captureDir: string) {
-  const sanctionedTemp = path.join(sandbox, "sanctioned-temp");
-  fs.mkdirSync(sanctionedTemp, { recursive: true });
-  /* No PATH and no browser: the subprocess dies right after the allocation
-     and the seeding, which is exactly the window under test. */
-  return spawnSync(process.execPath, [SCRIPT], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    timeout: 20_000,
-    env: {
-      NODE_ENV: "test",
-      PATH: "",
-      HOME: path.join(sandbox, "home"),
-      TMPDIR: sanctionedTemp,
-      XDG_CONFIG_HOME: path.join(sandbox, "xdg"),
-      LLV_STATE_DIR: path.join(sandbox, "state"),
-      NEXT_TELEMETRY_DISABLED: "1",
-      CHROME_BIN: path.join(sandbox, "missing-browser"),
-      MOBILE_V2_CAPTURE_DIR: captureDir,
-    },
-  });
-}
-
-describe("capture directory", () => {
-  test("an override outside the temp root is refused by name, and its contents survive", () => {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1439-refusal-"));
-    const fixture = path.join(sandbox, "outside-temp", "llv-issue-1439-operator-data");
-    const sentinel = path.join(fixture, "keep.txt");
-    fs.mkdirSync(fixture, { recursive: true });
-    fs.writeFileSync(sentinel, "keep", "utf8");
-    try {
-      const result = runCapture(sandbox, fixture);
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("MOBILE_V2_CAPTURE_DIR");
-      expect(result.stderr).toContain(fixture);
-      expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
-    } finally {
-      fs.rmSync(sandbox, { recursive: true, force: true });
-    }
-  });
-
-  test("no override lands one fresh run under the temp root, seeds its home and out, and publishes the latest link", () => {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1439-default-"));
-    const sanctionedTemp = path.join(sandbox, "sanctioned-temp");
-    try {
-      const result = runCapture(sandbox, "");
-      expect(result.status).not.toBe(0);
-      const latest = path.join(sanctionedTemp, "llv-issue-1439-latest");
-      expect(fs.lstatSync(latest).isSymbolicLink()).toBe(true);
-      const run = fs.realpathSync(latest);
-      expect(path.dirname(run)).toBe(fs.realpathSync(sanctionedTemp));
-      expect(fs.statSync(path.join(run, "home")).isDirectory()).toBe(true);
-      expect(fs.statSync(path.join(run, "out")).isDirectory()).toBe(true);
-    } finally {
-      fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
 });

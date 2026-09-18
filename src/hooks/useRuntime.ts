@@ -16,6 +16,7 @@ import {
   type SessionUiState,
 } from "@/components/runtime/runtimeModel";
 
+import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { Flow } from "@/lib/flows/types";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
@@ -259,6 +260,13 @@ export interface CommandResult {
   receipt?: RuntimeReceipt;
   status?: number;
   error?: string;
+  /** The route's own three-valued classification of this command's fate
+      (#1593), when it published one. `refused` means the route turned the
+      message away above the delivery attempt — nothing journaled, no operation
+      minted, nothing on any wire — so the caller may treat it as not sent;
+      `uncertain` is the one 503 that may already be on the wire. Absent from
+      an older server, and then the caller reads the status as it always did. */
+  delivery?: AttachmentDeliveryOutcome;
 }
 
 async function postCommand(url: string, body: unknown): Promise<CommandResult> {
@@ -278,6 +286,10 @@ async function postCommand(url: string, body: unknown): Promise<CommandResult> {
       && "conversationId" in candidate && typeof candidate.conversationId === "string"
       && "status" in candidate && typeof candidate.status === "string"
       ? candidate as RuntimeReceipt : undefined;
+    /* Narrowed off the wire rather than cast: an unknown word is no
+       classification at all, and reads exactly like a server that sends none. */
+    const delivery = json.delivery === "refused" || json.delivery === "uncertain" || json.delivery === "accepted"
+      ? json.delivery satisfies AttachmentDeliveryOutcome : undefined;
     const request = body as { conversationId?: string; idempotencyKey?: string; operationId?: string };
     const operationId = typeof json.operationId === "string" ? json.operationId : receipt?.operationId;
     const contradictory = receipt && (receipt.conversationId !== request.conversationId
@@ -293,6 +305,7 @@ async function postCommand(url: string, body: unknown): Promise<CommandResult> {
       operationId,
       receipt,
       ...(res.ok && json.held === true ? { held: true as const } : {}),
+      ...(delivery ? { delivery } : {}),
       ...(!res.ok ? { error: typeof json.error === "string" ? json.error : undefined } : {}),
     };
   } catch {

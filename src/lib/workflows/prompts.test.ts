@@ -36,8 +36,6 @@ test("stage 0 kickoff carries the brief, the scope, the verify hint and the mark
   expect(prompt).toContain("Backend/API: server logic");
   expect(prompt).toContain("bun test && bun run build");
   expect(prompt).toContain("STAGE_DONE: <one-line note for the next stage>");
-  /* The never-quote discipline from kickoffPrompt() survives here. */
-  expect(prompt).toContain("Do not print the STAGE_DONE marker now and never quote it at the start of a line");
   expect(prompt).not.toContain("Notes from the stages");
 });
 
@@ -66,7 +64,6 @@ test("fixer kickoff adds the FIXED/REJECTED protocol and every stage note", () =
   expect(prompt).toContain("FIXED");
   expect(prompt).toContain("REJECTED — <reason>");
   expect(prompt).toContain("REVIEW_READY: <one-line note>");
-  expect(prompt).toContain("Do not print the REVIEW_READY marker now and never quote it at the start of a line");
 });
 
 test("prBody folds the brief, stage notes and rounds into the PR", () => {

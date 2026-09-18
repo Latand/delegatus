@@ -2,8 +2,6 @@ name: Supply-chain audit
 
 on:
   pull_request:
-  push:
-    branches: [main]
   # dependabot-lockfile.yml commits the regenerated bun.lock with the repository
   # GITHUB_TOKEN, and GitHub raises no `synchronize` for that push, so the audit
   # is dispatched against the refreshed branch instead.
@@ -11,6 +9,27 @@ on:
 
 permissions:
   contents: read
+
+# A branch pushed three times ran three full rounds to completion: 7 percent of
+# pull-request runs in the audit window (#1761) finished work for a commit that
+# had already been replaced. One round per ref, and the newest wins. This group
+# is step 1 of the cut order on #1761.
+#
+# Nothing that must not be cancelled is in reach of this group. After step 2 none
+# of these workflows runs on a push to main or a tag at all, and on `pull_request`
+# the ref is `refs/pull/<n>/merge` while a run started by hand carries the branch
+# ref, so the two never share a group.
+#
+# The two required workflows get no group at all, deliberately. They run on
+# `pull_request_target` and, for the tracker audit, on issue and review events,
+# where `github.ref` is the base branch for every publication alike; any group
+# narrow enough to be correct there still lets a comment cancel the required run
+# in flight and strand a cancelled check on the head, which blocks the merge.
+# They finish in 40 to 90 seconds and have never failed, so there is nothing
+# worth saving in cancelling them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
@@ -26,7 +45,6 @@ jobs:
           bun-version: 1.3.3
 
       - name: Require a lockfile change with dependency changes
-        if: github.event_name != 'push'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

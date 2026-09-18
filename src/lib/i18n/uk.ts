@@ -499,6 +499,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "outbox.cancel": "Скасувати це повідомлення",
   "outbox.retry": "Повторити надсилання цього повідомлення",
   "outbox.reattach": "Не надіслано — додайте файли знову та надішліть",
+  "outbox.clearParked": "Повернути це повідомлення в редактор",
 
   // Agent control strip (issue #241)
   "strip.live": "наживо",
@@ -3325,8 +3326,14 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.saving": "Зберігаємо…",
   "seatTick.restore": "Повернути типове",
   "seatTick.row.lastCheck": "Остання перевірка",
-  "seatTick.row.lastWake": "Останнє пробудження",
+  "seatTick.row.lastWake": "Останнє доставлене пробудження",
   "seatTick.row.wakeWithReasons": "{age} · {reasons}",
+  "seatTick.row.nextWake": "Наступне пробудження",
+  "seatTick.nextWake.due": "на наступній перевірці",
+  "seatTick.nextWake.inMin": "через {n} хв",
+  "seatTick.nextWake.inHour": "через {n} год",
+  "seatTick.nextWake.off": "немає, доки тікер вимкнено",
+  "seatTick.nextWake.blocked": "стримується, доки триває перешкода",
   "seatTick.row.lastDelivery": "Остання доставка",
   "seatTick.row.noDelivery": "немає серед останніх перевірок тікера",
   "seatTick.row.delivery": "{outcome} · {age}",
