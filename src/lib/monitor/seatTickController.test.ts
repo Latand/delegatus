@@ -4943,3 +4943,152 @@ test("a failure this seat's own worker just had is listed beside the history tha
   expect(text).not.toContain(historical.id);
   expect(text).toContain("(1 spawned child(ren) not listed: their outcomes predate this seat's designation");
 });
+
+/* ------------------------------------------------------------------------- *
+ * The two paths that still reached the item list (#1783, round two).
+ *
+ * Read out of production state before anything was changed here. The wake of
+ * 2026-09-18 21:55Z, to a seat designated at 09:46 that morning, listed five
+ * children and held seventeen back. Three of them were architect runs whose
+ * ledgers hold ended turns and whose conversation rows still say `busy` with
+ * no host behind them: their accounting rows carry `terminalAt: null`, their
+ * transcripts were last written to on the 24th of August, and the age test —
+ * reading the terminal instant alone — found nothing to compare and listed
+ * them. The other two came through the stall path, which read neither clock
+ * nor transcript: one last written to four days before the designation, one
+ * whose transcript is not under any scanner root this Viewer has.
+ *
+ * Both are the same list of children asked the same question, so both cases
+ * below drive the production controller over its own registry, accounting row
+ * and state directory, once per path.
+ * ------------------------------------------------------------------------- */
+
+/** The agenda a wake carries: the bullets under `Items:` and no further —
+    the contract at the foot of every message is bulleted too. */
+function agendaOf(text: string): string[] {
+  const lines = text.split("\nItems:\n")[1]!.split("\n");
+  const end = lines.findIndex((line) => !line.startsWith("- "));
+  return end === -1 ? lines : lines.slice(0, end);
+}
+
+/** The shape all three cases are built from: a worker whose structured host
+    wrote an ended turn to its ledger and then died over the open turn, so the
+    accounting owes an outcome for it while the registry still reports it busy
+    with nothing running it. Every child in the evidence is one of these. */
+function endedTurnUnderADeadHost(fixture: ChildFixture, child: { id: string }, status: "completed" | "error", seq: number): void {
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: `turn-${seq}`, seq });
+  ledger.append(generation, { kind: "turn-ended", turnId: `turn-${seq}`, status, seq: seq + 1 });
+}
+
+test("a child whose last record predates the seat by weeks is skipped on the harvest and on the stall path (#1783)", async () => {
+  const fixture = childFixture("aged-child-both-paths");
+  /* One of each, both in the August shape: an open turn on the registry, a
+     dead host, and a transcript nothing has appended to for twenty-five days.
+     The first also owes an outcome, which is what puts it on the harvest. */
+  const owed = fixture.spawn({ title: "august worker", turn: "busy", host: "dead" });
+  endedTurnUnderADeadHost(fixture, owed, "completed", 1);
+  const stalled = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  for (const child of [owed, stalled]) ageTranscript(fixture, child.path, 25 * 24 * 60);
+  fixture.seed();
+
+  /* The condition under test, on the rows themselves: neither child has a
+     terminal instant to test, and the seat was designated two hours ago. */
+  for (const child of [owed, stalled]) {
+    const conversation = fixture.registry.conversation(child.id as never)!;
+    expect(conversation.turn.state).toBe("busy");
+    expect(conversation.turn.terminalAt).toBeNull();
+  }
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
+  await runSeatTickCheck(fixture.project, first.deps);
+  /* The stall memory saw both of them, which is what makes the second check
+     the one where the stall path WOULD name them. */
+  expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  /* No child reason at all: not the harvest, not the stall. The wake carries
+     the lane the seat launched and nothing else. */
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = second.sent[0]!.text;
+  expect(text).not.toContain(owed.id);
+  expect(text).not.toContain(stalled.id);
+  expect(text).toContain("(2 spawned child(ren) not listed: their outcomes predate this seat's designation");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("a child whose transcript the Viewer cannot resolve is skipped on the harvest and on the stall path (#1783)", async () => {
+  const fixture = childFixture("unresolvable-child-both-paths");
+  /* Spawned an hour ago — nothing about either of these is old — and neither
+     transcript is one this Viewer can read: one is outside every scanner root,
+     the other has gone from disk. No seat can harvest or read either, however
+     recently it ran. */
+  const owed = fixture.spawn({ title: "unscanned worker", turn: "busy", host: "dead", transcript: "outside-roots" });
+  endedTurnUnderADeadHost(fixture, owed, "error", 1);
+  const stalled = fixture.spawn({ title: "vanished worker", turn: "busy", host: "dead", transcript: "missing" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
+  await runSeatTickCheck(fixture.project, first.deps);
+  expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = second.sent[0]!.text;
+  expect(text).not.toContain(owed.id);
+  expect(text).not.toContain(stalled.id);
+  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript,");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("a failure this seat's own worker had an hour ago is listed, once (#1783)", async () => {
+  const fixture = childFixture("new-failure-listed-once");
+  /* The same shape as the children above, and a different answer: this one is
+     this seat's and it is an hour old, not a month. */
+  const child = fixture.spawn({ title: "current worker", turn: "busy", host: "dead" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  /* The first check sees the stall; a stall is only reported once it has
+     survived a second one, so this wake carries the open worker and no more. */
+  const first = childRig(fixture, { seat });
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["interval"] });
+  expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
+
+  /* Then its host writes an ended turn to the ledger and dies over the open
+     turn — the production shape exactly. The check that follows holds the same
+     child on BOTH paths: an outcome nobody has harvested, and a stall that has
+     now persisted across two checks. */
+  endedTurnUnderADeadHost(fixture, child, "error", 1);
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  expect(record).toMatchObject({ verdict: "wake", items: 1 });
+  expect(record!.reasons).toContain("child-terminal");
+  expect(record!.reasons).toContain("stalled");
+  const text = second.sent[0]!.text;
+  /* One line on the agenda, and it is the one that says what to do: the
+     failure is the seat's to harvest, and the stall is the same conversation.
+     Both reasons are true and the wake says both; the item list names the
+     child once, which is the half a seat works from. */
+  const agenda = agendaOf(text);
+  expect(agenda.filter((line) => line.includes(child.id))).toEqual([
+    `- [child] ${child.id} — current worker — spawned child failed, outcome unharvested`,
+  ]);
+  expect(fixture.acknowledged()).toEqual([child.id]);
+
+  /* And it wakes nobody again while nothing about it moves. The outcome the
+     line stood for is acknowledged, so the harvest no longer offers it; the
+     stall it was shown in is the stall it is still in, so the stall path does
+     not raise it a second time. The child is still open work, so the interval
+     agenda still says so — once, and without the stall line under it. */
+  const third = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat });
+  const after = await runSeatTickCheck(fixture.project, third.deps);
+  expect(after).toMatchObject({ verdict: "wake", reasons: ["interval"], items: 1 });
+  const later = agendaOf(third.sent[0]!.text);
+  expect(later).toEqual([`- [child] ${child.id} — current worker — spawned child running`]);
+});

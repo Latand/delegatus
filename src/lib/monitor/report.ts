@@ -246,6 +246,9 @@ export function seatTickWakeMessage(input: {
   if (input.skippedChildren && input.skippedChildren.unreadable > 0) {
     lines.push(`(${input.skippedChildren.unreadable} spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read or harvest their outcome.)`);
   }
+  if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
+    lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);
+  }
   if (input.signals.length > 0) {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));
   }
