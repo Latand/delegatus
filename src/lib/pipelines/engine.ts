@@ -2070,10 +2070,13 @@ function retryTerminalStagePublication(
 
 /** The `{{prev.output}}` payload a fail edge forwards: the failed attempt's
     narrative output plus its structured findings, so the loop target sees what
-    to fix without re-deriving it from transcripts. */
+    to fix without re-deriving it from transcripts. A `needs_decision` routed
+    along the same edge (#1785) names itself, so the target reads the findings
+    knowing the reviewer was unsure of its own confidence, not of the defect. */
 function failEdgeInput(parsed: ParsedStageVerdict): string | null {
+  const heading = parsed.verdict.status === "needs_decision" ? "Needs-decision verdict findings" : "Fail verdict findings";
   const findings = parsed.verdict.findings?.length
-    ? `Fail verdict findings:\n${parsed.verdict.findings.map((finding) => `- ${finding}`).join("\n")}`
+    ? `${heading}:\n${parsed.verdict.findings.map((finding) => `- ${finding}`).join("\n")}`
     : "";
   const combined = [parsed.output, findings].filter(Boolean).join("\n\n").trim();
   return combined || null;
@@ -2085,6 +2088,10 @@ function routeFailedAttempt(
   attempt: PipelineStageAttempt,
   input: string | null,
   detail: string,
+  /** A `needs_decision` routed as a fail (#1785) parks exactly as it did before
+      when the edge has nothing left, so the operator still reads the verdict's
+      own detail rather than a budget message about a fail it never reported. */
+  parkOnExhaustedBudget = true,
 ): boolean {
   if (!stage.onFail) return false;
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
@@ -2101,7 +2108,7 @@ function routeFailedAttempt(
     pipeline.pausedState = null;
     return true;
   }
-  if (targetStage) {
+  if (targetStage && parkOnExhaustedBudget) {
     park(pipeline, `fail-edge budget exhausted after ${used} round(s): ${detail}`, attempt);
     return true;
   }
@@ -2216,18 +2223,28 @@ function settleStageVerdict(
        parking. The failed attempt keeps its truthful failed state and verdict;
        the relay record (input + fail activation) lands in the SAME atomic
        mutation as the verdict. No worktree reset — the target continues from
-       lastPassedCommit plus its own committed passes. needs_decision always
-       parks; an exhausted budget parks with an actionable detail. */
+       lastPassedCommit plus its own committed passes. An exhausted budget parks
+       with an actionable detail.
+
+       A needs_decision that carries findings is routed the same way (#1785):
+       reviewers reported a fixable defect under that status because their
+       confidence in the call was partial, and the fix stage the fail edge names
+       is exactly where those findings belong. The attempt records the decision
+       request. Without findings, without a fail edge, or with the budget spent,
+       it parks exactly as it always did. */
+    const decisionCarriesFindings = parsed.verdict.status === "needs_decision" && Boolean(parsed.verdict.findings?.length);
     if (
-      parsed.verdict.status === "fail"
+      (parsed.verdict.status === "fail" || decisionCarriesFindings)
       && routeFailedAttempt(
         pipeline,
         stage,
         attempt,
         failEdgeInput(parsed),
         parsed.verdict.findings?.[0] ?? "stage verdict: fail",
+        parsed.verdict.status === "fail",
       )
     ) {
+      if (decisionCarriesFindings) attempt.decisionRequested = true;
       return;
     }
     park(pipeline, parsed.verdict.findings?.[0] ?? `stage verdict: ${parsed.verdict.status}`, attempt);

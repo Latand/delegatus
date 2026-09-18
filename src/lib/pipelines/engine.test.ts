@@ -7960,7 +7960,9 @@ test("a retry of the fail edge's target spends no round, and the budget still pa
   expect(current.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
 });
 
-test("needs_decision always parks — a fail edge never auto-loops it (#353)", async () => {
+/* A needs_decision that carries findings routes along the fail edge (#1785);
+   one with nothing to fix still parks, whatever budget the edge has left. */
+test("a needs_decision with no findings parks — a fail edge never auto-loops it (#353)", async () => {
   const h = harness();
   await create(h.ports, CYCLE_STAGES as never);
   await tickPipelines([], h.ports);

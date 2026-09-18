@@ -170,6 +170,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.output) &&
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
+    (attempt.decisionRequested === undefined || typeof attempt.decisionRequested === "boolean") &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
     isStageReport(attempt.report) &&

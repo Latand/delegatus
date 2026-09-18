@@ -368,6 +368,11 @@ export type PipelineStageAttempt = {
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
   error: string | null;
+  /** Set when a `needs_decision` verdict that carried findings was routed along
+      this stage's fail edge as a fail (#1785). The verdict keeps the status the
+      reviewer reported; this is what says the reviewer asked for a decision and
+      the lane kept going instead of parking on it. */
+  decisionRequested?: boolean;
   /** Bounded, append-only reconciliation receipt for terminal parser misses. */
   verdictRecovery?: PipelineVerdictRecovery;
   /** What a close could prove it did not finish (#1501): the authorized host

@@ -437,3 +437,116 @@ test("an attempt persisted in committing has already answered, so its completion
   expect(current().stageReports).toBeUndefined();
   expect(h.execCalls).toEqual([]);
 });
+
+/* ── #1785: a needs_decision carrying an actionable finding routes to the fix
+   stage, because reviewers reported fixable defects under that status when only
+   their confidence in the call was partial, and the lane stopped for a human to
+   relay one paragraph. ── */
+
+const FIX_LOOP = () => [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 2 } })];
+
+/** build passes, verify is spawned and holds the cursor. */
+async function reachedVerify(h: ReturnType<typeof harness>, stages: unknown[]): Promise<void> {
+  await started(h.ports, stages);
+  await tickPipelines([h.endTurn(1, 'Built.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+}
+
+test("a needs_decision with findings fires the fail edge and hands the findings to the fix stage (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+
+  await h.report(2, {
+    verdict: "needs_decision",
+    findings: [{ severity: "P1", text: "the fence is missing" }],
+    summary: "Fixable; my confidence in the call is partial.",
+  });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+
+  const decided = attemptsOf("verify")[0]!;
+  /* The verdict stays the one the reviewer reported; the routing is what changed. */
+  expect(decided.verdict).toMatchObject({ status: "needs_decision", findings: ["P1 — the fence is missing"] });
+  expect(decided.state).toBe("needs_decision");
+  expect(decided.decisionRequested).toBe(true);
+  expect(current().state).toBe("running");
+  expect(current().cursor).toMatchObject({
+    stageId: "build",
+    state: "pending",
+    activatedBy: { stageId: "verify", attempt: 1, edge: "fail" },
+  });
+
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["build", "verify", "build"]);
+  const relayed = attemptsOf("build")[1]!.input!;
+  expect(relayed).toContain("Needs-decision verdict findings:\n- P1 — the fence is missing");
+  expect(relayed).toContain("Fixable; my confidence in the call is partial.");
+});
+
+test("a needs_decision with findings parks once the fail edge's budget is spent (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1 } })]);
+
+  /* Round one: the only round this edge has. */
+  await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await tickPipelines([], h.ports); // spawn build attempt 2
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports); // spawn verify attempt 2
+  expect(h.spawnedStages).toEqual(["build", "verify", "build", "verify"]);
+
+  await h.report(4, { verdict: "needs_decision", findings: [{ severity: "P0", text: "still broken" }] });
+  await tickPipelines([h.endTurn(4, "Reviewed again.")], h.ports);
+
+  /* Parked exactly as before the change: the verdict's own worst finding is the
+     detail, never a budget message about a fail the reviewer never reported. */
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("P0 — still broken");
+  expect(current().cursor?.stageId).toBe("verify");
+  const parked = attemptsOf("verify")[1]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.decisionRequested).toBeUndefined();
+  expect(attemptsOf("build")).toHaveLength(2);
+});
+
+test("a needs_decision parks with no fail edge, and parks with no findings (#1785)", async () => {
+  const noEdge = harness();
+  await reachedVerify(noEdge, [stage("build", "verify"), stage("verify", null)]);
+  await noEdge.report(2, { verdict: "needs_decision", findings: [{ severity: "P2", text: "nowhere to route this" }] });
+  await tickPipelines([noEdge.endTurn(2, "Reviewed.")], noEdge.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("P2 — nowhere to route this");
+  expect(current().cursor?.stageId).toBe("verify");
+  expect(attemptsOf("build")).toHaveLength(1);
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+
+  /* A fail edge with its whole budget left, and a verdict with nothing to fix. */
+  const noFindings = harness();
+  await reachedVerify(noFindings, FIX_LOOP());
+  await noFindings.report(2, { verdict: "needs_decision", summary: "Only the operator can choose here." });
+  await tickPipelines([noFindings.endTurn(2, "Reviewed.")], noFindings.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("stage verdict: needs_decision");
+  expect(attemptsOf("build")).toHaveLength(1);
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+});
+
+test("a plain fail still routes under its own heading, and a plain pass still advances (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+
+  await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: "the fence is missing" }], summary: "One gap." });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("verify")[0]!.state).toBe("failed");
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+  expect(attemptsOf("build")[1]!.input).toContain("Fail verdict findings:\n- P1 — the fence is missing");
+
+  /* The loop round passes and the pipeline completes, as a pass always did. */
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+  await h.report(4, { verdict: "pass", summary: "Clean." });
+  await tickPipelines([h.endTurn(4, "Approved.")], h.ports);
+  expect(attemptsOf("verify")[1]!.state).toBe("passed");
+  expect(attemptsOf("verify")[1]!.decisionRequested).toBeUndefined();
+  expect(current().state).toBe("completed");
+});
