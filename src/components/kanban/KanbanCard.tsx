@@ -8,6 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
 import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
@@ -95,10 +96,6 @@ function parseActing(encoded: string): Map<string, PipelineActionKind> {
   return new Map(encoded ? encoded.split("\n").map((line) => line.split("\t") as [string, PipelineActionKind]) : []);
 }
 
-function engineClass(file: FileEntry): string {
-  return file.engine === "claude" || file.engine === "codex" ? file.engine : "other";
-}
-
 function memberRole(t: TFunction, member: KanbanMember): string {
   if (member.stage) return stageChipLabel(t, member.stage.stage);
   return cleanTitle(member.file.title ?? "", 80) || t("kanban.untitledConversation");
@@ -120,7 +117,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
       onClick={() => onOpen(member.file)}
     >
       <span className="row">
-        <span className={`engine ${engineClass(member.file)}`} title={member.file.engine} />
+        <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
         <span className="role">{role}</span>
         <span className={`state ${stateClass}`}>{state}</span>
       </span>

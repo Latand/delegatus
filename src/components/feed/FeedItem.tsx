@@ -6,7 +6,8 @@ import { useLocale } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
-import { Brain, ChevronUp, Command, Check, Mail, MessageCircle, Mic, Sparkle, X } from "../icons";
+import { EngineMark } from "@/components/EngineMark";
+import { Brain, ChevronUp, Check, Mail, Mic, X } from "../icons";
 import { hhmm } from "../utils";
 import { MESSAGE_ACTION } from "./actionStyles";
 import { SelectedContextBadge } from "../SelectedContextBadge";
@@ -120,7 +121,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   if (item.kind === "mem-citation") return <MemCitationCard item={item} />;
   if (item.kind === "prose") {
     const cls = item.engine === "codex" ? "bg-codex" : item.engine === "openclaw" ? "bg-openclaw" : "bg-claude";
-    const AvatarIcon = item.engine === "codex" ? Command : item.engine === "openclaw" ? MessageCircle : Sparkle;
+    const AvatarIcon = ({ className }: { className?: string }) => <EngineMark engine={item.engine} size={16} tone="inherit" className={className} />;
     if (isMobile) {
       /* Mobile v2 (#1439, lane 4; README §2.6, §4.2): content gets the width.
          No avatar column; the header is one 44 px row — engine glyph, engine

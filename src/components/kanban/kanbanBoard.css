@@ -220,9 +220,7 @@
 .kb .tile:hover { border-color: var(--border-strong); }
 .kb .tile .row { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.kb .tile .engine { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--color-muted); }
-.kb .tile .engine.claude { background: var(--color-claude); }
-.kb .tile .engine.codex { background: var(--color-codex); }
+.kb .tile .engine { flex-shrink: 0; }
 .kb .tile .state { margin-left: auto; font-weight: 600; color: var(--color-muted); white-space: nowrap; }
 .kb .tile .state.working { color: var(--color-success); }
 .kb .tile .state.needs { color: var(--color-warning); }
@@ -273,9 +271,59 @@
 }
 .kb button.pchip:hover { border-color: var(--border-strong); }
 .kb .pchip.side { border-style: dashed; }
-.kb .pchip .prounds { font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); }
+
+/* ── Who runs a stage (#1743) ─────────────────────────────────────────────
+   One unit — engine mark, model, effort ladder — at three densities. The unit
+   carries the engine colour as `color`, which is what the effort ladder fills
+   its lit bars with; a stage that has only been configured mutes that colour
+   and its text, while the mark keeps full contrast so a fresh pipeline is
+   still readable as orange and blue. */
+.kb .pident { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-muted); }
+.kb .pident[data-engine="claude"] { color: var(--color-claude-mark); }
+.kb .pident[data-engine="codex"] { color: var(--color-codex-mark); }
+.kb .pident[data-identity="configured"] { color: var(--color-muted); }
+.kb .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+.kb .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+.kb .pident[data-identity="configured"] .imodel,
+.kb .pident[data-identity="configured"] .ieffort,
+.kb .pident[data-identity="configured"] .iengine { color: var(--color-muted); }
+/* The chip has room for the model only when it is not the engine's default, and
+   the model is the first thing it gives up; the name goes next. */
+.kb .pident.d-chip { flex: 0 1 auto; }
+.kb .pident.d-chip .imodel { max-width: 64px; flex-shrink: 100; }
+.kb .pident.d-chip .pname { flex-shrink: 1; min-width: 3ch; }
+.kb .pident.d-node { width: 100%; }
+/* The dashed warning pill: the next attempt would run on other values. Dashed
+   means "configured, not run yet" here exactly as it does on an edge. */
+.kb .pnext {
+  display: inline-flex; align-items: center; gap: 4px; height: 14px; padding: 0 4px; flex-shrink: 0;
+  border: 1px dashed var(--color-warning); border-radius: 999px; background: transparent;
+  font-size: var(--text-caption); font-weight: 700; line-height: 1; color: var(--color-warning);
+}
+.kb .pnext.wide { height: 18px; color: var(--color-secondary); }
+.kb .pnext.wide .imodel, .kb .pnext.wide .ieffort { color: var(--color-secondary); }
+/* The circled number: one meaning in the Viewer — how many times it fired.
+   Fill versus outline carries the verdict without relying on hue. */
+.kb .ccircle {
+  --tone: var(--color-secondary);
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;
+  font-size: var(--text-caption); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--tone); background: var(--surface-card); border: 1px solid var(--tone);
+}
+.kb .ccircle.t-pass, .kb .ccircle.t-ok { --tone: var(--color-success); }
+.kb .ccircle.t-fail { --tone: var(--color-danger); }
+.kb .ccircle.t-open { --tone: var(--color-info); }
+.kb .ccircle.t-neutral { --tone: var(--color-secondary); }
+/* Filled: the digits take the card surface, the one value that reads on both
+   themes without a second colour literal. */
+.kb .ccircle.filled { background: var(--tone); border-color: var(--tone); color: var(--surface-card); }
 .kb .parrow { color: var(--color-muted); font-size: var(--text-label); }
-.kb .ploop { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-danger); background: var(--color-danger-soft); }
+.kb .ploop { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-danger); background: var(--color-danger-soft); }
+.kb .ploop.spent { background: var(--color-danger); color: var(--surface-card); }
+.kb .ploop.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
+.kb .ploop .lnone { font-weight: 700; }
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
 .kb .tone-active .pdot { background: var(--color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
 .kb .tone-review .pdot { background: var(--color-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-info) 22%, transparent); }
@@ -480,9 +528,11 @@
 .kb .reader .ch-state.tone-warning { color: var(--color-warning); }
 .kb .reader .ch-state.tone-danger { color: var(--color-danger); }
 .kb .reader .ch-state.tone-accent { color: var(--color-accent); }
-.kb .reader .ch-engine { height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; color: #fff; flex-shrink: 0; }
-.kb .reader .ch-engine.claude { background: var(--color-claude); }
-.kb .reader .ch-engine.codex { background: var(--color-codex); }
+/* Engine: the shared mark plus the engine's own word. The old filled pill set
+   white 10 px text on the engine colour, which measured 3.12:1 (#1743). */
+.kb .reader .ch-engine, .kb .pane .ch-engine { height: 18px; display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-caption); font-weight: 700; color: var(--color-secondary); flex-shrink: 0; }
+.kb .reader .ch-model, .kb .pane .ch-model { display: inline-flex; align-items: center; gap: 5px; }
+.kb .reader .ch-effort, .kb .pane .ch-effort { font-weight: 600; color: var(--color-secondary); }
 .kb .reader .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .reader .ch-tree { display: inline-flex; align-items: center; gap: 3px; font: var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-muted); white-space: nowrap; }
 .kb .reader .ch-tree svg { width: 11px; height: 11px; }
@@ -552,9 +602,7 @@
 .kb .menu .swatch:hover { filter: brightness(0.95); }
 .kb .popover.hidden-tray .sec-label { font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); padding: 8px 8px 2px; }
 .kb .popover .row .t .meta .working { color: var(--color-success); font-weight: 600; }
-.kb .popover .row .engine { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin: 0 6px; background: var(--color-muted); }
-.kb .popover .row .engine.claude { background: var(--color-claude); }
-.kb .popover .row .engine.codex { background: var(--color-codex); }
+.kb .popover .row .engine { flex-shrink: 0; margin: 0 6px; }
 @media (pointer: coarse) {
   .kb .card .desc, .kb .divider button, .kb .card .edit-hint button, .kb .card .notice button, .kb .card .title-trigger { min-height: 44px; }
   .kb .card .edit { min-height: 44px; }
@@ -574,10 +622,14 @@
 .kb .pgraph-box { overflow-x: auto; overflow-y: hidden; margin: 2px -4px 0; padding: 0 4px; scrollbar-width: thin; }
 .kb .pgraph { position: relative; flex-shrink: 0; }
 .kb .pedges { position: absolute; inset: 0; overflow: visible; }
-.kb .pedge { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); }
-.kb .pedge.taken { stroke: color-mix(in srgb, var(--color-secondary) 80%, transparent); stroke-width: 1.75; }
+/* Dashed keeps the one meaning it has on this board: a fail path. A pass edge
+   is solid whether or not it has run, so a fresh pipeline reads exactly as it
+   does today and never as a disabled graph. What travelling adds is colour and
+   weight — the verdict's hue at 1.75 px — plus the circled count (#1743). */
+.kb .pedge { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); }
+.kb .pedge.taken { stroke: color-mix(in srgb, var(--color-success) 80%, transparent); stroke-width: 1.75; }
 .kb .pedge.fail { stroke: color-mix(in srgb, var(--color-danger) 45%, transparent); stroke-dasharray: 5 4; }
-.kb .pedge.fail.taken { stroke: color-mix(in srgb, var(--color-danger) 80%, transparent); }
+.kb .pedge.fail.taken { stroke: color-mix(in srgb, var(--color-danger) 80%, transparent); stroke-width: 1.75; stroke-dasharray: none; }
 .kb .pedge.live { stroke: var(--color-accent); stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-edge-flow 700ms linear infinite; }
 .kb .pedge.fail.live { stroke: var(--color-danger); }
 @keyframes kb-edge-flow { to { stroke-dashoffset: -24; } }
@@ -586,15 +638,24 @@
   border-radius: 999px; font-size: var(--text-caption); font-weight: 700; line-height: 1; color: var(--color-secondary);
   background: var(--surface-card); border: 1px solid var(--border-default);
 }
+.kb .pelabel { gap: 4px; }
 .kb .pelabel.fail { color: var(--color-danger); border-color: color-mix(in srgb, var(--color-danger) 35%, var(--border-default)); }
+.kb .pelabel.pass.taken { border-color: color-mix(in srgb, var(--color-success) 35%, var(--border-default)); }
+.kb .pelabel .ebudget { white-space: nowrap; }
+/* An exhausted budget inverts the whole pill: a luminance cue, so "no return
+   left" reads in monochrome and for colour-blind operators. */
+.kb .pelabel.fail.spent { background: var(--color-danger); border-color: var(--color-danger); color: var(--surface-card); }
+.kb .pelabel.fail.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
+.kb .pelabel.badge { padding: 0; border: 0; background: transparent; }
 .kb .pelabel.beside { transform: translate(0, -50%); }
-.kb .pelabel.badge { width: 18px; padding: 0; justify-content: center; }
-.kb .pelabel.static { position: static; transform: none; flex-shrink: 0; }
 .kb .pelabel.live { border-color: var(--color-accent); color: var(--color-accent); }
 .kb .plegend { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-label); color: var(--color-secondary); }
+/* A legend row for an edge nothing has travelled leads with the dashed line
+   itself, so the row and the arrow say the same thing. */
+.kb .plegend .esample { width: 16px; height: 0; flex-shrink: 0; border-top: 1.5px dashed color-mix(in srgb, var(--color-danger) 45%, transparent); }
 .kb .plegend li { display: flex; align-items: center; gap: 6px; }
 .kb .pnode {
-  position: absolute; z-index: 1; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 8px 10px 8px 10px; text-align: left;
+  position: absolute; z-index: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 7px 10px; text-align: left;
   border-radius: 10px; background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
@@ -616,9 +677,7 @@
 .kb .pnode.role-architect { --role: #b0527e; }
 .kb .pnode.role-cleaner { --role: #6c7a88; }
 .kb .pnode .pname { font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.kb .pnode .pengine { width: 6px; height: 6px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
-.kb .pnode .pengine.claude { background: var(--color-claude); }
-.kb .pnode .pengine.codex { background: var(--color-codex); }
+.kb .pnode .prow.ident { height: 14px; }
 .kb .pnode .pstate { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
 .kb .pnode.tone-active .pstate { color: var(--color-success); }
 .kb .pnode.tone-review .pstate { color: var(--color-info); }
@@ -626,12 +685,13 @@
 .kb .pnode.tone-bad .pstate { color: var(--color-danger); }
 .kb .pnode.tone-idle .pstate { color: var(--color-muted); }
 .kb .pnode .pdetail { font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: auto; }
-.kb .pnode .rchip { font-size: var(--text-caption); font-weight: 700; height: 16px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; background: var(--surface-well); color: var(--color-muted); }
-.kb .pnode .rchips { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; flex-shrink: 1; overflow: hidden; white-space: nowrap; }
-.kb .pnode .rchip { white-space: nowrap; flex-shrink: 0; }
-.kb .pnode .rchip.more { background: var(--surface-well); color: var(--color-muted); }
-.kb .pnode .rchip.ok { color: var(--color-success); background: var(--color-success-soft); }
-.kb .pnode .rchip.bad { color: var(--color-danger); background: var(--color-danger-soft); }
+/* A review-loop stage counts its own rounds in the same circled vocabulary the
+   arrows use, then names the latest verdict (#1743). */
+.kb .rounds-mark { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; white-space: nowrap; }
+.kb .rounds-mark .rverdict { font-size: var(--text-caption); font-weight: 700; }
+.kb .rounds-mark .rverdict.ok { color: var(--color-success); }
+.kb .rounds-mark .rverdict.fail { color: var(--color-danger); }
+.kb .rounds-mark .rverdict.open { color: var(--color-info); }
 .kb .pnode.pulse .pdot { animation: kb-node-pulse 1.6s var(--ease-standard) infinite; }
 @keyframes kb-node-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-success) 8%, transparent); } }
 .kb .pport { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--surface-card); border: 1.5px solid var(--border-strong); }
@@ -700,6 +760,7 @@
 .kb .btn.gtoggle[aria-pressed="true"] { color: var(--color-accent); background: var(--color-accent-soft); }
 .kb .gs-nav { display: flex; align-items: center; gap: 6px; padding: 8px 12px; overflow-x: auto; border-bottom: 1px solid var(--border-default); scrollbar-width: thin; flex-shrink: 0; }
 .kb .navchip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 4px; border-radius: 999px; border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
+.kb .navchip .nlbl { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 3ch; }
 .kb .navchip .nidx { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); background: var(--surface-well); }
 .kb .navchip.in-view { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); }
 .kb .navchip[aria-current="true"] { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent); }
@@ -740,7 +801,8 @@
 .kb .pane-head { display: flex; align-items: center; gap: 8px; min-height: 36px; min-width: 0; }
 .kb .pane-title { display: flex; flex-direction: column; min-width: 0; }
 .kb .pane-title .pname { font-size: var(--text-body); font-weight: 650; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kb .pane-title .prole { font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb .pane-title .prole { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-label); color: var(--color-muted); white-space: nowrap; overflow: hidden; }
+.kb .pane-title .prole .prole-role, .kb .pane-title .prole .prole-kind { flex-shrink: 0; }
 .kb .pane-head .pstate { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); white-space: nowrap; flex-shrink: 0; }
 .kb .pane.tone-active .pane-head .pstate { color: var(--color-success); }
 .kb .pane.tone-review .pane-head .pstate { color: var(--color-info); }
@@ -771,9 +833,7 @@
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }
 .kb .pane .ch-meta .spacer { flex: 1; }
-.kb .pane .ch-engine { height: 18px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; color: #fff; flex-shrink: 0; }
-.kb .pane .ch-engine.claude { background: var(--color-claude); }
-.kb .pane .ch-engine.codex { background: var(--color-codex); }
+
 .kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }
 

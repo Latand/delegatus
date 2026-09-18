@@ -1,15 +1,19 @@
+import { translate, getLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
-import { effortMeter, effortTint, effortTitle } from "./utils";
+import { effortTint, effortTitle } from "./utils";
 
 /**
- * Slim vertical pills next to a model chip — one slot per tier of the entry's
- * own engine+model reasoning scale, filled up to the recorded tier (lowest
- * tier = one bar, top tier fills the meter). The filled bars carry the same
- * effort-shifted tint as the chip so the two read as one identity unit; empty
- * slots stay faint. Renders nothing when no reliable effort exists, keeping the
- * chip exactly as it looks today. The tier reads out through the shared
- * `util.effortTitle` tooltip with no visible label.
+ * The reasoning-effort ladder, as one geometry for the whole Viewer (#1743):
+ * five bottom-aligned bars of rising height, filled up to the tier. The scale
+ * is ABSOLUTE — low 1 … max 5 — not the engine's own slot count, because a
+ * mixed-engine stage strip drew "high" as 3 of 5 beside 3 of 4 and the two
+ * stages then read as different reasoning levels. Tiers outside the five clamp
+ * (`minimal`/`off` to 1, `ultra` to 5) and keep their exact word in the tooltip.
+ *
+ * Height carries the level, so hue is never the only signal: the filled bars
+ * take `currentColor` (the host sets the engine mark token, or `--color-muted`
+ * for a stage that has not launched) and the empty ones stay `--border-strong`.
  *
  * Layout contract (issue #270): the meter is a plain in-flow flex item — it
  * occupies exactly the space flexbox reserves for it and never paints outside
@@ -22,31 +26,61 @@ import { effortMeter, effortTint, effortTitle } from "./utils";
  * `reasoning-host` container (globals.css) collapse the meter below their
  * threshold instead of crowding it.
  */
-export function EffortPills({ file }: { file: FileEntry }) {
-  const { level, slots } = effortMeter(file);
+
+/** The five drawn steps, lowest first. */
+const STEPS = ["low", "medium", "high", "xhigh", "max"] as const;
+const BAR_HEIGHT = [4, 6, 8, 10, 12] as const;
+
+/** Where a recorded tier sits on the absolute five-step ladder; 0 hides it. */
+export function effortStep(effort: string | null | undefined): number {
+  const tier = (effort ?? "").trim().toLowerCase();
+  if (!tier) return 0;
+  const exact = STEPS.indexOf(tier as (typeof STEPS)[number]);
+  if (exact >= 0) return exact + 1;
+  if (tier === "minimal" || tier === "off") return 1;
+  if (tier === "ultra") return 5;
+  return 0;
+}
+
+/** The five-step ladder itself, for any surface that holds a raw tier token. */
+export function EffortScale({ effort, className, color, title }: {
+  effort: string | null | undefined;
+  className?: string;
+  /** Fill for the lit bars; defaults to the host's `currentColor`. */
+  color?: string;
+  /** Overrides the shared "reasoning: <tier>" tooltip. */
+  title?: string;
+}) {
+  const level = effortStep(effort);
   if (!level) return null;
-  const { color } = effortTint(file);
-  const title = effortTitle(file);
+  const label = title ?? translate(getLocale(), "util.effortTitle", { effort: effort ?? "" });
   return (
     <span
       data-effort-pills
-      className="reasoning-slot inline-flex h-[12px] shrink-0 items-end gap-px"
+      data-effort-step={level}
+      className={`reasoning-slot inline-flex h-[12px] shrink-0 items-end gap-px${className ? ` ${className}` : ""}`}
       role="img"
-      aria-label={title}
-      title={title}
+      aria-label={label}
+      title={label}
     >
-      {Array.from({ length: slots }, (_, i) => (
+      {BAR_HEIGHT.map((height, i) => (
         <span
           key={i}
           aria-hidden
           className="shrink-0 rounded-full"
           style={{
             width: "3px",
-            height: `${7 + i}px`,
-            backgroundColor: i < level ? color : "var(--color-border)",
+            height: `${height}px`,
+            backgroundColor: i < level ? color ?? "currentColor" : "var(--color-border)",
           }}
         />
       ))}
     </span>
   );
+}
+
+/** The conversation-card meter: the same ladder, in the entry's effort-shifted
+    model tint, so the chip and its bars keep reading as one identity unit. */
+export function EffortPills({ file }: { file: FileEntry }) {
+  return <EffortScale effort={file.effort} color={effortTint(file).color} title={effortTitle(file)} />;
 }

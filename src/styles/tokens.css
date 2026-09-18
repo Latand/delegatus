@@ -110,6 +110,13 @@
   --color-claude-soft: #faeee9;
   --color-openclaw: #b3407a;
   --color-openclaw-soft: #fbeaf3;
+  /* Engine MARK colours (#1743): the identity tints above are chip fills, and
+     Claude's orange falls under the 3:1 floor for a graphical mark on the light
+     tinted surfaces. The mark tokens are the stroke/fill of the shared engine
+     mark and of the filled effort steps beside it; the dark theme reuses the
+     identity tints, which already clear 5.6:1 there. */
+  --color-claude-mark: #c96442;
+  --color-codex-mark: var(--color-codex);
 
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
   --motion-fast: 120ms; /* hover, press, chip state         */
@@ -191,6 +198,8 @@
     --color-claude-soft: #2b1c15;
     --color-openclaw: #e888b6;
     --color-openclaw-soft: #2e1622;
+    --color-claude-mark: var(--color-claude);
+    --color-codex-mark: var(--color-codex);
 
     --color-user: #2a2a33;
 
@@ -248,6 +257,8 @@
   --color-claude-soft: #2b1c15;
   --color-openclaw: #e888b6;
   --color-openclaw-soft: #2e1622;
+  --color-claude-mark: var(--color-claude);
+  --color-codex-mark: var(--color-codex);
 
   --color-user: #2a2a33;
 

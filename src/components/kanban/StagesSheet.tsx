@@ -12,7 +12,9 @@ import { pipelineStateLabel, type StageChipState } from "@/components/pipelines/
 import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { cssEscape } from "./kanbanFocus";
-import { GraphGlyph, graphStateWord, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId } from "./PipelineSection";
+import { GraphGlyph, graphStateWord, LoopChip, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId } from "./PipelineSection";
+import { stageIdentity } from "./stageIdentity";
+import { engineWord, identityTitle, StageIdentity } from "./identityMarks";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
@@ -228,6 +230,9 @@ export function StagesSheet(props: {
         <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
           {order.map((stage, index) => {
             const state = views.get(stage.id)?.state ?? "pending";
+            /* The numbered chips carry the same engine mark and effort ladder as
+               the graph node, so a minimized stage still says who runs it (#1743). */
+            const identity = stageIdentity(pipeline, stage);
             return (
               <button
                 key={stage.id}
@@ -235,19 +240,17 @@ export function StagesSheet(props: {
                 className={`navchip tone-${STAGE_TONE[state]}${inView.has(stage.id) ? " in-view" : ""}`}
                 data-nav-stage={stage.id}
                 aria-current={focus === stage.id}
-                aria-label={t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}
+                aria-label={`${t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}. ${identityTitle(t, identity)}`}
                 onClick={() => reach(stage.id)}
               >
                 <span className="nidx num">{index + 1}</span>
                 <i className="pdot" aria-hidden="true" />
-                <span className="nlbl">{nameOf(stage)}</span>
+                <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} />
               </button>
             );
           })}
           {summary.loops.map((loop) => (
-            <span key={`${loop.from.id}->${loop.to.id}`} className="ploop fail" title={t("kanban.loopTitle", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}>
-              {t("kanban.loop", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}
-            </span>
+            <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
           ))}
         </nav>
 
@@ -264,6 +267,7 @@ export function StagesSheet(props: {
                       force={dir}
                       selected={new Set(focus ? [focus] : [])}
                       inView={inView}
+                      scale={scale}
                       navigate
                       onOpenStage={(_pipeline, stage) => reach(stage.id)}
                     />
@@ -346,7 +350,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
   const word = graphStateWord(t, state);
   const roleId = stageRoleId(stage);
-  const engine = (shown?.effectiveRole.engine ?? stage.effectiveRole.engine) === "codex" ? "Codex" : "Claude";
+  /* The pane header says who runs the stage in full words beside the same mark
+     and ladder the chip and the node draw (#1743). */
+  const identity = stageIdentity(pipeline, stage);
+  const engine = engineWord(shown?.effectiveRole.engine ?? stage.effectiveRole.engine);
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
   const glyph = <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>;
@@ -386,8 +393,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
     body = (
       <div className="pane-conv draft">
         <div className="ch-meta pane-id">
-          <span className={`ch-engine ${stage.effectiveRole.engine}`}>{engine}</span>
-          {stage.effectiveRole.model ? <span className="ch-model">{stage.effectiveRole.effort ? `${stage.effectiveRole.model} · ${stage.effectiveRole.effort}` : stage.effectiveRole.model}</span> : null}
+          <StageIdentity identity={identity} density="header" showWord />
           <StageAccountChip pipeline={pipeline} stage={stage} />
         </div>
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
@@ -423,7 +429,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         {glyph}
         <span className="pane-title">
           <span className="pname">{index + 1}. {name}</span>
-          <span className="prole">{[roleNameById(t, roleId), engine, stage.kind === "review-loop" ? t("kanban.stages.reviewLoop") : null].filter(Boolean).join(" · ")}</span>
+          <span className="prole">
+            <span className="prole-role">{roleNameById(t, roleId)}</span>
+            <StageIdentity identity={identity} density="header" showWord />
+            {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
+          </span>
         </span>
         <span className="pstate"><i className="pdot" aria-hidden="true" />{word}</span>
         <span className="spacer" />
