@@ -102,6 +102,26 @@ function retryRecordUnavailable(recorded: Evidence<boolean>): NextResponse {
 }
 
 /**
+ * The route's own delivery classification, on the response (#1593).
+ *
+ * Every exit above the delivery attempt already knows the message was turned
+ * away with nothing written: no journal row, no operation id, nothing on any
+ * wire. All of them answer 503, which is byte-identical to the ONE 503 that is
+ * genuinely uncertain — the trailing `catch`, where the command may already be
+ * on the wire — so a client reading the status alone has to assume the worst
+ * and park the message as an unknown delivery that nothing can ever settle.
+ *
+ * The distinction is published instead. `refused` is a proof of absence and
+ * the caller may put the message back in the operator's hands; `uncertain`
+ * keeps the caller's existing caution. The `error` beside it is the whole
+ * reason the operator is shown, so it stays a short fixed sentence — never a
+ * path, an id or an account.
+ */
+function refusedBeforeDispatch(error: string): NextResponse {
+  return NextResponse.json({ error, delivery: "refused" satisfies AttachmentDeliveryOutcome }, { status: 503 });
+}
+
+/**
  * One send's general (non-image) attachments and the fate of the delivery they
  * rode with, threaded through the dispatch so the wrapper below can release
  * them on a TERMINAL refusal and only then (#1224). Kept as a handle rather
@@ -128,9 +148,9 @@ async function dispatchRuntimeCommand(
 ): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
-  if (!dependencies.enabled()) return NextResponse.json({ error: "runtime events are disabled" }, { status: 503 });
+  if (!dependencies.enabled()) return refusedBeforeDispatch("runtime events are disabled");
   if (!(dependencies.structuredEnabled ?? (() => structuredHostsEnabled()))()) {
-    return NextResponse.json({ error: "structured hosts are disabled" }, { status: 503 });
+    return refusedBeforeDispatch("structured hosts are disabled");
   }
   let value: unknown;
   try {
@@ -227,7 +247,7 @@ async function dispatchRuntimeCommand(
           idempotencyKey: command.idempotencyKey,
         });
       } catch {
-        return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
+        return refusedBeforeDispatch("direct operator activity could not be recorded");
       }
     }
     /* #1202: the operator's own message retires the reply drafts offered under
@@ -300,12 +320,9 @@ async function dispatchRuntimeCommand(
          holding an id that never becomes an answer. Controls are untouched:
          they carry no message and reserve nothing. */
       attachments.outcome = "refused";
-      return NextResponse.json(
-        { error: "structured delivery ownership is unavailable for this conversation" },
-        { status: 503 },
-      );
+      return refusedBeforeDispatch("structured delivery ownership is unavailable for this conversation");
     }
-    if (!client) return NextResponse.json({ error: "runtime host socket is unavailable" }, { status: 503 });
+    if (!client) return refusedBeforeDispatch("runtime host socket is unavailable");
     /* Same fence as the queue above: the command is on the wire, so its fate is
        unknown until it answers. A transport failure or an idempotency conflict
        lands in the catch below with the attachments intact — a conflict in
@@ -322,7 +339,13 @@ async function dispatchRuntimeCommand(
     return NextResponse.json({ operationId: result.operationId, receipt: result.receipt }, { status });
   } catch (error) {
     const status = error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict" ? 409 : 503;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "runtime command failed" }, { status });
+    /* The other half of the classification (#1593): the command was on the
+       wire when this threw, so the Viewer cannot say whether the host took it.
+       Published as what it is, and the caller keeps every caution it has. */
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "runtime command failed",
+      delivery: "uncertain" satisfies AttachmentDeliveryOutcome,
+    }, { status });
   }
 }
 

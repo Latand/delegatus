@@ -499,6 +499,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "outbox.cancel": "Скасувати це повідомлення",
   "outbox.retry": "Повторити надсилання цього повідомлення",
   "outbox.reattach": "Не надіслано — додайте файли знову та надішліть",
+  "outbox.clearParked": "Повернути це повідомлення в редактор",
 
   // Agent control strip (issue #241)
   "strip.live": "наживо",

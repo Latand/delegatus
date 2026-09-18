@@ -25,6 +25,7 @@ import { getLocale, useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import type { RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
+import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import {
   queueAdmissionKey,
@@ -180,6 +181,8 @@ interface ComposerSendResult {
   spawned?: boolean;
   outcome?: "delivered-to-live" | "resumed" | "held" | "queued" | "delivering" | "delivered" | "recovering" | "failed";
   receipt?: RuntimeReceipt;
+  /** The send route's own classification of this attempt (#1593). */
+  delivery?: AttachmentDeliveryOutcome;
 }
 
 const SENT_LIMIT = 8;
@@ -2624,6 +2627,46 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         || entry.deliveryReceipt?.reason === "delivery-discarded") return;
       updateOutbox(cardId, outboxId, { state: "delivering", deliveryUncertain: true });
     };
+    /**
+     * A send the route refused above the delivery attempt (#1593).
+     *
+     * Nothing was journaled, no operation was minted and nothing reached a
+     * host, so this message was NOT sent — and it must never be parked as an
+     * unknown delivery, because no receipt can ever exist to settle one and the
+     * parked bubble carries no control at all.
+     *
+     * It goes back where it came from: the draft returns whole, text and
+     * attachments, and the bubble goes with it so the message is in exactly one
+     * place. Only into a composer holding nothing, though — the same rule a
+     * refused hand-off obeys. The answer can arrive after the operator has
+     * started the next message, and putting these words beside newer ones would
+     * be a second loss; then the bubble stays instead, saying the server's
+     * reason and carrying the ordinary retry and cancel a failure always had.
+     */
+    const returnRefusedSubmission = (reason: string) => {
+      /* A direct send never left the composer — the draft is still on screen,
+         and the status line below says why it did not go. */
+      if (!outboxId) return;
+      const entry = readOutbox(cardId).find((candidate) => candidate.id === outboxId);
+      if (!entry || entry.state === "delivered") return;
+      /* An entry already parked by an EARLIER attempt is not this refusal's to
+         reinterpret: that attempt may have landed, and this one proves nothing
+         about it. */
+      if (entry.deliveryUncertain) return;
+      const keepAsFailure = () => updateOutbox(cardId, outboxId, {
+        state: "failed", error: reason, settledAt: nowMs(), awaitingTurn: undefined, heldForSwitch: undefined,
+      });
+      if (textRef.current.trim() || attachments.attachmentsRef.current.length) { keepAsFailure(); return; }
+      cancelOutbox(cardId, outboxId);
+      if (readOutbox(cardId).some((candidate) => candidate.id === outboxId)) { keepAsFailure(); return; }
+      outboxImages.current.delete(outboxId);
+      outboxFiles.current.delete(outboxId);
+      outboxKeys.current.delete(outboxId);
+      persistPendingDeliveries(pendingDeliveries.current.filter((pending) => pending.key !== outboxId));
+      setText(requestedText);
+      if (requestedImages.length || requestedFiles.length) attachments.replace(requestedImages, requestedFiles);
+      inputRef.current?.focus();
+    };
     const settleOutboxFromReceipt = (receipt: RuntimeReceipt) => {
       /* The late admission: a send that answered `pending` and settled on the receipt
          stream. This is the moment its bridge batch became durable. */
@@ -2920,6 +2963,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
               receipt: result.receipt,
               operationId: result.operationId,
               held: result.held,
+              delivery: result.delivery,
               outcome: (result.receipt?.status === "delivering" || result.receipt?.status === "delivered"
                 ? result.receipt.status
                 : "queued") as "delivering" | "delivered" | "queued",
@@ -2954,16 +2998,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         json = { ...json, ok: false, receipt: undefined, operationId: undefined, held: undefined,
           error: "receipt-identity-mismatch" };
       }
+      /* #1593: the route said itself that it refused this message above the
+         delivery attempt — nothing journaled, no operation minted, nothing on
+         any wire. That is a KNOWN fate, and the one 503 that is genuinely
+         uncertain never carries it. Read only alongside the absence of an
+         operation and a receipt: an identity the server named is evidence of
+         admission, and evidence outranks a word. */
+      const refusedBeforeDispatch = json.delivery === "refused" && !json.operationId && !json.receipt
+        && json.error !== "receipt-identity-mismatch";
       if (durable && json.receipt) {
         if (!await composerSubmissionPayloads.observe(durable.ref, json.receipt)) {
           json = { ...json, ok: false, receipt: undefined, operationId: undefined, error: "receipt-identity-mismatch" };
         }
         await refreshPayloads();
       } else if (durable?.envelope?.route === "runtime" && !json.ok && !json.operationId
-        && json.status !== undefined && PRE_ADMISSION_REFUSALS.has(json.status)) {
+        && (refusedBeforeDispatch || (json.status !== undefined && PRE_ADMISSION_REFUSALS.has(json.status)))) {
         /* Refused before anything was reserved: say so durably, so a reload
-           still offers the sealed envelope again instead of an unknown fate. */
-        await composerSubmissionPayloads.refuse(durable.ref, { status: json.status, reason: json.error ?? t("common.failedSend") })
+           still offers the sealed envelope again instead of an unknown fate.
+           A published refusal is that same fact stated by the route, so it
+           opens the envelope on the statuses the set cannot recognize. */
+        await composerSubmissionPayloads.refuse(durable.ref, { status: json.status ?? 503, reason: json.error ?? t("common.failedSend") })
           .catch(() => false);
         await refreshPayloads();
       }
@@ -3033,18 +3087,21 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
            server may have accepted: a retry never overwrites it, and a
            outbox retains this snapshot for any permitted same-key retry.
            Direct submissions can release a proven pre-dispatch rejection. */
-        const possiblyAccepted = json.error === "receipt-identity-mismatch" || Boolean(json.receipt && receiptHasUnknownFate(json.receipt)) || !receiptIsTerminal(json.receipt?.status ?? "pending")
-          && (json.status === undefined || json.status >= 500 || json.status === 409);
+        const possiblyAccepted = !refusedBeforeDispatch
+          && (json.error === "receipt-identity-mismatch" || Boolean(json.receipt && receiptHasUnknownFate(json.receipt)) || !receiptIsTerminal(json.receipt?.status ?? "pending")
+          && (json.status === undefined || json.status >= 500 || json.status === 409));
         if (!possiblyAccepted && recordedThisAttempt && !outboxId) {
           persistPendingDeliveries(pendingDeliveries.current.filter((entry) => entry.key !== clientMessageId));
         }
         // A hard failure keeps the draft text (never cleared) so the message is
         // not lost; the error is announced by the composer's live status region.
         // A queued submission retains its bubble and the receipt evidence.
+        const failure = json.error ?? t("common.failedSend");
         if (json.receipt) settleOutboxFromReceipt(json.receipt);
+        else if (refusedBeforeDispatch) returnRefusedSubmission(failure);
         else if (possiblyAccepted && outboxId) markOutboxUnknown();
-        else settleOutbox("failed", json.error ?? t("common.failedSend"));
-        setStatus({ kind: "err", text: json.error ?? t("common.failedSend") });
+        else settleOutbox("failed", failure);
+        setStatus({ kind: "err", text: failure });
         return;
       }
       if (json.structured && json.receipt) {

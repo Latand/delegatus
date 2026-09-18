@@ -351,7 +351,9 @@ test("runtime image storage failures return 503 without issuing a runtime comman
   });
 
   expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ error: "runtime image storage is unavailable" });
+  /* The enqueue threw mid-delivery, which is the one 503 the Viewer cannot
+     call: it rides the same `uncertain` classification the attachments do. */
+  expect(await response.json()).toEqual({ error: "runtime image storage is unavailable", delivery: "uncertain" });
   expect(commands).toEqual([]);
 });
 
@@ -362,7 +364,7 @@ test("runtime command routes fail closed while activation is disabled", async ()
     { enabled: () => false, client: () => null },
   );
   expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ error: "runtime events are disabled" });
+  expect(await response.json()).toEqual({ error: "runtime events are disabled", delivery: "refused" });
 });
 
 test("direct runtime send reaches durable admission while the runtime socket synchronizes", async () => {
@@ -431,8 +433,9 @@ test("direct structured commands stop before runtime admission when hosting is d
 
   expect(send.status).toBe(503);
   expect(interrupt.status).toBe(503);
-  expect(await send.json()).toEqual({ error: "structured hosts are disabled" });
-  expect(await interrupt.json()).toEqual({ error: "structured hosts are disabled" });
+  /* Refused above the delivery attempt, and said so on the response (#1593). */
+  expect(await send.json()).toEqual({ error: "structured hosts are disabled", delivery: "refused" });
+  expect(await interrupt.json()).toEqual({ error: "structured hosts are disabled", delivery: "refused" });
   expect(commands).toEqual([]);
 });
 
