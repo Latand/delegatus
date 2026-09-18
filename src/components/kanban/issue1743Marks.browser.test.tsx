@@ -69,6 +69,11 @@ interface EdgeMeasure {
   fired: string | null;
   travelled: boolean;
   spent: boolean;
+  /** An arrow that has just carried work animates; it is dashed while it does. */
+  live: boolean;
+  /** The stroke as drawn: dashed while an edge is only configured, solid once
+      it has been travelled — on a pass edge exactly as on a fail edge. */
+  dash: string;
   /** The circled number drawn on the arrow, when one is. */
   circle: string | null;
   /** What the label settled on when it sits beside the return lane. */
@@ -81,6 +86,10 @@ interface EdgeMeasure {
   area: number;
   fill: string;
   filled: boolean;
+  /** The disc's own fill and the fill behind it: a disc painted in its
+      surround is a hole, which is the pass count's drawing, not a fail's. */
+  circleFill: string;
+  markFill: string;
 }
 
 interface GraphMeasure {
@@ -89,8 +98,9 @@ interface GraphMeasure {
   /** Effective on-screen px of the identity row's 10 px caption text. */
   captionPx: number;
   identityWords: string | null;
-  /** Rows the graph moved under itself because a label did not fit beside it. */
-  legend: string[];
+  /** Rows the graph moved under itself because a label did not fit beside it.
+      The key must sample the SAME mark the arrow above it carries. */
+  legend: Array<{ edge: string; text: string; circle: string | null; filled: boolean; spent: boolean }>;
 }
 
 const READ_GRAPH = (scopeSelector: string) => (page: Page) => page.evaluate((selector): GraphMeasure | null => {
@@ -143,20 +153,36 @@ const READ_GRAPH = (scopeSelector: string) => (page: Page) => page.evaluate((sel
     const overflowX = label
       ? Math.max(0, (label.getBoundingClientRect().right - graph.getBoundingClientRect().right) / Math.max(drawn, 0.01))
       : 0;
-    const fill = label ? getComputedStyle(label).backgroundColor : "";
-    const labelRect = label?.getBoundingClientRect();
+    /* Where a fail label paints depends on the form it took: a full pill inverts
+       ITSELF when the budget is spent, while a bare badge has no pill and the
+       ink sits on the mark inside it. Read whichever of the two actually paints,
+       so "exhausted is never the lighter drawing" is measured on the drawing
+       the operator sees (#1743). */
+    const opaque = (colour: string) => Boolean(colour) && colour !== "transparent" && !/rgba\(0, 0, 0, 0\)/.test(colour);
+    const mark = label?.querySelector<HTMLElement>(".cfired") ?? null;
+    const labelFill = label ? getComputedStyle(label).backgroundColor : "";
+    const markFill = mark ? getComputedStyle(mark).backgroundColor : "";
+    const fill = opaque(labelFill) ? labelFill : markFill;
+    const paintedRect = (opaque(labelFill) ? label : mark ?? label)?.getBoundingClientRect();
     return {
       edge: id,
       fired: path.getAttribute("data-edge-fired"),
       travelled: cls.includes("taken"),
       spent: cls.includes("spent") || (label?.className ?? "").includes("spent"),
+      live: cls.includes("live"),
+      dash: getComputedStyle(path).strokeDasharray,
       circle: label?.querySelector(".ccircle")?.textContent?.trim() ?? null,
       form: label?.dataset.edgeLabelForm ?? null,
       text: label?.textContent?.trim() ?? "",
       overflowX: Math.round(overflowX * 100) / 100,
-      area: labelRect ? Math.round(labelRect.width * labelRect.height) : 0,
+      area: paintedRect ? Math.round(paintedRect.width * paintedRect.height) : 0,
       fill,
-      filled: Boolean(fill) && fill !== "transparent" && !/rgba\(0, 0, 0, 0\)/.test(fill),
+      filled: opaque(labelFill) || opaque(markFill),
+      circleFill: (() => {
+        const circle = label?.querySelector<HTMLElement>(".ccircle");
+        return circle ? getComputedStyle(circle).backgroundColor : "";
+      })(),
+      markFill,
     };
   });
   return {
@@ -164,7 +190,13 @@ const READ_GRAPH = (scopeSelector: string) => (page: Page) => page.evaluate((sel
     edges,
     captionPx: Math.round(captionRaw * drawn * 100) / 100,
     identityWords: graph.dataset.identityWords ?? null,
-    legend: [...(box?.querySelectorAll<HTMLElement>(".plegend li") ?? [])].map((row) => row.textContent?.trim() ?? ""),
+    legend: [...(box?.querySelectorAll<HTMLElement>(".plegend li") ?? [])].map((row) => ({
+      edge: row.dataset.legendEdge ?? "",
+      text: row.textContent?.trim() ?? "",
+      circle: row.querySelector(".ccircle")?.textContent?.trim() ?? null,
+      filled: Boolean(row.querySelector(".ccircle.filled")),
+      spent: Boolean(row.querySelector(".cfired.spent")),
+    })),
   };
 }, scopeSelector);
 
@@ -238,6 +270,23 @@ const readPhoneStages = (page: Page) => page.evaluate(() => ({
     identity: row.querySelector<HTMLElement>(".pident")?.dataset.identity ?? null,
     model: row.querySelector(".imodel")?.textContent?.trim() ?? "",
     returns: row.querySelector(".ccircle")?.textContent?.trim() ?? null,
+    /* A return is a FILLED disc in both states, with a closed ring once the
+       budget is spent, and the budget itself is printed beside it: on a phone
+       there is no arrow and no legend to carry either (#1743). */
+    returnFilled: Boolean(row.querySelector(".cfired .ccircle.filled")),
+    returnSpent: Boolean(row.querySelector(".cfired.spent")),
+    returnBudget: row.querySelector("[data-mobile2-stage-budget]")?.textContent?.trim() ?? "",
+    returnBudgetState: row.querySelector<HTMLElement>("[data-mobile2-stage-budget]")?.dataset.mobile2StageBudget ?? null,
+    /* Painted area of the whole mark, so "exhausted reads heavier than live"
+       is a number rather than a claim. */
+    returnArea: (() => {
+      const mark = row.querySelector<HTMLElement>(".cfired");
+      if (!mark) return 0;
+      const rect = mark.getBoundingClientRect();
+      return Math.round(rect.width * rect.height);
+    })(),
+    /* The stage name may not be squeezed out by the budget beside it. */
+    nameWidth: Math.round((row.querySelector<HTMLElement>(".truncate")?.getBoundingClientRect().width ?? 0)),
     /* Nothing on a 390 px row may paint outside the row. */
     overflowX: (() => {
       const rect = row.getBoundingClientRect();
@@ -317,8 +366,35 @@ browserTest("#1743: every stage says who runs it, and a fail edge that fired twi
        in the legend under the graph — never nowhere. A pass edge has no budget,
        so its bare circled count is the whole of what it has to say. */
     for (const edge of measured.edges.filter((entry) => entry.form === "badge")) {
-      if (!measured.legend.some((row) => row.includes(String(edge.fired)) && row.length > 8)) {
+      if (!measured.legend.some((row) => row.text.includes(String(edge.fired)) && row.text.length > 8)) {
         failures.push(`${label}: ${edge.edge} stepped down to a number and the legend says nothing`);
+      }
+    }
+    /* Wherever the mark itself paints the exhausted ring, the disc inside it
+       must still be a DISC: painted in the ring's own colour it is a hole, and
+       a hole is this vocabulary's pass count (#1743). */
+    for (const edge of measured.edges.filter((entry) => entry.spent && entry.travelled)) {
+      if (edge.markFill && edge.markFill === edge.circleFill) {
+        failures.push(`${label}: the exhausted count on ${edge.edge} is a hole in its ring (${edge.circleFill})`);
+      }
+    }
+    /* Dashed is "configured, not travelled" on every kind of edge: a pass edge
+       that has never fired may not read as a path the work has taken (#1743).
+       A live arrow animates its own dashes, so it is not evidence either way. */
+    for (const edge of measured.edges.filter((entry) => !entry.live)) {
+      const dashed = Boolean(edge.dash) && edge.dash !== "none";
+      if (edge.travelled && dashed) failures.push(`${label}: travelled edge ${edge.edge} is drawn dashed (${edge.dash})`);
+      if (!edge.travelled && !dashed) failures.push(`${label}: untravelled edge ${edge.edge} is drawn solid`);
+    }
+    /* A key that samples a different mark than the arrow it explains explains
+       nothing: the legend's circle is filled like the arrow's, and carries the
+       same closed ring when the budget is spent (#1743). */
+    for (const row of measured.legend) {
+      const drawn = measured.edges.find((edge) => edge.edge === row.edge);
+      if (!drawn?.travelled) continue;
+      if (!row.filled) failures.push(`${label}: the legend for ${row.edge} samples an outlined count where the arrow is filled`);
+      if (row.spent !== Boolean(drawn.spent)) {
+        failures.push(`${label}: the legend for ${row.edge} reads spent=${row.spent} while the arrow reads spent=${drawn.spent}`);
       }
     }
   };
@@ -484,20 +560,51 @@ browserTest("#1743: every stage says who runs it, and a fail edge that fired twi
       await opened.page.waitForTimeout(400);
       const stages = await readPhoneStages(opened.page);
       await opened.page.screenshot({ path: path.join(OUT, `phone-pipeline-${label}.png`), fullPage: true });
-      frames[label] = { viewport, language, measured, stages };
       if (stages.rows.length !== 5) failures.push(`${label}: the pipeline screen drew ${stages.rows.length} stage rows`);
       for (const row of stages.rows) {
         if (!row.engineMark) failures.push(`${label}: stage row ${row.stage} drew no engine mark`);
         if (!row.effortStep) failures.push(`${label}: stage row ${row.stage} drew no effort ladder`);
         if (row.overflowX > 0.5) failures.push(`${label}: stage row ${row.stage} paints ${row.overflowX} px outside itself`);
+        if (row.nameWidth < 40) failures.push(`${label}: stage row ${row.stage} draws its name at ${row.nameWidth} px`);
       }
       const unstarted = stages.rows.find((row) => row.stage === "ship");
       if (unstarted?.identity !== "configured") failures.push(`${label}: the unstarted stage row reads ${JSON.stringify(unstarted?.identity)}`);
       const returned = stages.rows.find((row) => row.stage === "build");
       if (returned?.returns !== "2") failures.push(`${label}: the stage work came back to counts ${JSON.stringify(returned?.returns)}`);
+      if (!returned?.returnFilled) failures.push(`${label}: the live return is not a filled disc`);
+      if (returned?.returnSpent) failures.push(`${label}: the return with one left is drawn as spent`);
+      if (returned?.returnBudgetState !== "left") failures.push(`${label}: the live row's budget reads ${JSON.stringify(returned?.returnBudgetState)}`);
+      if (!/2.*3/.test(returned?.returnBudget ?? "")) failures.push(`${label}: the live row prints the budget as ${JSON.stringify(returned?.returnBudget)}`);
       if (stages.rows.filter((row) => row.returns).length !== 1) {
         failures.push(`${label}: a row that was never returned to carries a count ${JSON.stringify(stages.rows.map((row) => [row.stage, row.returns]))}`);
       }
+
+      /* And the pipeline whose budget is spent, on the same screen: exhaustion
+         is what the phone drew lighter and wordless before (#1743). */
+      await opened.page.click("[data-mobile2-back]");
+      await opened.page.waitForSelector('[data-mobile2-pipeline-row="p-marks-spent"]', { state: "attached", timeout: 20_000 });
+      await opened.page.click('[data-mobile2-pipeline-row="p-marks-spent"]');
+      await opened.page.waitForSelector('[data-mobile2-stage="fix"]', { state: "attached", timeout: 20_000 });
+      await opened.page.waitForTimeout(400);
+      const spentStages = await readPhoneStages(opened.page);
+      await opened.page.screenshot({ path: path.join(OUT, `phone-pipeline-spent-${label}.png`), fullPage: true });
+      const spentRow = spentStages.rows.find((row) => row.stage === "fix");
+      if (spentRow?.returns !== "2") failures.push(`${label}: the exhausted row counts ${JSON.stringify(spentRow?.returns)}`);
+      if (!spentRow?.returnFilled) failures.push(`${label}: the exhausted return is not a filled disc`);
+      if (!spentRow?.returnSpent) failures.push(`${label}: the exhausted return draws no closed ring`);
+      if (spentRow?.returnBudgetState !== "spent") failures.push(`${label}: the exhausted row's budget reads ${JSON.stringify(spentRow?.returnBudgetState)}`);
+      if (!/2.*2/.test(spentRow?.returnBudget ?? "")) failures.push(`${label}: the exhausted row prints the budget as ${JSON.stringify(spentRow?.returnBudget)}`);
+      if (spentRow?.returnBudget === returned?.returnBudget) {
+        failures.push(`${label}: the exhausted row says the same as the live one ${JSON.stringify(spentRow?.returnBudget)}`);
+      }
+      /* Exhaustion may never be the LIGHTER of the two drawings. */
+      if ((spentRow?.returnArea ?? 0) < (returned?.returnArea ?? 0)) {
+        failures.push(`${label}: the exhausted mark is smaller than the live one (${spentRow?.returnArea} vs ${returned?.returnArea} px2)`);
+      }
+      for (const row of spentStages.rows) {
+        if (row.overflowX > 0.5) failures.push(`${label}: exhausted stage row ${row.stage} paints ${row.overflowX} px outside itself`);
+      }
+      frames[label] = { viewport, language, measured, stages, spentStages };
       if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
     } catch (error) {
       failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);

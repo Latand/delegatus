@@ -16,8 +16,8 @@ import { reviewerBindingTargetsForRound } from "../flows/flowModel";
    "who runs this stage" and "how often work came back here" (#1743). They live
    beside the graph that first drew them; the phone reads the same modules
    rather than growing a second drawing of the same facts. */
-import { CountCircle, identityTitle, StageIdentity } from "../kanban/identityMarks";
-import { returnsInto, stageIdentity } from "../kanban/stageIdentity";
+import { FiredMark, identityTitle, StageIdentity } from "../kanban/identityMarks";
+import { returnsInto, stageIdentity, type EdgeCount } from "../kanban/stageIdentity";
 import {
   attemptNavTarget,
   attemptStateLabel,
@@ -643,7 +643,9 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   const identity = stageIdentity(pipeline, stage);
   const returns = returnsInto(pipeline, stage.id);
   const Tag = file || configurable ? "button" : "div";
-  const who = identityTitle(t, identity);
+  /* Who runs it AND what the returns spent, so the row says in words what it
+     draws as a disc and a ratio. */
+  const who = [identityTitle(t, identity), ...returns.map((count) => returnTitle(t, count))].join(" · ");
   const control = file
     ? { type: "button" as const, onClick: () => onOpenConversation(file), "aria-label": `${t("mobile2.pipeline.openStage", { stage: title })}. ${who}` }
     : configurable
@@ -666,13 +668,7 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
             {returns.map((count, at) => (
-              <CountCircle
-                key={at}
-                n={count.fired}
-                tone="fail"
-                filled={!count.exhausted}
-                label={t("kanban.graph.firedTitle", { count: count.fired })}
-              />
+              <ReturnMark key={at} count={count} />
             ))}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
@@ -693,6 +689,38 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
         <TranscriptRow key={transcript.path} n={transcript.n} path={transcript.path} files={files} onOpenConversation={onOpenConversation} />
       ))}
     </div>
+  );
+}
+
+/** Everything a return says in words: how much of the budget it spent, and
+    whether any return is left. The same sentence the arrow's hover carries. */
+const returnTitle = (t: TFunction, count: EdgeCount) => [
+  t("kanban.graph.failUsed", { n: count.fired, max: count.max ?? 0 }),
+  count.exhausted ? t("kanban.graph.noneLeft") : null,
+].filter(Boolean).join(" · ");
+
+/**
+ * Work came back into this stage, this many times, out of this budget (#1743).
+ *
+ * The phone has no arrow to hang the count on, so the row carries it — and it
+ * carries the SAME drawing the graph does: a filled disc in both states, with a
+ * closed ring around it once the budget is spent. A lighter outline would be
+ * strictly less ink for the worse state, and an outlined circle is this
+ * vocabulary's PASS count, so a fail count may never take one. The row's meta
+ * line names only the run and the state, so the budget is printed here or it is
+ * nowhere on the phone.
+ */
+function ReturnMark({ count }: { count: EdgeCount }) {
+  const { t } = useLocale();
+  const title = returnTitle(t, count);
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-label font-bold leading-none text-danger" title={title} data-mobile2-stage-returns={count.fired}>
+      <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
+      <span data-mobile2-stage-budget={count.exhausted ? "spent" : "left"}>
+        {t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 })}
+        {count.exhausted ? ` · ${t("kanban.graph.noneLeft")}` : ""}
+      </span>
+    </span>
   );
 }
 

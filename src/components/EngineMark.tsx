@@ -2,6 +2,8 @@
    engine glyph names, and a cycle through it would be needless. */
 import { MessageCircle, Terminal } from "lucide-react";
 
+import { engineBadgeFor } from "@/components/utils";
+
 /**
  * The one engine mark the Viewer draws (#1743). Every surface that used to pick
  * its own glyph — a lucide `Sparkle`, a `Command`, a coloured dot, a filled
@@ -104,4 +106,30 @@ function EngineGlyph({ engine, size }: { engine: string; size: number }) {
   if (engine === "shell") return <Terminal style={box} aria-hidden />;
   /* An engine this build has no mark for: a neutral dot, never a wrong mark. */
   return <span aria-hidden style={{ width: "6px", height: "6px", borderRadius: "999px", background: "currentColor" }} />;
+}
+
+/**
+ * The engine as a pill: the one mark, then the engine's own word, in the engine
+ * tint these badges have always carried (#1743).
+ *
+ * Every surface that named an engine as a bare tinted WORD — a conversation
+ * card with no model of its own, the branch pane's header, global search, the
+ * round deck, the incumbent orchestrator — draws this instead, so the icon
+ * vocabulary and the word vocabulary are one. The pill's own padding and type
+ * size stay the host's, because these sit in rows tuned to very different
+ * densities; what is shared is the mark, the word and the tint.
+ */
+export function EngineBadge({ engine, className = "", title, size = 12 }: {
+  engine: string;
+  className?: string;
+  title?: string;
+  size?: EngineMarkSize;
+}) {
+  const badge = engineBadgeFor(engine);
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full ${className}`} style={badge.style} title={title}>
+      <EngineMark engine={engine} size={size} tone="inherit" />
+      {badge.label}
+    </span>
+  );
 }

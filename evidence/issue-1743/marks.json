@@ -160,68 +160,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "long",
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1958,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -259,26 +279,34 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2fail 2/2",
             "overflowX": 0,
             "area": 1217,
             "fill": "rgb(198, 40, 40)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -346,68 +374,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1958,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -554,68 +602,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 346,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 346,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 395,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1253,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 8,
@@ -784,74 +852,100 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 288,
+            "area": 256,
             "fill": "rgba(0, 0, 0, 0)",
-            "filled": false
+            "filled": false,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": "rgba(0, 0, 0, 0)"
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Critique → Build on fail · 2 of 3 used"
+          {
+            "edge": "critique:fail:build",
+            "text": "2Critique → Build on fail · 2 of 3 used",
+            "circle": "2",
+            "filled": true,
+            "spent": false
+          }
         ]
       },
       "spent": {
@@ -885,32 +979,46 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 360,
+            "area": 400,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": "rgb(255, 255, 255)"
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Review → Fix on fail · 2 of 2 used · none left"
+          {
+            "edge": "review:fail:fix",
+            "text": "2Review → Fix on fail · 2 of 2 used · none left",
+            "circle": "2",
+            "filled": true,
+            "spent": true
+          }
         ]
       }
     },
@@ -1074,68 +1182,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "long",
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1958,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -1173,26 +1301,34 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2fail 2/2",
             "overflowX": 0,
             "area": 1217,
             "fill": "rgb(240, 113, 113)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -1260,68 +1396,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1958,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -1468,68 +1624,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 346,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 346,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 395,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2fail · 2 of 3 used",
             "overflowX": 0,
             "area": 1253,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 8,
@@ -1698,74 +1874,100 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "pass",
             "overflowX": 0,
             "area": 617,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 288,
+            "area": 256,
             "fill": "rgba(0, 0, 0, 0)",
-            "filled": false
+            "filled": false,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": "rgba(0, 0, 0, 0)"
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Critique → Build on fail · 2 of 3 used"
+          {
+            "edge": "critique:fail:build",
+            "text": "2Critique → Build on fail · 2 of 3 used",
+            "circle": "2",
+            "filled": true,
+            "spent": false
+          }
         ]
       },
       "spent": {
@@ -1799,32 +2001,46 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 360,
+            "area": 400,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": "rgb(23, 23, 28)"
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Review → Fix on fail · 2 of 2 used · none left"
+          {
+            "edge": "review:fail:fix",
+            "text": "2Review → Fix on fail · 2 of 2 used · none left",
+            "circle": "2",
+            "filled": true,
+            "spent": true
+          }
         ]
       }
     },
@@ -1843,7 +2059,7 @@
           "codex",
           "claude",
           "claude",
-          "codex",
+          "claude",
           "claude",
           "claude",
           "claude",
@@ -1872,6 +2088,12 @@
             "identity": "launched",
             "model": "Fable",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 89,
             "overflowX": 0
           },
           {
@@ -1881,6 +2103,12 @@
             "identity": "launched",
             "model": "Sonnet",
             "returns": "2",
+            "returnFilled": true,
+            "returnSpent": false,
+            "returnBudget": "fail 2/3",
+            "returnBudgetState": "left",
+            "returnArea": 256,
+            "nameWidth": 82,
             "overflowX": 0
           },
           {
@@ -1890,6 +2118,12 @@
             "identity": "launched",
             "model": "Opus 5",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 108,
             "overflowX": 0
           },
           {
@@ -1899,6 +2133,12 @@
             "identity": "configured",
             "model": "6-Astra",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 85,
             "overflowX": 0
           },
           {
@@ -1908,6 +2148,46 @@
             "identity": "configured",
             "model": "claude-opus-5-20260101-preview",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 79,
+            "overflowX": 0
+          }
+        ]
+      },
+      "spentStages": {
+        "rows": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": true,
+            "returnBudget": "fail 2/2 · none left",
+            "returnBudgetState": "spent",
+            "returnArea": 400,
+            "nameWidth": 66,
+            "overflowX": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 91,
             "overflowX": 0
           }
         ]
@@ -2073,68 +2353,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2невдача 2/3",
             "overflowX": 0,
             "area": 1672,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -2172,26 +2472,34 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2невдача 2/2",
             "overflowX": 0,
             "area": 1672,
             "fill": "rgb(198, 40, 40)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -2259,68 +2567,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2невдача · використано 2 з 3",
             "overflowX": 0,
             "area": 3061,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -2467,68 +2795,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 346,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 346,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 445,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2невдача · використано 2 з 3",
             "overflowX": 0,
             "area": 1959,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 8,
@@ -2697,74 +3045,100 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 288,
+            "area": 256,
             "fill": "rgba(0, 0, 0, 0)",
-            "filled": false
+            "filled": false,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": "rgba(0, 0, 0, 0)"
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Critique → Build при невдачі · використано 2 з 3"
+          {
+            "edge": "critique:fail:build",
+            "text": "2Critique → Build при невдачі · використано 2 з 3",
+            "circle": "2",
+            "filled": true,
+            "spent": false
+          }
         ]
       },
       "spent": {
@@ -2798,32 +3172,46 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(255, 255, 255)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 360,
+            "area": 400,
             "fill": "rgb(255, 255, 255)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(198, 40, 40)",
+            "markFill": "rgb(255, 255, 255)"
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Review → Fix при невдачі · використано 2 з 2 · більше немає"
+          {
+            "edge": "review:fail:fix",
+            "text": "2Review → Fix при невдачі · використано 2 з 2 · більше немає",
+            "circle": "2",
+            "filled": true,
+            "spent": true
+          }
         ]
       }
     },
@@ -2987,68 +3375,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2невдача 2/3",
             "overflowX": 0,
             "area": 1672,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -3086,26 +3494,34 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": "short",
             "text": "2невдача 2/2",
             "overflowX": 0,
             "area": 1672,
             "fill": "rgb(240, 113, 113)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -3173,68 +3589,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2невдача · використано 2 з 3",
             "overflowX": 0,
             "area": 3061,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
@@ -3381,68 +3817,88 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 346,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 346,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 445,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2невдача · використано 2 з 3",
             "overflowX": 0,
             "area": 1959,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": ""
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 8,
@@ -3611,74 +4067,100 @@
         "edges": [
           {
             "edge": "plan:pass:build",
-            "fired": "0",
-            "travelled": false,
+            "fired": "1",
+            "travelled": true,
             "spent": false,
-            "circle": null,
+            "live": false,
+            "dash": "none",
+            "circle": "1",
             "form": null,
-            "text": "",
+            "text": "1",
             "overflowX": 0,
-            "area": 0,
-            "fill": "",
-            "filled": false
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "успіх",
             "overflowX": 0,
             "area": 695,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "",
+            "markFill": ""
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 288,
+            "area": 256,
             "fill": "rgba(0, 0, 0, 0)",
-            "filled": false
+            "filled": false,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": "rgba(0, 0, 0, 0)"
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
+            "live": false,
+            "dash": "5px, 4px",
             "circle": null,
             "form": null,
             "text": "",
             "overflowX": 0,
             "area": 0,
             "fill": "",
-            "filled": false
+            "filled": false,
+            "circleFill": "",
+            "markFill": ""
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Critique → Build при невдачі · використано 2 з 3"
+          {
+            "edge": "critique:fail:build",
+            "text": "2Critique → Build при невдачі · використано 2 з 3",
+            "circle": "2",
+            "filled": true,
+            "spent": false
+          }
         ]
       },
       "spent": {
@@ -3712,32 +4194,46 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
             "area": 540,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(23, 23, 28)",
+            "markFill": ""
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
+            "live": false,
+            "dash": "none",
             "circle": "2",
             "form": null,
             "text": "2",
             "overflowX": 0,
-            "area": 360,
+            "area": 400,
             "fill": "rgb(23, 23, 28)",
-            "filled": true
+            "filled": true,
+            "circleFill": "rgb(240, 113, 113)",
+            "markFill": "rgb(23, 23, 28)"
           }
         ],
         "captionPx": 10,
         "identityWords": "1",
         "legend": [
-          "2Review → Fix при невдачі · використано 2 з 2 · більше немає"
+          {
+            "edge": "review:fail:fix",
+            "text": "2Review → Fix при невдачі · використано 2 з 2 · більше немає",
+            "circle": "2",
+            "filled": true,
+            "spent": true
+          }
         ]
       }
     },
@@ -3756,7 +4252,7 @@
           "codex",
           "claude",
           "claude",
-          "codex",
+          "claude",
           "claude",
           "claude",
           "claude",
@@ -3785,6 +4281,12 @@
             "identity": "launched",
             "model": "Fable",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 102,
             "overflowX": 0
           },
           {
@@ -3794,6 +4296,12 @@
             "identity": "launched",
             "model": "Sonnet",
             "returns": "2",
+            "returnFilled": true,
+            "returnSpent": false,
+            "returnBudget": "невдача 2/3",
+            "returnBudgetState": "left",
+            "returnArea": 256,
+            "nameWidth": 81,
             "overflowX": 0
           },
           {
@@ -3803,6 +4311,12 @@
             "identity": "launched",
             "model": "Opus 5",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 121,
             "overflowX": 0
           },
           {
@@ -3812,6 +4326,12 @@
             "identity": "configured",
             "model": "6-Astra",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 121,
             "overflowX": 0
           },
           {
@@ -3821,6 +4341,46 @@
             "identity": "configured",
             "model": "claude-opus-5-20260101-preview",
             "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 76,
+            "overflowX": 0
+          }
+        ]
+      },
+      "spentStages": {
+        "rows": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": true,
+            "returnBudget": "невдача 2/2 · більше немає",
+            "returnBudgetState": "spent",
+            "returnArea": 400,
+            "nameWidth": 65,
+            "overflowX": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 127,
             "overflowX": 0
           }
         ]

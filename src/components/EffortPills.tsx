@@ -14,7 +14,10 @@ import { effortTint, effortTitle } from "./utils";
  *
  * Height carries the level, so hue is never the only signal: the filled bars
  * take `currentColor` (the host sets the engine mark token, or `--color-muted`
- * for a stage that has not launched) and the empty ones stay `--color-border`.
+ * for a stage that has not launched) and the empty ones take `--effort-empty`,
+ * which is what makes the denominator readable: drawn in the border token they
+ * measured 1.2:1 on the light card, so a low-effort ladder was a single short
+ * bar with nothing behind it and said nothing about the scale it sits on.
  *
  * Layout contract (issue #270): the meter is a plain in-flow flex item — it
  * occupies exactly the space flexbox reserves for it and never paints outside
@@ -78,7 +81,7 @@ export function EffortScale({ effort, className, color, title }: {
           style={{
             width: "3px",
             height: `${height}px`,
-            backgroundColor: i < level ? color ?? "currentColor" : "var(--color-border)",
+            backgroundColor: i < level ? color ?? "currentColor" : "var(--effort-empty)",
           }}
         />
       ))}

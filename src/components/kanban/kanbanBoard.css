@@ -328,6 +328,12 @@
 /* Filled: the digits take the card surface, the one value that reads on both
    themes without a second colour literal. */
 .ccircle.filled { background: var(--tone); border-color: var(--tone); color: var(--surface-card); }
+/* A fail count with no pill around it to invert — the bare badge on an arrow,
+   the legend row, the phone's stage row. Exhaustion closes a ring around the
+   filled disc: strictly MORE ink than a live count, never a lighter outline,
+   which in this vocabulary is the pass count (#1743). */
+.cfired { display: inline-flex; flex-shrink: 0; border-radius: 999px; }
+.cfired.spent { padding: 2px; background: var(--surface-card); box-shadow: 0 0 0 2px var(--color-danger); }
 .kb .parrow { color: var(--color-muted); font-size: var(--text-label); }
 /* The loop chip is one 22 px line and must stay one: on a 256 px column card
    the budget sentence wrapped to two lines and painted outside the pill. The
@@ -637,12 +643,13 @@
 .kb .pgraph-box { overflow-x: auto; overflow-y: hidden; margin: 2px -4px 0; padding: 0 4px; scrollbar-width: thin; }
 .kb .pgraph { position: relative; flex-shrink: 0; }
 .kb .pedges { position: absolute; inset: 0; overflow: visible; }
-/* Dashed keeps the one meaning it has on this board: a fail path. A pass edge
-   is solid whether or not it has run, so a fresh pipeline reads exactly as it
-   does today and never as a disabled graph. What travelling adds is colour and
-   weight — the verdict's hue at 1.75 px — plus the circled count (#1743). */
-.kb .pedge { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); }
-.kb .pedge.taken { stroke: color-mix(in srgb, var(--color-success) 80%, transparent); stroke-width: 1.75; }
+/* Dashed is "configured, not travelled" — on a pass edge exactly as on a fail
+   edge, which is the one meaning dashes carry anywhere on this board (the next
+   attempt's pill, a draft node's border). Travelling is what turns a path
+   solid, and adds the verdict's hue at 1.75 px plus the circled count (#1743).
+   Hue then separates the two kinds: success for a pass, danger for a fail. */
+.kb .pedge { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); stroke-dasharray: 5 4; }
+.kb .pedge.taken { stroke: color-mix(in srgb, var(--color-success) 80%, transparent); stroke-width: 1.75; stroke-dasharray: none; }
 .kb .pedge.fail { stroke: color-mix(in srgb, var(--color-danger) 45%, transparent); stroke-dasharray: 5 4; }
 .kb .pedge.fail.taken { stroke: color-mix(in srgb, var(--color-danger) 80%, transparent); stroke-width: 1.75; stroke-dasharray: none; }
 .kb .pedge.live { stroke: var(--color-accent); stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-edge-flow 700ms linear infinite; }
@@ -660,15 +667,12 @@
 /* An exhausted budget inverts the whole pill: a luminance cue, so "no return
    left" reads in monochrome and for colour-blind operators. */
 .kb .pelabel.fail.spent { background: var(--color-danger); border-color: var(--color-danger); color: var(--surface-card); }
-.kb .pelabel.fail.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
-.kb .pelabel.badge { padding: 0; border: 0; background: transparent; }
-/* Legend mode gives the arrow a bare circle, and a bare circle has no pill to
-   invert: inverting the circle itself draws a red ring around white, which is
-   LESS ink than the live filled disc, so exhaustion read lighter than a live
-   edge. Here exhaustion keeps the filled disc and closes a ring around it —
-   strictly more ink than the live badge, never less (#1743). */
-.kb .pelabel.badge.spent { padding: 2px; border: 0; border-radius: 999px; background: var(--surface-card); box-shadow: 0 0 0 2px var(--color-danger); }
-.kb .pelabel.badge.spent .ccircle { --tone: var(--color-danger); color: var(--surface-card); background: var(--color-danger); border-color: var(--color-danger); }
+/* Its OWN circle, not one nested in a mark: a bare badge has no pill to invert,
+   and its exhausted mark keeps the filled disc with a ring around it. Reaching
+   into that mark would knock the disc back out to white inside a white ring —
+   the lighter drawing for the worse state, twice over (#1743). */
+.kb .pelabel.fail.spent > .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
+.kb .pelabel.badge, .kb .pelabel.badge.spent { padding: 0; border: 0; background: transparent; box-shadow: none; }
 .kb .pelabel.beside { transform: translate(0, -50%); }
 .kb .pelabel.live { border-color: var(--color-accent); color: var(--color-accent); }
 .kb .plegend { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-label); color: var(--color-secondary); }

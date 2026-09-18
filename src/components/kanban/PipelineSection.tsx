@@ -11,7 +11,7 @@ import { fmtAge } from "@/components/utils";
 import type { KanbanPipeline } from "./kanbanModel";
 import { attemptArrivals, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
 import { edgeCount, stageIdentity, type EdgeCount } from "./stageIdentity";
-import { CountCircle, engineWord, identityTitle, StageIdentity } from "./identityMarks";
+import { CountCircle, engineWord, FiredMark, identityTitle, StageIdentity } from "./identityMarks";
 import { ChevronRight, MaximizeGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { stageDraftable, type PipelineActionKind } from "./stagesModel";
 
@@ -510,8 +510,8 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             title={title}
           >
             {/* A fail count is a filled disc; on a bare badge exhaustion is the
-                ring the pill draws around it, not a lighter circle. */}
-            <CountCircle n={count.fired} tone="fail" filled label={t("kanban.graph.firedTitle", { count: count.fired })} />
+                ring drawn around it, not a lighter circle. */}
+            <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
           </span>,
         );
       }
@@ -630,9 +630,11 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
       {legend.length ? (
         <ul className="plegend">
           {legend.map((entry) => (
-            <li key={entry.id}>
+            <li key={entry.id} data-legend-edge={entry.id}>
+              {/* The key samples the mark the arrow above it actually carries,
+                  ring and all, or it explains a drawing that is not there. */}
               {entry.count.travelled
-                ? <CountCircle n={entry.count.fired} tone="fail" filled={!entry.count.exhausted} />
+                ? <FiredMark count={entry.count} />
                 : <span className="esample" aria-hidden="true" />}
               <span>{entry.text}{entry.count.exhausted ? ` · ${t("kanban.graph.noneLeft")}` : ""}</span>
             </li>

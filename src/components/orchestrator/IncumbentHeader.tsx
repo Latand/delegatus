@@ -3,7 +3,7 @@
 import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
-import { engineBadgeFor } from "@/components/utils";
+import { EngineBadge } from "@/components/EngineMark";
 import { useLocale } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -82,7 +82,6 @@ export function IncumbentHeader({
   const account = accountId
     ? catalog?.[engine ?? "claude"]?.accounts.find((candidate) => candidate.id === accountId)?.label ?? accountId
     : null;
-  const badge = engine ? engineBadgeFor(engine) : null;
   const context: IncumbentContext | null = designated?.context ?? boardContext(file);
 
   return (
@@ -104,7 +103,7 @@ export function IncumbentHeader({
         data-orchestrator-identity
         className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : "flex-wrap"}`}
       >
-        {badge ? <Badge style={badge.style}>{badge.label}</Badge> : null}
+        {engine ? <EngineBadge engine={engine} className="min-h-5 px-2 py-0.5 text-caption font-semibold leading-none" /> : null}
         {model ? (
           /* A product name, so sans (design system §1.1 mono rule) — the tier
              rides with it because «opus» and «opus at high» are one answer to

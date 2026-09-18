@@ -188,12 +188,12 @@ const marksStage = (id: string, roleId: string, next: string | null, engine: str
 
 const marksPipelines: Pipeline[] = MARKS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
-  const plan = conv("marks-plan", "Plan the retry banner", { mtime: now - 300 * MIN });
-  const build1 = conv("marks-build-1", "First pass at the banner", { mtime: now - 260 * MIN });
-  const build2 = conv("marks-build-2", "Second pass after the first critique", { mtime: now - 180 * MIN, engine: "codex", model: "gpt-5.6-terra" });
-  const build3 = conv("marks-build-3", "Third pass after the second critique", working({ engine: "codex", model: "gpt-5.6-terra", plan: { current: "Rewriting the banner copy" } }));
-  const crit1 = conv("marks-crit-1", "Sent it back: the banner hides the retry", { mtime: now - 220 * MIN, engine: "codex", model: "gpt-6-astra" });
-  const crit2 = conv("marks-crit-2", "Sent it back again: still no count", { mtime: now - 140 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const plan = conv("marks-plan", "Plan the retry banner", { mtime: now - 300 * MIN, model: "fable" });
+  const build1 = conv("marks-build-1", "First pass at the banner", { mtime: now - 260 * MIN, model: "sonnet" });
+  const build2 = conv("marks-build-2", "Second pass after the first critique", { mtime: now - 180 * MIN, model: "sonnet" });
+  const build3 = conv("marks-build-3", "Third pass after the second critique", working({ model: "sonnet", plan: { current: "Rewriting the banner copy" } }));
+  const crit1 = conv("marks-crit-1", "Sent it back: the banner hides the retry", { mtime: now - 220 * MIN });
+  const crit2 = conv("marks-crit-2", "Sent it back again: still no count", { mtime: now - 140 * MIN });
   const spentBuild = conv("marks-spent-build", "Reworked the limit notice", { mtime: now - 90 * MIN });
   const spentRev = conv("marks-spent-rev", "Out of returns", { mtime: now - 40 * MIN, engine: "codex", model: "gpt-6-astra" });
   return [
@@ -210,7 +210,7 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
     ], [
       { stageId: "plan", attempts: [attempt(1, "passed", plan, { effectiveRole: runRole("architect", "claude", "fable", "low"), startedAt: iso(300 * MIN) })] },
       { stageId: "build", attempts: [
-        attempt(1, "passed", build1, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(260 * MIN) }),
+        attempt(1, "passed", build1, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(260 * MIN), activatedBy: { stageId: "plan", attempt: 1, edge: "pass" } }),
         attempt(2, "passed", build2, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(200 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
         attempt(3, "running", build3, { effectiveRole: runRole("builder", "claude", "sonnet", "medium"), startedAt: iso(120 * MIN), activatedBy: { stageId: "critique", attempt: 2, edge: "fail" } }),
       ] },

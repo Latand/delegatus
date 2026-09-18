@@ -134,3 +134,22 @@ export function CountCircle({ n, tone, filled, label, className }: {
     </span>
   );
 }
+
+/**
+ * A fail count where there is no pill around it to invert: the bare badge on an
+ * arrow, the legend row under the graph, and the phone's stage row. The disc is
+ * filled in BOTH states — exhaustion closes a ring around it, which is strictly
+ * more ink than a live count, never less. An outlined circle is the pass count
+ * in this vocabulary, so a fail count may not borrow it (#1743).
+ */
+export function FiredMark({ count, label, className }: {
+  count: { fired: number; exhausted: boolean };
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <span className={`cfired${count.exhausted ? " spent" : ""}${className ? ` ${className}` : ""}`}>
+      <CountCircle n={count.fired} tone="fail" filled label={label} />
+    </span>
+  );
+}
