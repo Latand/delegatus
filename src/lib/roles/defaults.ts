@@ -8,9 +8,13 @@ const REVIEW_FENCES = [
 ];
 
 // Review rounds otherwise only ratchet scope upward: reviewers find gaps inside a
-// frame, nobody questions the frame. These two rules give the frame itself standing.
+// frame, nobody questions the frame. These rules give the frame itself standing.
+// Rule (3) is #1741: a reviewer approved a UI head on the correctness lens while
+// the design critique failed the same head on blocking layout breakage, because
+// correctness for a UI diff stopped at the code and the author's evidence had
+// never mounted one of the surfaces the requirement named.
 const REVIEW_FRAME_RULES =
-  "Two standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round.";
+  "Three standing rules. (1) Anchor the frame: when the assignment carries the requester's originating requirement, validate the work against that verbatim requirement, never against the artifact's previous revision — WRONG-PREMISE (\"this does not serve the original requirement\") is an expected verdict and outranks any finding about internal rigour. (2) Over-engineering pass: on every review, flag machinery heavier than the problem it solves (a library plus wrapper where a native primitive does), name the simpler mechanism, and report what to cut — OVER-BUILT is a first-class verdict, and a round that only removes scope is a successful round. (3) Rendered surfaces are part of correctness: when the diff touches UI (components, styles, layout), the review covers the rendered result and the code alike. Check that the author's rendered evidence reaches every surface and every viewport the requirement names; evidence that skips a named surface is REQUEST_CHANGES on its own. Where that evidence is missing and a harness exists, render from an export of the reviewed HEAD — never the live worktree, never the operator's Viewer — and report overflow, clipped or zero-width controls, overlap and unreadable states as severity-ranked findings carrying the viewport and the measured numbers.";
 
 // #1428 — the Viewer indexes every message of every conversation on this machine,
 // and stages kept re-solving what an earlier one had already solved. Pipeline
