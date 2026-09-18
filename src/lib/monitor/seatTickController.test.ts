@@ -4697,10 +4697,11 @@ test("a completed lane the seat launched leads the wake, and stale children are 
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
 
-  /* First, ahead of everything the tick found. */
-  expect(text).toContain("pipeline_own_lane");
-  expect(text.indexOf("pipeline_own_lane")).toBeLessThan(text.indexOf("Contract:"));
-  expect(text.split("pipeline_own_lane")[0]).not.toContain("[child]");
+  /* First: the line straight under the agenda's heading, which is where the
+     five-item bound cuts from. */
+  const agenda = text.split("\nItems:\n")[1]!.split("\n").filter((line) => line.startsWith("- "));
+  expect(agenda[0]).toContain("pipeline_own_lane");
+  expect(record).toMatchObject({ items: 1 });
 
   /* And not one of the forty is named: they are a number on one line. */
   for (const child of historical) expect(text).not.toContain(child.id);
