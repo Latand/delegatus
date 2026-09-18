@@ -482,10 +482,12 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "c".repeat(43);
   /* #795: the deploy tool authorizes off the SERVER-ATTRIBUTED caller identity, so
      the control-surface check attributes this session as the designated seat of its
-     own project. `deployAuthority.test.ts` covers the refusals directly. */
+     own project — and (#1321) that project is the one owning the Viewer this MCP
+     serves. `deployAuthority.test.ts` covers the refusals directly. */
   const designatedSeat = {
     callerAttribution: () => ({ kind: "manager" as const, conversationId: "conversation_seat", role: null }),
     callerProject: () => "proj-a",
+    viewerProject: () => "proj-a",
     authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
     /* #845: the send resolves the conversation it names from ONE injected registry
        projection rather than reaching for the registry itself. */
