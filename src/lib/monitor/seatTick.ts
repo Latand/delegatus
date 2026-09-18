@@ -1052,7 +1052,12 @@ function wakeItems(context: {
       label: `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`,
     });
   }
+  /* A lane parked on a decision is open, so it can be BOTH the seat's own
+     settled work and a persisted stall. It is one lane and one obligation, and
+     the item at the head already says what stopped it. */
+  const owned = new Set(context.ownLanes.map((lane) => lane.id));
   for (const entry of context.stalled) {
+    if (owned.has(entry.pipeline.id)) continue;
     items.push({ kind: "pipeline", id: entry.pipeline.id, label: `${entry.pipeline.title} — ${entry.reason}` });
   }
   for (const entry of context.stalledChildren) {
