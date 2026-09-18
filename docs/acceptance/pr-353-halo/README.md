@@ -17,11 +17,11 @@ and the large white empty panel are gone.
 
 ## Evidence
 
-`scripts/capture-pr-353-halo.ts` captures the built Viewer with production
-`next start` over the disposable demo fixture home and locally cached Chromium.
-The real screenshots stay in `/tmp/llv-pr353-halo` for direct visual review. The
-script overlays one pipeline onto synthetic `atlas` transcripts, so the capture
-contains fixture values only. The repository retains the privacy-safe SVG
+The PR #353 halo capture script (deleted with the other per-issue capture scripts in #1761) captured the built Viewer with
+production `next start` over the disposable demo fixture home and locally cached
+Chromium. The real screenshots stayed in `/tmp/llv-pr353-halo` for direct visual
+review. The script overlaid one pipeline onto synthetic `atlas` transcripts, so
+the capture contained fixture values only. The repository retains the privacy-safe SVG
 composition and deterministic DOM evidence.
 
 | Artifact | Shows |
@@ -30,12 +30,8 @@ composition and deterministic DOM evidence.
 | `/tmp/llv-pr353-halo/halo-composition-desktop.png` | Private 1360×860 capture visually reviewed by the agent without OCR: each of the five declared stages projects exactly one surface — the live `verify` stage is the only full conversation pane, the passed `architect`/`builder` stages are short compact history anchors (the capture asserts two `data-pipeline-stage-history` cards and that the architect full pane is absent), and `polish`/`review` are taller future conversation shells with prompt previews. Five marked stage surfaces, the `3/5` header, and the pass/handoff rails are visible; cards do not overlap. |
 | `/tmp/llv-pr353-halo/halo-composition-390.png` | Private 390×820 capture visually reviewed without OCR: chat remains the primary surface, pipeline chrome stays compact above it, the composer remains visible, and the capture assertion proves `scrollWidth === innerWidth === 390`. |
 
-To regenerate (needs the cached Chromium and a short tmux socket dir on a deep
-checkout):
-
-```
-LLV_DEMO_TMUX_TMPDIR=/tmp/halo-tmux bun scripts/capture-pr-353-halo.ts
-```
+The SVG composition below is the committed record; a new capture of this
+surface goes through `scripts/capture-board-geometry.ts`.
 
 The composition is *also* asserted deterministically against the **shipped
 components** by:

@@ -75,8 +75,9 @@ confirmation rather than a discovery.
 - `src/components/mobile/mobileHeaderFit.dom.test.tsx` — the row is one tap
   inside the «⋯» menu, holds a real sentinel from there, and adds **zero**
   controls to the 390px header row.
-- `src/components/mobile/issue613Evidence.browser.test.tsx` — the real Chromium
-  390px header geometry still fits, measured against the production CSS.
+- `src/components/mobile/issue1671Evidence.browser.test.tsx` — the one mobile
+  browser harness; the real Chromium 390px geometry, measured against the
+  production CSS. The #613 driver it replaced was deleted in #1761.
 
 What none of them can prove: that a physical iPhone display stays lit. That is
 cases 1–13 above.

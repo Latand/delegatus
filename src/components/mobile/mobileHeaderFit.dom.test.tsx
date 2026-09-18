@@ -11,7 +11,8 @@ import type { BoardTask } from "@/lib/tasks/types";
 /*
  * Issue #613 — the phone header must fit a 390px viewport. happy-dom does no
  * layout, so this guards the *structural* contract the geometry depends on
- * (issue613Evidence.browser.test.tsx measures the pixels in Chromium):
+ * (issue1671Evidence.browser.test.tsx measures the pixels in Chromium; the
+ * #613 driver was deleted in #1761):
  *
  *   - the row carries only fixed 44px targets plus ONE elastic cell, the
  *     project name, which truncates;
@@ -23,7 +24,7 @@ import type { BoardTask } from "@/lib/tasks/types";
  * COMPLETE mobile control combination — every optional control present at once.
  * The budget is five 44px targets, so search's arrival folded board undo into
  * the «⋯» menu beside the redo already there; a sixth target measured the
- * project name down to 25px (issue613Evidence.browser.test.tsx holds the pixel
+ * project name down to 25px (the mobile browser harness holds the pixel
  * floor).
  */
 
