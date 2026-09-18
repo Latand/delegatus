@@ -405,8 +405,8 @@ async function sweepSeat(
   /* The rule is DELETED from the loaded stylesheet rather than overridden by
      one of this file's own: an override would be measuring whatever `display`
      it happened to pick, and what the threshold is a claim about is the row
-     without that rule in it. The link's half of the same container rule is
-     left alone — this what-if is about the word. */
+     without that rule in it. One half goes at a time — the other stays, so
+     what the measurement isolates is the half named here. */
   if (keep) {
     await page.evaluate((marker) => {
       const drop = (group: CSSGroupingRule): void => {
@@ -451,8 +451,8 @@ async function sweepSeat(
   const { face = "configured", incumbent = "designated" } = seatCase;
   return {
     /* The SUMMARY is what lands in `geometry.json`; the rows stay here, for
-       the assertions. 86 near-identical records would bury the three numbers
-       that say whether the row holds. */
+       the assertions. Hundreds of near-identical records would bury the few
+       numbers that say whether the row holds. */
     summary: {
       key: `sweep-${locale}-${caseKey(seatCase)}${keep ? `-${keep}-kept` : ""}`,
       locale,
