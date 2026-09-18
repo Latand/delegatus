@@ -1,0 +1,157 @@
+{
+  "issue": 1758,
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "parentlessBackgroundTasks": 2,
+  "scanned": {
+    "conversations": 2,
+    "backgroundTasks": [
+      {
+        "title": "Background task bbbb2222",
+        "activity": "live",
+        "parent": null,
+        "sameProjectAsTheBoard": true
+      },
+      {
+        "title": "Background task aaaa1111",
+        "activity": "live",
+        "parent": null,
+        "sameProjectAsTheBoard": true
+      }
+    ]
+  },
+  "cases": {
+    "clean": {
+      "boardTop": 40,
+      "boardLeft": 248,
+      "viewportWidth": 1280,
+      "boardWidth": 1032,
+      "above": [
+        {
+          "tag": "aside",
+          "className": "flex w-[248px] shrink-0 flex-col border-r border-border bg-card",
+          "top": 0,
+          "height": 900,
+          "width": 248,
+          "spansBoardWidth": false,
+          "text": "Agent logs2ENOverviewdock2s ago22RAM14 GiB freeSwap12 GiB usedcaptured 0s agoCla"
+        },
+        {
+          "tag": "div",
+          "className": "pointer-events-none fixed right-4 top-12 z-50 flex flex-col items-end gap-2",
+          "top": 48,
+          "height": 28,
+          "width": 110.77,
+          "spansBoardWidth": false,
+          "text": "Needs you 0"
+        },
+        {
+          "tag": "div",
+          "className": "flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4",
+          "top": 0,
+          "height": 40,
+          "width": 1032,
+          "spansBoardWidth": true,
+          "text": "dock2 branches running · 2 trees Orchestrator Tasks"
+        }
+      ],
+      "boardWidthRowsAbove": 1,
+      "backgroundStripsAbove": 0,
+      "namedSomewhereOnThePage": false
+    },
+    "live": {
+      "boardTop": 40,
+      "boardLeft": 248,
+      "viewportWidth": 1280,
+      "boardWidth": 1032,
+      "above": [
+        {
+          "tag": "aside",
+          "className": "flex w-[248px] shrink-0 flex-col border-r border-border bg-card",
+          "top": 0,
+          "height": 900,
+          "width": 248,
+          "spansBoardWidth": false,
+          "text": "Agent logs4ENOverviewdock4s ago42RAM13 GiB freeSwap12 GiB usedcaptured 0s agoCla"
+        },
+        {
+          "tag": "div",
+          "className": "pointer-events-none fixed right-4 top-12 z-50 flex flex-col items-end gap-2",
+          "top": 48,
+          "height": 28,
+          "width": 110.77,
+          "spansBoardWidth": false,
+          "text": "Needs you 0"
+        },
+        {
+          "tag": "div",
+          "className": "flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4",
+          "top": 0,
+          "height": 40,
+          "width": 1032,
+          "spansBoardWidth": true,
+          "text": "dock2 branches running · 2 trees Orchestrator Tasks"
+        }
+      ],
+      "boardWidthRowsAbove": 1,
+      "backgroundStripsAbove": 0,
+      "namedSomewhereOnThePage": true
+    },
+    "docked": {
+      "boardTop": 129,
+      "boardLeft": 248,
+      "viewportWidth": 1280,
+      "boardWidth": 1032,
+      "above": [
+        {
+          "tag": "aside",
+          "className": "flex w-[248px] shrink-0 flex-col border-r border-border bg-card",
+          "top": 0,
+          "height": 900,
+          "width": 248,
+          "spansBoardWidth": false,
+          "text": "Agent logs4ENOverviewdock4s ago42RAM13 GiB freeSwap12 GiB usedcaptured 0s agoCla"
+        },
+        {
+          "tag": "div",
+          "className": "pointer-events-none fixed right-4 top-12 z-50 flex flex-col items-end gap-2",
+          "top": 48,
+          "height": 28,
+          "width": 110.77,
+          "spansBoardWidth": false,
+          "text": "Needs you 0"
+        },
+        {
+          "tag": "div",
+          "className": "flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4",
+          "top": 0,
+          "height": 40,
+          "width": 1032,
+          "spansBoardWidth": true,
+          "text": "dock2 branches running · 2 trees Orchestrator Tasks"
+        },
+        {
+          "tag": "div",
+          "className": "shrink-0 border-b border-border",
+          "top": 40,
+          "height": 89,
+          "width": 1032,
+          "spansBoardWidth": true,
+          "text": "Background task aaaa1111Background task bbbb2222"
+        }
+      ],
+      "boardWidthRowsAbove": 2,
+      "backgroundStripsAbove": 1,
+      "namedSomewhereOnThePage": true
+    }
+  },
+  "verdicts": {
+    "noStripAboveTheHeader": true,
+    "sameBoardOrigin": true,
+    "sameBoxesAboveTheBoard": true,
+    "stillReachableOnThePage": true,
+    "probeSeesADock": true
+  }
+}

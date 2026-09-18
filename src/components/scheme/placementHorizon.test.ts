@@ -21,7 +21,7 @@ function file(path: string, overrides: Partial<FileEntry> = {}): FileEntry {
 }
 
 function group(entry: FileEntry): BranchGroup {
-  return { key: entry.path, columns: [{ file: entry, tasks: [] }], returnable: [], finished: [], smt: entry.mtime, orphanTask: false };
+  return { key: entry.path, columns: [{ file: entry, tasks: [] }], returnable: [], finished: [], smt: entry.mtime };
 }
 
 function stage(id: string, next: string | null): PipelineStage {

@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/* The Viewer's own repository metadata. Bundled into the server and the MCP
+   binary, so a packaged release with no checkout can still name the repository
+   it deploys (#1321). */
+import viewerPackageManifest from "../../../package.json";
+
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
@@ -88,7 +93,7 @@ import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
-import { viewerOwnProject } from "@/lib/projects/viewerIdentity";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -688,6 +693,31 @@ function productionCallerProject(): string | null {
   const conversationId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
   if (!conversationId) return null;
   return callerProjectFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
+}
+
+/**
+ * The canonical project of the Agent Log Viewer this process IS — the one
+ * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
+ *
+ * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
+ * which is exactly the foreign repository the deploy refusal has to tell apart
+ * from the Viewer's own, and a packaged release has no `.git` of its own to
+ * read either. The one fact that travels with the code is the canonical remote
+ * it is deployed from — `LLV_VIEWER_CANONICAL_REMOTE` when the host configures
+ * one, else the repository metadata bundled in the Viewer's own manifest —
+ * resolved through the SAME repository-key algorithm that names live checkouts,
+ * so a clone of that remote and the release built from it land on one project
+ * id.
+ *
+ * Folded through the operator's project aliases because seats are stored
+ * alias-resolved: comparing a raw repository id against an aliased seat project
+ * would refuse the Viewer's own deploy.
+ */
+function viewerOwnProject(): string | null {
+  const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
+  const remote = configured || viewerPackageManifest.repository.url.trim();
+  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
+  return project ? canonicalOrchestratorProject(project) : null;
 }
 
 /**

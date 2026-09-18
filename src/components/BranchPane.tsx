@@ -509,8 +509,9 @@ export function TaskStrip({
   return (
     <div className="border-t border-border first:border-t-0">
       {/* 44px expand target on the phone (issue #148); desktop keeps its compact
-          28px row via the sm: reset. These rows ride inside conversation panes
-          and the docked-task section, both reachable by ordinary taps at 390px. */}
+          28px row via the sm: reset. Since #1758 these rows ride inside the pane
+          of the conversation that owns the process — the one place they appear —
+          and stay reachable by ordinary taps at 390px. */}
       <div className="flex min-h-11 flex-wrap items-center gap-1.5 pl-2 pr-2.5 sm:min-h-7">
         <button
           className="flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-[6px] text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-7"

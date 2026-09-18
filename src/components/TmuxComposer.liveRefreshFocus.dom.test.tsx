@@ -260,7 +260,7 @@ function renderNodesLayer(root: Root, nodes: SchemeNode[], dormant = true): void
 /* The real mobile board owner: focuses one conversation and keys the pane host
    by `activeNode.file.path`. A board refresh re-renders it with a fresh group. */
 function mobileGroup(file: FileEntry): BranchGroup {
-  return { key: file.path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: file.mtime, orphanTask: false } as unknown as BranchGroup;
+  return { key: file.path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: file.mtime } as unknown as BranchGroup;
 }
 function renderMobileFocus(root: Root, file: FileEntry): void {
   flushSync(() => root.render(

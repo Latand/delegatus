@@ -155,7 +155,6 @@ test("a direct review group rides the phone switcher as a round deck with access
     returnable: [],
     finished: [],
     smt: builder.mtime,
-    orphanTask: false,
   };
 
   roots.push(
@@ -227,7 +226,6 @@ test("a terminal direct group rides the phone as a tappable collapsed verdict ch
     returnable: [],
     finished: [],
     smt: builder.mtime,
-    orphanTask: false,
   };
 
   roots.push(
@@ -324,7 +322,7 @@ test("an active pipeline-owned review names its stage in the menu row, and the r
     ],
     cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null }, state: "reviewing", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: "2026-07-18T00:00:00Z", closedAt: null,
   } as unknown as Pipeline;
-  const group: BranchGroup = { key: builder.path, columns: [{ file: builder, tasks: [] }], returnable: [], finished: [], smt: builder.mtime, orphanTask: false };
+  const group: BranchGroup = { key: builder.path, columns: [{ file: builder, tasks: [] }], returnable: [], finished: [], smt: builder.mtime };
   const selected: { path: string | null } = { path: null };
 
   roots.push(mount(
@@ -370,7 +368,7 @@ test("an active retry's menu row pushes its pipeline, where the earlier attempt 
     ] }],
     cursor: { stageId: "build", state: "running", input: null, activatedBy: null }, state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: "2026-07-18T00:00:00Z", closedAt: null,
   } as unknown as Pipeline;
-  const group: BranchGroup = { key: current.path, columns: [{ file: current, tasks: [] }], returnable: [], finished: [], smt: current.mtime, orphanTask: false };
+  const group: BranchGroup = { key: current.path, columns: [{ file: current, tasks: [] }], returnable: [], finished: [], smt: current.mtime };
   const selected: { path: string | null } = { path: null };
 
   roots.push(mount(
@@ -410,7 +408,7 @@ test("a focused deck keeps the switcher on the bar and the swipe that walks it (
   });
   const files = [builder, reviewer];
   const reviewGroups = directReviewFlows({ files, flows: [], tasks: [] });
-  const group: BranchGroup = { key: builder.path, columns: [{ file: builder, tasks: [] }], returnable: [], finished: [], smt: builder.mtime, orphanTask: false };
+  const group: BranchGroup = { key: builder.path, columns: [{ file: builder, tasks: [] }], returnable: [], finished: [], smt: builder.mtime };
 
   roots.push(mount(
     <MobileFocusView

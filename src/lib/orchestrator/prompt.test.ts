@@ -15,8 +15,6 @@ import {
   ORCHESTRATOR_TASK_OWNERSHIP_HEADING,
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
-  ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE,
-  ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
 } from "./prompt";
@@ -93,13 +91,13 @@ test("bridge reports survive as the second channel, for the operator away from t
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 15, and a v14 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(15);
-  /* #1720, and again #1745 — a seat already running keeps the mandate it was
+test("the default mandate is at version 16, and a v15 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(16);
+  /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. */
-  expect(orchestratorMandateStale(14)).toBe(true);
-  expect(orchestratorMandateStale(15)).toBe(false);
+  expect(orchestratorMandateStale(15)).toBe(true);
+  expect(orchestratorMandateStale(16)).toBe(false);
 });
 
 /* #1428 v13 — agents kept re-solving what an earlier conversation had already
@@ -347,37 +345,17 @@ test("the prompt carries the directive trailer contract in the exact wire form",
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never read one into unrelated prose");
 });
 
-/* #795 (superseding contract) — the designated agent decides the deploy and
-   executes it directly. The contract must say where the authority comes from
-   (the server-attributed seat), that the SHA is resolved internally, and that
-   nothing is ever routed back through the user for approval. It reads off the
-   directive rather than the shared body since #1745 scoped it to the Viewer's
-   own seat. */
-test("the deploy directive encodes the designated-agent contract and its refusals", () => {
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("YOU decide when to deploy, and you execute it yourself");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Your authority is your designated seat, attributed server-side");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("a seat acts only for its own project");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Resolve origin/main to a full 40-hex commit SHA yourself");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("never route it through the user");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("Deployments serialize");
-});
-
-test("the deploy directive forbids any user-facing confirmation step outright", () => {
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("ever asks the user to confirm, approve, repeat, or say a commit hash");
-  expect(ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE).toContain("There is no confirmation step for the user, anywhere");
-  /* And the general form of that rule stays with every project: starting the
-     work the operator asked for needs no confirmation either. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("without a confirmation step or draft");
-});
-
-/* #1745 — the section describes deploying the Viewer itself, so the shared body
-   every project's manager receives must not carry it, and neither must the
-   conveyor line promise it as the step after the merge bar. */
-test("the shared mandate body says nothing about deploying the Viewer", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === ORCHESTRATOR_VIEWER_DEPLOYS_HEADING))
-    .toHaveLength(0);
+/* #1760 — the mandate is the prompt for a manager of ANY project, and the
+   deploy section described deploying Agent Log Viewer itself. It is gone from
+   the body for every project, the Viewer's own included; the protocol it
+   carried lives in the llv-conveyor skill the fences already name. The rule
+   that no user is ever asked to confirm anything stays with every project in
+   its general form. */
+test("the mandate body says nothing about deploying the Viewer", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("deploy_exact_sha");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("batched deploy");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("without a confirmation step or draft");
 });
 
 test("the prompt tells the manager to re-derive board state rather than accumulate it", () => {
@@ -578,113 +556,34 @@ test("the ownership section precedes the start-by-default pipeline contract", ()
   expect(start).toBeGreaterThan(ownership);
 });
 
-/* #1745 round 2. The strip ran once and ended at a heading of ANY level, so a
-   reworded section was only partly removed and the rest — `deploy_exact_sha`
-   and all — was still handed to a foreign project's manager. Each case below
-   is one of the shapes that survived. A foreign delivery is
-   `orchestratorMandateForDelivery(..., { viewerSeat: false })`; nothing here
-   asserts on the prose of the section, only on where it starts and ends. */
-function deliveredElsewhere(mandate: string): string {
-  return orchestratorMandateForDelivery(mandate, { viewerSeat: false });
-}
-
-/** The tail every case below keeps: a top-level heading and what follows it,
-    which must survive byte for byte. */
-const SURVIVING_TAIL = [
-  "## Fences",
-  "- Operate exclusively through the viewer API and MCP tools.",
-  "- One lane per issue.",
-  "",
-  "### Escalation",
-  "Report, never ask.",
+/** The `## Deploys` section exactly as it shipped in the mandate body through
+    v15, copied here from that body rather than read off the module, so the
+    removal is checked against the bytes stored mandates actually carry. */
+const SHIPPED_DEPLOYS_SECTION = [
+  `## Deploys`,
+  `YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.`,
+  `1. Prepare: merges landed on origin/main, gates green. Never deploy red.`,
+  `2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.`,
+  `3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.`,
+  `4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`,
 ].join("\n");
 
-test("#1745: a sub-heading inside the deploy section is removed with it", () => {
-  const stored = [
-    "You run the conveyor for this project.",
-    "",
-    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
-    "Deploy when main is green.",
-    "",
-    "### Rollback",
-    "Call deploy_exact_sha with the previous SHA.",
-    "",
-    SURVIVING_TAIL,
-  ].join("\n");
+/* #1760 — a stored mandate composed from the body of v15 or earlier still
+   carries those bytes, and it is replayed verbatim on a pending retry and
+   carried through a rotation. Delivery removes the block that shipped by exact
+   string match, so what surrounds it survives untouched. */
+test("delivery removes the deploy section a stored mandate carries from the old body", () => {
+  const stored = `You run the conveyor for this project.\n\n${SHIPPED_DEPLOYS_SECTION}\n\n## Fences\n- Report, never ask.`;
 
-  const delivered = deliveredElsewhere(stored);
-  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
-  expect(delivered).not.toContain("### Rollback");
+  const delivered = orchestratorMandateForDelivery(stored);
   expect(delivered).not.toContain("deploy_exact_sha");
-  /* What preceded the section, and everything from the next heading of the
-     marker's own level onwards, byte for byte — the every-project directives
-     delivery appends follow it. */
-  expect(delivered).toStartWith(`You run the conveyor for this project.\n\n${SURVIVING_TAIL}`);
+  expect(delivered.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
+  expect(delivered).toStartWith("You run the conveyor for this project.\n\n## Fences\n- Report, never ask.");
 });
 
-test("#1745: a heading-looking line inside a fenced block does not end the deploy section", () => {
-  const stored = [
-    "Ship what the operator asks for.",
-    "",
-    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
-    "Resolve the SHA yourself:",
-    "",
-    "```bash",
-    "# comment that looks like a heading",
-    "git rev-parse origin/main",
-    "```",
-    "",
-    "Then call deploy_exact_sha with it.",
-    "",
-    SURVIVING_TAIL,
-  ].join("\n");
-
-  const delivered = deliveredElsewhere(stored);
-  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
-  expect(delivered).not.toContain("git rev-parse origin/main");
-  expect(delivered).not.toContain("deploy_exact_sha");
-  expect(delivered).not.toContain("```");
-  expect(delivered).toStartWith(`Ship what the operator asks for.\n\n${SURVIVING_TAIL}`);
-});
-
-test("#1745: two copies of the deploy section both go", () => {
-  const stored = [
-    "A seat's own mandate.",
-    "",
-    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
-    "The first copy, with deploy_exact_sha in it.",
-    "",
-    "## Conveyor rules",
-    "- one lane per issue",
-    "",
-    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
-    "The second copy, pasted in later, also naming deploy_exact_sha.",
-    "",
-    SURVIVING_TAIL,
-  ].join("\n");
-
-  const delivered = deliveredElsewhere(stored);
-  expect(delivered).not.toContain(ORCHESTRATOR_VIEWER_DEPLOYS_HEADING);
-  expect(delivered).not.toContain("deploy_exact_sha");
-  /* What sat between the two copies is untouched, and so is the tail. */
-  expect(delivered).toStartWith(
-    `A seat's own mandate.\n\n## Conveyor rules\n- one lane per issue\n\n${SURVIVING_TAIL}`,
-  );
-});
-
-test("#1745: everything after the following top-level heading survives byte for byte", () => {
-  const stored = [
-    ORCHESTRATOR_VIEWER_DEPLOYS_HEADING,
-    "Deploy when main is green.",
-    "",
-    "### Rollback",
-    "```",
-    "## not a heading",
-    "```",
-    "Call deploy_exact_sha with the previous SHA.",
-    "",
-    SURVIVING_TAIL,
-  ].join("\n");
-
-  expect(deliveredElsewhere(stored).slice(0, SURVIVING_TAIL.length)).toBe(SURVIVING_TAIL);
+/* A seat's own section about ITS project's release is not the block that
+   shipped, so nothing takes it off: delivery matches text, never a heading. */
+test("a seat's own deploy section survives delivery", () => {
+  const stored = "## Deploys\nPush the tag and let the pipeline build it.\n\n## Fences\n- Report, never ask.";
+  expect(orchestratorMandateForDelivery(stored)).toStartWith(stored);
 });

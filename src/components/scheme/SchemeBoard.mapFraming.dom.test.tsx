@@ -94,7 +94,6 @@ test("an open mobile map holds its camera across files polls and refits only on 
     returnable: [],
     finished: [quiet],
     smt: live.mtime,
-    orphanTask: false,
   };
   const render = (nextFiles: FileEntry[], mapFrame: "all" | "current") => {
     flushSync(() => {
