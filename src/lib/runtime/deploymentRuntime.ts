@@ -7,7 +7,7 @@ import type { ViewerDeploymentReceipt, ViewerDeploymentRequest } from "./contrac
  * Lives beside the route rather than inside it because a `route.ts` may export only
  * the documented route fields — handlers and segment config — and Next.js enforces
  * that at build time. Anything the route shares with a test belongs in a module both
- * import, which is the shape `scanCache` and `orchestrator/retire` already use.
+ * import, which is the shape `scanCache` already uses.
  *
  * Seamed so the deployment endpoint's authorization contract is testable without a
  * runtime host socket, and — more to the point — so a test can assert that a refused

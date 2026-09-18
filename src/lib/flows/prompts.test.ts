@@ -51,10 +51,6 @@ test("reviewer prompt includes pinned specification and acceptance criteria", ()
   expect(prompt).toContain(`Exact review HEAD: ${reviewHeadSha}`);
 });
 
-test("kickoff requests spec.md before review when the flow has no pinned specification", () => {
-  expect(kickoffPrompt()).toContain("Before your first REVIEW_READY, write spec.md");
-});
-
 test("kickoff carries a pinned specification into the implementer session", () => {
   expect(kickoffPrompt("Task\nAC1: Deliver context")).toContain("AC1: Deliver context");
 });

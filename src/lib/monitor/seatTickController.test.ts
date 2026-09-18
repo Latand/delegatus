@@ -21,6 +21,7 @@ const { resolveOriginalSend, resolveSendReceipt, SEND_UNRECORDED_REASON, SEND_UN
 const { DELIVERY_FENCED_BY_SETTLEMENT } = await import("@/lib/runtime/structuredDeliveryQueue");
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
+const { RUNTIME_IDEMPOTENCY_KEY_LIMIT } = await import("@/lib/runtime/contracts");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { deliverConversationMessage } = await import("@/lib/delivery");
 const { readSeatTickState, writeSeatTickState } = await import("./seatTickState");
@@ -3929,6 +3930,10 @@ async function strandedManagerWake(name: string, over: {
   lastWakeAt?: string;
   /** The project's own cadence, which the age bound is two of (#1746). */
   wakeIntervalMinutes?: number;
+  /** A standing instruction on the project's row, whose digest is part of
+      every wake's identity (#1280) and part of what took the live key past the
+      bound the journal admits (#1771). */
+  monitorPrompt?: string;
 } = {}): Promise<StrandedWake> {
   const fixture = childFixture(name);
   setAgentRegistryForTests(fixture.registry);
@@ -3936,9 +3941,13 @@ async function strandedManagerWake(name: string, over: {
   const seatEpoch = over.seatEpoch ?? 7;
   fixture.seed({ seatEpoch, ...(over.lastWakeAt ? { lastWakeAt: over.lastWakeAt } : {}) });
   const seat = { ...fixture.seat, seatEpoch };
-  const settings = over.wakeIntervalMinutes === undefined
+  const settings = over.wakeIntervalMinutes === undefined && over.monitorPrompt === undefined
     ? undefined
-    : { ...defaultSeatTickSettings(fixture.project), wakeIntervalMinutes: over.wakeIntervalMinutes, reason: "this project batches its wakes" };
+    : {
+      ...defaultSeatTickSettings(fixture.project),
+      ...(over.wakeIntervalMinutes === undefined ? {} : { wakeIntervalMinutes: over.wakeIntervalMinutes, reason: "this project batches its wakes" }),
+      ...(over.monitorPrompt === undefined ? {} : { monitorPrompt: over.monitorPrompt }),
+    };
   const rig = (minutes: number, extra: Parameters<typeof harness>[0] = {}) =>
     childRig(fixture, { realWakeState: true, journal, seat, ...(settings ? { settings } : {}), now: fixture.now + minutes * MINUTE, ...extra });
   const journal = fakeJournal();
@@ -4492,4 +4501,147 @@ test("a wake retired on its age is taken back out of the queue that still holds 
   expect(late.cards.map((raised) => raised.card.instance)).toEqual([aged.wake.clientMessageId]);
   expect(late.cards[0]!.card.detail).toContain("retired unresolved on its age bound");
   expect(late.sent.map((message) => message.clientMessageId)).not.toContain(aged.wake.clientMessageId);
+});
+
+/* ------------------------------------------------------------------------- *
+ * The bound on the KEY (#1771).
+ *
+ * What the live seat did on 2026-09-18: one wake landed at 09:54Z and none
+ * ever again, through idle stretches of 70 and 120 minutes on a twenty-minute
+ * cadence, while `seat_tick_settings` reported the project fenced by a wake
+ * prepared under the SAME original key hour after hour. The key ran 211
+ * characters — a 37-character project name, the stamp of the last landed wake,
+ * two reasons, the state fingerprint and the monitor prompt's digest — and the
+ * runtime journal refuses any key over 200 inside its own admission, before it
+ * writes an operation, an outbox effect or a ledger entry. So nothing reached
+ * the conversation, nothing landed, the stamp never moved, and the age-bound
+ * retirement then appended the released-wake digest and made the replacement
+ * key LONGER than the key it replaced. The loop could not end on its own.
+ *
+ * Both cases run the production controller over this test's own registry, row,
+ * delivery record and runtime journal, in its own sandbox.
+ * ------------------------------------------------------------------------- */
+
+const MUTE_PROMPT = "before the items, check the deploy ledger for a rollback nobody chased";
+
+/** A send command shaped as the delivery layer shapes one, for asking the real
+    journal — the production validator — what it makes of a key. */
+function admissionCommand(conversationId: string, idempotencyKey: string, text: string) {
+  return {
+    kind: "send" as const,
+    conversationId,
+    idempotencyKey,
+    text,
+    contentDigest: structuredContentDigest({ text, images: [] }),
+    policy: "interrupt-active" as const,
+  };
+}
+
+test("the wake replacing an attempt retired on its age stays inside the bound the runtime journal admits, and reaches the seat (#1771)", async () => {
+  const { fixture, child, wake, rig } = await strandedManagerWake("mute-seat-key-bound", {
+    seatEpoch: 173, wakeIntervalMinutes: 20, monitorPrompt: MUTE_PROMPT,
+  });
+  /* The original attempt is the readable composition, prompt digest and all,
+     and it fits — which is why the seat got that first wake and no other. */
+  expect(wake.clientMessageId).toContain(":prompt-");
+  expect(wake.clientMessageId.length).toBeLessThanOrEqual(RUNTIME_IDEMPOTENCY_KEY_LIMIT);
+
+  /* The bound spent. The replacement folds the whole composition — the
+     retired key's digest included — behind the project and the seat epoch,
+     because the readable form of it no longer fits. */
+  const past = rig(61);
+  const woken = await runSeatTickCheck(fixture.project, past.deps);
+  expect(woken).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "delivered" } });
+  expect(past.sent).toHaveLength(1);
+  const replacement = past.sent[0]!.clientMessageId!;
+  expect(replacement).not.toBe(wake.clientMessageId);
+  expect(replacement.startsWith(`seat-tick:${fixture.project}:173:digest-`)).toBe(true);
+  expect(replacement.length).toBeLessThanOrEqual(RUNTIME_IDEMPOTENCY_KEY_LIMIT);
+  /* It landed, so the stamp the whole loop turned on finally moves, and the
+     retired attempt is the only thing left fenced — crediting nothing. */
+  expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: new Date(fixture.now + 61 * MINUTE).toISOString() });
+  expect(fixture.row().retiredWakes).toMatchObject([{ wake: { clientMessageId: wake.clientMessageId }, reason: "unresolved-age" }]);
+  /* And the wake carried the obligations the retired attempt named. */
+  expect(past.sent[0]!.text).toContain(`[child] ${child.id}`);
+  expect(past.sent[0]!.text).toContain(MUTE_PROMPT);
+  expect(fixture.acknowledged()).toEqual([child.id]);
+
+  /* The verdict that matters is the production validator's, not a number this
+     test picked: the real journal admits the replacement key, and refuses one
+     character past the bound. */
+  const journal = new RuntimeJournal(path.join(fixture.dir, "key-admission.sqlite"), { structuredHosts: true });
+  try {
+    const admitted = journal.executeOperation(admissionCommand(wake.conversationId, replacement, past.sent[0]!.text));
+    expect(admitted.receipt).toMatchObject({ idempotencyKey: replacement });
+    expect(() => journal.executeOperation(admissionCommand(wake.conversationId, "k".repeat(RUNTIME_IDEMPOTENCY_KEY_LIMIT + 1), "over the bound")))
+      .toThrow("idempotencyKey is invalid");
+  } finally {
+    journal.close();
+  }
+});
+
+test("a wake whose identity crosses the bound is admitted by the real journal through the real transport, and lands (#1771)", async () => {
+  const fixture = childFixture("mute-seat-real-transport");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  /* The marker an age-bound retirement leaves behind, which is what pushed the
+     live project's next key past the bound. */
+  fixture.seed({ releasedWake: { clientMessageId: `seat-tick:${fixture.project}:173:retired`, releasedAt: ago(fixture, 5) } });
+  const { journal, client } = hostedSeat(fixture);
+  try {
+    const settings = { ...defaultSeatTickSettings(fixture.project), wakeIntervalMinutes: 20, reason: "this project batches its wakes", monitorPrompt: MUTE_PROMPT };
+    const rig = childRig(fixture, { realWakeState: true, journal: { client }, settings, settlementNow: () => Date.now(), deliverWith: realTransport(fixture, client) });
+    const record = await runSeatTickCheck(fixture.project, rig.deps);
+    /* Queued by the real journal, under a key it admitted. Before the bound
+       existed this check ended `failed`: the journal threw at admission, the
+       claimed reservation was left delivery-uncertain, and the seat was fenced
+       behind it for the hour. */
+    expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "queued" } });
+    const outstanding = fixture.row().outstandingWake!;
+    expect(outstanding.clientMessageId.length).toBeLessThanOrEqual(RUNTIME_IDEMPOTENCY_KEY_LIMIT);
+    expect(journal.operationResult(outstanding.operationId!)?.receipt).toMatchObject({ status: "queued", idempotencyKey: outstanding.clientMessageId });
+    expect(journal.effectBatch(100, ["runtime.send"]).map((effect) => effect.payload.operationId)).toEqual([outstanding.operationId]);
+
+    /* The drain delivers it and the next check credits the plan: the stamp
+       moves, the child is harvested, and the released marker is cleared. */
+    journal.transitionOperation(outstanding.operationId!, "delivered");
+    const landed = childRig(fixture, { realWakeState: true, journal: { client }, settings, now: fixture.now + 5 * MINUTE, settlementNow: () => Date.now(), deliverWith: realTransport(fixture, client) });
+    expect(await runSeatTickCheck(fixture.project, landed.deps)).toMatchObject({ verdict: "quiet" });
+    expect(landed.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: outstanding.clientMessageId, outcome: "landed" } });
+    expect(fixture.row()).toMatchObject({ outstandingWake: null, releasedWake: null, lastWakeAt: new Date(fixture.now + 5 * MINUTE).toISOString() });
+    expect(fixture.acknowledged()).toEqual([child.id]);
+  } finally {
+    journal.close();
+  }
+});
+
+/* Outcome 2 of the issue: "prepared, with nothing delivered and nothing
+   recorded" is the state to eliminate. A layer that refuses a send answers with
+   a reason, and the check's own journal line — which the seat surface reads
+   back as the last run's detail — is where it belongs. */
+test("a wake the delivery layer would not take names the refusal on the check's journal line (#1771)", async () => {
+  const fixture = childFixture("mute-seat-refusal-named");
+  setAgentRegistryForTests(fixture.registry);
+  fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  fixture.seed();
+  const refused = childRig(fixture, {
+    deliverWith: async () => ({ ok: false, outcome: "failed", error: "clientMessageId is longer than the 200 characters the runtime journal admits, so no send was reserved", status: 400 }),
+  });
+  const record = await runSeatTickCheck(fixture.project, refused.deps);
+  expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "failed" } });
+  expect(record!.detail).toContain("the delivery layer would not take the wake");
+  expect(record!.detail).toContain("the runtime journal admits");
+
+  /* A transport call that never came back says that instead, on its own
+     project: the prepared attempt is kept either way, and the line is what
+     tells an operator which of the two happened. */
+  const other = childFixture("mute-seat-transport-threw");
+  setAgentRegistryForTests(other.registry);
+  other.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(other, 20) });
+  other.seed();
+  const threw = childRig(other, { deliveryThrows: true });
+  const unreturned = await runSeatTickCheck(other.project, threw.deps);
+  expect(unreturned).toMatchObject({ verdict: "wake", delivery: { outcome: "unreturned" } });
+  expect(unreturned!.detail).toContain("the transport call for the wake did not return");
+  expect(other.row().outstandingWake).not.toBeNull();
 });

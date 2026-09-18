@@ -52,6 +52,23 @@ export const RUNTIME_RECEIPT_STATUSES = [
 export type RuntimeReceiptStatus = (typeof RUNTIME_RECEIPT_STATUSES)[number];
 /** Absorbing terminal reason written when the operator discards a send. */
 export const RUNTIME_DELIVERY_DISCARDED_REASON = "delivery-discarded";
+/**
+ * The longest idempotency key the runtime journal will admit (#1771).
+ *
+ * The journal refuses a longer one inside `assertOperation`, BEFORE it opens a
+ * transaction — so an over-bound key creates no operation, no outbox effect
+ * and no ledger entry, and the refusal reaches the caller as a throw from the
+ * send rather than as a receipt it can settle. Every layer that composes a key
+ * of its own has to be bounded by this number, and the only way to keep them
+ * bounded by the SAME number is for there to be one.
+ */
+export const RUNTIME_IDEMPOTENCY_KEY_LIMIT = 200;
+
+/** Whether the runtime journal would admit an operation under this key. The
+    journal's own rule, exported so a composer can ask before it sends. */
+export function runtimeIdempotencyKeyAdmissible(key: string): boolean {
+  return !!key && key.length <= RUNTIME_IDEMPOTENCY_KEY_LIMIT;
+}
 export type OperationKind = RuntimeOperationKind;
 export type ReceiptStatus = RuntimeReceiptStatus;
 
