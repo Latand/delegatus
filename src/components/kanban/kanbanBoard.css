@@ -385,6 +385,12 @@
   border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
   display: flex; flex-direction: column;
 }
+/* The composer grows and shrinks inside this fixed-height box on every typed
+   or dictated character. The page scroller anchored to a node in that region
+   and compensated its scrollTop, which moved the whole board below by the
+   field's height delta, up and down, once per character (#1731). The seat
+   stops being an anchor candidate; the board keeps its own anchoring. */
+.kb .seat { overflow-anchor: none; }
 .kb .seat > [data-orchestrator-panel] { border-radius: inherit; overflow: hidden; background: var(--surface-card); }
 .kb .seat.folded { height: auto; }
 /* The seat is short on purpose (the agreed clamp(160px, 30vh, 360px)), so its

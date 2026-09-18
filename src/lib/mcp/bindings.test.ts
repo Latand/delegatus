@@ -482,10 +482,12 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "c".repeat(43);
   /* #795: the deploy tool authorizes off the SERVER-ATTRIBUTED caller identity, so
      the control-surface check attributes this session as the designated seat of its
-     own project. `deployAuthority.test.ts` covers the refusals directly. */
+     own project — and (#1321) that project is the one owning the Viewer this MCP
+     serves. `deployAuthority.test.ts` covers the refusals directly. */
   const designatedSeat = {
     callerAttribution: () => ({ kind: "manager" as const, conversationId: "conversation_seat", role: null }),
     callerProject: () => "proj-a",
+    viewerProject: () => "proj-a",
     authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
     /* #845: the send resolves the conversation it names from ONE injected registry
        projection rather than reaching for the registry itself. */
@@ -809,6 +811,59 @@ test("link_task_to_pipeline binds the latest operational attempt after historica
     path: operationalPath,
     state: "handoff",
   })]);
+});
+
+/* #1720 — the two repair tools are named alike and write different things. This
+   one records ONE assignment row on the task; the pipeline's own task list is
+   what later stage launches read, and it is left alone here, so a pipeline
+   repaired only this way keeps admitting its stages onto a card of its own.
+   The mandate warns about exactly this, and the warning stays true only while
+   the behaviour is pinned. */
+test("link_task_to_pipeline records an assignment and leaves the pipeline's own task list untouched", async () => {
+  const pipeline = {
+    id: "pipeline-mcp-binding-scope",
+    taskIds: [],
+    srcPath: "/pipeline/creator.jsonl",
+    srcConversationId: "conversation_creator",
+    runs: [{ stageId: "build", attempts: [{
+      n: 1,
+      state: "running",
+      historical: false,
+      agentPath: "/pipeline/build.jsonl",
+      conversationId: "conversation_build",
+    }] }],
+  } as unknown as Pipeline;
+  let tasks: BoardTask[] = [{
+    id: "task-mcp-binding-scope",
+    project: "live-log-viewer-next",
+    status: "inbox",
+    text: "Keep one outcome on one card",
+    placement: "unplaced",
+    assignments: [],
+    createdAt: "2026-09-16T10:30:00.000Z",
+    updatedAt: "2026-09-16T10:30:00.000Z",
+  }];
+  const bindings = viewerMcpBindings({
+    getPipelines: () => ({ pipelines: [pipeline] }),
+    mutateTasks: (mutator) => {
+      const mutation = mutator(tasks);
+      if (mutation.tasks) tasks = mutation.tasks;
+      return mutation.result;
+    },
+    isoNow: () => "2026-09-16T10:31:00.000Z",
+  });
+
+  await bindings.link_task_to_pipeline({
+    taskId: tasks[0]!.id,
+    pipelineId: pipeline.id,
+    clientRequestId: "mcp-link-binding-scope",
+  });
+
+  expect(tasks[0]!.assignments).toEqual([expect.objectContaining({
+    conversationId: "conversation_build",
+    state: "handoff",
+  })]);
+  expect(pipeline.taskIds).toEqual([]);
 });
 
 test("link_task_to_pipeline follows the cursor retry after a fail-edge loop-back", async () => {

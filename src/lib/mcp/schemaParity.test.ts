@@ -881,3 +881,99 @@ test("task coordinates publish finite axes and retain pinned-update position sem
     expect(TOOL_INPUT_SCHEMAS.update_task.safeParse({ clientRequestId: "retain-position", taskId: "task-fixture", placement: "pinned", expectedProject: "fixture-project", expectedRevision: "opaque" }).success).toBe(true);
   });
 });
+
+/* #1720 — membership is committed at the launch reservation from what the CALL
+   carried, and both binding fields worked only because these schemas pass extra
+   keys through: a caller reading the published tool contract could not find the
+   one field that keeps an outcome on one card. They are declared now, with the
+   consequence of omitting them in the description. */
+test("the launch tools publish the task binding fields agents must pass", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+
+    const pipeline = listed.tools.find((candidate) => candidate.name === "create_pipeline");
+    const taskIds = pipeline?.inputSchema.properties?.taskIds as { type?: string; items?: { type?: string }; description?: string } | undefined;
+    expect(taskIds?.type).toBe("array");
+    expect(taskIds?.items?.type).toBe("string");
+    /* Every stage launch re-reads the list, which is why it belongs in the
+       create call rather than after the pipeline is running. */
+    expect(taskIds?.description).toContain("EVERY stage launch");
+    expect(taskIds?.description).toContain("placeholder task of its own");
+    expect(taskIds?.description).toContain("existing task in the pipeline's project");
+    expect(taskIds?.description).toContain("link-task");
+    expect(pipeline?.inputSchema.required).not.toContain("taskIds");
+    expect(pipeline?.description).toContain("`taskIds` binds the pipeline to existing board tasks in the same call");
+
+    const spawn = listed.tools.find((candidate) => candidate.name === "spawn_agent");
+    const taskId = spawn?.inputSchema.properties?.taskId as { type?: string; description?: string } | undefined;
+    expect(taskId?.type).toBe("string");
+    expect(taskId?.description).toContain("an id naming no task refuses the launch before any agent starts");
+    /* The published contract must not promise the cross-project refusal that
+       only create_pipeline performs: a spawn's explicit target carries its own
+       project, so a single foreign id is admitted (membership.test.ts). */
+    expect(taskId?.description).toContain("taken as given and binds the agent to that project's card");
+    expect(taskId?.description).not.toContain("or a task in another project, refuses the launch");
+    expect(taskIds?.description).toContain("existing task in the pipeline's project");
+    /* The omission case depends on the parent the CALL names: this tool never
+       infers the caller as parent (spawnRecovery.integration.test.ts), so a
+       call naming no parent gets a placeholder card — a duplicate — and one
+       naming a parent joins that parent's card. */
+    expect(taskId?.description).toContain("this tool never infers one from the caller");
+    expect(taskId?.description).toContain("it is given a placeholder task of its own, which is a duplicate card");
+    expect(taskId?.description).not.toContain("lands on the manager's own seat card");
+    expect(spawn?.description).toContain("it is given a placeholder task of its own — a duplicate card");
+    /* A reviewer that names a parent joins that parent's card beside the
+       reviewed work's (membership.test.ts), so it is told to pass taskId too. */
+    expect(taskId?.description).toContain("so pass taskId on reviewer spawns too — an explicit id wins over inheritance");
+    expect(taskId?.description).not.toContain("needs nothing here");
+    expect(spawn?.inputSchema.required).not.toContain("taskId");
+    expect(spawn?.description).toContain("Pass `taskId` to admit the agent onto an existing board task");
+    /* create_pipeline keeps the placeholder wording, which is true of it. */
+    expect(taskIds?.description).toContain("placeholder task of its own");
+  });
+});
+
+/* Backwards compatibility: both fields reached the server through `.passthrough()`
+   before they were declared, so declaring them must not refuse a call that used
+   to be admitted. `create_pipeline` keeps its empty and whitespace entries,
+   which the engine validates and answers for with a named violation. A blank
+   `spawn_agent.taskId` is the one addition: nothing downstream refuses it — the
+   spawn route reads a blank id as absent, and the launch lands on the tasks of
+   whatever parent or reviewed conversation the call named, or on a fresh
+   placeholder card when it named none. The outcome's card records nothing
+   either way and the caller is told nothing, so the boundary is the only place
+   that can answer, and both launch tools now answer the same malformed id the
+   same way. */
+test("declaring the task binding fields refuses nothing the launch surfaces already accepted", () => {
+  const pipelineArgs = { clientRequestId: "binding-parity", task: "t", repoDir: "/repo", stages: [{ id: "build", kind: "run", "prompt": "Implement." }] };
+  for (const taskIds of [undefined, [], ["board-task-fixture"], ["board-task-fixture", "second-task-fixture"], [""], ["  "]]) {
+    const args = taskIds === undefined ? pipelineArgs : { ...pipelineArgs, taskIds };
+    const parsed = TOOL_INPUT_SCHEMAS.create_pipeline.safeParse(args);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as { taskIds?: unknown } | undefined)?.taskIds).toEqual(taskIds);
+  }
+
+  const spawnArgs = { clientRequestId: "binding-parity-spawn", cwd: "/repo", "prompt": "Implement.", title: "Fixture launch" };
+  for (const taskId of [undefined, "board-task-fixture"]) {
+    const args = taskId === undefined ? spawnArgs : { ...spawnArgs, taskId };
+    const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse(args);
+    expect(parsed.success).toBe(true);
+    expect((parsed.data as { taskId?: unknown } | undefined)?.taskId).toEqual(taskId);
+  }
+
+  /* A shape no launch surface could ever use is refused at the boundary now,
+     naming the field, instead of reaching the engine as an unread key. */
+  expect(TOOL_INPUT_SCHEMAS.create_pipeline.safeParse({ ...pipelineArgs, taskIds: "board-task-fixture" }).success).toBe(false);
+  expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: 7 }).success).toBe(false);
+
+  /* A blank spawn taskId is refused at the boundary, naming the field, because
+     the launch would read it as absent and admit the agent onto whatever the
+     call's parent or reviewed conversation holds — or onto a fresh placeholder
+     card when it names neither — while the outcome's card records nothing.
+     `create_pipeline` answers the same mistake from the engine. */
+  for (const blank of ["", "   "]) {
+    const parsed = TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ ...spawnArgs, taskId: blank });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((issue) => issue.path[0] === "taskId")).toBe(true);
+  }
+});

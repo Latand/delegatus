@@ -4,7 +4,13 @@ import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { isCanonicalProjectId, projectIdentityFromDirectory, projectIdentityFromRepositoryRoot, repositoryRootForPath } from "./identity";
+import {
+  isCanonicalProjectId,
+  projectIdentityFromDirectory,
+  projectIdentityFromRemote,
+  projectIdentityFromRepositoryRoot,
+  repositoryRootForPath,
+} from "./identity";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-project-identity-"));
 
@@ -45,6 +51,33 @@ test("scp, ssh, and https clones of one remote resolve to one identity", () => {
   expect(new Set(identities.map((identity) => identity.canonicalRemote)))
     .toEqual(new Set(["example.invalid/team/shared-repository"]));
   expect(identities[0]!.displayName).toBe("shared-repository");
+});
+
+/* #1321: a packaged release ships no checkout, so the only thing that can name
+   the repository it was built from is repository metadata bundled with it. That
+   identity has to be the SAME one a live clone of the remote resolves to, or the
+   Viewer and its own seat would disagree about which project owns it. */
+test("a packaged release with no checkout resolves to the identity of a clone of its remote", () => {
+  const clone = createRepository("packaged-clone", "https://example.invalid/team/packaged-repository.git");
+
+  /* `git+` prefixed and `.git` suffixed spellings of one remote, as npm
+     repository metadata writes them. */
+  for (const remote of [
+    "git+https://example.invalid/team/packaged-repository.git",
+    "https://example.invalid/team/packaged-repository",
+    "git@example.invalid:team/packaged-repository.git",
+  ]) {
+    expect(projectIdentityFromRemote(remote, SANDBOX)).toEqual(projectIdentityFromRepositoryRoot(clone));
+  }
+
+  expect(projectIdentityFromRemote("https://example.invalid/team/other-repository.git", SANDBOX)?.project)
+    .not.toBe(projectIdentityFromRepositoryRoot(clone)?.project);
+});
+
+test("a remote that names no repository resolves to no identity", () => {
+  for (const remote of ["", "   ", "https://example.invalid", "https://example.invalid/"]) {
+    expect(projectIdentityFromRemote(remote, SANDBOX)).toBeNull();
+  }
 });
 
 test("an https remote never parses as an scp host", () => {

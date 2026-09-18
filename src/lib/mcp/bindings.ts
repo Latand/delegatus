@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/* The Viewer's own repository metadata. Bundled into the server and the MCP
+   binary, so a packaged release with no checkout can still name the repository
+   it deploys (#1321). */
+import viewerPackageManifest from "../../../package.json";
+
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
@@ -86,6 +91,7 @@ import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -644,6 +650,14 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  /** The canonical project of the repository this Viewer deploys (#1321) — the
+      only project whose designated seat may execute a deploy. Production derives
+      it from the canonical Viewer remote, never from the caller's working
+      directory, because an MCP client launches inside the caller's own
+      repository. Optional so partial harnesses fall back to the production
+      resolver; null means the Viewer cannot name what it deploys, and the
+      deploy refusal then fails closed. */
+  viewerProject?(): string | null;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -677,6 +691,29 @@ function productionCallerProject(): string | null {
   const conversationId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
   if (!conversationId) return null;
   return callerProjectFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
+}
+
+/**
+ * #1321: the project of the repository this Viewer deploys.
+ *
+ * The cwd cannot answer this. An MCP client launches wherever the CALLER works,
+ * which is exactly the foreign repository the deploy refusal has to tell apart
+ * from the Viewer's own, and a packaged release has no `.git` of its own to read
+ * either. The one fact that travels with the code is the canonical remote it is
+ * deployed from — `LLV_VIEWER_CANONICAL_REMOTE` when the host configures one,
+ * else the repository metadata bundled in the Viewer's own manifest — resolved
+ * through the SAME repository-key algorithm that names checkouts, so the seat of
+ * a live Viewer clone and the release it deploys land on one project id.
+ *
+ * Folded through the orchestrator's project namespace because seats are stored
+ * alias-resolved: comparing a raw repository id against an aliased seat project
+ * would refuse the Viewer's own deploy.
+ */
+function productionViewerProject(): string | null {
+  const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
+  const remote = configured || viewerPackageManifest.repository.url.trim();
+  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
+  return project ? canonicalOrchestratorProject(project) : null;
 }
 
 /**
@@ -994,6 +1031,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
+  viewerProject: productionViewerProject,
 };
 
 function text(value: unknown): string {
@@ -2156,6 +2194,22 @@ async function deployExactSha(
     throw new McpToolRefusal(
       "a designated orchestrator deploys only as its own project's seat; this session's seat belongs to another project",
       { code: "deploy_cross_project", revision },
+    );
+  }
+
+  /* #1321: being a designated seat says WHO may deploy, never WHAT. This tool
+     ships one repository — the Viewer serving this MCP — so a designated seat of
+     any other project holds no authority here at all, whatever SHA it names. The
+     refusal is placed ahead of the POST on purpose: past it the runtime host
+     fetches the canonical mirror and resolves the revision, so a foreign caller
+     would otherwise learn only "revision not found" and go looking for a better
+     SHA. Fails closed when the Viewer cannot name its own repository — a deploy
+     whose target is unproven is the one this closes. */
+  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : productionViewerProject();
+  if (seat.project !== viewerProject) {
+    throw new McpToolRefusal(
+      "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
+      { code: "deploy_foreign_project", revision },
     );
   }
 

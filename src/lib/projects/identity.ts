@@ -160,6 +160,32 @@ function remoteDisplayName(remote: string): string | null {
   return name || null;
 }
 
+/** The one place a canonical remote becomes a durable repository identity, so
+    every entry point below mints the same id for the same remote. */
+function repositoryProjectIdentity(canonical: string): RepositoryProjectIdentity | null {
+  const displayName = remoteDisplayName(canonical);
+  if (!displayName) return null;
+  const digest = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+  return {
+    project: `repo-${digest}`,
+    displayName,
+    canonicalRemote: canonical,
+  };
+}
+
+/** The repository identity of a remote URL, for a caller that knows which
+    repository it means but cannot read a `.git` to prove it — a PACKAGED
+    RELEASE has no checkout of its own, so the identity of the code it runs is
+    only recoverable from repository metadata that shipped with it. `root`
+    resolves a relative or `file:` remote exactly as a checkout at that path
+    would, so a clone and its packaged build converge on one id. */
+export function projectIdentityFromRemote(remote: string, root: string): RepositoryProjectIdentity | null {
+  const value = remote.trim();
+  if (!value) return null;
+  const canonical = canonicalRemote(value, root);
+  return canonical ? repositoryProjectIdentity(canonical) : null;
+}
+
 export function projectIdentityFromRepositoryRoot(root: string): RepositoryProjectIdentity | null {
   const directory = gitDirectory(root);
   if (!directory) return null;
@@ -178,12 +204,5 @@ export function projectIdentityFromRepositoryRoot(root: string): RepositoryProje
     }
   })();
   const canonical = remote ? canonicalRemote(remote, root) : `local:${localRoot}`;
-  const displayName = canonical ? remoteDisplayName(canonical) : null;
-  if (!canonical || !displayName) return null;
-  const digest = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 32);
-  return {
-    project: `repo-${digest}`,
-    displayName,
-    canonicalRemote: canonical,
-  };
+  return canonical ? repositoryProjectIdentity(canonical) : null;
 }

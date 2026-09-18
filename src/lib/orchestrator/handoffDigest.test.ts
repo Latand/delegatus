@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { CODEX_LUNA_MODEL } from "@/lib/agent/models";
 import type { HeadlessCodexRunRequest, HeadlessRunResult } from "@/lib/flows/exec";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
   composeSuccessorMandate,
@@ -19,8 +20,10 @@ import {
   productionDigestRuntime,
   splitMandate,
   summarizeHandoffsHeadless,
+  mandatePreflight,
   type HandoffDigestRuntime,
 } from "./handoffDigest";
+import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "./prompt";
 
 /* Issue #1067. Every test here runs against an isolated LLV_STATE_DIR and an
    injected runtime: nothing spawns a process, opens a socket, reads an account
@@ -424,4 +427,59 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
 
   expect(runs).toBe(0);
   expect(outcome).toBeInstanceOf(Error);
+});
+
+/* #1720 grew the default mandate by a section, and the same text is what a
+   rotation carries into the successor's core. One bound decides delivery, and
+   it is measured on the DELIVERED text plus the launch scaffold — so the
+   growth is checked here rather than discovered as a silently trimmed digest
+   or a refused designation. */
+test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
+  const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
+  expect(preflight.ok).toBe(true);
+  /* A rotation composes core + history + handoff against the same envelope;
+     the history alone is budgeted at HISTORY_BUDGET_BYTES, so the core has to
+     leave at least that much behind. */
+  if (preflight.ok) {
+    const remaining = MAX_STRUCTURED_TEXT_BYTES - preflight.bytes - preflight.overhead;
+    expect(remaining).toBeGreaterThan(HISTORY_BUDGET_BYTES);
+  }
+  /* Delivery appends nothing to the current default, so the mandate a fresh
+     seat is spawned with is the text measured above. */
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+});
+
+/* What delivery appends is a fixed cost every bespoke mandate pays, so it is
+   the number worth pinning: a mandate is only deliverable in the room left
+   after it. This ceiling is the budget the delivered directives are allowed to
+   occupy — a quarter of the envelope — and a directive that grows past it
+   fails HERE, naming the budget, rather than as a 413 on a live seat's
+   adoption or rotation. Raising it is a deliberate edit with the remaining
+   headroom in view. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 8_000;
+
+test("what delivery appends stays inside its share of the envelope", () => {
+  const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));
+  expect(appended).toBeLessThanOrEqual(DELIVERED_DIRECTIVE_BUDGET_BYTES);
+  /* And the budget itself leaves a bespoke mandate the room the rotation
+     ladder needs: core, plus a history section, plus a fresh handoff. */
+  expect(MAX_STRUCTURED_TEXT_BYTES - DELIVERED_DIRECTIVE_BUDGET_BYTES).toBeGreaterThan(HISTORY_BUDGET_BYTES * 2);
+});
+
+/* The boundary of mandatePreflight itself, measured on the delivered text: a
+   bespoke mandate sized to land exactly on the envelope is admitted, and one
+   byte more is refused by exactly one byte. This pins the arithmetic — that
+   delivery's cost is added to the mandate before the bound is applied, and
+   that `excess` reports the real overshoot a caller is asked to shorten by. */
+test("a bespoke mandate landing exactly on the envelope is admitted, and one byte past it is refused", () => {
+  const room = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(orchestratorMandateForDelivery(""));
+  expect(room).toBeGreaterThan(0);
+
+  const atBound = mandatePreflight("c".repeat(room), "existing", { mode: "standard" });
+  expect(atBound.ok).toBe(true);
+  expect(atBound.bytes).toBe(MAX_STRUCTURED_TEXT_BYTES);
+
+  const past = mandatePreflight("c".repeat(room + 1), "existing", { mode: "standard" });
+  expect(past.ok).toBe(false);
+  expect(past.ok === false && past.excess).toBe(1);
 });
