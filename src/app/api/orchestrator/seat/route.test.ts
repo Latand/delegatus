@@ -9,7 +9,11 @@ import { NextRequest } from "next/server";
 
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import {
+  beginOrchestratorSeatIntent,
+  failOrchestratorSeatIntent,
+  orchestratorSeatFor,
+} from "@/lib/orchestrator/seats";
 
 import { POST as rotatePost } from "../rotate/route";
 import { GET as seatGet, POST as seatPost } from "./route";
@@ -95,6 +99,32 @@ test("REGRESSION (#1402): the same agent request is ADMITTED by the rotation rou
   const { active, pending } = orchestratorSeatFor("proj-a");
   expect(active).toBeNull();
   expect(pending).toBeNull();
+});
+
+test("REGRESSION (#1757): the seat read carries the last FAILED attempt, so its reason survives leaving the pending position", async () => {
+  beginOrchestratorSeatIntent({
+    project: "proj-a",
+    mandate: "own the board",
+    clientRequestId: "req_00000010",
+    mode: "spawn",
+    now: "2026-09-18T09:46:49.000Z",
+  });
+  failOrchestratorSeatIntent("proj-a", "req_00000010", "the runtime host never answered", "2026-09-18T09:47:31.000Z");
+
+  const answer = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"));
+
+  expect(answer.status).toBe(200);
+  /* Nothing pending — the record is complete — and the reason is still on the
+     surface the panel reads. */
+  expect(await answer.json()).toMatchObject({
+    pending: null,
+    lastFailure: {
+      error: "the runtime host never answered",
+      clientRequestId: "req_00000010",
+      designatedAt: "2026-09-18T09:46:49.000Z",
+      terminalizedAt: "2026-09-18T09:47:31.000Z",
+    },
+  });
 });
 
 test("the seat read reports the Viewer MCP definition resolved for the project cwd", async () => {

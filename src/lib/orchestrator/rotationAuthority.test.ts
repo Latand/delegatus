@@ -207,6 +207,7 @@ function dependencies(): { deps: SeatCommandDependencies; spawns: Record<string,
     launchSettlement: () => ({ kind: "unknown" }),
     stampRegistryIdentity: () => {},
     runtimeIdentity: () => ({ engine: null, model: null }),
+    conversationTurns: () => 12,
     now: () => AT,
   };
   setSeatCommandDependenciesForTests(deps);

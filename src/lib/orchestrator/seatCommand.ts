@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -11,6 +11,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { readSession } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
@@ -32,14 +33,18 @@ import {
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery, orchestratorMandateStale } from "./prompt";
 import { isViewerOwnProject } from "./viewerProject";
 import {
+  abandonStillbornOrchestratorSeat,
   activeOrchestratorSeats,
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
+  confirmOrchestratorSeatMaterialization,
   failOrchestratorSeatIntent,
   canonicalOrchestratorProject,
+  orchestratorRevocations,
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
   type OrchestratorSeat,
+  type OrchestratorSeatTerminalization,
   type OrchestratorSeatTrigger,
 } from "./seats";
 
@@ -99,6 +104,12 @@ export interface SeatCommandDependencies {
   stampRegistryIdentity(seat: OrchestratorSeat): void;
   /** Durable runtime identity for legacy seats that predate engine/model. */
   runtimeIdentity(conversationId: string): { engine: string | null; model: string | null };
+  /** How many turns a candidate predecessor's transcript actually holds, for
+      choosing WHICH conversation the handoff tells the successor to read
+      (#1757). Zero for a transcript that exists but records nothing, and zero
+      for one that cannot be read — both mean "there is nothing here to hand
+      over", which is the only question this answers. */
+  conversationTurns(input: { conversationId: string; path: string; engine: "claude" | "codex" }): number;
   now(): string;
 }
 
@@ -269,6 +280,14 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
       model: receipt.launchProfile.model,
     };
   },
+  conversationTurns: ({ path, engine }) => {
+    try {
+      return readSession(path, engine).messages.length;
+    } catch {
+      /* An unreadable transcript holds no turns anyone can hand over. */
+      return 0;
+    }
+  },
   runtimeIdentity: (conversationId) => {
     const conversation = agentRegistry().conversation(conversationId as `conversation_${string}`);
     const conversationModel = conversation
@@ -415,14 +434,79 @@ function reconcileCompletedSeatReplay(
 }
 
 /**
+ * Reconcile the ACTIVE seat against the durable settlement of the launch it was
+ * activated on (issue #1757).
+ *
+ * A seat activated on a durably ACCEPTED spawn is provisional: the conversation
+ * id is reserved, the transcript does not exist yet, and `get_conversation`
+ * answers «not found» until the launch materializes it. The pending intent had
+ * a reconciler for exactly this window; the active seat had none, so a launch
+ * that died after activation left the project seated on a conversation nobody
+ * could read or reach, and the only record of the failure was a runtime host
+ * timeout in a container log.
+ *
+ * Three outcomes, and each one ENDS the provisional state:
+ *  - the launch produced a readable conversation → confirm it, drop the
+ *    rollback, record the transcript path;
+ *  - the launch terminally failed → roll the seat back: revoke the stillborn
+ *    conversation, restore the predecessor it superseded, and terminalize the
+ *    attempt into `intentHistory` with its reason;
+ *  - the launch has not settled → leave it alone; an in-flight launch is not a
+ *    failed one.
+ *
+ * Synchronous, like its pending sibling, so a request reaches its durable begin
+ * with no await point in between.
+ */
+function reconcileActiveSeatLaunch(
+  project: string,
+  dependencies: SeatCommandDependencies,
+): OrchestratorSeatTerminalization | null {
+  const active = orchestratorSeatFor(project).active;
+  if (!active?.conversationId || active.intent.mode !== "spawn" || active.path !== null) return null;
+  /* READABLE OUTRANKS EVERY RECEIPT. An admitted receipt names a conversation
+     long before a transcript exists under it, and a receipt can read terminal
+     while the conversation it launched is alive and answering. So the question
+     asked first is the one the operator would ask: can the Viewer resolve this
+     conversation? If it can, the seat is real — confirmed, never rolled back. */
+  const target = dependencies.conversationTarget(active.conversationId);
+  if (target?.kind === "eligible") {
+    confirmOrchestratorSeatMaterialization({
+      project,
+      clientRequestId: active.intent.clientRequestId,
+      conversationId: active.conversationId,
+      path: target.path,
+    });
+    return null;
+  }
+  const settlement = dependencies.launchSettlement({
+    launchId: active.intent.launchId,
+    clientRequestId: active.intent.clientRequestId,
+  });
+  /* Unresolvable AND still launching is a seat in its boot window, which is
+     not a failure; only a terminal launch makes it stillborn. */
+  if (settlement.kind !== "failed") return null;
+  const rolledBack = abandonStillbornOrchestratorSeat({
+    project,
+    clientRequestId: active.intent.clientRequestId,
+    error: `the accepted launch failed before its conversation became readable: ${settlement.error}`,
+    now: dependencies.now(),
+  });
+  if (rolledBack) {
+    console.warn(`orchestrator seat for ${project} was rolled back: its accepted launch failed before the conversation became readable (${settlement.error})`);
+  }
+  return rolledBack?.terminalized ?? null;
+}
+
+/**
  * Reconcile a pending spawn intent against the durable settlement of the launch
  * its request attempted, so a 202 Accepted spawn converges to exactly one seat
  * whether or not the accepting request survived. A settled launch activates the
  * intent on its conversation (the same atomic write the surviving request would
  * have made — revoking a differing predecessor, so no interleaving yields two
  * seats or an accepted launch with no seat); a terminally failed one records
- * the error, making the intent terminalizable by the next begin. An unsettled
- * launch is left pending — the genuinely in-flight guard stays intact.
+ * the error, which terminalizes the intent into durable history on the spot
+ * (#1757). An unsettled launch is left pending — the genuinely in-flight guard
+ * stays intact.
  *
  * Returns null — synchronously, with no await point — whenever there is
  * nothing to activate, so a request with no reconcilable intent still
@@ -448,18 +532,78 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
     }, dependencies);
   }
   if (settlement.kind === "failed") {
-    failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error);
+    failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error, dependencies.now());
   }
   return null;
 }
 
-export async function executeOrchestratorSeatRequest(
+/**
+ * EVERY WAY OUT OF A SEAT TRANSITION IS A RECORD (issue #1757).
+ *
+ * The seat store is guarded by the account mutation lock, and that lock throws
+ * `AccountMutationBusyError` rather than waiting forever. Any throw past the
+ * durable begin — that one, a registry read that blew up, a bug — used to
+ * leave the route answering an unhandled 500 with no body, the burnt epoch
+ * sitting in `pending` with `error: null`, and every later designation refused
+ * as `seat_intent_in_progress` behind it. The operator's evidence was three
+ * epochs missing from the record and a stack trace in a container log.
+ *
+ * So the two exported entry points are wrapped: the thrown reason is recorded
+ * on the intent, which terminalizes it into `intentHistory`, and the caller is
+ * answered with that row and a code it can act on. A busy store answers 503,
+ * because retrying shortly is the whole remedy.
+ */
+async function guardedSeatTransition(
+  rawBody: Record<string, unknown>,
+  code: "seat_transition_failed" | "rotation_failed",
+  run: () => Promise<SeatCommandResult>,
+): Promise<SeatCommandResult> {
+  try {
+    return await run();
+  } catch (thrown) {
+    const busy = thrown instanceof AccountMutationBusyError;
+    const reason = thrown instanceof Error ? thrown.message : String(thrown);
+    const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
+    const clientRequestId = text(rawBody.clientRequestId);
+    let terminalized: OrchestratorSeatTerminalization | null = null;
+    if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
+      const project = canonicalOrchestratorProject(named);
+      try {
+        terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason);
+      } catch {
+        /* The store itself is what failed. Nothing to record, and the answer
+           below still names the reason — silence is the one outcome this
+           wrapper exists to prevent. */
+      }
+    }
+    console.error(`orchestrator seat transition failed for ${String(rawBody.project)}: ${reason}`);
+    return {
+      status: busy ? 503 : 500,
+      body: {
+        error: reason,
+        code: busy ? "seat_store_busy" : code,
+        retryable: busy,
+        seat: terminalized?.seat ?? null,
+      },
+    };
+  }
+}
+
+export function executeOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = productionSeatCommandDependencies,
   /* Who triggered this designation, resolved from the REQUEST by the caller.
      Deliberately not a `rawBody` field: the body is caller-supplied JSON, and
      attribution that a caller can write is not attribution. */
   triggeredBy: OrchestratorSeatTrigger | null = null,
+): Promise<SeatCommandResult> {
+  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy));
+}
+
+async function runOrchestratorSeatRequest(
+  rawBody: Record<string, unknown>,
+  dependencies: SeatCommandDependencies,
+  triggeredBy: OrchestratorSeatTrigger | null,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
@@ -492,6 +636,10 @@ export async function executeOrchestratorSeatRequest(
   const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams, { viewerSeat });
   if (!preflight.ok) return { status: 413, body: mandateTooLargeBody(preflight) };
 
+  /* Before anything reads the incumbent: a seat still standing on a launch that
+     died is not an incumbent, and rolling it back here is what puts the
+     predecessor back in front of this request (#1757). */
+  reconcileActiveSeatLaunch(project, dependencies);
   const reconciliation = reconcilePendingSeatIntent(project, dependencies);
   if (reconciliation) await reconciliation;
 
@@ -556,8 +704,8 @@ export async function executeOrchestratorSeatRequest(
       : target;
     if (!deliveryTarget || deliveryTarget.kind === "ineligible" || deliveryTarget.project !== project) {
       const error = "the pending adoption target is no longer eligible";
-      failOrchestratorSeatIntent(project, clientRequestId, error);
-      return { status: 409, body: { error, code: "adoption_target_unavailable", seat: orchestratorSeatFor(project).pending } };
+      const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
+      return { status: 409, body: { error, code: "adoption_target_unavailable", seat: terminalized?.seat ?? null } };
     }
 
     const delivery = await dependencies.deliver({
@@ -572,7 +720,7 @@ export async function executeOrchestratorSeatRequest(
     });
     if (!delivery.ok) {
       const error = delivery.error ?? "mandate delivery failed";
-      failOrchestratorSeatIntent(project, clientRequestId, error);
+      const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
       return {
         status: 502,
         body: {
@@ -581,9 +729,10 @@ export async function executeOrchestratorSeatRequest(
           /* Recoverable, not a dead end: the incumbent (if any) still holds the
              seat, and the selected conversation can be resumed from the board
              before retrying. The intent this returns is TERMINAL (issue #1067)
-             — the next call to begin clears it, even under this same request
-             id, and delivers the mandate composed then rather than this one. */
-          seat: orchestratorSeatFor(project).pending,
+             and already terminalized into `intentHistory` (issue #1757), so a
+             retry — even under this same request id — composes afresh rather
+             than replaying the mandate that failed. */
+          seat: terminalized?.seat ?? null,
         },
       };
     }
@@ -650,13 +799,13 @@ export async function executeOrchestratorSeatRequest(
   if (begun.kind === "in_progress") return inProgressSeatResponse(begun.seat);
   if (begun.kind === "replay" && begun.seat.runtimeIdentityFrozen !== true) {
     const error = "legacy pending orchestrator runtime identity is unavailable; retry the designation with a new clientRequestId";
-    failOrchestratorSeatIntent(project, clientRequestId, error);
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
     return {
       status: 409,
       body: {
         error,
         code: "legacy_runtime_identity_unavailable",
-        seat: orchestratorSeatFor(project).pending,
+        seat: terminalized?.seat ?? null,
       },
     };
   }
@@ -677,13 +826,13 @@ export async function executeOrchestratorSeatRequest(
       };
   const cwd = resolveOrchestratorCwd(project, rawBody.cwd);
   if (!cwd) {
-    failOrchestratorSeatIntent(project, clientRequestId, "orchestrator cwd could not be resolved");
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, "orchestrator cwd could not be resolved", dependencies.now());
     return {
       status: 400,
       body: {
         error: "orchestrator cwd could not be resolved — pass cwd explicitly or set LLV_ORCHESTRATOR_CWD",
         code: "cwd_unresolved",
-        seat: orchestratorSeatFor(project).pending,
+        seat: terminalized?.seat ?? null,
       },
     };
   }
@@ -714,8 +863,8 @@ export async function executeOrchestratorSeatRequest(
         : !spawnedConversationId
           ? "spawn response omitted conversationId"
           : "spawn did not report an accepted launch");
-    failOrchestratorSeatIntent(project, clientRequestId, error);
-    return { status: spawned.status, body: { ...spawned.body, seat: orchestratorSeatFor(project).pending } };
+    const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
+    return { status: spawned.status, body: { ...spawned.body, seat: terminalized?.seat ?? null } };
   }
   const activated = await activate({
     project,
@@ -735,6 +884,72 @@ export async function executeOrchestratorSeatRequest(
       seat: activated.seat,
     },
   };
+}
+
+/** How far back a handover will walk a lineage looking for turns. A seat that
+    rotated this many times with nothing readable behind it has no story to
+    hand over, and the walk costs a transcript read per hop. */
+const HANDOFF_LINEAGE_CAP = 8;
+
+/** The one bounded read the successor is told to make, spelled the same way
+    wherever the handover names a conversation. */
+function predecessorReadCall(conversationId: string): string {
+  return `conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${conversationId}","conversationId":"${conversationId}","roles":["user","assistant"],"limit":40})`;
+}
+
+/**
+ * The newest conversation in this seat's lineage that ACTUALLY HOLDS TURNS
+ * (#1757), starting at the incumbent and walking back through the revocations.
+ *
+ * The incident: a rotation seated a conversation whose launch died before its
+ * transcript existed, and the next rotation's handover told the successor to
+ * read that conversation's recent turns. `conversation_messages` answered that
+ * the transcript was outside the scanner roots, `get_conversation` answered
+ * «conversation not found», and the successor was left with a lineage of one
+ * dead link and no way to know the real predecessor was one hop further back.
+ *
+ * Each hop is checked the same way the adoption path checks a target — a
+ * registry row, a transcript on disk, a resolvable project — and then asked
+ * the only question a handover cares about: does it hold turns? A stillborn
+ * link answers no on both counts and is skipped, never followed.
+ */
+function readablePredecessor(
+  project: string,
+  incumbent: OrchestratorSeat,
+  incumbentTarget: Extract<ExistingConversationTarget, { kind: "eligible" }> | null,
+  dependencies: SeatCommandDependencies,
+): { conversationId: string; turns: number; cwd: string } | null {
+  const holdsTurns = (target: Extract<ExistingConversationTarget, { kind: "eligible" }>): { conversationId: string; turns: number; cwd: string } | null => {
+    const turns = dependencies.conversationTurns({
+      conversationId: target.conversationId,
+      path: target.path,
+      engine: target.engine,
+    });
+    return turns > 0 ? { conversationId: target.conversationId, turns, cwd: target.cwd } : null;
+  };
+  if (incumbentTarget) {
+    const held = holdsTurns(incumbentTarget);
+    if (held) return held;
+  }
+  /* Newest-first: each revocation names the seat that ended and the successor
+     that replaced it, so following `successorConversationId` backwards from the
+     incumbent walks the lineage without trusting any single seat row to carry
+     more than its own predecessor. */
+  const lineage = orchestratorRevocations().filter((revocation) => revocation.project === project);
+  const seen = new Set<string>([incumbent.conversationId ?? ""]);
+  let current = incumbent.conversationId;
+  for (let hop = 0; hop < HANDOFF_LINEAGE_CAP && current; hop += 1) {
+    const link = [...lineage].reverse().find((revocation) => revocation.successorConversationId === current);
+    const candidate = link?.conversationId ?? null;
+    if (!candidate || seen.has(candidate)) return null;
+    seen.add(candidate);
+    current = candidate;
+    const target = dependencies.conversationTarget(candidate);
+    if (target?.kind !== "eligible") continue;
+    const held = holdsTurns(target);
+    if (held) return held;
+  }
+  return null;
 }
 
 const HANDOFF_TASK_CAP = 12;
@@ -811,7 +1026,7 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  * Never automatic: context pressure only ever produces a recommendation
  * (`./health`), and this function runs solely when explicitly called.
  */
-export async function executeOrchestratorRotation(
+export function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = productionSeatCommandDependencies,
   /* WHO ordered this rotation. Never a refusal — rotation bans nobody — and
@@ -819,6 +1034,14 @@ export async function executeOrchestratorRotation(
      someone else. Null is an in-process caller that named nobody, and records
      unknown provenance; the operator is never credited by default. */
   actor: ViewerActor | null = null,
+): Promise<SeatCommandResult> {
+  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor));
+}
+
+async function runOrchestratorRotation(
+  rawBody: Record<string, unknown>,
+  dependencies: SeatCommandDependencies,
+  actor: ViewerActor | null,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -829,25 +1052,59 @@ export async function executeOrchestratorRotation(
     return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters" } };
   }
   /* An accepted launch whose request died may hold the seat this rotation must
-     replace; converge it first so the rotation sees its real incumbent. */
+     replace, and one that DIED may still be holding it; converge both so the
+     rotation sees its real incumbent (#1757). */
+  const rolledBack = reconcileActiveSeatLaunch(project, dependencies);
+  /* What the caller is owed when the seat it asked about turns out to have been
+     stillborn: WHICH designation died and why, on the same answer as whatever
+     this rotation goes on to do. Without it the incumbent silently changes
+     identity between two calls and nothing says a rotation ever failed. */
+  const rollbackReport = rolledBack
+    ? {
+      rolledBack: {
+        conversationId: rolledBack.seat.conversationId,
+        seatEpoch: rolledBack.seat.seatEpoch,
+        error: rolledBack.seat.intent.error,
+        terminalizedAt: rolledBack.terminalizedAt,
+      },
+    }
+    : {};
   const reconciliation = reconcilePendingSeatIntent(project, dependencies);
   if (reconciliation) await reconciliation;
   const incumbent = orchestratorSeatFor(project).active;
   if (!incumbent?.conversationId) {
     return {
       status: 409,
-      body: { error: "no orchestrator is designated for this project — use create_orchestrator instead of rotating", code: "no_incumbent" },
+      body: {
+        error: "no orchestrator is designated for this project — use create_orchestrator instead of rotating",
+        code: "no_incumbent",
+        ...rollbackReport,
+      },
     };
   }
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
   const predecessor = predecessorTarget?.kind === "eligible" ? predecessorTarget : null;
+  /* WHICH predecessor the successor is told to READ (#1757). The seat it
+     replaces and the conversation that holds the story are usually the same
+     one, and when a rotation seated a conversation that never drew a breath
+     they are not: the handover named that stillborn link anyway, and the
+     successor's one instruction was to read a transcript that does not exist. */
+  const readable = readablePredecessor(project, incumbent, predecessor, dependencies);
   const tasks = dependencies.projectTasks(project).slice(0, HANDOFF_TASK_CAP);
   const notes = text(rawBody.handoffNotes).slice(0, HANDOFF_NOTES_CAP);
   const handoff: HandoffParts = {
     header: [
       `You are replacing orchestrator conversation ${incumbent.conversationId} for project ${project}. Its manager authority is revoked; its session and card remain on the board, linked to yours.`,
-      `Your predecessor's recent turns — decisions, blockers, in-flight work — are one call away: conversation_messages({"clientRequestId":"rotation-predecessor-recent-turns-${incumbent.conversationId}","conversationId":"${incumbent.conversationId}","roles":["user","assistant"],"limit":40}). Records are newest first; pass the returned cursor with a fresh clientRequestId for each older page. Read them before acting, and never open the transcript file. If the call reports that the conversation has no transcript, reconstruct state from the board.`,
+      ...(readable
+        ? [
+          readable.conversationId === incumbent.conversationId
+            ? `Your predecessor's recent turns — decisions, blockers, in-flight work — are one call away: ${predecessorReadCall(readable.conversationId)}. Records are newest first; pass the returned cursor with a fresh clientRequestId for each older page. Read them before acting, and never open the transcript file. If the call reports that the conversation has no transcript, reconstruct state from the board.`
+            : `The seat you are replacing holds no readable turns, so it is not what you read. The last predecessor in this lineage that does is ${readable.conversationId}: ${predecessorReadCall(readable.conversationId)}. Records are newest first; pass the returned cursor with a fresh clientRequestId for each older page. Read them before acting, and never open the transcript file.`,
+        ]
+        : [
+          `No conversation in this seat's lineage holds readable turns — the seat you are replacing has none, and neither does any predecessor on record. There is no handover transcript to read: reconstruct state from the board tasks below and from the notes in this mandate, and do not go looking for the predecessor's transcript file.`,
+        ]),
     ],
     tasks: tasks.length
       ? `Open board tasks for this project:\n${tasks.map((task) => `- [${task.status}] ${task.text.slice(0, HANDOFF_TASK_TEXT_CAP)} (${task.id})`).join("\n")}`
@@ -926,18 +1183,24 @@ export async function executeOrchestratorRotation(
     /* Issue #903: a rotation without an explicit cwd continues in the
        predecessor's checkout rather than falling through to the generic
        resolver — the successor inherits the incumbent's mandate, so it
-       inherits its working directory too. */
+       inherits its working directory too. When the seat being replaced cannot
+       be resolved at all (#1757), the checkout comes from the same predecessor
+       whose turns the handover names: rotating AWAY from a stillborn seat is
+       precisely when the operator needs it to work. */
     ...(rawBody.cwd !== undefined
       ? { cwd: rawBody.cwd }
       : predecessor
         ? { cwd: predecessor.cwd }
-        : {}),
+        : readable
+          ? { cwd: readable.cwd }
+          : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),
   }, dependencies, triggeredBy);
   return {
     status: outcome.status,
     body: {
       ...outcome.body,
+      ...rollbackReport,
       rotatedFrom,
       /* Who ordered it, on the answer as well as on the durable record, so the
          caller reads back the attribution its rotation was recorded under. */

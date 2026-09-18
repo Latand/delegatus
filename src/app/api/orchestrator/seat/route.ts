@@ -20,10 +20,26 @@ export const dynamic = "force-dynamic";
 interface SeatStatus {
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
+  /** The last designation attempt that FAILED, once it has left the pending
+      position (issue #1757). A failure is terminalized into durable history the
+      moment it happens, so without this the panel's reason banner would vanish
+      the instant the record became complete — and a failure the operator did
+      not personally submit (a rotation ordered from a seat, an accepted launch
+      that died) would never reach them at all. */
+  lastFailure: SeatFailure | null;
   /** Whether the active seat's transcript is still on disk; false invites a
       resume or a replacement from the same draft surface. */
   exists: boolean;
   viewerMcpRegistered: boolean;
+}
+
+interface SeatFailure {
+  error: string;
+  clientRequestId: string;
+  seatEpoch: number;
+  conversationId: string | null;
+  designatedAt: string;
+  terminalizedAt: string;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | ApiError>> {
@@ -31,10 +47,21 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   const home = process.env.HOME?.trim() || os.homedir();
-  const { active, pending } = orchestratorSeatFor(project);
+  const { active, pending, history } = orchestratorSeatFor(project);
+  const failed = [...history].reverse().find((entry) => entry.seat.intent.error !== null);
   return NextResponse.json({
     seat: active,
     pending,
+    lastFailure: failed
+      ? {
+        error: failed.seat.intent.error ?? "",
+        clientRequestId: failed.seat.intent.clientRequestId,
+        seatEpoch: failed.seat.seatEpoch,
+        conversationId: failed.seat.conversationId,
+        designatedAt: failed.seat.designatedAt,
+        terminalizedAt: failed.terminalizedAt,
+      }
+      : null,
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
   });

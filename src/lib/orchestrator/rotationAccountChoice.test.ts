@@ -235,6 +235,7 @@ function dependencies(): { asks: SpawnAsk[]; resolved: string[] } {
     launchSettlement: () => ({ kind: "unknown" }),
     stampRegistryIdentity: () => {},
     runtimeIdentity: () => ({ engine: "codex", model: "gpt-6-astra" }),
+    conversationTurns: () => 12,
     now: () => AT,
   };
   setSeatCommandDependenciesForTests(deps);
@@ -302,8 +303,12 @@ test("a refused rotation leaves the incumbent seated and the refusal readable, w
   expect(resolved).toEqual([]);
   const seat = orchestratorSeatFor(PROJECT);
   expect(seat.active?.conversationId).toBe(INCUMBENT_ID);
-  expect(seat.pending?.intent.error).toContain("account-project-bindings.json");
-  expect(seat.pending?.conversationId).toBeNull();
+  /* The reason is on the record the operator reads, terminalized at the
+     failure (#1757) rather than left pending for a later designation. */
+  expect(seat.pending).toBeNull();
+  const refusal = seat.history.at(-1)?.seat;
+  expect(refusal?.intent.error).toContain("account-project-bindings.json");
+  expect(refusal?.conversationId).toBeNull();
 });
 
 test("the crossing this rotation makes classifies as outside-pool against the real record", async () => {

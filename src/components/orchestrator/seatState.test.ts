@@ -107,6 +107,49 @@ describe("the panel names every state in the map (#977)", () => {
     });
   });
 
+  test("REGRESSION (#1757): a TERMINALIZED failure keeps its reason on the panel after it leaves the pending position", () => {
+    /* The failure is durable history the moment it happens, so `pending` is
+       empty by the time the panel reads the seat — and the operator is still
+       owed the reason, especially for a rotation this browser never submitted. */
+    const state = deriveOrchestratorPanelState({
+      ...base,
+      status: status({
+        lastFailure: {
+          error: "the accepted launch failed before its conversation became readable: runtime host timed out",
+          clientRequestId: "req-77777777",
+          seatEpoch: 172,
+          designatedAt: "2026-09-18T09:46:49.000Z",
+          terminalizedAt: "2026-09-18T09:47:31.000Z",
+        },
+      }),
+    });
+    expect(state).toEqual({
+      kind: "intent-error",
+      error: "the accepted launch failed before its conversation became readable: runtime host timed out",
+      retry: "fresh",
+      designatedAt: "2026-09-18T09:46:49.000Z",
+    });
+  });
+
+  test("REGRESSION (#1757): a rollback's failure rides ALONGSIDE the seat it restored, and an older one does not", () => {
+    const restored = seat({ activatedAt: "2026-09-18T09:47:31.000Z" });
+    const standing = {
+      error: "the accepted launch failed before its conversation became readable: runtime host timed out",
+      clientRequestId: "req-77777777",
+      seatEpoch: 172,
+      designatedAt: "2026-09-18T09:46:49.000Z",
+      terminalizedAt: "2026-09-18T09:47:31.000Z",
+    };
+    expect(deriveOrchestratorPanelState({ ...base, status: status({ seat: restored, lastFailure: standing }) }))
+      .toMatchObject({ kind: "live", transition: { kind: "error", error: standing.error } });
+    /* ...and a failure the seat outlived is history, not a banner: a permanent
+       record must not hang a dead reason over a healthy orchestrator. */
+    expect(deriveOrchestratorPanelState({
+      ...base,
+      status: status({ seat: restored, lastFailure: { ...standing, terminalizedAt: "2026-09-10T00:00:00.000Z" } }),
+    })).toMatchObject({ kind: "live", transition: null });
+  });
+
   test("a lost reply is an intent-error whose retry replays the SAME key", () => {
     const state = deriveOrchestratorPanelState({
       ...base,
@@ -389,9 +432,9 @@ describe("the rotate draft renders the same two states the create draft does (#9
 
 describe("seat status parsing", () => {
   test("a malformed body reads as no seat rather than throwing", () => {
-    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, exists: true, viewerMcpRegistered: false });
+    expect(parseSeatStatus(null)).toEqual({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false });
     expect(parseSeatStatus({ seat: { project: 7 }, pending: [], exists: false }))
-      .toEqual({ seat: null, pending: null, exists: false, viewerMcpRegistered: false });
+      .toEqual({ seat: null, pending: null, lastFailure: null, exists: false, viewerMcpRegistered: false });
   });
 
   test("a well-formed seat keeps the fields the panel renders from", () => {
