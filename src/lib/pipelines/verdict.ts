@@ -12,9 +12,13 @@ const ALLOWED_KEYS = new Set(["status", "findings", "rankedFindings", "confidenc
 const SEVERITY_RANK = new Map<StageFindingSeverity | null, number>(
   [...STAGE_FINDING_SEVERITIES.map((severity, index) => [severity, index] as const), [null, STAGE_FINDING_SEVERITIES.length] as const],
 );
-/** `P1 — text`, `P1 - text` and bare `P1 text`: the forms reviewers already
-    write and the form the structured-finding adapter renders. */
-const RANKED_FINDING_RE = new RegExp(`^(${STAGE_FINDING_SEVERITIES.join("|")})\\s*(?:[—–-]\\s*)?([\\s\\S]*)$`);
+/** `P1 — text`, `P1 - text` and `P1: text`: the forms reviewers already write
+    and the form {@link stageFindingText} renders. The separator is required
+    and a dash carries a space on each side, so prose that merely opens on a
+    severity keeps its own text: "P1-based scoring is wrong" and "P0 through
+    P3 are undefined" talk about ranks, and reading either as a rank would
+    rewrite the words the reviewer wrote. */
+const RANKED_FINDING_RE = new RegExp(`^(${STAGE_FINDING_SEVERITIES.join("|")})(?:\\s+[—–-]\\s+|\\s*:\\s*)([\\s\\S]*)$`);
 
 /** One finding as a record. Text that names no severity is unranked, which is
     every finding a fenced verdict carried before ranking existed. */
@@ -241,7 +245,15 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   if (status === "pass" && findings.length > 0) {
     return refusal('contradictory stage verdict: status "pass" cannot include findings', "STAGE_REPORT_CONTRADICTORY");
   }
-  const verdict = stageVerdictFrom({ status, ...(findings.length ? { findings: rankStageFindings(findings).map(stageFindingText) } : {}) });
+  /* The bound belongs to the finding as it is recorded, and that is the
+     rendered `P1 — text`: a text at the schema's own bound is five characters
+     longer once its rank is in front of it, and handing that to
+     {@link stageVerdictFrom} would refuse the whole call over characters the
+     caller never wrote. Clamp the rendering, exactly as that validator does
+     when it reloads a record, so such a text is accepted and loses only its
+     tail. The tool schema states this where the caller reads the bound. */
+  const rendered = rankStageFindings(findings).map((finding) => stageFindingText(finding).slice(0, MAX_FINDING_CHARS));
+  const verdict = stageVerdictFrom({ status, ...(rendered.length ? { findings: rendered } : {}) });
   if (!verdict) return refusal("the reported verdict is not a valid stage verdict");
   const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
   return { verdict, summary: summary || null };

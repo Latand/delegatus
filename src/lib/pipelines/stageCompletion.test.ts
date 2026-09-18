@@ -372,3 +372,68 @@ test("an attempt that moved on while its provenance was read is refused, and kee
   expect(accepted).toMatchObject({ attempt: 2, replaced: false });
   expect(attemptsOf("build")[1]!.report).toMatchObject({ summary: "Reported against attempt 2." });
 });
+
+test("a review-loop stage's reviewer cannot report a completion, and nothing is written", async () => {
+  const h = harness();
+  await started(h.ports, [
+    stage("build", "review"),
+    { id: "review", kind: "review-loop", role: { roleId: "builder" }, prompt: "Review the run", next: null },
+  ]);
+  await tickPipelines([h.endTurn(1, 'Built.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+
+  /* What attachReviewFlowAttempt leaves on a review-loop attempt: the flow's
+     reviewer conversation, running the flow's own review. Its verdict is the
+     flow outcome tickReviewStage settles from, and that path never reads a
+     report — so a report taken here would show on the card and move nothing. */
+  const records = loadPipelines();
+  const review = records[0]!.runs.find((run) => run.stageId === "review")!;
+  review.attempts.push({
+    ...structuredClone(records[0]!.runs[0]!.attempts[0]!),
+    n: 1,
+    state: "reviewing",
+    conversationId: "conversation_stage_2",
+    agentPath: "/codex/stage-2.jsonl",
+    flowId: "flow_review_1",
+    verdict: null,
+    completedAt: null,
+    report: null,
+  } as never);
+  savePipelines(records);
+  h.execCalls.length = 0;
+
+  const refused = await h.report(2, { verdict: "pass", summary: "Approved it myself." });
+  expect(refused).toMatchObject({ code: "STAGE_REPORT_NOT_A_RUN_STAGE", status: 403 });
+  expect(refused.error).toContain("review-loop stage");
+  expect(refused.slots).toEqual([{ pipelineId: current().id, stageId: "review", attempt: 1, state: "reviewing" }]);
+
+  /* Nothing written, on the attempt or on the pipeline, and no command run. */
+  expect(refused.report).toBeUndefined();
+  expect(attemptsOf("review")[0]!.report ?? null).toBeNull();
+  expect(attemptsOf("review")[0]!.verdict).toBeNull();
+  expect(current().stageReports).toBeUndefined();
+  expect(h.execCalls).toEqual([]);
+});
+
+test("an attempt persisted in committing has already answered, so its completion is refused", async () => {
+  const h = harness();
+  await started(h.ports, [stage("build", null)]);
+  /* The durable window settleStageVerdict opens: the verdict is written and
+     the state marked committing before the commit lands, and the graph has
+     routed on that verdict, so the attempt is settled for reporting. */
+  const records = loadPipelines();
+  const attempt = records[0]!.runs[0]!.attempts[0]!;
+  attempt.state = "committing";
+  attempt.verdict = { status: "pass" };
+  savePipelines(records);
+  h.execCalls.length = 0;
+
+  const refused = await h.report(1, { verdict: "fail", findings: [{ severity: "P0", text: "changed my mind" }] });
+  expect(refused).toMatchObject({ code: "STAGE_REPORT_SETTLED", status: 409 });
+  expect(refused.error).toContain("already settled as committing");
+  expect(refused.slots).toEqual([{ pipelineId: current().id, stageId: "build", attempt: 1, state: "committing" }]);
+
+  expect(attemptsOf("build")[0]!.report ?? null).toBeNull();
+  expect(attemptsOf("build")[0]!.verdict).toEqual({ status: "pass" });
+  expect(current().stageReports).toBeUndefined();
+  expect(h.execCalls).toEqual([]);
+});

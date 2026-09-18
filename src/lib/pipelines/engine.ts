@@ -5643,10 +5643,15 @@ export async function patchPipeline(
   });
 }
 
-/** A stage attempt whose turn is under way, so its conversation can still say
-    how the stage ended. Everything else has settled, and a settled attempt
-    holds the verdict the graph already routed on. */
-const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running", "reviewing", "committing"]);
+/** A run attempt whose own turn is under way, so its conversation can still
+    say how the stage ended. Every other state counts as settled, and a settled
+    attempt holds the verdict the graph already routed on. `committing` is one
+    of them: settleStageVerdict writes `attempt.verdict` and only then marks
+    that state, so an attempt found committing has already answered, and a call
+    taken there would record a second answer over the verdict the graph routed
+    on. `reviewing` is a review-loop state, and a review-loop stage is refused
+    by kind in {@link resolveStageCompletionTarget}. */
+const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running"]);
 
 export type StageCompletionRequest = StageCompletionInput & { stageId?: unknown };
 
@@ -5668,6 +5673,14 @@ export type StageCompletionResult = {
 };
 
 type StageCompletionTarget = { pipeline: Pipeline; stageId: string; attempt: PipelineStageAttempt };
+
+/** The kind the graph gives the stage an attempt belongs to, or null once an
+    edit has removed that stage. An attempt's bound definition never carries a
+    kind (attemptStage keeps the stage's identity), so the graph is the only
+    place this can be read from. */
+function stageKindOf({ pipeline, stageId }: StageCompletionTarget): PipelineStage["kind"] | null {
+  return pipeline.stages.find((stage) => stage.id === stageId)?.kind ?? null;
+}
 
 /** Which attempt a completion call is about, decided from the conversation the
     server attributed the call to. Nothing the caller says takes part beyond
@@ -5698,14 +5711,33 @@ function resolveStageCompletionTarget(
       slots: slots(held),
     } };
   }
-  const live = named.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
+  /* A completion is a run stage's to report. A review-loop stage's attempt
+     carries its flow's reviewer conversation (attachReviewFlowAttempt), and
+     tickReviewStage settles it from the flow's own outcome and never reads a
+     report — so a reviewer's call would be recorded on the attempt and shown
+     on the card while nothing acted on it. A stage an edit has since removed
+     from the graph is refused the same way: it has nothing left to route. */
+  const runStages = named.filter((candidate) => stageKindOf(candidate) === "run");
+  if (runStages.length === 0) {
+    const other = named.at(-1)!;
+    const kind = stageKindOf(other);
+    return { refusal: {
+      error: kind === "review-loop"
+        ? `stage ${other.stageId} is a review-loop stage, whose completion its review flow decides; only a run stage's own attempt reports its completion`
+        : `stage ${other.stageId} is no longer a stage of this pipeline's graph, so it has no completion to report`,
+      status: 403,
+      code: "STAGE_REPORT_NOT_A_RUN_STAGE",
+      slots: slots(named),
+    } };
+  }
+  const live = runStages.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
   if (live.length === 0) {
-    const settled = named.at(-1)!;
+    const settled = runStages.at(-1)!;
     return { refusal: {
       error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
       status: 409,
       code: "STAGE_REPORT_SETTLED",
-      slots: slots(named),
+      slots: slots(runStages),
     } };
   }
   if (live.length > 1) {
@@ -5725,7 +5757,10 @@ function resolveStageCompletionTarget(
  * The caller is resolved server-side: the calling conversation is matched to
  * the attempt it is running, so a conversation cannot report for a stage it
  * does not hold and `stageId` is needed only to disambiguate a conversation
- * that holds more than one. The call records an intent: it writes the verdict
+ * that holds more than one. What can report is a run stage's live attempt: a
+ * review-loop stage's attempt holds its flow's reviewer conversation and is
+ * settled from the flow's own outcome, so a call there is refused with
+ * STAGE_REPORT_NOT_A_RUN_STAGE. The call records an intent: it writes the verdict
  * on the attempt and returns, and the attempt settles when its turn completes,
  * on the existing lifecycle-aware path. A second call before settlement replaces the
  * first, and a call after it is refused, because by then the verdict is the

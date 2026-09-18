@@ -2717,10 +2717,11 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation.",
   stage_report: [
-    "Report the completion of the pipeline stage THIS conversation is running.",
+    "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
     "Findings are returned and shown most severe first; pass cannot carry findings.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
+    "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
     "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "A fenced JSON verdict in the final turn remains the second input of the same form; when both exist, this call wins.",
@@ -3034,7 +3035,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("pass when the stage contract is complete, fail for a retryable stage failure, needs_decision when operator judgment is required."),
     findings: z.array(z.object({
       severity: z.enum(STAGE_FINDING_SEVERITIES).describe("P0 highest, P3 lowest. Findings are ranked by it."),
-      text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS).describe("What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself."),
+      text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS).describe(
+        `What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself. A finding is recorded in its rendered form "P1 — text", and the ${MAX_STAGE_FINDING_CHARS}-character bound is on that form, so a text within five characters of it keeps its rank and loses that tail.`,
+      ),
     })).max(MAX_STAGE_REPORT_FINDINGS).optional()
       .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings."),
     summary: z.string().max(MAX_STAGE_REPORT_SUMMARY_CHARS).optional()

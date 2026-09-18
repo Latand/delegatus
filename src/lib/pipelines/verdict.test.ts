@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { StageVerdict } from "./types";
-import { normalizeStageCompletion, parseStageVerdict, stageVerdictFrom, stageVerdictRejectionReason } from "./verdict";
+import { normalizeStageCompletion, parseStageVerdict, stageFindingFromText, stageVerdictFrom, stageVerdictRejectionReason } from "./verdict";
 
 test("stage verdict guard accepts the bounded contract", () => {
   expect(stageVerdictFrom({ status: "pass", findings: ["verified"], confidence: 0.9 })).toEqual({
@@ -291,7 +291,7 @@ test("findings are recorded most severe first, whichever input carried them", ()
     summary: null,
   });
   /* The same order out of a fenced block, and unranked findings come last. */
-  expect(stageVerdictFrom({ status: "fail", findings: ["P2 - third", "no rank at all", "P0 first"] })).toEqual({
+  expect(stageVerdictFrom({ status: "fail", findings: ["P2 - third", "no rank at all", "P0: first"] })).toEqual({
     status: "fail",
     findings: ["P0 — first", "P2 — third", "no rank at all"],
     rankedFindings: [
@@ -343,10 +343,47 @@ test("a rankedFindings field in an agent's own fenced block is ignored, and a re
 });
 
 test("a finding already at the bound survives the rendering, and the record re-derives itself", () => {
-  /* `P1-` renders as `P1 — `, which is two characters longer: clamping the
+  /* `P1: ` renders as `P1 — `, which is one character longer: clamping the
      rendering is what keeps the record loadable. */
-  const verdict = stageVerdictFrom({ status: "fail", findings: [`P1-${"x".repeat(1_997)}`] })!;
+  const verdict = stageVerdictFrom({ status: "fail", findings: [`P1: ${"x".repeat(1_996)}`] })!;
   expect(verdict.findings![0]!.length).toBe(2_000);
   expect(verdict.rankedFindings).toEqual([{ severity: "P1", text: "x".repeat(1_995) }]);
+  expect(stageVerdictFrom(verdict)).toEqual(verdict);
+});
+
+test("prose that opens on a severity keeps its own words, and is recorded unranked", () => {
+  /* Both are findings ABOUT ranks. Read as ranked, each would be rewritten:
+     "P1 — based scoring is wrong" and "P0 — through P3 are undefined". */
+  for (const text of ["P1-based scoring is wrong", "P0 through P3 are undefined"]) {
+    expect(stageFindingFromText(text)).toEqual({ severity: null, text });
+    expect(stageVerdictFrom({ status: "fail", findings: [text] })).toEqual({ status: "fail", findings: [text] });
+  }
+  /* The separators a reviewer does write still carry the rank. */
+  expect(stageVerdictFrom({ status: "fail", findings: ["P1 — em dash", "P2 - hyphen", "P3: colon"] })).toEqual({
+    status: "fail",
+    findings: ["P1 — em dash", "P2 — hyphen", "P3 — colon"],
+    rankedFindings: [
+      { severity: "P1", text: "em dash" },
+      { severity: "P2", text: "hyphen" },
+      { severity: "P3", text: "colon" },
+    ],
+  });
+});
+
+test("a finding text at the schema's own bound is accepted, clamped by the rank it is rendered with", () => {
+  /* The MCP schema bounds `text` at 2000; the record keeps `P1 — text`, five
+     characters longer. Refusing that call would name neither field nor bound. */
+  const called = normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "x".repeat(2_000) }] });
+  expect(called).toEqual({
+    verdict: {
+      status: "fail",
+      findings: [`P1 — ${"x".repeat(1_995)}`],
+      rankedFindings: [{ severity: "P1", text: "x".repeat(1_995) }],
+    },
+    summary: null,
+  });
+  const verdict = (called as { verdict: StageVerdict }).verdict;
+  expect(verdict.findings![0]!.length).toBe(2_000);
+  /* And the record it produced re-derives itself, byte for byte, on reload. */
   expect(stageVerdictFrom(verdict)).toEqual(verdict);
 });
