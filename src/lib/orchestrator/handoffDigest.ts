@@ -311,21 +311,10 @@ export type MandatePreflight =
  * spawn mode places after the scaffold and existing mode delivers, so a
  * mandate that passes here cannot fail the envelope assertion afterwards, and
  * one that fails never becomes a pending intent.
- *
- * `viewerSeat` travels with the mandate because what delivery appends depends
- * on it (#1745): the Viewer's own seat is handed the deploy section on top of
- * its mandate and every other project's delivery has it taken off. The caller
- * resolves it once, from the seat's project, and hands the SAME answer to this
- * and to the delivery itself, so the bytes counted are the bytes sent.
  */
-export function mandatePreflight(
-  mandate: string,
-  mode: "spawn" | "existing",
-  roleParams: unknown,
-  { viewerSeat = false }: { viewerSeat?: boolean } = {},
-): MandatePreflight {
+export function mandatePreflight(mandate: string, mode: "spawn" | "existing", roleParams: unknown): MandatePreflight {
   const overhead = launchOverheadBytes(mode, roleParams);
-  const bytes = byteLength(orchestratorMandateForDelivery(mandate, { viewerSeat }));
+  const bytes = byteLength(orchestratorMandateForDelivery(mandate));
   const excess = bytes + overhead - MAX_STRUCTURED_TEXT_BYTES;
   return excess > 0
     ? { ok: false, bytes, overhead, bound: MAX_STRUCTURED_TEXT_BYTES, excess }

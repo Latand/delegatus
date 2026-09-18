@@ -32,12 +32,12 @@
  * itself — `taskIds` on create_pipeline, `taskId` on spawn_agent — because a
  * launch that names no task is recorded somewhere else: on the card of a
  * conversation it names as parent or reviews, or on a placeholder card of its
- * own. v15 (#1745) takes the Deploys section out of the shared body: it
- * describes deploying Agent Log Viewer itself, every project's manager was
- * receiving it, and a manager of an unrelated project read it as the way to
- * deploy its own project. It is a delivered directive now, scoped to the
- * Viewer's own seat, and a delivery to any other project strips the copy its
- * stored mandate already carries. */
+ * own. v16 (#1760) deletes the Deploys section outright. It described
+ * deploying Agent Log Viewer itself, this mandate is the prompt for a manager
+ * of ANY project, and scoping the section to the Viewer's own seat (v15, #1745)
+ * answered a question mandate delivery has no business asking. The protocol it
+ * carried lives in the Viewer checkout's own `llv-conveyor` skill, which the
+ * fences below already name as that checkout's playbook. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -53,7 +53,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 15;
+export const ORCHESTRATOR_PROMPT_VERSION = 16;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -189,36 +189,18 @@ ONE OUTCOME NEVER SHOWS TWO LIVE CLAIMS. When you supersede work — a fresh pip
 RECEIPTS ARE THE RECORD. Every one of these calls is keyed by clientRequestId. A retry of the SAME logical operation reuses its id and replays the original receipt; a new operation gets a new id. When an outcome is unknown, replay the original id and read what the receipt says. Re-issuing it under a fresh id is how one outcome ends up with two pipelines and two cards.`;
 
 /**
- * Identifies the deploy section below inside a mandate, however its body was
- * edited — and, unlike the two headings above, it is also what delivery REMOVES
- * a section by (#1745).
+ * The `## Deploys` section exactly as it shipped in the shared mandate body up
+ * to v15 (#1760).
  *
- * The literal is the heading the section has always carried, and it has to stay
- * that literal: thirteen other projects' stored mandates carry `## Deploys`
- * today, and recognizing it is the only thing that takes it back off them.
- * The cost of a heading that short is that a manager's own `## Deploys` section
- * about ITS project's release process is removed too — the operator's call,
- * because what that seat loses is a paragraph it wrote, while what it keeps
- * otherwise is an instruction to deploy someone else's production.
+ * It described deploying Agent Log Viewer itself, and every project's stored
+ * mandate that was composed from the default body carries these bytes today.
+ * Delivery removes them by exact string match and by nothing else: no heading
+ * is parsed, so a seat's own section about its own project's release survives
+ * whatever it is called, and a mandate whose copy was reworded keeps its
+ * wording — the only text this knows how to take back is the text the Viewer
+ * put there.
  */
-export const ORCHESTRATOR_VIEWER_DEPLOYS_HEADING = "## Deploys";
-
-/**
- * Deploying Agent Log Viewer itself (#795 contract, scoped by #1745).
- *
- * Delivered ONLY to a seat whose project is the Viewer's own. The tool it names
- * deploys the repository that serves the Viewer and nothing else, so in any
- * other project's mandate this section is an instruction to replace a
- * production the seat does not own — which is what #1321 refuses server-side,
- * and what this stops the prompt from proposing in the first place.
- *
- * The general "never ask the operator to confirm" rule does not leave with it:
- * the start-by-default pipeline contract in the shared body carries that for
- * every project. What leaves is the commit-hash confirmation, which only a
- * Viewer deploy ever had.
- */
-export const ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE = `${ORCHESTRATOR_VIEWER_DEPLOYS_HEADING}
-This section is about deploying Agent Log Viewer itself — the application serving this board — and about no other project's release.
+const SHIPPED_DEPLOYS_SECTION = `## Deploys
 YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.
 1. Prepare: merges landed on origin/main, gates green. Never deploy red.
 2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.
@@ -292,116 +274,11 @@ When the operator asks for work, assess complexity, compose stages/roles, POST /
     reworded the body under it keeps their wording; the initial-status contract
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
-const DELIVERED_DIRECTIVES: readonly {
-  marker: string;
-  directive: string;
-  /** Delivered only to the Viewer's own project's seat, and REMOVED from every
-      other project's delivery. Such a marker is a heading line, because the
-      removal has to find where the section starts and where it ends. */
-  viewerOnly?: true;
-}[] = [
-  { marker: ORCHESTRATOR_VIEWER_DEPLOYS_HEADING, directive: ORCHESTRATOR_VIEWER_DEPLOYS_DIRECTIVE, viewerOnly: true },
+const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
   { marker: ORCHESTRATOR_TASK_OWNERSHIP_HEADING, directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { marker: ORCHESTRATOR_VIEWER_CLOCK_HEADING, directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { marker: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
-
-/** A Markdown heading line and its level, or 0 when the line is not a heading.
-    The shape matches what `normalizeMarkers` in `handoffDigest.ts` neutralizes,
-    so the two modules agree on what counts as a heading. */
-function headingLevel(line: string): number {
-  return /^(#{1,6})[ \t]+/.exec(line)?.[1]!.length ?? 0;
-}
-
-/** A fenced code block's delimiter: three or more backticks or tildes, indented
-    by at most three spaces. An opening backtick fence's info string may not
-    itself contain a backtick; a closing fence carries no info string at all. */
-function fenceDelimiter(line: string): { char: string; length: number; info: string } | null {
-  const match = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-  if (!match) return null;
-  return { char: match[1]![0]!, length: match[1]!.length, info: match[2]!.trim() };
-}
-
-/**
- * The heading level of every line, with fenced code blocks blanked out.
- *
- * A mandate is prose that quotes commands, and a fenced block is where a `#`
- * comment or a `### ` in a sample lives. Such a line is not a section boundary:
- * treating one as a heading would end the deploy section early and leave the
- * rest of it — `deploy_exact_sha` and all — in a foreign project's delivery.
- */
-function headingLevels(lines: readonly string[]): number[] {
-  let open: { char: string; length: number } | null = null;
-  return lines.map((line) => {
-    const delimiter = fenceDelimiter(line);
-    if (open) {
-      if (delimiter && delimiter.char === open.char && delimiter.length >= open.length && !delimiter.info) open = null;
-      return 0;
-    }
-    if (delimiter && !(delimiter.char === "`" && delimiter.info.includes("`"))) {
-      open = { char: delimiter.char, length: delimiter.length };
-      return 0;
-    }
-    return headingLevel(line);
-  });
-}
-
-/** The lines at which this heading opens a section of the mandate. Anchored to
-    a whole line and outside fenced blocks, unlike the substring test the
-    every-project directives use: prose that mentions `## Deploys` mid-sentence
-    is not a section, and treating it as one would withhold the real section
-    from the seat entitled to it. */
-function sectionStarts(lines: readonly string[], heading: string): number[] {
-  const levels = headingLevels(lines);
-  const starts: number[] = [];
-  lines.forEach((line, index) => {
-    if (levels[index]! > 0 && line.trimEnd() === heading) starts.push(index);
-  });
-  return starts;
-}
-
-/** Whether a heading names a section of this mandate. */
-function carriesSection(mandate: string, heading: string): boolean {
-  return sectionStarts(mandate.split("\n"), heading).length > 0;
-}
-
-/**
- * The mandate with EVERY section this heading names removed — each heading line
- * and everything under it up to the next heading of the same or shallower
- * level, and nothing beyond that.
- *
- * Three things a reworded section does that a single pass to the next heading
- * of any level got wrong, each of which left `deploy_exact_sha` text in a
- * foreign project's delivered mandate: a `### ` sub-heading belongs to the
- * section it sits under, a heading-looking line inside a fenced block is not a
- * heading at all, and a mandate that carries the section twice must lose both
- * copies. Removal repeats until the heading names nothing left in the text.
- *
- * The body is never compared: a caller who reworded it under the recognised
- * heading wrote their own version of the same section, and this is a delivery
- * that must not carry either version. Everything from the next heading of the
- * marker's own level onwards survives byte for byte.
- */
-function withoutSection(mandate: string, heading: string): string {
-  const level = headingLevel(heading);
-  let lines = mandate.split("\n");
-  /* Mid-mandate the removed range takes the blank line that separated the
-     section from the next heading with it, so the seam already reads right; a
-     section that ran to the end of the mandate leaves the blank line that
-     preceded it. */
-  let reachedEnd = false;
-  for (;;) {
-    const levels = headingLevels(lines);
-    const start = sectionStarts(lines, heading)[0];
-    if (start === undefined) break;
-    let end = start + 1;
-    while (end < lines.length && !(levels[end]! > 0 && levels[end]! <= level)) end += 1;
-    reachedEnd ||= end === lines.length;
-    lines = [...lines.slice(0, start), ...lines.slice(end)];
-  }
-  const kept = lines.join("\n");
-  return reachedEnd ? kept.trimEnd() : kept;
-}
 
 /** Every seat receives the initial-status contract, the clock handover AND the
     task-ownership section (#1720), whatever mandate it holds. Each is appended
@@ -413,23 +290,19 @@ function withoutSection(mandate: string, heading: string): string {
     cannot say which paragraphs a mandate actually contains. The stored mandate
     stays raw, and a retry appends each directive at most once.
 
-    `viewerSeat` decides the one directive that is not for everybody (#1745):
-    the Viewer's own seat receives the deploy section, every other project's
-    delivery has it removed — including the thirteen stored mandates that carry
-    it from the years it lived in the shared body. The caller answers that
-    question with `isViewerOwnProject` in `viewerProject.ts`, which reads the
-    same Viewer-project resolver the deploy refusal does; it is not answered
-    here because this module is also imported by the seat's client surfaces,
-    which cannot reach the server's own state. Delivering to no named seat is not
-    delivering to the Viewer's, which is the safe direction: the section is
-    withheld rather than guessed into place. */
-export function orchestratorMandateForDelivery(
-  mandate: string,
-  { viewerSeat = false }: { viewerSeat?: boolean } = {},
-): string {
-  return DELIVERED_DIRECTIVES.reduce((text, { marker, directive, viewerOnly }) => {
-    if (viewerOnly && !viewerSeat) return withoutSection(text, marker);
-    const carried = viewerOnly ? carriesSection(text, marker) : text.includes(marker);
-    return carried ? text : `${text}\n\n${directive}`;
-  }, mandate);
+    Delivery also takes one thing OFF the mandate (#1760): the `## Deploys`
+    section as it shipped in the body up to v15, which told every project's
+    manager how to deploy Agent Log Viewer. A stored mandate composed from that
+    body is replayed verbatim on a pending retry and carried through a rotation,
+    so the version bump alone would leave those bytes in front of managers who
+    must never read them. The removal is an exact string match against what
+    shipped, and delivery asks nothing about whose project this is. */
+export function orchestratorMandateForDelivery(mandate: string): string {
+  const withoutShippedDeploys = mandate
+    .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
+    .split(SHIPPED_DEPLOYS_SECTION).join("");
+  return DELIVERED_DIRECTIVES.reduce(
+    (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
+    withoutShippedDeploys,
+  );
 }
