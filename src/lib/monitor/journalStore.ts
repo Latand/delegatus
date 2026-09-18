@@ -35,8 +35,8 @@ import {
  * along with the CLI. There is one clock now and it lives in the release that
  * owns traffic, so the contention that lock existed for cannot arise — and a
  * lock file kept for a contender that no longer exists is a thing to leak, not
- * a safety net. `MonitorDeps.claim` is where a future driver states how it
- * serializes itself instead.
+ * a safety net. A future driver that needs serialization states how it does
+ * it in its own deps.
  */
 
 /** Runs retained before the oldest are dropped. */

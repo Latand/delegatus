@@ -11,13 +11,13 @@ import type { MonitorRunRecord } from "./types";
  * release that owns traffic, so there is no second process to speak HTTP to
  * anything, and `httpViewerApi` retired with the CLI that was its only caller.
  *
- * What survives is the interface and its row shapes. `evidence.ts`,
- * `seatTickSources.ts` and `run.ts` are typed against them, and they are the
+ * What survives is the interface and its row shapes. `evidence.ts` and
+ * `seatTickSources.ts` are typed against them, and they are the
  * honest description of what the scan needs: a driver supplies them from
  * wherever it actually has them — in-process readers for anything inside the
  * Viewer, a fake in a test — rather than from one transport this module
- * hard-coded. The single-flight lock went the same way and for the same reason
- * (see {@link MonitorDeps.claim}): one clock in one process needs no lock, and
+ * hard-coded. The single-flight lock went the same way and for the same
+ * reason: one clock in one process needs no lock, and
  * a lock kept for a driver that does not exist is a file to leak.
  */
 

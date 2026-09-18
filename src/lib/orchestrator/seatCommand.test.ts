@@ -21,7 +21,6 @@ import {
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
 } from "./prompt";
-import { setRetireManagerForTests } from "./retire";
 import {
   executeOrchestratorRotation,
   executeOrchestratorSeatRequest,
@@ -32,25 +31,13 @@ import { activeOrchestratorSeats, orchestratorRevocations, orchestratorSeatFor, 
 
 let sandbox = "";
 let previousStateDir: string | undefined;
-/** Every host-retirement the production module would perform, observed at the
-    REAL seam (`setRetireManagerForTests`), so a mutation that reintroduces a
-    retireOutgoingManager call anywhere in the seat flow turns the axis-1
-    assertions red instead of silently killing a real agent. */
-let retiredHosts: string[] = [];
-
 beforeEach(() => {
   previousStateDir = process.env.LLV_STATE_DIR;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-command-"));
   process.env.LLV_STATE_DIR = sandbox;
-  retiredHosts = [];
-  setRetireManagerForTests(async (conversationId) => {
-    retiredHosts.push(conversationId);
-    return "killed";
-  });
 });
 
 afterEach(() => {
-  setRetireManagerForTests(null);
   setAgentRegistryForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
@@ -618,9 +605,8 @@ test("AXIS 1/2 SEPARATION: replacement revokes MANAGER-LEVEL authority only — 
   expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(OLD_ID);
   /* …and its host and ordinary Viewer access are left exactly as they were:
      revocation is an axis-2 act, killing a session would be an axis-1 one.
-     Observed at the REAL retire seam, so a production call to
-     retireOutgoingManager anywhere in this flow turns this red. */
-  expect(retiredHosts).toEqual([]);
+     The seat flow holds no retirement path at all now (#1761 deleted the
+     unused retire module), so there is nothing here that could touch it. */
 });
 
 test("an unknown existing conversation is refused before any intent exists", async () => {
@@ -707,7 +693,6 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
     conversationId: NEW_ID,
     successorConversationId: SUCCESSOR,
   })]);
-  expect(retiredHosts).toEqual([]);
 });
 
 /* #1452: the recorded version follows the TEXT. A stale seat rotated onto the
