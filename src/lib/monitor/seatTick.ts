@@ -13,6 +13,7 @@ import {
   type SeatTickEventInput,
   type SeatTickEvidenceGap,
   type SeatTickItem,
+  type SeatTickOwnLaneInput,
   type SeatTickPipelineInput,
   type SeatTickPolicy,
   type SeatTickProjectState,
@@ -207,8 +208,12 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
   return input.pipelines.some(isOpenLane)
     || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
     || input.pullRequests.length > 0
+    || ownSettledLanes(input).length > 0
     || input.children.some(isRunningChild)
-    || input.children.some(isTerminalChild);
+    /* A stale child is not open work either (#1749): its outcome belongs to a
+       seat that has been retired for weeks, and counting it keeps a board with
+       nothing left on it from ever being able to say so. */
+    || input.children.some((child) => isTerminalChild(child) && !(input.seat && isStaleChild(child, input.seat)));
 }
 
 /**
@@ -334,6 +339,72 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
     }
   }
   return found;
+}
+
+/** A day, the grace the designation clock is read with (#1749). */
+const STALE_CHILD_GRACE_MS = 24 * 60 * MINUTE_MS;
+
+/**
+ * Whether a terminal child's outcome belongs to THIS seat's board (#1749).
+ *
+ * Two ways it does not, and each was in the evidence the issue was filed on.
+ * The first is age: a wake to seat epoch 173 listed five children that finished
+ * on the 4th and 5th of September, whose handoffs had been delivered to the
+ * manager of that day and receipted. A terminal instant more than a day older
+ * than the seat's own designation is a fact about a predecessor's board; this
+ * seat cannot harvest it, and every wake that carried one spent five item slots
+ * saying so.
+ *
+ * The second is the harvest itself. An outcome identity is a turn of a ledger
+ * generation, so a child re-read from a fresh cursor mints a NEW owed outcome
+ * for an outcome that was consumed weeks ago — which is how one child reached
+ * the same wake twice, once as failed and once as finished. The stamp a landed
+ * wake leaves on the child answers it: an earlier epoch harvested this
+ * conversation, and nothing has happened to it since.
+ *
+ * Both are narrow on purpose, and both are measured against the designation. A
+ * child that went terminal after this seat was designated is owed however many
+ * earlier outcomes a predecessor took — a worker re-instructed since the
+ * rotation is exactly that case — and a seat with no readable designation
+ * instant, or a child with no readable terminal instant, stales nothing at all.
+ * The rule may cost a wake an item it should have carried in none of them.
+ */
+function isStaleChild(child: SeatTickChildInput, seat: SeatTickSeatInput): boolean {
+  const terminalAt = child.terminalAt ? Date.parse(child.terminalAt) : Number.NaN;
+  const designatedAt = seat.designatedAt ? Date.parse(seat.designatedAt) : Number.NaN;
+  if (!Number.isFinite(terminalAt) || !Number.isFinite(designatedAt)) return false;
+  if (terminalAt < designatedAt - STALE_CHILD_GRACE_MS) return true;
+  /* The harvest narrows the same window rather than opening a second one. A
+     child an earlier epoch already took needs no day of grace — the outcome was
+     consumed before this seat existed — but an outcome recorded AFTER the
+     designation is this seat's work whatever a predecessor took, which is what
+     keeps a child re-instructed since the rotation owed. */
+  return typeof child.harvestedEpoch === "number" && child.harvestedEpoch < seat.seatEpoch && terminalAt < designatedAt;
+}
+
+/**
+ * The seat's own settled lanes that are still standing (#1749).
+ *
+ * The backlog bound is the one {@link isUnstarted} applies to an assigned card,
+ * and for the same reason: "the seat launched a lane and it completed" is true
+ * for ever, so without a bound it is a wake reason nothing can discharge. Past
+ * the bound the lane is history; inside it, closing, dismissing or moving the
+ * lane is what discharges it, and each of those makes it recent again.
+ */
+function ownSettledLanes(input: SeatTickCheckInput): readonly SeatTickOwnLaneInput[] {
+  return input.ownLanes.filter((lane) => {
+    const movedAt = lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN;
+    return Number.isFinite(movedAt) && input.now - movedAt < input.policy.backlogAfterMs;
+  });
+}
+
+function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
+  const settled = lane.settled === "completed"
+    ? "completed, and nobody has closed it out"
+    : lane.settled === "failed"
+      ? "a stage failed"
+      : "parked on a decision";
+  return `${lane.title} — lane you launched: ${settled}`;
 }
 
 /** The terminal children in harvest order: the one that finished first is
@@ -682,7 +753,13 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      two attempts is never called stuck. */
   const persistedStalls = stalled.filter((entry) => input.state.stalledSeen.includes(entry.pipeline.id));
   const persistedChildStalls = stalledKids.filter((entry) => input.state.stalledSeen.includes(childStallId(entry.child)));
-  const harvest = terminalChildren(input);
+  const ownLanes = ownSettledLanes(input);
+  /* The harvest, minus the children that are not this seat's to harvest
+     (#1749). The skipped ones are counted and never named: a wake that listed
+     them is precisely the wake this issue was filed on. */
+  const settledChildren = terminalChildren(input);
+  const harvest = settledChildren.filter((child) => !isStaleChild(child, input.seat!));
+  const staleChildren = settledChildren.length - harvest.length;
   const unknownChildren = input.children.filter((child) => child.status === "unknown").length;
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
   const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned).length - unstarted.length;
@@ -726,6 +803,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        by the check itself at no cost, and the check that reaches it names it.
        A wake that says only "something is waiting further down" is the empty
        agenda this whole mechanism exists to stop sending. */
+    /* First, and ahead of the lane events, because it is the seat's own work
+       (#1749): a lane it launched that settled and is standing there is the
+       obligation the tick was blind to for the whole of the evidence in that
+       issue, while five slots went to children of seats two weeks retired. */
+    if (ownLanes.length > 0) {
+      const first = ownLanes[0]!;
+      const more = ownLanes.length > 1 ? ` and ${ownLanes.length - 1} more` : "";
+      candidates.push({ kind: "own-lane-settled", detail: `a lane you launched is ${first.settled}${more}` });
+    }
     if (laneEvents.length > 0) {
       const first = laneEvents[0]!;
       const more = laneEvents.length > 1 ? ` and ${laneEvents.length - 1} more` : "";
@@ -831,13 +917,14 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
-    const all = wakeItems({ input, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, laneEvents, unstarted });
+    const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, laneEvents, unstarted });
     return {
       verdict: {
         kind: "wake",
         reasons,
         items: all.slice(0, input.policy.itemsPerWake),
         deferred: Math.max(0, all.length - input.policy.itemsPerWake),
+        staleChildren,
         gaps,
       },
       state,
@@ -903,8 +990,25 @@ function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
   return { ...state, quietSince: state.quietSince ?? at };
 }
 
+/**
+ * The agenda, in the order the per-wake bound cuts it (#1749).
+ *
+ * The bound is five, and the order is therefore the whole of what a seat is
+ * told. It used to run lane events, then every unharvested child, then the
+ * pull requests and the parked lanes — so a seat holding forty historical
+ * children got five of those and nothing else, check after check, while its own
+ * completed lane sat on an approved pull request nobody merged and a second
+ * lane stood parked on a decision.
+ *
+ * So the seat's OWN settled work goes first: the lanes it launched that
+ * settled, then the pull requests their finishing left open. Both are bounded
+ * by what the seat itself started, both are things only this seat can close
+ * out, and putting them at the head is what makes "always fits in the item
+ * window" true without a second budget — the slice below takes the head.
+ */
 function wakeItems(context: {
   input: SeatTickCheckInput;
+  ownLanes: readonly SeatTickOwnLaneInput[];
   stalled: { pipeline: SeatTickPipelineInput; reason: string }[];
   stalledChildren: { child: SeatTickChildInput; reason: string }[];
   /** Terminal children in harvest order, oldest outcome first. */
@@ -914,6 +1018,26 @@ function wakeItems(context: {
 }): SeatTickItem[] {
   const { input } = context;
   const items: SeatTickItem[] = [];
+  /* Named, not merely counted (#1289). The twelve hours were spent because the
+     seat had no way to know a pull request was waiting; a wake that says one is
+     and leaves the seat to rediscover which would have cost most of the same
+     turn. The lane that produced it travels with it for the same reason. */
+  for (const pullRequest of input.pullRequests) {
+    items.push({
+      kind: "pull-request",
+      id: `#${pullRequest.number}`,
+      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
+    });
+  }
+  /* A lane whose open pull request is already on the agenda is that pull
+     request: the item above names the lane it came from and says what to do
+     with it, and spending a second of five slots to say the lane it names
+     completed is how an agenda of five carries three facts. */
+  const pulled = new Set(input.pullRequests.map((pullRequest) => pullRequest.pipelineId));
+  for (const lane of context.ownLanes) {
+    if (pulled.has(lane.id)) continue;
+    items.push({ kind: "pipeline", id: lane.id, label: ownLaneLabel(lane) });
+  }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}` });
   }
@@ -926,17 +1050,6 @@ function wakeItems(context: {
       id: child.conversationId,
       outcomeId: child.outcomeId,
       label: `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`,
-    });
-  }
-  /* Named, not merely counted (#1289). The twelve hours were spent because the
-     seat had no way to know a pull request was waiting; a wake that says one is
-     and leaves the seat to rediscover which would have cost most of the same
-     turn. The lane that produced it travels with it for the same reason. */
-  for (const pullRequest of input.pullRequests) {
-    items.push({
-      kind: "pull-request",
-      id: `#${pullRequest.number}`,
-      label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished`,
     });
   }
   for (const entry of context.stalled) {

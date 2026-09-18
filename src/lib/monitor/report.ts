@@ -80,10 +80,21 @@ export function renderMonitorReport(input: ReportInput): string {
  * what it found and the seat supplies the judgement.
  *
  * The contract at the foot is the same in both briefs, and each clause answers
- * a way the session-scheduled version actually failed: it acted outside the
- * items it was woken for, it left outcomes only in its own transcript, it kept
- * re-running an action that had already failed, it re-armed its own schedule,
- * and it once stopped inside a tick to ask the operator a question.
+ * a way the session-scheduled version actually failed: it left outcomes only in
+ * its own transcript, it kept re-running an action that had already failed, it
+ * re-armed its own schedule, and it once stopped inside a tick to ask the
+ * operator a question.
+ *
+ * The first clause used to read "act on the listed items only, and nothing else
+ * this turn", and #1749 is what that cost. A seat woken with five items derived
+ * from a board of forty-odd read the line as a fence: its own pipeline sat
+ * completed with an approved pull request unmerged, a second lane was parked on
+ * a decision and a third had just failed to spawn a review, and the seat left
+ * all three standing because none of them was on the list. The items are what
+ * the tick could see and rank; the board is what the seat can. So the listed
+ * items come first — they are the sharpest evidence anyone has — and the turn
+ * ends with one bounded pass over the rest, with the reads it takes named so
+ * that pass is a fixed cost rather than an invitation to wander.
  *
  * The clause about the settings is there because the pair "do not schedule
  * yourself" and "nothing can quiet the schedule armed for you" is what #1275
@@ -142,7 +153,9 @@ function boundedSeatTickMessage(dynamic: readonly string[], reserved: readonly s
 /** Exported so a regression can assert EVERY clause survived a bounded wake,
     including the ones a hand-written list would miss. */
 export const SEAT_TICK_CONTRACT = [
-  "Act on the listed items only, and nothing else this turn.",
+  "Handle the listed items first, then make ONE bounded pass over this project's whole board and act on what stands still: "
+    + "list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, "
+    + "list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
   "Record every outcome where it belongs — on the board card or on the pipeline — not only in this conversation.",
   "If an item cannot be done, mark its task blocked with the reason. That is the stop, and it is the only one.",
   "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.",
@@ -196,6 +209,10 @@ export function seatTickWakeMessage(input: {
   reasons: readonly SeatTickWakeReason[];
   items: readonly SeatTickItem[];
   deferred: number;
+  /** Terminal children the check declined to list (#1749). Said as one line
+      and no more: naming them is what filled six consecutive wakes with work
+      that had been harvested a fortnight earlier. */
+  staleChildren?: number;
   signals: readonly SeatTickSignalInput[];
   /** Evidence this check could not read (#1298). The reasons above stand
       without it, and the seat is told what is missing from the picture rather
@@ -220,6 +237,9 @@ export function seatTickWakeMessage(input: {
   lines.push("", "Items:", ...input.items.map(seatTickBullet));
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
+  }
+  if (input.staleChildren && input.staleChildren > 0) {
+    lines.push(`(${input.staleChildren} spawned child(ren) not listed: their outcomes predate this seat's designation or an earlier seat epoch harvested them.)`);
   }
   if (input.signals.length > 0) {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));

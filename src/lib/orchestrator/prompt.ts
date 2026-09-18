@@ -37,7 +37,13 @@
  * of ANY project, and scoping the section to the Viewer's own seat (v15, #1745)
  * answered a question mandate delivery has no business asking. The protocol it
  * carried lives in the Viewer checkout's own `llv-conveyor` skill, which the
- * fences below already name as that checkout's playbook. */
+ * fences below already name as that checkout's playbook. v17 (#1749) reverses
+ * the clock paragraph's instruction for the turn itself: a wake used to end "act on the items it
+ * lists and nothing else", and a seat read that as a fence while its own
+ * completed lane, a lane parked on a decision and a lane whose review spawn had
+ * failed all stood untouched. The items still come first — they are the sharpest
+ * evidence anyone has — and the turn now ends with one bounded pass over the
+ * project's whole board. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -53,7 +59,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 16;
+export const ORCHESTRATOR_PROMPT_VERSION = 17;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -93,7 +99,7 @@ export const ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE = `${ORCHESTRATOR_VIEWER_CLOCK_
 The Viewer wakes you. A controller in the release that owns traffic checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Viewer restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
 So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
 If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see the Viewer's tick work first": while your own schedule keeps your turn open, the Viewer's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.
-Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists and nothing else, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
