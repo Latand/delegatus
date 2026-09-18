@@ -1,0 +1,220 @@
+{
+  "alternations": 12,
+  "cases": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "seat": "compact",
+      "seatHeights": null,
+      "scroll": {
+        "scrollTop": 214,
+        "maxScroll": 282,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          44
+        ],
+        "shortLength": 179,
+        "longLength": 188
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          214
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39,
+          200.39
+        ],
+        "scrollTops": [
+          214,
+          204
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "seat": "grip-expanded",
+      "seatHeights": {
+        "before": 270,
+        "after": 520
+      },
+      "scroll": {
+        "scrollTop": 464,
+        "maxScroll": 532,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          46
+        ],
+        "shortLength": 179,
+        "longLength": 188
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          46
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          464
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          46
+        ],
+        "frameTops": [
+          190.39,
+          202.39
+        ],
+        "scrollTops": [
+          464,
+          452
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    },
+    {
+      "viewport": {
+        "width": 1100,
+        "height": 800
+      },
+      "seat": "compact",
+      "seatHeights": null,
+      "scroll": {
+        "scrollTop": 182,
+        "maxScroll": 250,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          44
+        ],
+        "shortLength": 134,
+        "longLength": 143
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          182
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39,
+          200.39
+        ],
+        "scrollTops": [
+          182,
+          172
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    },
+    {
+      "viewport": {
+        "width": 1100,
+        "height": 800
+      },
+      "seat": "grip-expanded",
+      "seatHeights": {
+        "before": 240,
+        "after": 490
+      },
+      "scroll": {
+        "scrollTop": 432,
+        "maxScroll": 500,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          46
+        ],
+        "shortLength": 134,
+        "longLength": 143
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          46
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          432
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          46
+        ],
+        "frameTops": [
+          190.39,
+          202.39
+        ],
+        "scrollTops": [
+          432,
+          420
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    }
+  ],
+  "failures": []
+}
