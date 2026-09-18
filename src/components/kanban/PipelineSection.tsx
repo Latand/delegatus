@@ -9,7 +9,9 @@ import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, t
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
-import { attemptArrivals, edgeFired, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
+import { attemptArrivals, graphOrder, layoutGraph, operationalAttempts, routeEdge, STAGE_TONE, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
+import { edgeCount, stageIdentity, type EdgeCount } from "./stageIdentity";
+import { CountCircle, engineWord, FiredMark, identityTitle, StageIdentity } from "./identityMarks";
 import { ChevronRight, MaximizeGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { stageDraftable, type PipelineActionKind } from "./stagesModel";
 
@@ -284,20 +286,31 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
     const current = latestAttempt(pipeline, entry.stage.id);
     const openable = Boolean(current?.agentPath || current?.conversationId) || stageDraftable(pipeline, entry.stage.id);
     const className = `pchip tone-${STAGE_TONE[entry.state]} st-${entry.state}${branch ? " side" : ""}${selected.has(entry.stage.id) ? " selected" : ""}`;
+    /* Who runs it and how hard it thinks, without a word of text (#1743): the
+       engine mark and the effort ladder ride the chip itself. */
+    const identity = stageIdentity(pipeline, entry.stage);
     const body = (
       <>
         <i className="pdot" aria-hidden="true" />
-        <span className="pname">{branch ? t("kanban.branch", { stage: label }) : label}</span>
-        {entry.rounds ? <span className="prounds">{t("kanban.rounds", { count: entry.rounds })}</span> : null}
+        <StageIdentity
+          identity={identity}
+          density="chip"
+          name={<span className="pname">{branch ? t("kanban.branch", { stage: label }) : label}</span>}
+        />
+        {entry.rounds ? <CountCircle n={entry.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds })} /> : null}
       </>
     );
-    const aria = entry.rounds ? t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds }) : t("kanban.stageAria", { stage: label, state });
+    const aria = [
+      entry.rounds ? t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds }) : t("kanban.stageAria", { stage: label, state }),
+      identityTitle(t, identity),
+    ].join(". ");
+    const hover = `${label} · ${state} · ${identityTitle(t, identity)}`;
     return openable ? (
-      <button key={entry.stage.id} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={`${label} · ${state}`} onClick={() => onOpenStage(pipeline, entry.stage)}>
+      <button key={entry.stage.id} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={hover} onClick={() => onOpenStage(pipeline, entry.stage)}>
         {body}
       </button>
     ) : (
-      <span key={entry.stage.id} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={`${label} · ${state}`} data-index={index}>
+      <span key={entry.stage.id} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={hover} data-index={index}>
         {body}
       </span>
     );
@@ -311,16 +324,36 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
         </span>
       ))}
       {summary.loops.map((loop) => (
-        <span
-          key={`${loop.from.id}->${loop.to.id}`}
-          className="ploop fail"
-          title={t("kanban.loopTitle", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}
-        >
-          {t("kanban.loop", { from: nameOf(loop.from), to: nameOf(loop.to), fired: loop.fired, max: loop.max })}
-        </span>
+        <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
       ))}
       {branches.map((entry, index) => chip(entry, index, true))}
     </div>
+  );
+}
+
+/** The compact strip's loop chip (#1743): the leading glyph becomes the same
+    circled number the arrow draws once the edge has fired, and a spent budget
+    inverts the chip so "no return left" reads without colour.
+
+    The chip is one line on a 256 px column card, so its parts are separate: the
+    stage names truncate, and the budget — the fact the chip exists for — never
+    does. */
+export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
+  const { t } = useLocale();
+  const exhausted = loop.fired >= loop.max;
+  const title = [
+    t("kanban.loopTitle", { from, to, fired: loop.fired, max: loop.max }),
+    exhausted ? t("kanban.graph.noneLeft") : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    <span className={`ploop fail${loop.fired ? " taken" : ""}${exhausted ? " spent" : ""}`} title={title}>
+      {loop.fired
+        ? <CountCircle n={loop.fired} tone="fail" filled={!exhausted} label={t("kanban.graph.firedTitle", { count: loop.fired })} />
+        : <span className="lglyph" aria-hidden="true">↺</span>}
+      <span className="lnames">{t("kanban.loopNames", { from, to })}</span>
+      <span className="lbudget">{t("kanban.loopUsed", { fired: loop.fired, max: loop.max })}</span>
+      {exhausted ? <span className="lnone">{t("kanban.graph.noneLeft")}</span> : null}
+    </span>
   );
 }
 
@@ -334,7 +367,31 @@ const LIVE_EDGE_MS = 2_400;
  * earlier stage runs in its own lane. An edge is marked live only when a new
  * attempt arrives that it activated.
  */
-export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView }: {
+/* The identity row's text is `--text-caption`, 10 px. Below 9 px on screen it
+   stops being readable, so a host that scales the whole graph (the modal's
+   zoom) drops the model and effort WORDS at that point and keeps the mark and
+   the effort ladder, which are shapes and survive any scale. The card draws at
+   scale 1 (10 px effective) and the modal's default "fit" never goes under 0.9
+   (9 px effective), so the words are dropped only when the operator zooms out
+   by hand — 0.8 gives 8 px, and the floor of 0.7 gives 7 px. */
+const CAPTION_PX = 10;
+const MIN_LEGIBLE_PX = 9;
+
+/** How much of itself a beside fail label still draws: the whole sentence, the
+    short budget, or the circled count with the sentence in the legend. */
+type BesideForm = "long" | "short" | "badge";
+const NO_FORMS: Readonly<Record<string, BesideForm>> = {};
+
+/** Registers a beside label for measurement; a label that is not beside the
+    return lane has the box's whole width and is never measured. */
+const besideRef = (boxes: React.RefObject<Map<string, HTMLElement>>, id: string | null) =>
+  (element: HTMLElement | null) => {
+    if (!id) return;
+    if (element) boxes.current.set(id, element);
+    else boxes.current.delete(id);
+  };
+
+export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView, scale = 1 }: {
   summary: KanbanPipeline;
   names: ReadonlyMap<string, string>;
   available: number;
@@ -345,11 +402,39 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
   navigate?: boolean;
   /** Stages whose pane the sheet's lane shows. */
   inView?: ReadonlySet<string>;
+  /** The transform the host draws this graph under, so the node can tell how
+      big its text actually lands. */
+  scale?: number;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { pipeline, views } = summary;
   const layout = useMemo(() => layoutGraph(pipeline, available, force), [pipeline, available, force]);
   const nameOf = (id: string) => names.get(id) ?? id;
+  const identityWords = CAPTION_PX * scale >= MIN_LEGIBLE_PX;
+
+  /* A fail edge's label sits beside the return lane, in the width the layout
+     reserved for it. How wide the sentence actually is depends on the language
+     — Ukrainian's is half again longer than English's — and a label the box
+     cuts is worse than a short one: the remaining budget was the part that went
+     missing. So a beside label that does not fit steps down, measured rather
+     than guessed: the full sentence, then `fail n/m`, then the circled count
+     alone with the sentence moved into the legend under the graph. Each edge
+     only ever steps down, so the measurement settles. */
+  const labelBoxes = useRef(new Map<string, HTMLElement>());
+  const fitKey = `${layout.dir}|${layout.width}|${layout.labelMode}|${locale}`;
+  const [fit, setFit] = useState<{ key: string; forms: Readonly<Record<string, BesideForm>> }>({ key: fitKey, forms: {} });
+  const forms = fit.key === fitKey ? fit.forms : NO_FORMS;
+  useLayoutEffect(() => {
+    const next: Record<string, BesideForm> = { ...forms };
+    let changed = fit.key !== fitKey;
+    for (const [id, element] of labelBoxes.current) {
+      if (!element.isConnected || forms[id] === "badge") continue;
+      if (element.offsetLeft + element.offsetWidth <= layout.width + 0.5) continue;
+      next[id] = forms[id] === "short" ? "badge" : "short";
+      changed = true;
+    }
+    if (changed) setFit({ key: fitKey, forms: next });
+  });
 
   /* Live edges: the stage's own attempts that were not here on the last render
      and name the edge that activated them. The first render marks nothing, and
@@ -378,45 +463,85 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     if (clearTimer.current) clearTimeout(clearTimer.current);
   }, []);
 
-  const legend: Array<{ n: number; text: string }> = [];
+  const legend: Array<{ id: string; count: EdgeCount; text: string }> = [];
   const labels: React.ReactNode[] = [];
   const paths: React.ReactNode[] = [];
   for (const edge of layout.topology.edges) {
     const route = routeEdge(layout, edge);
     if (!route) continue;
-    const fired = edgeFired(pipeline, edge);
+    /* One rule for what an edge did: the engine's own activation provenance,
+       through `edgeCount`. A travelled edge is drawn solid in its verdict's
+       colour; one that is only configured stays dashed and muted (#1743). */
+    const count = edgeCount(pipeline, edge);
     const back = layout.topology.back.has(edge.id);
     const isLive = live.has(edge.id);
     paths.push(
       <path
         key={edge.id}
         d={route.d}
-        className={`pedge ${edge.kind}${back ? " back" : ""}${fired ? " taken" : ""}${isLive ? " live" : ""}`}
+        className={`pedge ${edge.kind}${back ? " back" : ""}${count.travelled ? " taken" : ""}${count.exhausted ? " spent" : ""}${isLive ? " live" : ""}`}
         markerEnd="url(#kb-pg-arrow)"
         data-edge={edge.id}
+        data-edge-fired={count.fired}
       />,
     );
-    const label = edgeLabel(t, edge, fired, layout.topology.branching.has(edge.from));
-    if (!label) continue;
     const style = { left: `${route.label[0]}px`, top: `${route.label[1]}px` };
-    if (edge.kind === "fail" && layout.dir === "TB" && layout.labelMode === "legend" && back) {
-      legend.push({ n: legend.length + 1, text: t("kanban.graph.legendFail", { from: nameOf(edge.from), to: nameOf(edge.to), n: fired, max: edge.maxRounds ?? 0 }) });
-      labels.push(<span key={`label-${edge.id}`} className={`pelabel ${edge.kind} badge${isLive ? " live" : ""}`} data-edge-label={edge.id} style={style} title={label.long}>{legend.length}</span>);
-    } else {
-      const beside = route.labelAxis === "v" && edge.kind === "fail" && back;
-      labels.push(
-        <span key={`label-${edge.id}`} className={`pelabel ${edge.kind}${beside ? " beside" : ""}${isLive ? " live" : ""}`} data-edge-label={edge.id} style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style} title={label.long}>
-          {edge.kind === "fail" && back ? label.long : label.short}
-        </span>,
-      );
+    const title = edgeTitle(t, edge, count, layout.topology.branching.has(edge.from));
+    const beside = route.labelAxis === "v" && edge.kind === "fail" && back;
+    /* Legend mode is the layout's own decision, taken before any text exists;
+       the step-down below is this label's, taken from what it measured. */
+    const legendMode = edge.kind === "fail" && layout.dir === "TB" && layout.labelMode === "legend" && back;
+    const measured = beside && !legendMode ? edge.id : null;
+    const form: BesideForm = measured ? forms[edge.id] ?? "long" : "long";
+    const badgeOnly = legendMode || form === "badge";
+    if (badgeOnly) {
+      /* The arrow carries the count and nothing else, so a circled number means
+         "times fired" here too. The row under the graph names the stages. */
+      legend.push({ id: edge.id, count, text: t("kanban.graph.legendFail", { from: nameOf(edge.from), to: nameOf(edge.to), n: count.fired, max: count.max ?? 0 }) });
+      if (count.travelled) {
+        labels.push(
+          <span
+            key={`label-${edge.id}`}
+            ref={besideRef(labelBoxes, measured)}
+            className={`pelabel ${edge.kind} badge${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
+            data-edge-label={edge.id}
+            data-edge-fired={count.fired}
+            style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
+            title={title}
+          >
+            {/* A fail count is a filled disc; on a bare badge exhaustion is the
+                ring drawn around it, not a lighter circle. */}
+            <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
+          </span>,
+        );
+      }
+      continue;
     }
+    const long = edge.kind === "fail" && back && form === "long";
+    const content = edgeContent(t, edge, count, layout.topology.branching.has(edge.from), long);
+    if (!content) continue;
+    labels.push(
+      <span
+        key={`label-${edge.id}`}
+        ref={besideRef(labelBoxes, measured)}
+        className={`pelabel ${edge.kind}${count.travelled ? " taken" : ""}${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
+        data-edge-label={edge.id}
+        data-edge-fired={count.fired}
+        data-edge-label-form={measured ? form : undefined}
+        style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
+        title={title}
+      >
+        {content}
+      </span>,
+    );
   }
 
   return (
     <div className="pgraph-box">
       <div
-        className={`pgraph dir-${layout.dir}`}
+        className={`pgraph dir-${layout.dir}${identityWords ? "" : " marks-only"}`}
         data-dir={layout.dir}
+        data-identity-words={identityWords ? "1" : "0"}
         style={{ width: `${layout.width}px`, height: `${layout.height}px` }}
         role="group"
         aria-label={layout.dir === "LR" ? t("kanban.graph.ariaLR") : t("kanban.graph.ariaTB")}
@@ -440,13 +565,15 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const draftable = !attempt && stageDraftable(pipeline, stage.id);
           const openable = navigate || conversation || draftable;
           const roleId = stageRoleId(stage);
-          const engine = attempt?.effectiveRole.engine ?? stage.effectiveRole.engine;
+          /* Engine, model and effort of the attempt as it was actually
+             launched, or the configuration, muted, when nothing has run (#1743). */
+          const identity = stageIdentity(pipeline, stage);
           const isSelected = selected.has(stage.id);
           const rounds = view?.rounds ?? [];
           const attempts = view?.attempts ?? 0;
           const detail = view?.again ? (
             <span className="pdetail">{t("kanban.graph.nextAttempt", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
-          ) : rounds.length ? <RoundChips rounds={rounds} /> : (
+          ) : rounds.length ? <RoundsMark rounds={rounds} /> : (
             <span className="pdetail">
               {attempts
                 ? stage.onFail ? t("kanban.graph.attemptRetries", { n: attempts, count: stage.onFail.maxRounds }) : t("kanban.graph.attempt", { n: attempts })
@@ -454,7 +581,8 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             </span>
           );
           const aria = [
-            t("kanban.graph.nodeAria", { stage: nameOf(stage.id), engine: engine === "codex" ? "Codex" : "Claude", state: word }),
+            t("kanban.graph.nodeAria", { stage: nameOf(stage.id), engine: engineWord(identity.engine), state: word }),
+            identityTitle(t, identity),
             attempts ? t("kanban.graph.attempt", { n: attempts }) : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
             navigate
@@ -482,10 +610,14 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
                   <span className="pport out fail" aria-hidden="true" />
                 </>
               ) : <span className="pport out" aria-hidden="true" />}
-              <span className="prow">
+              <span className="prow head">
                 <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>
                 <span className="pname">{nameOf(stage.id)}</span>
-                <span className={`pengine ${engine}`} aria-hidden="true" />
+              </span>
+              <span className="prow ident">
+                {/* The effort word only where the layout gave the node room for
+                    it, so the identity line never pushes the state row out. */}
+                <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} />
               </span>
               <span className="prow">
                 <span className="pstate"><i className="pdot" aria-hidden="true" />{word}</span>
@@ -496,43 +628,80 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
         })}
       </div>
       {legend.length ? (
-        <ol className="plegend">
+        <ul className="plegend">
           {legend.map((entry) => (
-            <li key={entry.n}><span className="pelabel badge static">{entry.n}</span><span>{entry.text}</span></li>
+            <li key={entry.id} data-legend-edge={entry.id}>
+              {/* The key samples the mark the arrow above it actually carries,
+                  ring and all, or it explains a drawing that is not there. */}
+              {entry.count.travelled
+                ? <FiredMark count={entry.count} />
+                : <span className="esample" aria-hidden="true" />}
+              <span>{entry.text}{entry.count.exhausted ? ` · ${t("kanban.graph.noneLeft")}` : ""}</span>
+            </li>
           ))}
-        </ol>
+        </ul>
       ) : null}
     </div>
   );
 }
 
-/* A node draws at most two round chips: every round while there are two or
-   fewer, else the latest and a "+N" chip naming the earlier ones. The node's
-   label names every round, and Past attempts lists each finished one. */
-const VISIBLE_ROUNDS = 2;
-
-function RoundChips({ rounds }: { rounds: readonly ReviewRound[] }) {
+/**
+ * A review-loop stage recovers through its own flow rounds rather than a fail
+ * edge, so it says how many times it went round in exactly the vocabulary the
+ * arrows use (#1743): one circled number, then the latest verdict. The node's
+ * label and the circle's tooltip still name every round, and Past attempts
+ * lists each finished one.
+ */
+function RoundsMark({ rounds }: { rounds: readonly ReviewRound[] }) {
   const { t } = useLocale();
-  const title = (round: ReviewRound) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) });
-  const shown = rounds.length <= VISIBLE_ROUNDS ? rounds : rounds.slice(-1);
-  const earlier = rounds.slice(0, rounds.length - shown.length);
+  const latest = rounds[rounds.length - 1]!;
+  const each = rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join("\n");
+  const tone = latest.verdict === "approved" ? "ok" : latest.verdict === "changes" ? "fail" : "open";
   return (
-    <span className="rchips">
-      {earlier.length ? (
-        <span className="rchip more" title={earlier.map(title).join("\n")} data-rounds-more={earlier.length}>+{earlier.length}</span>
-      ) : null}
-      {shown.map((round) => (
-        <span key={round.n} className={`rchip ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`} title={title(round)}>
-          R{round.n} {round.verdict === "approved" ? "✓" : round.verdict === "changes" ? "✕" : "…"}
-        </span>
-      ))}
+    <span className="rounds-mark" data-rounds={rounds.length} title={each}>
+      <CountCircle
+        n={rounds.length}
+        tone={tone}
+        filled={latest.verdict === "changes"}
+        label={t("kanban.graph.roundsAria", { count: rounds.length, verdict: t(`kanban.graph.verdict.${latest.verdict}`) })}
+      />
+      <span className={`rverdict ${tone}`} aria-hidden="true">{latest.verdict === "approved" ? "✓" : latest.verdict === "changes" ? "✕" : "…"}</span>
     </span>
   );
 }
 
-function edgeLabel(t: TFunction, edge: GraphEdge, fired: number, branching: boolean): { short: string; long: string } | null {
-  if (edge.kind === "fail") return { short: t("kanban.graph.fail"), long: t("kanban.graph.failRetry", { n: fired, max: edge.maxRounds ?? 0 }) };
-  return branching ? { short: t("kanban.graph.pass"), long: t("kanban.graph.pass") } : null;
+/** Everything an edge label says in words, for the hover: what it is, how often
+    it fired, and whether any return is left. */
+function edgeTitle(t: TFunction, edge: GraphEdge, count: EdgeCount, branching: boolean): string {
+  if (edge.kind === "pass") {
+    return [branching ? t("kanban.graph.pass") : null, count.travelled ? t("kanban.graph.firedTitle", { count: count.fired }) : null]
+      .filter(Boolean).join(" · ") || t("kanban.graph.pass");
+  }
+  return [
+    t("kanban.graph.failUsed", { n: count.fired, max: count.max ?? 0 }),
+    count.exhausted ? t("kanban.graph.noneLeft") : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/** What the label draws on the arrow. A travelled edge leads with the circled
+    count; a configured one keeps the word it had. A pass edge that has not
+    fired is labelled only where the source branches, as before. */
+function edgeContent(t: TFunction, edge: GraphEdge, count: EdgeCount, branching: boolean, long: boolean): React.ReactNode | null {
+  const circle = <CountCircle n={count.fired} tone={edge.kind} filled={edge.kind === "fail" && !count.exhausted} label={t("kanban.graph.firedTitle", { count: count.fired })} />;
+  if (edge.kind === "pass") {
+    if (count.travelled) return circle;
+    return branching ? t("kanban.graph.pass") : null;
+  }
+  const budget = long
+    ? t("kanban.graph.failUsed", { n: count.fired, max: count.max ?? 0 })
+    : count.travelled ? t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 }) : t("kanban.graph.fail");
+  if (!count.travelled) return budget;
+  return (
+    <>
+      {circle}
+      <span className="ebudget">{budget}{count.exhausted && long ? ` · ${t("kanban.graph.noneLeft")}` : ""}</span>
+    </>
+  );
 }
 
 /** "Past attempts · N": finished attempts and review rounds, newest first, then

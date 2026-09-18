@@ -8,7 +8,8 @@ import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
 import { ChevronDown, FoldVertical } from "@/components/icons";
-import { engineBadgeFor, fmtAge } from "@/components/utils";
+import { EngineBadge } from "@/components/EngineMark";
+import { fmtAge } from "@/components/utils";
 
 import { VERDICT_GLYPHS, verdictTone } from "./flowModel";
 import {
@@ -236,7 +237,6 @@ export function RoundDeck({
        click restores the full deck in place. */
     const lastRound = latest?.round ?? front.round;
     const lastTone = verdictTone(lastRound.verdict);
-    const badge = engineBadgeFor(flow.roles.reviewer?.engine ?? "claude");
     const finishedAtIso = lastRound.terminalAt ?? lastRound.reviewedAt ?? lastRound.startedAt;
     const finishedAtMs = finishedAtIso ? Date.parse(finishedAtIso) : Number.NaN;
     return (
@@ -257,7 +257,7 @@ export function RoundDeck({
           {lastRound.error ? t("roundDeck.aborted") : lastRound.verdict ? `${VERDICT_GLYPHS[lastRound.verdict]} ${lastRound.verdict}` : t("roundDeck.reviewInProgress")}
           {lastRound.findingsCount != null && lastRound.findingsCount > 0 ? ` · ${t("roundDeck.findings", { count: lastRound.findingsCount })}` : ""}
         </span>
-        <span className="shrink-0 rounded-full px-1.5 text-[9px] font-bold" style={badge.style}>{badge.label}</span>
+        <EngineBadge engine={flow.roles.reviewer?.engine ?? "claude"} className="px-1.5 text-[9px] font-bold" />
         {Number.isFinite(finishedAtMs) ? (
           <span className="shrink-0 text-[10px] font-normal tabular-nums text-muted">{fmtAge(finishedAtMs / 1000)}</span>
         ) : null}

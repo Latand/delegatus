@@ -12,6 +12,12 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
+/* The identity unit and the circled count are the Viewer's ONE vocabulary for
+   "who runs this stage" and "how often work came back here" (#1743). They live
+   beside the graph that first drew them; the phone reads the same modules
+   rather than growing a second drawing of the same facts. */
+import { FiredMark, identityTitle, StageIdentity } from "../kanban/identityMarks";
+import { returnsInto, stageIdentity, type EdgeCount } from "../kanban/stageIdentity";
 import {
   attemptNavTarget,
   attemptStateLabel,
@@ -632,17 +638,25 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   /* Configurable by the one rule the desktop's pane and strip read too. */
   const configurable = !file && stageConfigurable(pipeline, stage.id);
   const title = stageRowTitle(t, stage);
+  /* Who runs it, and how often work came back to it: the same mark, ladder and
+     circled count the desktop's graph draws (#1743). */
+  const identity = stageIdentity(pipeline, stage);
+  const returns = returnsInto(pipeline, stage.id);
   const Tag = file || configurable ? "button" : "div";
+  /* Who runs it AND what the returns spent, so the row says in words what it
+     draws as a disc and a ratio. */
+  const who = [identityTitle(t, identity), ...returns.map((count) => returnTitle(t, count))].join(" · ");
   const control = file
-    ? { type: "button" as const, onClick: () => onOpenConversation(file), "aria-label": t("mobile2.pipeline.openStage", { stage: title }) }
+    ? { type: "button" as const, onClick: () => onOpenConversation(file), "aria-label": `${t("mobile2.pipeline.openStage", { stage: title })}. ${who}` }
     : configurable
-      ? { type: "button" as const, onClick: () => onConfigure(stage), "aria-label": t("mobile2.pipeline.configure", { stage: title }), "aria-haspopup": "dialog" as const }
+      ? { type: "button" as const, onClick: () => onConfigure(stage), "aria-label": `${t("mobile2.pipeline.configure", { stage: title })}. ${who}`, "aria-haspopup": "dialog" as const }
       : {};
   return (
     <div data-mobile2-stage-group={stage.id}>
       <Tag
         {...control}
         data-mobile2-stage={stage.id}
+        title={who}
         data-mobile2-go={file ? "chat" : undefined}
         data-mobile2-stage-configure={configurable ? "true" : undefined}
         data-mobile2-stage-state={state}
@@ -651,8 +665,16 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
       >
         <StageMark state={state} index={index} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
-          <span className="truncate text-label tabular-nums text-muted">{stageMetaLine(t, pipeline, stage)}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+            {returns.map((count, at) => (
+              <ReturnMark key={at} count={count} />
+            ))}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
+            <StageIdentity identity={identity} density="line" />
+            <span className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
+          </span>
         </span>
         {file ? (
           <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
@@ -667,6 +689,38 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
         <TranscriptRow key={transcript.path} n={transcript.n} path={transcript.path} files={files} onOpenConversation={onOpenConversation} />
       ))}
     </div>
+  );
+}
+
+/** Everything a return says in words: how much of the budget it spent, and
+    whether any return is left. The same sentence the arrow's hover carries. */
+const returnTitle = (t: TFunction, count: EdgeCount) => [
+  t("kanban.graph.failUsed", { n: count.fired, max: count.max ?? 0 }),
+  count.exhausted ? t("kanban.graph.noneLeft") : null,
+].filter(Boolean).join(" · ");
+
+/**
+ * Work came back into this stage, this many times, out of this budget (#1743).
+ *
+ * The phone has no arrow to hang the count on, so the row carries it — and it
+ * carries the SAME drawing the graph does: a filled disc in both states, with a
+ * closed ring around it once the budget is spent. A lighter outline would be
+ * strictly less ink for the worse state, and an outlined circle is this
+ * vocabulary's PASS count, so a fail count may never take one. The row's meta
+ * line names only the run and the state, so the budget is printed here or it is
+ * nowhere on the phone.
+ */
+function ReturnMark({ count }: { count: EdgeCount }) {
+  const { t } = useLocale();
+  const title = returnTitle(t, count);
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-label font-bold leading-none text-danger" title={title} data-mobile2-stage-returns={count.fired}>
+      <FiredMark count={count} label={t("kanban.graph.firedTitle", { count: count.fired })} />
+      <span data-mobile2-stage-budget={count.exhausted ? "spent" : "left"}>
+        {t("kanban.graph.failUsedShort", { n: count.fired, max: count.max ?? 0 })}
+        {count.exhausted ? ` · ${t("kanban.graph.noneLeft")}` : ""}
+      </span>
+    </span>
   );
 }
 

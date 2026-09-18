@@ -164,7 +164,8 @@ test("every card starts on the compact summary, the active Assigned card include
   expect(card(host).querySelector(".pnode")).toBeNull();
   expect(toggle(host)?.getAttribute("aria-pressed")).toBe("false");
   expect([...card(host).querySelectorAll(".psummary .pchip")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
-  expect(card(host).querySelector(".ploop")?.textContent).toContain("1/2");
+  /* The loop chip leads with the circled count the arrow draws (#1743). */
+  expect(card(host).querySelector(".ploop .ccircle")?.getAttribute("data-count")).toBe("1");
   click(toggle(host));
   await tick();
   expect(section().classList.contains("open")).toBe(true);
@@ -190,11 +191,17 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   expect(nodes[3]!.getAttribute("aria-label")).toContain("Open its first message");
   expect(nodes[0]!.querySelector(".pdetail")?.textContent).toBe("attempt 2");
   expect(nodes[2]!.querySelector(".pdetail")?.textContent).toBe("attempt 2 · 2 retries");
-  expect([...nodes[1]!.querySelectorAll(".rchip")].map((chip) => chip.textContent)).toEqual(["R1 ✓"]);
+  expect(nodes[1]!.querySelector(".rounds-mark")?.getAttribute("data-rounds")).toBe("1");
   const edges = [...section.querySelectorAll<SVGPathElement>(".pedge")];
   expect(edges.map((edge) => edge.getAttribute("data-edge"))).toEqual(["implement:pass:review", "review:pass:verify", "verify:pass:merge", "verify:fail:implement"]);
   expect(edges[3]!.getAttribute("class")).toContain("fail back taken");
-  expect([...section.querySelectorAll(".pelabel")].map((label) => label.textContent)).toEqual(["pass", "fail · retry 1 of 2"]);
+  /* Counts come from `activatedBy` and nothing else: this record carries the
+     provenance of the one fail return only, so that is the one edge with a
+     number on it. The branching source still names its pass side (#1743). */
+  expect([...section.querySelectorAll<HTMLElement>(".pelabel")].map((label) => [label.dataset.edgeLabel, label.dataset.edgeFired]))
+    .toEqual([["verify:pass:merge", "0"], ["verify:fail:implement", "1"]]);
+  expect(section.querySelector('[data-edge-label="verify:fail:implement"] .ccircle')?.getAttribute("data-count")).toBe("1");
+  expect(section.querySelector('[data-edge-label="verify:fail:implement"]')?.className).not.toContain("spent");
 });
 
 test("with a helper conversation adopted last on Implement, the graph keeps the engine's budget and attempt count, and the node a click opens is the one marked", async () => {
@@ -206,10 +213,10 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     const { host } = mount([record]);
     await tick();
     /* The summary's loop chip reads the same budget. */
-    expect(card(host).querySelector(".ploop")?.textContent).toContain("· 1/2");
+    expect(card(host).querySelector(".ploop .ccircle")?.getAttribute("data-count")).toBe("1");
     click(toggle(host));
     await tick();
-    expect([...card(host).querySelectorAll(".pelabel")].map((label) => label.textContent)).toEqual(["pass", "fail · retry 1 of 2"]);
+    expect(card(host).querySelector<HTMLElement>('[data-edge-label="verify:fail:implement"]')?.dataset.edgeFired).toBe("1");
     expect(card(host).querySelector('.pnode[data-stage="implement"] .pdetail')?.textContent).toBe("attempt 2");
     click(card(host).querySelector('.pnode[data-stage="implement"]'));
     await tick();
@@ -262,7 +269,10 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   render([retried]);
   await tick();
   expect(card(host).querySelector(".pedge.live")?.getAttribute("data-edge")).toBe("verify:fail:implement");
-  expect(card(host).querySelector(".pelabel.live")?.textContent).toBe("fail · retry 2 of 2");
+  /* The second return spends the budget, so the label reads as exhausted. */
+  const liveLabel = card(host).querySelector<HTMLElement>(".pelabel.live")!;
+  expect(liveLabel.dataset.edgeFired).toBe("2");
+  expect(liveLabel.className).toContain("spent");
 
   /* Within the window the record changes again with nothing attributed. */
   await tick(400);
@@ -292,8 +302,11 @@ test("a review stage with five rounds draws the latest round and a count of the 
   click(toggle(host));
   await tick();
   const review = card(host).querySelector<HTMLElement>('.pnode[data-stage="review"]')!;
-  expect([...review.querySelectorAll(".rchip")].map((chip) => chip.textContent)).toEqual(["+4", "R5 ✓"]);
-  expect(review.querySelector(".rchip.more")?.getAttribute("title")?.split("\n")).toEqual(["Round 1: changes requested", "Round 2: changes requested", "Round 3: changes requested", "Round 4: changes requested"]);
+  /* One circled number for the rounds, in the same vocabulary as the arrows,
+     and the hover still names every round (#1743). */
+  expect(review.querySelector(".rounds-mark")?.getAttribute("data-rounds")).toBe("5");
+  expect(review.querySelector(".rounds-mark .ccircle")?.getAttribute("data-count")).toBe("5");
+  expect(review.querySelector(".rounds-mark")?.getAttribute("title")?.split("\n")).toHaveLength(5);
   expect(review.getAttribute("aria-label")).toContain("Round 1: changes requested, Round 2: changes requested, Round 3: changes requested, Round 4: changes requested, Round 5: approved");
 });
 

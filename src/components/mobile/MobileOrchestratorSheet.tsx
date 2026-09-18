@@ -1,6 +1,7 @@
 "use client";
 
-import { Bot, ChevronRight, Command, CornerDownRight, LoaderCircle, Pencil, RefreshCw, RotateCcw, Sparkle, TriangleAlert } from "lucide-react";
+import { EngineMark } from "@/components/EngineMark";
+import { Bot, ChevronRight, CornerDownRight, LoaderCircle, Pencil, RefreshCw, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { X } from "@/components/icons";
@@ -1094,10 +1095,11 @@ function SeatIdentity({
             cards and here (README §5, P3-5). */}
         <span
           data-mobile2-seat-engine={engine ?? "unknown"}
-          className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-white ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
+          style={{ "--engine-mark-cut": `var(--color-${engine === "codex" ? "codex" : "claude"})` } as React.CSSProperties}
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-[color:var(--engine-fill-ink)] ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
           aria-hidden
         >
-          {engine === "codex" ? <Command className="h-[15px] w-[15px]" /> : <Sparkle className="h-[15px] w-[15px]" />}
+          <EngineMark engine={engine === "codex" ? "codex" : "claude"} size={16} tone="inherit" />
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">

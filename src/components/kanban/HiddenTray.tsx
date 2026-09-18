@@ -3,6 +3,7 @@
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 
 import { statusLabel } from "./KanbanCard";
@@ -81,7 +82,7 @@ export function HiddenTray({ anchor, groups, offBoard, closed, nowMs, onClose, o
           {head(t("kanban.trayClosedHead"))}
           {closed.map((file) => (
             <div key={file.path} className="row" data-closed-conversation={file.path}>
-              <span className={`engine ${file.engine === "claude" || file.engine === "codex" ? file.engine : "other"}`} title={file.engine} />
+              <EngineMark engine={file.engine} size={12} className="engine" label={file.engine} />
               <span className="t">
                 <span className="title">{cleanTitle(file.title ?? "", 80) || t("kanban.untitledConversation")}</span>
                 <span className="meta">{t("kanban.trayClosedMeta")}</span>

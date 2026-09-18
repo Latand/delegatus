@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 
 import { Loader2, Search, X } from "@/components/icons";
 import { useModalLayer } from "@/components/modalLayer";
-import { engineBadgeFor, fmtAge } from "@/components/utils";
+import { EngineBadge } from "@/components/EngineMark";
+import { fmtAge } from "@/components/utils";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
 import { snippetSegments } from "@/lib/search/snippet";
@@ -283,7 +284,6 @@ export function GlobalSearch({ mobile, onClose, onOpen }: Props) {
             className={`space-y-1.5 ${search.stale ? "opacity-60" : ""}`}
           >
             {search.items.map((item, index) => {
-              const badge = engineBadgeFor(item.engine);
               return (
                 <button
                   key={transcriptSearchRowKey(item)}
@@ -309,7 +309,7 @@ export function GlobalSearch({ mobile, onClose, onOpen }: Props) {
                     >
                       {projectDisplayName(item.project)}
                     </span>
-                    <span className="shrink-0 rounded-full px-1.5 text-[9px] font-bold" style={badge.style}>{badge.label}</span>
+                    <EngineBadge engine={item.engine} className="px-1.5 text-[9px] font-bold" />
                     {item.timestamp === null ? null : (
                       <span className="shrink-0 text-[10.5px] text-muted">{fmtAge(item.timestamp)}</span>
                     )}

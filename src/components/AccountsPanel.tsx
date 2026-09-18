@@ -21,7 +21,8 @@ import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
 import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
 
-import { ArrowRight, ChevronRight, Command, Loader2, RotateCw, Sparkle, SquareTerminal, Trash2, X, Zap } from "./icons";
+import { EngineMark } from "@/components/EngineMark";
+import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
 import { MobileMeter, meterTone, type MeterTone } from "./mobile/MobileMeter";
 import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileReceipt";
 import { Badge } from "./ui/Badge";
@@ -981,10 +982,16 @@ function MobileBadge({ tone, children }: { tone: keyof typeof MOBILE_BADGE; chil
 /** The filled 36 px engine circle: the account card is one of the two places
     the filled mark survives (README §5). */
 function MobileEngineFill({ engine }: { engine: "claude" | "codex" }) {
-  const Glyph = engine === "codex" ? Command : Sparkle;
   return (
-    <span aria-hidden data-mobile2-engine={engine} className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-full text-white ${engine === "codex" ? "bg-codex" : "bg-claude"}`}>
-      <Glyph className="h-[18px] w-[18px]" strokeWidth={2.5} />
+    <span
+      aria-hidden
+      data-mobile2-engine={engine}
+      /* The mark is cut out of the fill, so it reads the circle's own colour
+         rather than the card behind it. */
+      style={{ "--engine-mark-cut": `var(--color-${engine})` } as React.CSSProperties}
+      className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-full text-[color:var(--engine-fill-ink)] ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
+    >
+      <EngineMark engine={engine} size={18} tone="inherit" />
     </span>
   );
 }

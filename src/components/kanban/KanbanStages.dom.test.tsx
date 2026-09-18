@@ -332,9 +332,16 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
   expect(view.querySelector("header h2")?.textContent).toBe("Restore search results after the index rebuild");
   expect(view.querySelector("header .progress")?.textContent).toBe("4 stages · Verify running · attempt 2");
   const chips = [...view.querySelectorAll<HTMLElement>("[data-nav-stage]")];
-  expect(chips.map((chip) => chip.textContent)).toEqual(["1Implement", "2Review", "3Verify", "4Merge"]);
+  expect(chips.map((chip) => `${chip.querySelector(".nidx")?.textContent}${chip.querySelector(".nlbl")?.textContent}`)).toEqual(["1Implement", "2Review", "3Verify", "4Merge"]);
+  /* Who runs each stage, on the minimized chip itself (#1743): the engine mark
+     and the effort ladder. Review was launched on Claude and is now configured
+     for Codex, so its chip keeps the launched mark and flags the next attempt. */
+  expect(chips.map((chip) => chip.querySelector("[data-engine-mark]")?.getAttribute("data-engine-mark"))).toEqual(["claude", "claude", "claude", "claude"]);
+  expect(chips.map((chip) => chip.querySelector("[data-effort-pills]")?.getAttribute("data-effort-step"))).toEqual(["3", "3", "3", "3"]);
+  expect(chips.map((chip) => Boolean(chip.querySelector("[data-next-differs]")))).toEqual([false, true, false, false]);
   expect(chips.map((chip) => chip.getAttribute("aria-current"))).toEqual(["false", "false", "true", "false"]);
-  expect(view.querySelector(".gs-nav .ploop")?.textContent).toBe("↺ Verify fails → Implement · 1/2");
+  expect(view.querySelector(".gs-nav .ploop .ccircle")?.getAttribute("data-count")).toBe("1");
+  expect(view.querySelector(".gs-nav .ploop .lnames")?.textContent).toContain("Verify");
   expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
   expect([...view.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   same(document.activeElement, pane(host, "verify"));

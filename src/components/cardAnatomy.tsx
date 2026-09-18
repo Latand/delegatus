@@ -6,6 +6,7 @@ import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { hueFromId } from "./scheme/agentLinks";
+import { EngineBadge } from "./EngineMark";
 import { effortTint, effortTitle, engineBadge } from "./utils";
 
 /**
@@ -146,8 +147,6 @@ export function CardIdentityChip({ file, fontClassName = "text-[9.5px]" }: { fil
     );
   }
   return (
-    <span className={`shrink-0 rounded-full px-1.5 py-0.5 font-bold ${fontClassName}`} style={badge.style} title={effortTitle(file)}>
-      {badge.label}
-    </span>
+    <EngineBadge engine={file.engine} className={`px-1.5 py-0.5 font-bold ${fontClassName}`} title={effortTitle(file)} />
   );
 }

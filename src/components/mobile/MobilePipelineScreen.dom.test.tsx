@@ -242,9 +242,12 @@ test("a never-run stage's row opens its configuration in a sheet — the desktop
   const store = nav();
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
   const fix = q(host, '[data-mobile2-stage="fix"]')!;
-  expect(fix.getAttribute("aria-label")).toBe(translate("en", "mobile2.pipeline.configure", {
+  /* The row names what it opens, and then who would run the stage — the marks
+     beside it are never the only carrier of that (#1743). */
+  expect(fix.getAttribute("aria-label")).toContain(translate("en", "mobile2.pipeline.configure", {
     stage: translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "fix" }),
   }));
+  expect(fix.querySelector("[data-engine-mark]")).not.toBeNull();
   expect(fix.className).toContain("min-h-[52px]");
   /* A stage that ran configures nothing: the engine snapshots its config at
      the first attempt. */
