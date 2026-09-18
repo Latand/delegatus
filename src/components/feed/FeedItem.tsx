@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, type CSSProperties } from "react";
 import { useLocale } from "@/lib/i18n";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -122,6 +122,10 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
   if (item.kind === "prose") {
     const cls = item.engine === "codex" ? "bg-codex" : item.engine === "openclaw" ? "bg-openclaw" : "bg-claude";
     const AvatarIcon = ({ className }: { className?: string }) => <EngineMark engine={item.engine} size={16} tone="inherit" className={className} />;
+    /* Inside the filled circle the mark takes the fill ink, not white — white
+       on the dark theme's engine tints is 2.6:1 (#1743) — and its cut-outs
+       take the circle's own colour, so they stay holes. */
+    const fillStyle = { "--engine-mark-cut": `var(--color-${item.engine === "codex" ? "codex" : item.engine === "openclaw" ? "openclaw" : "claude"})` } as CSSProperties;
     if (isMobile) {
       /* Mobile v2 (#1439, lane 4; README §2.6, §4.2): content gets the width.
          No avatar column; the header is one 44 px row — engine glyph, engine
@@ -149,7 +153,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText }: 
     }
     return (
       <div className="group/msg my-3 flex gap-2.5">
-        <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-white ${cls}`}>
+        <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
           <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
         </div>
         {/* `data-tts-message` / `data-tts-body`: the anchors the read-aloud

@@ -1096,7 +1096,7 @@ function SeatIdentity({
         <span
           data-mobile2-seat-engine={engine ?? "unknown"}
           style={{ "--engine-mark-cut": `var(--color-${engine === "codex" ? "codex" : "claude"})` } as React.CSSProperties}
-          className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-white ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-[color:var(--engine-fill-ink)] ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
           aria-hidden
         >
           <EngineMark engine={engine === "codex" ? "codex" : "claude"} size={16} tone="inherit" />

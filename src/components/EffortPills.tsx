@@ -1,4 +1,5 @@
-import { translate, getLocale } from "@/lib/i18n";
+import { en } from "@/lib/i18n/en";
+import { translate, getLocale, type MessageKey } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { effortTint, effortTitle } from "./utils";
@@ -13,7 +14,7 @@ import { effortTint, effortTitle } from "./utils";
  *
  * Height carries the level, so hue is never the only signal: the filled bars
  * take `currentColor` (the host sets the engine mark token, or `--color-muted`
- * for a stage that has not launched) and the empty ones stay `--border-strong`.
+ * for a stage that has not launched) and the empty ones stay `--color-border`.
  *
  * Layout contract (issue #270): the meter is a plain in-flow flex item — it
  * occupies exactly the space flexbox reserves for it and never paints outside
@@ -53,7 +54,13 @@ export function EffortScale({ effort, className, color, title }: {
 }) {
   const level = effortStep(effort);
   if (!level) return null;
-  const label = title ?? translate(getLocale(), "util.effortTitle", { effort: effort ?? "" });
+  /* The tier is a CLI token; the ladder's label says it in the reader's own
+     language, and an unknown tier keeps its token (#1743). */
+  const locale = getLocale();
+  const tier = (effort ?? "").trim().toLowerCase();
+  const tierKey = `effortTier.${tier}`;
+  const word = tierKey in en ? translate(locale, tierKey as MessageKey) : (effort ?? "");
+  const label = title ?? translate(locale, "util.effortTitle", { effort: word });
   return (
     <span
       data-effort-pills

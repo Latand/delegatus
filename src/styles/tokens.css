@@ -117,6 +117,10 @@
      identity tints, which already clear 5.6:1 there. */
   --color-claude-mark: #c96442;
   --color-codex-mark: var(--color-codex);
+  /* The ink a mark takes INSIDE a filled engine avatar (#1743). White on the
+     dark theme's engine tints measures 2.6:1 — under the 3:1 floor a graphical
+     object has — because those tints are light by design there. */
+  --engine-fill-ink: #ffffff;
 
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
   --motion-fast: 120ms; /* hover, press, chip state         */
@@ -200,6 +204,7 @@
     --color-openclaw-soft: #2e1622;
     --color-claude-mark: var(--color-claude);
     --color-codex-mark: var(--color-codex);
+    --engine-fill-ink: #121620;
 
     --color-user: #2a2a33;
 
@@ -259,6 +264,7 @@
   --color-openclaw-soft: #2e1622;
   --color-claude-mark: var(--color-claude);
   --color-codex-mark: var(--color-codex);
+  --engine-fill-ink: #121620;
 
   --color-user: #2a2a33;
 

@@ -989,7 +989,7 @@ function MobileEngineFill({ engine }: { engine: "claude" | "codex" }) {
       /* The mark is cut out of the fill, so it reads the circle's own colour
          rather than the card behind it. */
       style={{ "--engine-mark-cut": `var(--color-${engine})` } as React.CSSProperties}
-      className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-full text-white ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
+      className={`inline-grid h-9 w-9 shrink-0 place-items-center rounded-full text-[color:var(--engine-fill-ink)] ${engine === "codex" ? "bg-codex" : "bg-claude"}`}
     >
       <EngineMark engine={engine} size={18} tone="inherit" />
     </span>

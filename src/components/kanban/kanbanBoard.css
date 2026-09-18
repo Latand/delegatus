@@ -273,56 +273,71 @@
 .kb .pchip.side { border-style: dashed; }
 
 /* ── Who runs a stage (#1743) ─────────────────────────────────────────────
-   One unit — engine mark, model, effort ladder — at three densities. The unit
+   One unit — engine mark, model, effort ladder — at four densities. The unit
    carries the engine colour as `color`, which is what the effort ladder fills
    its lit bars with; a stage that has only been configured mutes that colour
    and its text, while the mark keeps full contrast so a fresh pipeline is
-   still readable as orange and blue. */
-.kb .pident { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-muted); }
-.kb .pident[data-engine="claude"] { color: var(--color-claude-mark); }
-.kb .pident[data-engine="codex"] { color: var(--color-codex-mark); }
-.kb .pident[data-identity="configured"] { color: var(--color-muted); }
-.kb .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
-.kb .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
-.kb .pident[data-identity="configured"] .imodel,
-.kb .pident[data-identity="configured"] .ieffort,
-.kb .pident[data-identity="configured"] .iengine { color: var(--color-muted); }
+   still readable as orange and blue.
+
+   These selectors are NOT scoped to `.kb`: the phone's pipeline screen draws
+   the same unit on its stage rows, and one vocabulary means one rule set. */
+.pident { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-muted); }
+.pident[data-engine="claude"] { color: var(--color-claude-mark); }
+.pident[data-engine="codex"] { color: var(--color-codex-mark); }
+.pident[data-identity="configured"] { color: var(--color-muted); }
+.pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+.pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
+.pident[data-identity="configured"] .imodel,
+.pident[data-identity="configured"] .ieffort,
+.pident[data-identity="configured"] .iengine { color: var(--color-muted); }
 /* The chip has room for the model only when it is not the engine's default, and
    the model is the first thing it gives up; the name goes next. */
-.kb .pident.d-chip { flex: 0 1 auto; }
-.kb .pident.d-chip .imodel { max-width: 64px; flex-shrink: 100; }
-.kb .pident.d-chip .pname { flex-shrink: 1; min-width: 3ch; }
-.kb .pident.d-node { width: 100%; }
+.pident.d-chip { flex: 0 1 auto; }
+.pident.d-chip .imodel { max-width: 64px; flex-shrink: 100; }
+.pident.d-chip .pname { flex-shrink: 1; min-width: 3ch; }
+.pident.d-node { width: 100%; }
+/* A one-line row (a pane's title line, a phone stage row) draws no words, so the
+   model is the only text and keeps a floor under it rather than being squeezed
+   to nothing by its neighbours (#1743). */
+.pident.d-line { flex: 0 1 auto; }
+.pident.d-line .imodel { min-width: 7ch; }
 /* The dashed warning pill: the next attempt would run on other values. Dashed
    means "configured, not run yet" here exactly as it does on an edge. */
-.kb .pnext {
+.pnext {
   display: inline-flex; align-items: center; gap: 4px; height: 14px; padding: 0 4px; flex-shrink: 0;
   border: 1px dashed var(--color-warning); border-radius: 999px; background: transparent;
   font-size: var(--text-caption); font-weight: 700; line-height: 1; color: var(--color-warning);
 }
-.kb .pnext.wide { height: 18px; color: var(--color-secondary); }
-.kb .pnext.wide .imodel, .kb .pnext.wide .ieffort { color: var(--color-secondary); }
+.pnext.wide { height: 18px; color: var(--color-secondary); }
+.pnext .nvals { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.pnext.wide .imodel, .pnext.wide .ieffort { color: var(--color-secondary); }
 /* The circled number: one meaning in the Viewer — how many times it fired.
    Fill versus outline carries the verdict without relying on hue. */
-.kb .ccircle {
+.ccircle {
   --tone: var(--color-secondary);
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
   min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;
   font-size: var(--text-caption); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
   color: var(--tone); background: var(--surface-card); border: 1px solid var(--tone);
 }
-.kb .ccircle.t-pass, .kb .ccircle.t-ok { --tone: var(--color-success); }
-.kb .ccircle.t-fail { --tone: var(--color-danger); }
-.kb .ccircle.t-open { --tone: var(--color-info); }
-.kb .ccircle.t-neutral { --tone: var(--color-secondary); }
+.ccircle.t-pass, .ccircle.t-ok { --tone: var(--color-success); }
+.ccircle.t-fail { --tone: var(--color-danger); }
+.ccircle.t-open { --tone: var(--color-info); }
+.ccircle.t-neutral { --tone: var(--color-secondary); }
 /* Filled: the digits take the card surface, the one value that reads on both
    themes without a second colour literal. */
-.kb .ccircle.filled { background: var(--tone); border-color: var(--tone); color: var(--surface-card); }
+.ccircle.filled { background: var(--tone); border-color: var(--tone); color: var(--surface-card); }
 .kb .parrow { color: var(--color-muted); font-size: var(--text-label); }
-.kb .ploop { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-danger); background: var(--color-danger-soft); }
+/* The loop chip is one 22 px line and must stay one: on a 256 px column card
+   the budget sentence wrapped to two lines and painted outside the pill. The
+   stage names are what gives way — they are on the chips beside it — while the
+   count, the budget and "none left" never shrink (#1743). */
+.kb .ploop { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; line-height: 22px; white-space: nowrap; color: var(--color-danger); background: var(--color-danger-soft); }
 .kb .ploop.spent { background: var(--color-danger); color: var(--surface-card); }
 .kb .ploop.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
+.kb .ploop .lnames { min-width: 3ch; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.kb .ploop .lbudget, .kb .ploop .lnone, .kb .ploop .lglyph { flex-shrink: 0; }
 .kb .ploop .lnone { font-weight: 700; }
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
 .kb .tone-active .pdot { background: var(--color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
@@ -647,6 +662,13 @@
 .kb .pelabel.fail.spent { background: var(--color-danger); border-color: var(--color-danger); color: var(--surface-card); }
 .kb .pelabel.fail.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
 .kb .pelabel.badge { padding: 0; border: 0; background: transparent; }
+/* Legend mode gives the arrow a bare circle, and a bare circle has no pill to
+   invert: inverting the circle itself draws a red ring around white, which is
+   LESS ink than the live filled disc, so exhaustion read lighter than a live
+   edge. Here exhaustion keeps the filled disc and closes a ring around it —
+   strictly more ink than the live badge, never less (#1743). */
+.kb .pelabel.badge.spent { padding: 2px; border: 0; border-radius: 999px; background: var(--surface-card); box-shadow: 0 0 0 2px var(--color-danger); }
+.kb .pelabel.badge.spent .ccircle { --tone: var(--color-danger); color: var(--surface-card); background: var(--color-danger); border-color: var(--color-danger); }
 .kb .pelabel.beside { transform: translate(0, -50%); }
 .kb .pelabel.live { border-color: var(--color-accent); color: var(--color-accent); }
 .kb .plegend { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-label); color: var(--color-secondary); }

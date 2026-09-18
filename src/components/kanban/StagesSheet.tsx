@@ -429,9 +429,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         {glyph}
         <span className="pane-title">
           <span className="pname">{index + 1}. {name}</span>
-          <span className="prole">
+          {/* One line under the pane title, inside a 340-440 px pane that also
+              carries the state and the pane's controls: mark, model and ladder,
+              with the words in the row's own title and `aria-label` (#1743). */}
+          <span className="prole" title={identityTitle(t, identity)}>
             <span className="prole-role">{roleNameById(t, roleId)}</span>
-            <StageIdentity identity={identity} density="header" showWord />
+            <StageIdentity identity={identity} density="line" />
             {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
           </span>
         </span>

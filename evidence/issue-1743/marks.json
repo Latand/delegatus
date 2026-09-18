@@ -5,6 +5,10 @@
         "width": 1280,
         "height": 1000
       },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
       "chips": {
         "chips": [
           {
@@ -51,7 +55,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": false
+            "spent": false,
+            "text": "2Critique fails → Build2 of 3 used",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 186,
+            "scrollWidth": 186,
+            "budget": "2 of 3 used",
+            "budgetTruncated": false
           }
         ]
       },
@@ -77,7 +88,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": true
+            "spent": true,
+            "text": "2Review fails → Fix2 of 2 usednone left",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 219,
+            "scrollWidth": 219,
+            "budget": "2 of 2 used",
+            "budgetTruncated": false
           }
         ]
       },
@@ -145,39 +163,70 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": "long",
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1958,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "spent": {
         "nodes": [
@@ -210,18 +259,31 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2fail 2/2",
+            "overflowX": 0,
+            "area": 1217,
+            "fill": "rgb(198, 40, 40)",
+            "filled": true
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "modal": {
         "nodes": [
@@ -287,40 +349,123 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1958,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
+      "paneHeads": [
+        {
+          "stage": "plan",
+          "engineMark": "claude",
+          "effortStep": "1",
+          "model": "Fable",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "build",
+          "engineMark": "claude",
+          "effortStep": "2",
+          "model": "Sonnet",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": true
+        },
+        {
+          "stage": "critique",
+          "engineMark": "claude",
+          "effortStep": "3",
+          "model": "Opus 5",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "verify",
+          "engineMark": "codex",
+          "effortStep": "4",
+          "model": "6-Astra",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "ship",
+          "engineMark": "claude",
+          "effortStep": "5",
+          "model": "claude-opus-5-20260101-preview",
+          "modelWidth": 111.52,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        }
+      ],
       "navChips": [
         {
           "stage": "plan",
@@ -412,40 +557,361 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 346,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 395,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1253,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 8,
         "identityWords": "0",
+        "legend": [],
         "zoomScale": "0.8"
+      }
+    },
+    "640-en-light": {
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
+      "chips": {
+        "chips": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": true
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": false,
+            "text": "2Critique fails → Build2 of 3 used",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 186,
+            "scrollWidth": 186,
+            "budget": "2 of 3 used",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "spentChips": {
+        "chips": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": true,
+            "text": "2Review fails → Fix2 of 2 usednone left",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 219,
+            "scrollWidth": 219,
+            "budget": "2 of 2 used",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "looped": {
+        "nodes": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Fable",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "nextDiffers": true,
+            "model": "Sonnet",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "claude-opus-5-20260101-preview",
+            "modelTruncated": true,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "plan:pass:build",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          },
+          {
+            "edge": "build:pass:critique",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "critique:pass:verify",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "critique:fail:build",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 288,
+            "fill": "rgba(0, 0, 0, 0)",
+            "filled": false
+          },
+          {
+            "edge": "verify:pass:ship",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Critique → Build on fail · 2 of 3 used"
+        ]
+      },
+      "spent": {
+        "nodes": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "fix:pass:review",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "review:fail:fix",
+            "fired": "2",
+            "travelled": true,
+            "spent": true,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 360,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Review → Fix on fail · 2 of 2 used · none left"
+        ]
       }
     },
     "1280-en-dark": {
@@ -453,6 +919,10 @@
         "width": 1280,
         "height": 1000
       },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
       "chips": {
         "chips": [
           {
@@ -499,7 +969,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": false
+            "spent": false,
+            "text": "2Critique fails → Build2 of 3 used",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 186,
+            "scrollWidth": 186,
+            "budget": "2 of 3 used",
+            "budgetTruncated": false
           }
         ]
       },
@@ -525,7 +1002,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": true
+            "spent": true,
+            "text": "2Review fails → Fix2 of 2 usednone left",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 219,
+            "scrollWidth": 219,
+            "budget": "2 of 2 used",
+            "budgetTruncated": false
           }
         ]
       },
@@ -593,39 +1077,70 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": "long",
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1958,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "spent": {
         "nodes": [
@@ -658,18 +1173,31 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2fail 2/2",
+            "overflowX": 0,
+            "area": 1217,
+            "fill": "rgb(240, 113, 113)",
+            "filled": true
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "modal": {
         "nodes": [
@@ -735,40 +1263,123 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1958,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
+      "paneHeads": [
+        {
+          "stage": "plan",
+          "engineMark": "claude",
+          "effortStep": "1",
+          "model": "Fable",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "build",
+          "engineMark": "claude",
+          "effortStep": "2",
+          "model": "Sonnet",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": true
+        },
+        {
+          "stage": "critique",
+          "engineMark": "claude",
+          "effortStep": "3",
+          "model": "Opus 5",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "verify",
+          "engineMark": "codex",
+          "effortStep": "4",
+          "model": "6-Astra",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "ship",
+          "engineMark": "claude",
+          "effortStep": "5",
+          "model": "claude-opus-5-20260101-preview",
+          "modelWidth": 111.52,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        }
+      ],
       "navChips": [
         {
           "stage": "plan",
@@ -860,40 +1471,361 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 346,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 395,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2fail · 2 of 3 used",
+            "overflowX": 0,
+            "area": 1253,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 8,
         "identityWords": "0",
+        "legend": [],
         "zoomScale": "0.8"
+      }
+    },
+    "640-en-dark": {
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
+      "chips": {
+        "chips": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": true
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": false,
+            "text": "2Critique fails → Build2 of 3 used",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 186,
+            "scrollWidth": 186,
+            "budget": "2 of 3 used",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "spentChips": {
+        "chips": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": true,
+            "text": "2Review fails → Fix2 of 2 usednone left",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 219,
+            "scrollWidth": 219,
+            "budget": "2 of 2 used",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "looped": {
+        "nodes": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Fable",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "nextDiffers": true,
+            "model": "Sonnet",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "claude-opus-5-20260101-preview",
+            "modelTruncated": true,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "plan:pass:build",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          },
+          {
+            "edge": "build:pass:critique",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "critique:pass:verify",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "pass",
+            "overflowX": 0,
+            "area": 617,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "critique:fail:build",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 288,
+            "fill": "rgba(0, 0, 0, 0)",
+            "filled": false
+          },
+          {
+            "edge": "verify:pass:ship",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Critique → Build on fail · 2 of 3 used"
+        ]
+      },
+      "spent": {
+        "nodes": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "fix:pass:review",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "review:fail:fix",
+            "fired": "2",
+            "travelled": true,
+            "spent": true,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 360,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Review → Fix on fail · 2 of 2 used · none left"
+        ]
       }
     },
     "390-en": {
@@ -901,6 +1833,10 @@
         "width": 390,
         "height": 844
       },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
       "measured": {
         "board": "mobile2",
         "marks": [
@@ -926,6 +1862,55 @@
           16
         ],
         "pipelineRows": 2
+      },
+      "stages": {
+        "rows": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "model": "Fable",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "model": "Sonnet",
+            "returns": "2",
+            "overflowX": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "model": "6-Astra",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "model": "claude-opus-5-20260101-preview",
+            "returns": null,
+            "overflowX": 0
+          }
+        ]
       }
     },
     "1280-uk-light": {
@@ -933,6 +1918,10 @@
         "width": 1280,
         "height": 1000
       },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
+      },
       "chips": {
         "chips": [
           {
@@ -979,7 +1968,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": false
+            "spent": false,
+            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 260,
+            "scrollWidth": 260,
+            "budget": "використано 2 з 3",
+            "budgetTruncated": false
           }
         ]
       },
@@ -1005,7 +2001,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": true
+            "spent": true,
+            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 318,
+            "scrollWidth": 318,
+            "budget": "використано 2 з 2",
+            "budgetTruncated": false
           }
         ]
       },
@@ -1073,39 +2076,70 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2невдача 2/3",
+            "overflowX": 0,
+            "area": 1672,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "spent": {
         "nodes": [
@@ -1138,18 +2172,31 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2невдача 2/2",
+            "overflowX": 0,
+            "area": 1672,
+            "fill": "rgb(198, 40, 40)",
+            "filled": true
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "modal": {
         "nodes": [
@@ -1215,40 +2262,123 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2невдача · використано 2 з 3",
+            "overflowX": 0,
+            "area": 3061,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
+      "paneHeads": [
+        {
+          "stage": "plan",
+          "engineMark": "claude",
+          "effortStep": "1",
+          "model": "Fable",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "build",
+          "engineMark": "claude",
+          "effortStep": "2",
+          "model": "Sonnet",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": true
+        },
+        {
+          "stage": "critique",
+          "engineMark": "claude",
+          "effortStep": "3",
+          "model": "Opus 5",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "verify",
+          "engineMark": "codex",
+          "effortStep": "4",
+          "model": "6-Astra",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "ship",
+          "engineMark": "claude",
+          "effortStep": "5",
+          "model": "claude-opus-5-20260101-preview",
+          "modelWidth": 122.64,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        }
+      ],
       "navChips": [
         {
           "stage": "plan",
@@ -1340,40 +2470,361 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 346,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 445,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2невдача · використано 2 з 3",
+            "overflowX": 0,
+            "area": 1959,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 8,
         "identityWords": "0",
+        "legend": [],
         "zoomScale": "0.8"
+      }
+    },
+    "640-uk-light": {
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
+      },
+      "chips": {
+        "chips": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": true
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": false,
+            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 260,
+            "scrollWidth": 260,
+            "budget": "використано 2 з 3",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "spentChips": {
+        "chips": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": true,
+            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 292,
+            "scrollWidth": 292,
+            "budget": "використано 2 з 2",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "looped": {
+        "nodes": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Fable",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "nextDiffers": true,
+            "model": "Sonnet",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "claude-opus-5-20260101-preview",
+            "modelTruncated": true,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "plan:pass:build",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          },
+          {
+            "edge": "build:pass:critique",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "critique:pass:verify",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "critique:fail:build",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 288,
+            "fill": "rgba(0, 0, 0, 0)",
+            "filled": false
+          },
+          {
+            "edge": "verify:pass:ship",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Critique → Build при невдачі · використано 2 з 3"
+        ]
+      },
+      "spent": {
+        "nodes": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "fix:pass:review",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          },
+          {
+            "edge": "review:fail:fix",
+            "fired": "2",
+            "travelled": true,
+            "spent": true,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 360,
+            "fill": "rgb(255, 255, 255)",
+            "filled": true
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Review → Fix при невдачі · використано 2 з 2 · більше немає"
+        ]
       }
     },
     "1280-uk-dark": {
@@ -1381,6 +2832,10 @@
         "width": 1280,
         "height": 1000
       },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
+      },
       "chips": {
         "chips": [
           {
@@ -1427,7 +2882,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": false
+            "spent": false,
+            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 260,
+            "scrollWidth": 260,
+            "budget": "використано 2 з 3",
+            "budgetTruncated": false
           }
         ]
       },
@@ -1453,7 +2915,14 @@
         "loops": [
           {
             "count": "2",
-            "spent": true
+            "spent": true,
+            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 318,
+            "scrollWidth": 318,
+            "budget": "використано 2 з 2",
+            "budgetTruncated": false
           }
         ]
       },
@@ -1521,39 +2990,70 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2невдача 2/3",
+            "overflowX": 0,
+            "area": 1672,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "spent": {
         "nodes": [
@@ -1586,18 +3086,31 @@
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "review:fail:fix",
             "fired": "2",
             "travelled": true,
             "spent": true,
-            "circle": "2"
+            "circle": "2",
+            "form": "short",
+            "text": "2невдача 2/2",
+            "overflowX": 0,
+            "area": 1672,
+            "fill": "rgb(240, 113, 113)",
+            "filled": true
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
       "modal": {
         "nodes": [
@@ -1663,40 +3176,123 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2невдача · використано 2 з 3",
+            "overflowX": 0,
+            "area": 3061,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 10,
-        "identityWords": "1"
+        "identityWords": "1",
+        "legend": []
       },
+      "paneHeads": [
+        {
+          "stage": "plan",
+          "engineMark": "claude",
+          "effortStep": "1",
+          "model": "Fable",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "build",
+          "engineMark": "claude",
+          "effortStep": "2",
+          "model": "Sonnet",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": true
+        },
+        {
+          "stage": "critique",
+          "engineMark": "claude",
+          "effortStep": "3",
+          "model": "Opus 5",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "verify",
+          "engineMark": "codex",
+          "effortStep": "4",
+          "model": "6-Astra",
+          "modelWidth": 42,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        },
+        {
+          "stage": "ship",
+          "engineMark": "claude",
+          "effortStep": "5",
+          "model": "claude-opus-5-20260101-preview",
+          "modelWidth": 122.64,
+          "roleOverflow": 0,
+          "nextExpanded": false,
+          "nextDiffers": false
+        }
+      ],
       "navChips": [
         {
           "stage": "plan",
@@ -1788,46 +3384,371 @@
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           },
           {
             "edge": "build:pass:critique",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 346,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:pass:verify",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 445,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "critique:fail:build",
             "fired": "2",
             "travelled": true,
             "spent": false,
-            "circle": "2"
+            "circle": "2",
+            "form": null,
+            "text": "2невдача · використано 2 з 3",
+            "overflowX": 0,
+            "area": 1959,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
           },
           {
             "edge": "verify:pass:ship",
             "fired": "0",
             "travelled": false,
             "spent": false,
-            "circle": null
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
           }
         ],
         "captionPx": 8,
         "identityWords": "0",
+        "legend": [],
         "zoomScale": "0.8"
+      }
+    },
+    "640-uk-dark": {
+      "viewport": {
+        "width": 640,
+        "height": 720
+      },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
+      },
+      "chips": {
+        "chips": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": true
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": false,
+            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 260,
+            "scrollWidth": 260,
+            "budget": "використано 2 з 3",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "spentChips": {
+        "chips": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "markWidth": 12,
+            "scaleWidth": 19,
+            "nextDiffers": false
+          }
+        ],
+        "loops": [
+          {
+            "count": "2",
+            "spent": true,
+            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
+            "clientHeight": 22,
+            "scrollHeight": 22,
+            "clientWidth": 292,
+            "scrollWidth": 292,
+            "budget": "використано 2 з 2",
+            "budgetTruncated": false
+          }
+        ]
+      },
+      "looped": {
+        "nodes": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Fable",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "nextDiffers": true,
+            "model": "Sonnet",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "nextDiffers": false,
+            "model": "claude-opus-5-20260101-preview",
+            "modelTruncated": true,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "plan:pass:build",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          },
+          {
+            "edge": "build:pass:critique",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "critique:pass:verify",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "успіх",
+            "overflowX": 0,
+            "area": 695,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "critique:fail:build",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 288,
+            "fill": "rgba(0, 0, 0, 0)",
+            "filled": false
+          },
+          {
+            "edge": "verify:pass:ship",
+            "fired": "0",
+            "travelled": false,
+            "spent": false,
+            "circle": null,
+            "form": null,
+            "text": "",
+            "overflowX": 0,
+            "area": 0,
+            "fill": "",
+            "filled": false
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Critique → Build при невдачі · використано 2 з 3"
+        ]
+      },
+      "spent": {
+        "nodes": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "Opus 5",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "nextDiffers": false,
+            "model": "6-Astra",
+            "modelTruncated": false,
+            "overflowX": 0,
+            "overflowY": 0
+          }
+        ],
+        "edges": [
+          {
+            "edge": "fix:pass:review",
+            "fired": "2",
+            "travelled": true,
+            "spent": false,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 540,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          },
+          {
+            "edge": "review:fail:fix",
+            "fired": "2",
+            "travelled": true,
+            "spent": true,
+            "circle": "2",
+            "form": null,
+            "text": "2",
+            "overflowX": 0,
+            "area": 360,
+            "fill": "rgb(23, 23, 28)",
+            "filled": true
+          }
+        ],
+        "captionPx": 10,
+        "identityWords": "1",
+        "legend": [
+          "2Review → Fix при невдачі · використано 2 з 2 · більше немає"
+        ]
       }
     },
     "390-uk": {
       "viewport": {
         "width": 390,
         "height": 844
+      },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
       },
       "measured": {
         "board": "mobile2",
@@ -1854,6 +3775,55 @@
           16
         ],
         "pipelineRows": 2
+      },
+      "stages": {
+        "rows": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "model": "Fable",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "model": "Sonnet",
+            "returns": "2",
+            "overflowX": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "model": "6-Astra",
+            "returns": null,
+            "overflowX": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "model": "claude-opus-5-20260101-preview",
+            "returns": null,
+            "overflowX": 0
+          }
+        ]
       }
     }
   },

@@ -341,7 +341,7 @@ test("Stages opens the sheet on the live stage: navigator, loop, graph, and a pa
   expect(chips.map((chip) => Boolean(chip.querySelector("[data-next-differs]")))).toEqual([false, true, false, false]);
   expect(chips.map((chip) => chip.getAttribute("aria-current"))).toEqual(["false", "false", "true", "false"]);
   expect(view.querySelector(".gs-nav .ploop .ccircle")?.getAttribute("data-count")).toBe("1");
-  expect(view.querySelector(".gs-nav .ploop .ltext")?.textContent).toContain("Verify");
+  expect(view.querySelector(".gs-nav .ploop .lnames")?.textContent).toContain("Verify");
   expect(view.querySelectorAll(".gs-graph .pnode")).toHaveLength(4);
   expect([...view.querySelectorAll<HTMLElement>(".pane")].map((element) => element.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   same(document.activeElement, pane(host, "verify"));

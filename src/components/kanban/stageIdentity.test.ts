@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Pipeline, PipelineEdgeActivation, PipelineStage } from "@/lib/pipelines/types";
 
-import { edgeCount, stageIdentity } from "./stageIdentity";
+import { edgeCount, returnsInto, stageIdentity } from "./stageIdentity";
 
 /*
  * The data model behind graph slice 5 (#1743): what a stage says it runs on,
@@ -122,6 +122,24 @@ test("lineage-adopted evidence never marks an edge travelled", () => {
   expect(edgeCount(record, FAIL_EDGE).fired).toBe(0);
 });
 
+test("a stage row says how often work came back to it, from the same edge rule", () => {
+  const record = pipeline([BUILD, REVIEW], [
+    { stageId: "build", attempts: [
+      attempt(1),
+      attempt(2, { activatedBy: sentBack(1) }),
+      attempt(3, { state: "running", activatedBy: sentBack(2) }),
+    ] },
+    { stageId: "review", attempts: [
+      attempt(1, { state: "failed", activatedBy: passedOn(1) }),
+      attempt(2, { state: "failed", activatedBy: passedOn(2) }),
+    ] },
+  ]);
+  /* Two of two used: the row that work returned to carries the count, and the
+     stage that sent it back carries none. */
+  expect(returnsInto(record, "build")).toEqual([{ fired: 2, max: 2, travelled: true, exhausted: true }]);
+  expect(returnsInto(record, "review")).toEqual([]);
+});
+
 /* ── Launched values versus configured values ─────────────────────────────── */
 
 test("a stage that has not launched shows its configuration, marked as configuration", () => {
@@ -130,6 +148,17 @@ test("a stage that has not launched shows its configuration, marked as configura
     engine: "claude", model: "opus", modelLabel: "Opus 5", effort: "high",
     source: "configured", modelIsDefault: true, next: null,
   });
+});
+
+test("an attempt recorded without the values it ran on falls back to the configuration, as configuration", () => {
+  const record = pipeline([BUILD, REVIEW], [
+    { stageId: "build", attempts: [attempt(1, { state: "passed", effectiveRole: undefined })] },
+    { stageId: "review", attempts: [] },
+  ]);
+  const identity = stageIdentity(record, BUILD);
+  expect(identity.source).toBe("configured");
+  expect(identity.next).toBeNull();
+  expect(identity.engine).toBe("claude");
 });
 
 test("a bound attempt that never left the queue is not a launch", () => {

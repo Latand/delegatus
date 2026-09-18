@@ -66,7 +66,11 @@ const sameValues = (a: StageRunValues, b: StageRunValues) =>
 export function stageIdentity(pipeline: Pipeline, stage: PipelineStage): StageIdentityView {
   const configured = valuesOf(stage.effectiveRole);
   const launchedAttempt = operationalAttempts(pipeline, stage.id).filter(LAUNCHED).at(-1) ?? null;
-  if (!launchedAttempt) {
+  /* An attempt recorded without the values it was bound to — an older engine
+     build, a hand-repaired record — has no launched truth to show, so the
+     surface falls back to the configuration AS configuration rather than
+     claiming the current settings are what ran. */
+  if (!launchedAttempt?.effectiveRole) {
     return { ...configured, source: "configured", modelIsDefault: isDefaultModel(configured), next: null };
   }
   const launched = valuesOf(launchedAttempt.effectiveRole);
@@ -111,4 +115,17 @@ export function edgeCount(
   const fired = edgeRoundsUsed(pipeline, edge);
   const max = edge.kind === "fail" ? edge.maxRounds ?? null : null;
   return { fired, max, travelled: fired > 0, exhausted: max !== null && fired >= max };
+}
+
+/**
+ * Every fail edge that has sent work back INTO a stage, with its count — what a
+ * surface that draws a pipeline as rows rather than as a graph (the phone's
+ * pipeline screen) puts on the row the work returned to. Same rule, same
+ * numbers as the arrow: there is no second counter.
+ */
+export function returnsInto(pipeline: Pipeline, stageId: string): EdgeCount[] {
+  return pipeline.stages
+    .filter((source) => source.onFail?.to === stageId)
+    .map((source) => edgeCount(pipeline, { from: source.id, to: stageId, kind: "fail", maxRounds: source.onFail?.maxRounds ?? null }))
+    .filter((count) => count.travelled);
 }

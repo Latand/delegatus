@@ -333,7 +333,11 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
 
 /** The compact strip's loop chip (#1743): the leading glyph becomes the same
     circled number the arrow draws once the edge has fired, and a spent budget
-    inverts the chip so "no return left" reads without colour. */
+    inverts the chip so "no return left" reads without colour.
+
+    The chip is one line on a 256 px column card, so its parts are separate: the
+    stage names truncate, and the budget — the fact the chip exists for — never
+    does. */
 export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
   const { t } = useLocale();
   const exhausted = loop.fired >= loop.max;
@@ -346,7 +350,8 @@ export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][num
       {loop.fired
         ? <CountCircle n={loop.fired} tone="fail" filled={!exhausted} label={t("kanban.graph.firedTitle", { count: loop.fired })} />
         : <span className="lglyph" aria-hidden="true">↺</span>}
-      <span className="ltext">{t("kanban.loopPlain", { from, to, fired: loop.fired, max: loop.max })}</span>
+      <span className="lnames">{t("kanban.loopNames", { from, to })}</span>
+      <span className="lbudget">{t("kanban.loopUsed", { fired: loop.fired, max: loop.max })}</span>
       {exhausted ? <span className="lnone">{t("kanban.graph.noneLeft")}</span> : null}
     </span>
   );
@@ -372,6 +377,20 @@ const LIVE_EDGE_MS = 2_400;
 const CAPTION_PX = 10;
 const MIN_LEGIBLE_PX = 9;
 
+/** How much of itself a beside fail label still draws: the whole sentence, the
+    short budget, or the circled count with the sentence in the legend. */
+type BesideForm = "long" | "short" | "badge";
+const NO_FORMS: Readonly<Record<string, BesideForm>> = {};
+
+/** Registers a beside label for measurement; a label that is not beside the
+    return lane has the box's whole width and is never measured. */
+const besideRef = (boxes: React.RefObject<Map<string, HTMLElement>>, id: string | null) =>
+  (element: HTMLElement | null) => {
+    if (!id) return;
+    if (element) boxes.current.set(id, element);
+    else boxes.current.delete(id);
+  };
+
 export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView, scale = 1 }: {
   summary: KanbanPipeline;
   names: ReadonlyMap<string, string>;
@@ -387,11 +406,35 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
       big its text actually lands. */
   scale?: number;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { pipeline, views } = summary;
   const layout = useMemo(() => layoutGraph(pipeline, available, force), [pipeline, available, force]);
   const nameOf = (id: string) => names.get(id) ?? id;
   const identityWords = CAPTION_PX * scale >= MIN_LEGIBLE_PX;
+
+  /* A fail edge's label sits beside the return lane, in the width the layout
+     reserved for it. How wide the sentence actually is depends on the language
+     — Ukrainian's is half again longer than English's — and a label the box
+     cuts is worse than a short one: the remaining budget was the part that went
+     missing. So a beside label that does not fit steps down, measured rather
+     than guessed: the full sentence, then `fail n/m`, then the circled count
+     alone with the sentence moved into the legend under the graph. Each edge
+     only ever steps down, so the measurement settles. */
+  const labelBoxes = useRef(new Map<string, HTMLElement>());
+  const fitKey = `${layout.dir}|${layout.width}|${layout.labelMode}|${locale}`;
+  const [fit, setFit] = useState<{ key: string; forms: Readonly<Record<string, BesideForm>> }>({ key: fitKey, forms: {} });
+  const forms = fit.key === fitKey ? fit.forms : NO_FORMS;
+  useLayoutEffect(() => {
+    const next: Record<string, BesideForm> = { ...forms };
+    let changed = fit.key !== fitKey;
+    for (const [id, element] of labelBoxes.current) {
+      if (!element.isConnected || forms[id] === "badge") continue;
+      if (element.offsetLeft + element.offsetWidth <= layout.width + 0.5) continue;
+      next[id] = forms[id] === "short" ? "badge" : "short";
+      changed = true;
+    }
+    if (changed) setFit({ key: fitKey, forms: next });
+  });
 
   /* Live edges: the stage's own attempts that were not here on the last render
      and name the edge that activated them. The first render marks nothing, and
@@ -444,29 +487,47 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     );
     const style = { left: `${route.label[0]}px`, top: `${route.label[1]}px` };
     const title = edgeTitle(t, edge, count, layout.topology.branching.has(edge.from));
-    if (edge.kind === "fail" && layout.dir === "TB" && layout.labelMode === "legend" && back) {
-      /* Legend mode: the arrow carries the count and nothing else, so a circled
-         number means "times fired" here too. The row names the stages. */
+    const beside = route.labelAxis === "v" && edge.kind === "fail" && back;
+    /* Legend mode is the layout's own decision, taken before any text exists;
+       the step-down below is this label's, taken from what it measured. */
+    const legendMode = edge.kind === "fail" && layout.dir === "TB" && layout.labelMode === "legend" && back;
+    const measured = beside && !legendMode ? edge.id : null;
+    const form: BesideForm = measured ? forms[edge.id] ?? "long" : "long";
+    const badgeOnly = legendMode || form === "badge";
+    if (badgeOnly) {
+      /* The arrow carries the count and nothing else, so a circled number means
+         "times fired" here too. The row under the graph names the stages. */
       legend.push({ id: edge.id, count, text: t("kanban.graph.legendFail", { from: nameOf(edge.from), to: nameOf(edge.to), n: count.fired, max: count.max ?? 0 }) });
       if (count.travelled) {
         labels.push(
-          <span key={`label-${edge.id}`} className={`pelabel ${edge.kind} badge${count.exhausted ? " spent" : ""}${isLive ? " live" : ""}`} data-edge-label={edge.id} style={style} title={title}>
-            <CountCircle n={count.fired} tone="fail" filled={!count.exhausted} label={t("kanban.graph.firedTitle", { count: count.fired })} />
+          <span
+            key={`label-${edge.id}`}
+            ref={besideRef(labelBoxes, measured)}
+            className={`pelabel ${edge.kind} badge${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
+            data-edge-label={edge.id}
+            data-edge-fired={count.fired}
+            style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
+            title={title}
+          >
+            {/* A fail count is a filled disc; on a bare badge exhaustion is the
+                ring the pill draws around it, not a lighter circle. */}
+            <CountCircle n={count.fired} tone="fail" filled label={t("kanban.graph.firedTitle", { count: count.fired })} />
           </span>,
         );
       }
       continue;
     }
-    const long = edge.kind === "fail" && back;
+    const long = edge.kind === "fail" && back && form === "long";
     const content = edgeContent(t, edge, count, layout.topology.branching.has(edge.from), long);
     if (!content) continue;
-    const beside = route.labelAxis === "v" && edge.kind === "fail" && back;
     labels.push(
       <span
         key={`label-${edge.id}`}
+        ref={besideRef(labelBoxes, measured)}
         className={`pelabel ${edge.kind}${count.travelled ? " taken" : ""}${count.exhausted ? " spent" : ""}${beside ? " beside" : ""}${isLive ? " live" : ""}`}
         data-edge-label={edge.id}
         data-edge-fired={count.fired}
+        data-edge-label-form={measured ? form : undefined}
         style={beside ? { left: `${route.label[0] + 8}px`, top: `${route.label[1]}px` } : style}
         title={title}
       >

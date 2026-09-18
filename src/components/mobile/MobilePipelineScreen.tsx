@@ -12,6 +12,12 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
+/* The identity unit and the circled count are the Viewer's ONE vocabulary for
+   "who runs this stage" and "how often work came back here" (#1743). They live
+   beside the graph that first drew them; the phone reads the same modules
+   rather than growing a second drawing of the same facts. */
+import { CountCircle, identityTitle, StageIdentity } from "../kanban/identityMarks";
+import { returnsInto, stageIdentity } from "../kanban/stageIdentity";
 import {
   attemptNavTarget,
   attemptStateLabel,
@@ -632,17 +638,23 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   /* Configurable by the one rule the desktop's pane and strip read too. */
   const configurable = !file && stageConfigurable(pipeline, stage.id);
   const title = stageRowTitle(t, stage);
+  /* Who runs it, and how often work came back to it: the same mark, ladder and
+     circled count the desktop's graph draws (#1743). */
+  const identity = stageIdentity(pipeline, stage);
+  const returns = returnsInto(pipeline, stage.id);
   const Tag = file || configurable ? "button" : "div";
+  const who = identityTitle(t, identity);
   const control = file
-    ? { type: "button" as const, onClick: () => onOpenConversation(file), "aria-label": t("mobile2.pipeline.openStage", { stage: title }) }
+    ? { type: "button" as const, onClick: () => onOpenConversation(file), "aria-label": `${t("mobile2.pipeline.openStage", { stage: title })}. ${who}` }
     : configurable
-      ? { type: "button" as const, onClick: () => onConfigure(stage), "aria-label": t("mobile2.pipeline.configure", { stage: title }), "aria-haspopup": "dialog" as const }
+      ? { type: "button" as const, onClick: () => onConfigure(stage), "aria-label": `${t("mobile2.pipeline.configure", { stage: title })}. ${who}`, "aria-haspopup": "dialog" as const }
       : {};
   return (
     <div data-mobile2-stage-group={stage.id}>
       <Tag
         {...control}
         data-mobile2-stage={stage.id}
+        title={who}
         data-mobile2-go={file ? "chat" : undefined}
         data-mobile2-stage-configure={configurable ? "true" : undefined}
         data-mobile2-stage-state={state}
@@ -651,8 +663,22 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
       >
         <StageMark state={state} index={index} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
-          <span className="truncate text-label tabular-nums text-muted">{stageMetaLine(t, pipeline, stage)}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+            {returns.map((count, at) => (
+              <CountCircle
+                key={at}
+                n={count.fired}
+                tone="fail"
+                filled={!count.exhausted}
+                label={t("kanban.graph.firedTitle", { count: count.fired })}
+              />
+            ))}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
+            <StageIdentity identity={identity} density="line" />
+            <span className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
+          </span>
         </span>
         {file ? (
           <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />

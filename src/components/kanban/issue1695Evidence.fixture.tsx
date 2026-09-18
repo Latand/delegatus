@@ -909,6 +909,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 localStorage.setItem("llvProject", PROJECT);
-localStorage.setItem("llv_lang", "en");
+/* The harness may seed a language before this module runs (`openFixture`), so
+   English is only the DEFAULT here — writing it unconditionally turned every
+   requested Ukrainian frame back into an English render (#1743). */
+if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
 if (!location.hash) location.hash = `#p=${PROJECT}`;
 createRoot(document.getElementById("root")!).render(<Viewer />);

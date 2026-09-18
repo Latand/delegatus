@@ -1,5 +1,6 @@
 "use client";
 
+import { effortTierLabel } from "@/components/builderCopy";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
 import { engineBadgeFor } from "@/components/utils";
@@ -8,19 +9,27 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import type { StageIdentityView, StageRunValues } from "./stageIdentity";
 
 /*
- * Who runs a stage, drawn (#1743). One unit, three densities, so the same
- * facts read the same on a minimized chip, on a graph node and in a pane
- * header:
+ * Who runs a stage, drawn (#1743). One unit, four densities, so the same facts
+ * read the same on a minimized chip, on a graph node, on a one-line row and in
+ * a pane header:
  *
  *   engine → the shared `EngineMark`, in the engine's colour
  *   effort → the shared five-step `EffortScale`, identical everywhere
  *   model  → text, wherever there is room for it
  *
- * The engine word is printed only in the header, where there is space for it;
- * on a chip and a node the mark carries the engine and the host's `aria-label`
- * names it in words. A stage that has not launched draws its configuration
- * muted, and a configuration that has moved on since the launch adds a dashed
- * "next attempt differs" pill rather than quietly replacing what ran.
+ * The engine word is printed only in the roomy `header` density — the draft
+ * pane's own wrapping meta row — because a pane is 340-440 px wide and its
+ * title line also carries the role, the state and the pane's controls: spelling
+ * out engine AND effort there squeezed the model to nothing. That line takes
+ * the tight `line` density, which draws mark, model and ladder only and leaves
+ * the words to the row's own tooltip and `aria-label`; the phone's stage rows
+ * take the same one, so a stage says who runs it there too.
+ *
+ * A stage that has not launched draws its configuration muted, and a
+ * configuration that has moved on since the launch adds a dashed "next attempt
+ * differs" pill rather than quietly replacing what ran. The pill spells the
+ * next values out only in the roomy density; everywhere else it is its arrow,
+ * because the expanded form is 150 px wide and was cut mid-pill.
  */
 
 /** Human engine name, from the Viewer's one engine label table. */
@@ -28,7 +37,7 @@ export const engineWord = (engine: string) => engineBadgeFor(engine).label;
 
 function valuesTitle(t: TFunction, values: StageRunValues): string {
   return values.effort
-    ? t("kanban.identity.title", { engine: engineWord(values.engine), model: values.modelLabel, effort: values.effort })
+    ? t("kanban.identity.title", { engine: engineWord(values.engine), model: values.modelLabel, effort: effortTierLabel(t, values.effort) })
     : t("kanban.identity.titleNoEffort", { engine: engineWord(values.engine), model: values.modelLabel });
 }
 
@@ -43,7 +52,9 @@ export function identityTitle(t: TFunction, identity: StageIdentityView): string
 
 export function StageIdentity({ identity, density, name, showWord = false, words = true, className }: {
   identity: StageIdentityView;
-  density: "chip" | "node" | "header";
+  /** `chip` minimized, `node` on a graph node, `line` on a one-line row that
+      has no space for words, `header` on a wrapping meta row that does. */
+  density: "chip" | "node" | "line" | "header";
   /** The chip draws the stage name inside the unit, between mark and scale. */
   name?: React.ReactNode;
   /** Print the effort word beside the scale. The node passes this only when the
@@ -61,15 +72,16 @@ export function StageIdentity({ identity, density, name, showWord = false, words
   /* A minimized chip has room for the model only when it says something the
      engine mark does not: a model other than the engine's own default. */
   const showModel = words && (density !== "chip" || !identity.modelIsDefault);
+  const roomy = words && density === "header";
   return (
     <span className={`pident d-${density}${className ? ` ${className}` : ""}`} data-identity={identity.source} data-engine={identity.engine} title={title}>
       <EngineMark engine={identity.engine} size={12} />
-      {density === "header" && words ? <span className="iengine">{engineWord(identity.engine)}</span> : null}
+      {roomy ? <span className="iengine">{engineWord(identity.engine)}</span> : null}
       {name}
       {showModel ? <span className="imodel">{identity.modelLabel}</span> : null}
       <EffortScale effort={identity.effort} />
-      {words && showWord && identity.effort ? <span className="ieffort">{identity.effort}</span> : null}
-      {identity.next ? <NextPill next={identity.next} expanded={words && density === "header"} /> : null}
+      {words && showWord && identity.effort ? <span className="ieffort">{effortTierLabel(t, identity.effort)}</span> : null}
+      {identity.next ? <NextPill next={identity.next} expanded={roomy} /> : null}
     </span>
   );
 }
@@ -83,12 +95,12 @@ function NextPill({ next, expanded }: { next: StageRunValues; expanded: boolean 
     <span className={`pnext${expanded ? " wide" : ""}`} data-next-differs="" role="img" aria-label={title} title={title}>
       <span aria-hidden="true">→</span>
       {expanded ? (
-        <>
+        <span className="nvals">
           <EngineMark engine={next.engine} size={12} />
           <span className="imodel">{next.modelLabel}</span>
           <EffortScale effort={next.effort} />
-          {next.effort ? <span className="ieffort">{next.effort}</span> : null}
-        </>
+          {next.effort ? <span className="ieffort">{effortTierLabel(t, next.effort)}</span> : null}
+        </span>
       ) : null}
     </span>
   );
