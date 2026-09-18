@@ -326,3 +326,49 @@ test("a pipeline whose graph was edited shows the latest edit, signed by the con
   expect(line.textContent).toContain("changed verify · applies from attempt 3");
   expect(line.getAttribute("title")).toBe("changed prompt of stage verify; applies from attempt 3");
 });
+
+test("a stage that reported its own completion shows it on the card, findings most severe first (graph slice 2)", async () => {
+  const base = searchPipeline();
+  const verdict = {
+    status: "fail",
+    findings: ["P0 — the fence is missing", "P1 — the retry loop never ends", "P2 — a nit", "P3 — spelling"],
+    rankedFindings: [
+      { severity: "P0", text: "the fence is missing" },
+      { severity: "P1", text: "the retry loop never ends" },
+      { severity: "P2", text: "a nit" },
+      { severity: "P3", text: "spelling" },
+    ],
+  };
+  base.runs[2]!.attempts[1]!.verdict = verdict as never;
+  const reported = {
+    ...base,
+    stageReports: [
+      { seq: 1, at: iso(900), actor: { kind: "agent", role: "builder", conversationId: "conversation_implement" }, stageId: "implement", attempt: 2, status: "pass", findings: 0, replaces: null, summary: "Built it." },
+      { seq: 2, at: iso(300), actor: { kind: "agent", role: "verifier", conversationId: "conversation_verify" }, stageId: "verify", attempt: 2, status: "fail", findings: 4, replaces: null, summary: "Four findings left." },
+    ],
+  } as unknown as Pipeline;
+  const { host, render } = mount([searchPipeline()]);
+  await tick();
+  expect(card(host).querySelector(".stage-report")).toBeNull();
+  render([reported]);
+  await tick();
+
+  const line = card(host).querySelector<HTMLElement>(".stage-report")!;
+  expect(line.dataset.stageReport).toBe("2");
+  expect(line.dataset.stageReportActor).toBe("agent");
+  expect(line.dataset.stageReportStatus).toBe("fail");
+  expect(line.textContent).toContain("verifier conversation_verify");
+  expect(line.getAttribute("title")).toBe("Four findings left.");
+
+  const findings = card(host).querySelector<HTMLElement>(".stage-findings")!;
+  expect(findings.dataset.stageFindings).toBe("4");
+  expect([...findings.querySelectorAll("li[data-severity]")].map((item) => [
+    item.getAttribute("data-severity"),
+    item.querySelector(".text")?.textContent,
+  ])).toEqual([
+    ["P0", "the fence is missing"],
+    ["P1", "the retry loop never ends"],
+    ["P2", "a nit"],
+  ]);
+  expect(findings.querySelector(".more")?.textContent).toContain("1 more finding");
+});

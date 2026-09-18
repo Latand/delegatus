@@ -1,9 +1,46 @@
-import type { StageVerdict } from "./types";
+import { MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
+import { STAGE_FINDING_SEVERITIES, type StageFinding, type StageFindingSeverity, type StageVerdict, type StageVerdictStatus } from "./types";
 
-const MAX_FINDINGS = 50;
-const MAX_FINDING_CHARS = 2_000;
-const MAX_OUTPUT_CHARS = 32_000;
-const ALLOWED_KEYS = new Set(["status", "findings", "confidence"]);
+const MAX_FINDINGS = MAX_STAGE_REPORT_FINDINGS;
+const MAX_FINDING_CHARS = MAX_STAGE_FINDING_CHARS;
+export const MAX_OUTPUT_CHARS = 32_000;
+/* `rankedFindings` is derived from `findings`, never read from the value being
+   validated: an agent that writes it into its own fenced block is ignored, and
+   a persisted record re-derives the identical array when it is loaded. */
+const ALLOWED_KEYS = new Set(["status", "findings", "rankedFindings", "confidence"]);
+
+const SEVERITY_RANK = new Map<StageFindingSeverity | null, number>(
+  [...STAGE_FINDING_SEVERITIES.map((severity, index) => [severity, index] as const), [null, STAGE_FINDING_SEVERITIES.length] as const],
+);
+/** `P1 — text`, `P1 - text` and `P1: text`: the forms reviewers already write
+    and the form {@link stageFindingText} renders. The separator is required
+    and a dash carries a space on each side, so prose that merely opens on a
+    severity keeps its own text: "P1-based scoring is wrong" and "P0 through
+    P3 are undefined" talk about ranks, and reading either as a rank would
+    rewrite the words the reviewer wrote. */
+const RANKED_FINDING_RE = new RegExp(`^(${STAGE_FINDING_SEVERITIES.join("|")})(?:\\s+[—–-]\\s+|\\s*:\\s*)([\\s\\S]*)$`);
+
+/** One finding as a record. Text that names no severity is unranked, which is
+    every finding a fenced verdict carried before ranking existed. */
+export function stageFindingFromText(text: string): StageFinding {
+  const match = RANKED_FINDING_RE.exec(text.trim());
+  const body = match?.[2]?.trim();
+  return match && body ? { severity: match[1] as StageFindingSeverity, text: body } : { severity: null, text: text.trim() };
+}
+
+/** The single rendering of a finding, for the card, the relay and the record. */
+export function stageFindingText(finding: StageFinding): string {
+  return finding.severity ? `${finding.severity} — ${finding.text}` : finding.text;
+}
+
+/** Most severe first, unranked last, stable within a severity. */
+export function rankStageFindings(findings: readonly StageFinding[]): StageFinding[] {
+  return findings
+    .map((finding, index) => ({ finding, index }))
+    .sort((left, right) => (SEVERITY_RANK.get(left.finding.severity)! - SEVERITY_RANK.get(right.finding.severity)!) || (left.index - right.index))
+    .map(({ finding }) => finding);
+}
+
 const PROSE_VERDICT_STATUSES = {
   APPROVE: "pass",
   REQUEST_CHANGES: "fail",
@@ -44,14 +81,26 @@ export function stageVerdictFrom(value: unknown): StageVerdict | null {
   const verdict: StageVerdict = { status: record.status };
   if (record.findings !== undefined) {
     if (!Array.isArray(record.findings) || record.findings.length > MAX_FINDINGS) return null;
-    const findings: string[] = [];
+    const findings: StageFinding[] = [];
     for (const finding of record.findings) {
       if (typeof finding !== "string") return null;
       const trimmed = finding.trim();
       if (!trimmed || trimmed.length > MAX_FINDING_CHARS) return null;
-      findings.push(trimmed);
+      findings.push(stageFindingFromText(trimmed));
     }
-    verdict.findings = findings;
+    /* Ranking is what the record keeps: the relay, the park detail and the
+       card all read `findings[0]`, and that must be the worst one. Findings
+       none of which carry a rank have nothing to order, so they keep the
+       order they arrived in and the record stays the array it always was.
+
+       The clamp applies to the rendered form: rewriting a separator can
+       lengthen a finding that was already at the bound, and a
+       record this validator would then reject on reload is a record the store
+       refuses whole. Clamping the rendering makes it idempotent — a reload
+       re-derives the same array, byte for byte. */
+    const ranked = rankStageFindings(findings).map((finding) => stageFindingFromText(stageFindingText(finding).slice(0, MAX_FINDING_CHARS)));
+    verdict.findings = ranked.map(stageFindingText);
+    if (ranked.some((finding) => finding.severity !== null)) verdict.rankedFindings = ranked;
   }
   if (record.confidence !== undefined) {
     if (typeof record.confidence !== "number" || !Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) {
@@ -141,4 +190,71 @@ export function parseStageVerdict(text: string): ParsedStageVerdict | RejectedSt
     }
   }
   return { verdict, output };
+}
+
+/** The completion a stage attempt reports for itself, as the MCP call carries
+    it (graph slice 2). Deliberately three fields: everything else on the
+    record — the head, the branch's pull request, the declared outputs — is
+    read by the server, so nothing here can be claimed. */
+export type StageCompletionInput = {
+  verdict: unknown;
+  findings?: unknown;
+  summary?: unknown;
+};
+
+export type StageCompletionRefusal = { error: string; code: StageCompletionRefusalCode };
+export type StageCompletionRefusalCode = "STAGE_REPORT_INVALID" | "STAGE_REPORT_CONTRADICTORY";
+export type NormalizedStageCompletion = { verdict: StageVerdict; summary: string | null };
+
+const STAGE_VERDICT_STATUSES: readonly StageVerdictStatus[] = ["pass", "fail", "needs_decision"];
+
+function refusal(error: string, code: StageCompletionRefusalCode = "STAGE_REPORT_INVALID"): StageCompletionRefusal {
+  return { error, code };
+}
+
+/**
+ * The second input of the same form (graph slice 2). A completion call and a
+ * fenced JSON verdict end in the SAME normaliser: the call's ranked findings
+ * are rendered to the verdict's finding strings and handed to
+ * {@link stageVerdictFrom}, which is where every bound and every contradiction
+ * rule already lives. A call therefore cannot express a verdict a fenced block
+ * could not, and both produce byte-identical records.
+ */
+export function normalizeStageCompletion(input: StageCompletionInput): NormalizedStageCompletion | StageCompletionRefusal {
+  if (typeof input.verdict !== "string" || !STAGE_VERDICT_STATUSES.includes(input.verdict as StageVerdictStatus)) {
+    return refusal(`verdict must be one of ${STAGE_VERDICT_STATUSES.join(", ")}`);
+  }
+  const status = input.verdict as StageVerdictStatus;
+  const findings: StageFinding[] = [];
+  if (input.findings !== undefined && input.findings !== null) {
+    if (!Array.isArray(input.findings)) return refusal("findings must be an array of { severity, text }");
+    if (input.findings.length > MAX_FINDINGS) return refusal(`findings must hold at most ${MAX_FINDINGS} entries`);
+    for (const raw of input.findings) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return refusal("each finding must be an object { severity, text }");
+      const finding = raw as Record<string, unknown>;
+      const severity = finding.severity;
+      if (typeof severity !== "string" || !(STAGE_FINDING_SEVERITIES as readonly string[]).includes(severity)) {
+        return refusal(`each finding needs a severity of ${STAGE_FINDING_SEVERITIES.join(", ")}`);
+      }
+      const text = typeof finding.text === "string" ? finding.text.trim() : "";
+      if (!text) return refusal("each finding needs a non-empty text");
+      if (text.length > MAX_FINDING_CHARS) return refusal(`each finding text must be at most ${MAX_FINDING_CHARS} characters`);
+      findings.push({ severity: severity as StageFindingSeverity, text });
+    }
+  }
+  if (status === "pass" && findings.length > 0) {
+    return refusal('contradictory stage verdict: status "pass" cannot include findings', "STAGE_REPORT_CONTRADICTORY");
+  }
+  /* The bound belongs to the finding as it is recorded, and that is the
+     rendered `P1 — text`: a text at the schema's own bound is five characters
+     longer once its rank is in front of it, and handing that to
+     {@link stageVerdictFrom} would refuse the whole call over characters the
+     caller never wrote. Clamp the rendering, exactly as that validator does
+     when it reloads a record, so such a text is accepted and loses only its
+     tail. The tool schema states this where the caller reads the bound. */
+  const rendered = rankStageFindings(findings).map((finding) => stageFindingText(finding).slice(0, MAX_FINDING_CHARS));
+  const verdict = stageVerdictFrom({ status, ...(rendered.length ? { findings: rendered } : {}) });
+  if (!verdict) return refusal("the reported verdict is not a valid stage verdict");
+  const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
+  return { verdict, summary: summary || null };
 }
