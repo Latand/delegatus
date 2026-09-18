@@ -1,5 +1,6 @@
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
+import { edgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
 import { LIVE_ATTEMPT_STATES, latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /**
@@ -58,10 +59,11 @@ export function operationalAttempts(pipeline: Pipeline, stageId: string): Pipeli
   return stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
 }
 
-/** How many times an edge fired: the stage's own attempts of its target that it
-    activated. For a fail edge this is the engine's spent retry budget. */
+/** How many times an edge fired: the distinct source attempts that activated
+    its target. For a fail edge this is the engine's own spent retry budget,
+    read from the engine's own function. */
 export function edgeFired(pipeline: Pipeline, edge: Pick<GraphEdge, "from" | "to" | "kind">): number {
-  return operationalAttempts(pipeline, edge.to).filter((attempt) => attempt.activatedBy?.stageId === edge.from && attempt.activatedBy.edge === edge.kind).length;
+  return edgeRoundsUsed(pipeline, edge);
 }
 
 /** The attempts that should mark an edge live when they first appear: the
