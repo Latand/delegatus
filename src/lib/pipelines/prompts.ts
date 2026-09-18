@@ -58,7 +58,7 @@ export function renderStagePrompt(
     "",
     "Report this stage's completion with the Viewer MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
-    "The call is an intent: the stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
+    "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
     "",
     "Finish the completed turn with one fenced JSON object as the final block. Without the tool call, this block is the completion authority; with it, the call wins:",
     "```json",

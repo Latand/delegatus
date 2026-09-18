@@ -4,10 +4,11 @@ import { pipelineWorktreeChanges } from "./git";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import type { Pipeline, PipelineStageProvenance } from "./types";
 
-/** The forge read is the only remote call a completion report makes, and it is
-    made while the pipeline mutation is held. Bound it, and treat anything it
-    cannot answer as "no pull request observed" rather than a refusal: the
-    report is about the stage's work, and a forge outage is not the stage's. */
+/** The forge read is the only remote call a completion report makes. Bound it,
+    and treat anything it cannot answer as "no pull request observed", which
+    still accepts the report: a forge outage says nothing about the stage's own
+    work. The caller runs this before it takes the pipeline mutation, so the
+    bound is what keeps one unanswered connection off the report's latency. */
 const PULL_REQUEST_LOOKUP_TIMEOUT = "10s";
 const MAX_UNCOMMITTED_PATHS = 20;
 
@@ -70,9 +71,9 @@ function pullRequestOf(worktreeDir: string, branch: string, exec: ExecPort): Pul
  * The completion call carries a verdict, findings and a summary; everything an
  * agent could otherwise assert about its own work — which commit it left, what
  * it published, whether it produced what the stage declared — is read here
- * instead, so the record on the attempt is an observation rather than a claim.
- * No read refuses the report: a field the server could not read is `null`, and
- * that is a statement about the read.
+ * instead, so the record on the attempt states what the server saw. No read
+ * refuses the report: a field the server could not read is `null`, which
+ * describes the read itself.
  */
 export function collectStageProvenance(
   pipeline: Pick<Pipeline, "worktreeDir" | "branch">,

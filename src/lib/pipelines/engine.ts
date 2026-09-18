@@ -2184,8 +2184,8 @@ function commitPassedStage(
  * the next stage reads is lost.
  *
  * This is consulted only where settlement is already decided — at a terminal
- * turn — which is what makes the call an intent rather than the close: an
- * attempt that reports and then keeps working settles when its turn ends.
+ * turn — which is what keeps the call an intent: an attempt that reports and
+ * then keeps working settles when its turn ends.
  */
 function reportedStageVerdict(
   attempt: PipelineStageAttempt,
@@ -5644,8 +5644,8 @@ export async function patchPipeline(
 }
 
 /** A stage attempt whose turn is under way, so its conversation can still say
-    how the stage ended. Everything else has settled, and a settled attempt is
-    a record, not a claim anyone may still edit. */
+    how the stage ended. Everything else has settled, and a settled attempt
+    holds the verdict the graph already routed on. */
 const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running", "reviewing", "committing"]);
 
 export type StageCompletionRequest = StageCompletionInput & { stageId?: unknown };
@@ -5725,9 +5725,9 @@ function resolveStageCompletionTarget(
  * The caller is resolved server-side: the calling conversation is matched to
  * the attempt it is running, so a conversation cannot report for a stage it
  * does not hold and `stageId` is needed only to disambiguate a conversation
- * that holds more than one. The call is an intent — it records the verdict on
- * the attempt and returns; the attempt settles when its turn completes, on the
- * existing lifecycle-aware path. A second call before settlement replaces the
+ * that holds more than one. The call records an intent: it writes the verdict
+ * on the attempt and returns, and the attempt settles when its turn completes,
+ * on the existing lifecycle-aware path. A second call before settlement replaces the
  * first, and a call after it is refused, because by then the verdict is the
  * record the graph already routed on.
  *

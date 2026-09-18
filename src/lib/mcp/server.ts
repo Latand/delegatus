@@ -2722,7 +2722,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Findings are returned and shown most severe first; pass cannot carry findings.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
     "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",
-    "The call is an intent, not the close: the stage settles when your turn ends, so you may keep working after it. Calling again before settlement replaces the report; a call after it is refused.",
+    "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "A fenced JSON verdict in the final turn remains the second input of the same form; when both exist, this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
   ].join(" "),

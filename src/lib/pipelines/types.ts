@@ -228,8 +228,8 @@ export type PipelineGraphEdit = {
 /** What the server itself observed about a stage attempt's work at the moment
     the attempt reported completion (graph slice 2). Never taken from the
     caller: the call carries a verdict, findings and a summary, and nothing
-    else. A field the server could not read is `null`, which is a statement
-    about the read, not about the work. */
+    else. A field the server could not read is `null`, which states what the
+    read found and says nothing about the work itself. */
 export type PipelineStageProvenance = {
   /** The worktree's checked-out commit, dirty tree included. */
   head: string | null;
@@ -246,9 +246,9 @@ export type PipelineStageProvenance = {
 };
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
-    attempt stated through the MCP tool, not the close. The attempt settles
-    when its turn completes, on this verdict; a second call before settlement
-    replaces this record, and one after it is refused. */
+    attempt stated through the MCP tool. The attempt settles when its turn
+    completes, on this verdict; a second call before settlement replaces this
+    record, and one after it is refused. */
 export type PipelineStageReport = {
   /** Shared with the pipeline's attributed journal entry for this call. */
   seq: number;

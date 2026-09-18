@@ -89,8 +89,8 @@ export function stageVerdictFrom(value: unknown): StageVerdict | null {
        none of which carry a rank have nothing to order, so they keep the
        order they arrived in and the record stays the array it always was.
 
-       The rendered form is clamped, not the text that arrived: rewriting a
-       separator can lengthen a finding that was already at the bound, and a
+       The clamp applies to the rendered form: rewriting a separator can
+       lengthen a finding that was already at the bound, and a
        record this validator would then reject on reload is a record the store
        refuses whole. Clamping the rendering makes it idempotent — a reload
        re-derives the same array, byte for byte. */

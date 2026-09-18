@@ -154,7 +154,7 @@ test("a live attempt's reported completion settles it when the turn ends, with s
   });
   expect(accepted.report!.provenance.branch).toBe(current().branch);
 
-  /* The call is an intent, not the close: nothing settles while the turn runs. */
+  /* The call records an intent: nothing settles while the turn runs. */
   await tickPipelines([], h.ports);
   expect(attemptsOf("build")[0]!.state).toBe("running");
   expect(attemptsOf("build")[0]!.verdict).toBeNull();
@@ -169,7 +169,7 @@ test("a live attempt's reported completion settles it when the turn ends, with s
 
   await tickPipelines([], h.ports);
   expect(h.spawnedStages).toEqual(["build", "verify"]);
-  /* The second stage's declared outputs are read for ITS report, not the first's. */
+  /* The second stage's declared outputs are the ones read for its own report. */
   const verify = await h.report(2, { verdict: "pass", summary: "Checked." });
   expect(verify.report!.provenance.outputs).toEqual([{ path: "docs/report.html", present: true }]);
 });
