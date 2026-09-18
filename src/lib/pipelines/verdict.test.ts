@@ -341,3 +341,12 @@ test("a rankedFindings field in an agent's own fenced block is ignored, and a re
   });
   expect(stageVerdictFrom(forged)).toEqual(forged!);
 });
+
+test("a finding already at the bound survives the rendering, and the record re-derives itself", () => {
+  /* `P1-` renders as `P1 — `, which is two characters longer: clamping the
+     rendering is what keeps the record loadable. */
+  const verdict = stageVerdictFrom({ status: "fail", findings: [`P1-${"x".repeat(1_997)}`] })!;
+  expect(verdict.findings![0]!.length).toBe(2_000);
+  expect(verdict.rankedFindings).toEqual([{ severity: "P1", text: "x".repeat(1_995) }]);
+  expect(stageVerdictFrom(verdict)).toEqual(verdict);
+});

@@ -87,8 +87,14 @@ export function stageVerdictFrom(value: unknown): StageVerdict | null {
     /* Ranking is what the record keeps: the relay, the park detail and the
        card all read `findings[0]`, and that must be the worst one. Findings
        none of which carry a rank have nothing to order, so they keep the
-       order they arrived in and the record stays the array it always was. */
-    const ranked = rankStageFindings(findings);
+       order they arrived in and the record stays the array it always was.
+
+       The rendered form is clamped, not the text that arrived: rewriting a
+       separator can lengthen a finding that was already at the bound, and a
+       record this validator would then reject on reload is a record the store
+       refuses whole. Clamping the rendering makes it idempotent — a reload
+       re-derives the same array, byte for byte. */
+    const ranked = rankStageFindings(findings).map((finding) => stageFindingFromText(stageFindingText(finding).slice(0, MAX_FINDING_CHARS)));
     verdict.findings = ranked.map(stageFindingText);
     if (ranked.some((finding) => finding.severity !== null)) verdict.rankedFindings = ranked;
   }
