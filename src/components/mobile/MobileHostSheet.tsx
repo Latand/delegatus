@@ -136,7 +136,9 @@ export function MobileHostSheet({
 }: {
   projectName: string;
   runtime: ConnectionState;
-  /** The parentless background processes that used to dock above the board. */
+  /** The live background processes no conversation on the board owns. Since
+      #1758 nothing is drawn for them on the desktop board, so this sheet and
+      its count in the board menu are the phone's whole reach to them. */
   tasks: readonly FileEntry[];
   /** Conversations the board is not showing, reachable through the catalog. */
   hiddenCount: number;

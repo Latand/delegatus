@@ -116,7 +116,7 @@ function entry(overrides: Partial<FileEntry> & { path: string }): FileEntry {
 
 function view() {
   const conversation = entry({ path: "/session", title: "Main session", activity: "live", mtime: 9_000 });
-  const group: BranchGroup = { key: conversation.path, columns: [{ file: conversation, tasks: [] }], returnable: [], finished: [], smt: conversation.mtime, orphanTask: false };
+  const group: BranchGroup = { key: conversation.path, columns: [{ file: conversation, tasks: [] }], returnable: [], finished: [], smt: conversation.mtime };
   return (
     <MobileFocusView
       project="demo" groups={[group]} manual={[]} files={[conversation]} flows={[]}

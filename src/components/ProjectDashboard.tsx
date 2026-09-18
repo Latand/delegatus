@@ -24,7 +24,6 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { BoardHistoryControls } from "./BoardHistoryControls";
 import { createFocusEdgeGate } from "./focusRequestEdge";
-import { TaskStrip } from "./BranchPane";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
 import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
@@ -83,6 +82,7 @@ import {
   draftWorkingDirectory,
   isChildConversation,
   OVERVIEW,
+  parentlessBackgroundTasks,
   projectDraftWorkingDirectory,
   projectKey,
   type ProjectView,
@@ -1039,7 +1039,7 @@ function ProjectDashboardView({
       ),
     [groups],
   );
-  const treeGroups = groups.filter((group) => !group.orphanTask).length;
+  const treeGroups = groups.length;
 
   /* The conversation a back gesture just dismissed.
 
@@ -1423,8 +1423,8 @@ function ProjectDashboardView({
     [files, project],
   );
   const catalogComplete = catalogKnown && schemeConversationCount >= catalogConversationCount;
-  /* Only the root key and orphan flag of each group matter to reconciliation. */
-  const rootGroups = useMemo(() => groups.map((group) => ({ key: group.key, orphanTask: group.orphanTask })), [groups]);
+  /* Only the root key of each group matters to reconciliation. */
+  const rootGroups = useMemo(() => groups.map((group) => ({ key: group.key })), [groups]);
 
   /* Board membership convergence, as one ordered mutation batch:
        1. succession remap — a predecessor's tombstone/placement follows the
@@ -1682,16 +1682,20 @@ function ProjectDashboardView({
   const visibleGroups = useMemo(() => groups
     .map((group) => ({ ...group, columns: group.columns.filter((column) => !hiddenSet.has(column.file.path)) }))
     .filter((group) => group.columns.length), [groups, hiddenSet]);
-  /* Parentless background processes dock as colored strips at the top of the
-     canvas instead of hanging as lone stub nodes in the middle of it. */
-  const dockedTasks = useMemo(() => visibleGroups.filter((group) => group.orphanTask).map((group) => group.columns[0]!.file), [visibleGroups]);
-  const schemeGroups = useMemo(() => visibleGroups.filter((group) => !group.orphanTask), [visibleGroups]);
+  /* Live background processes no conversation on this board owns. They take no
+     board space on either platform (#1758): the phone reads them in its host
+     sheet, and the sidebar and the file list are where the desktop finds them. */
+  const hostBackgroundTasks = useMemo(
+    () => parentlessBackgroundTasks(sceneFiles, project, { expandedConversationPaths: expandedConversations, keepExpandedPaths, now: nowSeconds })
+      .filter((task) => !hiddenSet.has(task.path)),
+    [sceneFiles, project, expandedConversations, keepExpandedPaths, nowSeconds, hiddenSet],
+  );
   /* Active pipelines keep the scheme available before the first transcript;
      SchemeBoard anchors their world-space PipelineGroups beside linked tasks. */
   const activePipelines = useMemo(() => pipelinesForProject(pipelines, project, files), [pipelines, project, files]);
   const visibleDrafts = useMemo(() => drafts.filter((id) => !pendingRestoredHandoffs.has(id)), [drafts, pendingRestoredHandoffs]);
   const hasNodes =
-    schemeGroups.length > 0 || schemeManual.length > 0 || visibleDrafts.length > 0 || projectTasks.length > 0 || activePipelines.length > 0;
+    visibleGroups.length > 0 || schemeManual.length > 0 || visibleDrafts.length > 0 || projectTasks.length > 0 || activePipelines.length > 0;
   /* Scheme-visible project files, freshest first. They gate live activity for
      project actions; the deletion flow loads its complete target set from the
      uncapped conversation catalog before confirmation. */
@@ -1728,7 +1732,7 @@ function ProjectDashboardView({
      exists only for an implementer placed as a board node — the same layout the
      scheme draws. Derive availability from that layout's nodes, so a scanned but
      unplaced (hidden/tombstoned) implementer disables the action (#93 finding). */
-  const layoutGroups = hasNodes ? schemeGroups : archiveGroups;
+  const layoutGroups = hasNodes ? visibleGroups : archiveGroups;
   const layoutManual = hasNodes ? schemeManual : EMPTY_MANUAL;
   const layoutDrafts = hasNodes ? visibleDrafts : EMPTY_DRAFTS;
   const layoutTasks = useMemo(() => (hasNodes ? boardTasks : EMPTY_TASKS).filter(isPlacedTask), [hasNodes, boardTasks]);
@@ -1972,19 +1976,6 @@ function ProjectDashboardView({
       {t("dash.pipelinesUnavailable")}
     </div>
   ) : null;
-  /* Parentless background processes dock as colored strips at the top of the
-     desktop canvas; on the phone they are host detail and live in the host
-     sheet as their own rows (mobile v2 lane 2), never as always-on rows under
-     the bar. */
-  const dockedTaskStrips = dockedTasks.map((task) => (
-    <div
-      key={task.path}
-      className={`border-l-4 ${task.activity === "live" ? "border-l-success bg-success-soft" : "border-l-muted"}`}
-    >
-      <TaskStrip file={task} />
-    </div>
-  ));
-
   /* The board menu (README §3.1, §4.1): every former header control as a
      labelled 44 px row, create actions first, the danger-free Archive last. No
      row asks for confirmation; Archive answers with a receipt carrying Restore. */
@@ -2018,7 +2009,7 @@ function ProjectDashboardView({
         trailing: (
           <>
             {mobileRuntime !== "live" ? <Badge tone={mobileRuntime === "offline" ? "danger" : "warning"} data-connection={mobileRuntime}>{t(`runtime.${mobileRuntime}`)}</Badge> : null}
-            {t("mobile2.menu.hostTasks", { count: dockedTasks.length })}
+            {t("mobile2.menu.hostTasks", { count: hostBackgroundTasks.length })}
           </>
         ),
         onSelect: () => mobileNav.openSheet("host"),
@@ -2133,7 +2124,7 @@ function ProjectDashboardView({
         <MobileHostSheet
           projectName={projectName}
           runtime={mobileRuntime}
-          tasks={dockedTasks}
+          tasks={hostBackgroundTasks}
           hiddenCount={hasArchiveNodes ? 0 : residual.length}
           onOpenCatalog={() => { mobileNav.closeSheet(); chooseEmptyView("list"); }}
           onClose={close}
@@ -2247,10 +2238,6 @@ function ProjectDashboardView({
       ) : null}
 
       {isMobile ? null : pipelinesAlert}
-
-      {!isMobile && boardReady && dockedTasks.length ? (
-        <div className="shrink-0 border-b border-border bg-sunken">{dockedTaskStrips}</div>
-      ) : null}
 
       {isMobile ? (
         /* The phone (mobile v2 lanes 1–2): the shell's bar, banner slot and
