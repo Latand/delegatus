@@ -305,3 +305,24 @@ test("a summary chip is a control only when the stage's latest own attempt has a
   expect(chip("verify").tagName).toBe("SPAN");
   expect(chip("implement").tagName).toBe("BUTTON");
 });
+
+test("a pipeline whose graph was edited shows the latest edit, signed by the conversation that made it (graph slice 1)", async () => {
+  const edited = {
+    ...searchPipeline(),
+    graphEdits: [
+      { seq: 1, at: iso(900), actor: { kind: "operator" }, action: "set-edge", stageId: "review", pipelineState: "running", effect: "applied", appliesFromAttempt: null, summary: "set the pass edge of review to verify" },
+      { seq: 2, at: iso(300), actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_orchestrator" }, action: "override-stage", stageId: "verify", pipelineState: "running", effect: "pending-next-attempt", appliesFromAttempt: 3, summary: "changed prompt of stage verify; applies from attempt 3" },
+    ],
+  } as unknown as Pipeline;
+  const { host, render } = mount([searchPipeline()]);
+  await tick();
+  expect(card(host).querySelector(".graph-edit")).toBeNull();
+  render([edited]);
+  await tick();
+  const line = card(host).querySelector<HTMLElement>(".graph-edit")!;
+  expect(line.dataset.graphEdit).toBe("2");
+  expect(line.dataset.graphEditActor).toBe("agent");
+  expect(line.textContent).toContain("orchestrator conversation_orchestrator");
+  expect(line.textContent).toContain("changed verify · applies from attempt 3");
+  expect(line.getAttribute("title")).toBe("changed prompt of stage verify; applies from attempt 3");
+});

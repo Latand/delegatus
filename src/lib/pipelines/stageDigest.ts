@@ -26,17 +26,20 @@ import type { PipelineStage } from "./types";
  * edit that no override has applied changes nothing stored, so it neither
  * moves the digest nor changes what the stage would start with.
  *
+ * - the stage's own edges, `next` and `onFail`, so two editors rewiring the
+ *   same stage from one read cannot both write (graph slice 1).
+ *
  * `v` versions this canonical form: v2 added the effective role id and
- * scaffold.
+ * scaffold, v3 the edges.
  */
-export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole">): string {
+export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail">): string {
   const account = typeof stage.account === "string" && stage.account.trim() ? stage.account.trim() : null;
   const params = stage.role?.params && Object.keys(stage.role.params).length
     ? Object.fromEntries(Object.entries(stage.role.params).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
     : null;
   const runtime = stage.effectiveRole;
   return JSON.stringify({
-    v: 2,
+    v: 3,
     "prompt": stage.prompt,
     account,
     role: stage.role ? { roleId: stage.role.roleId, params } : null,
@@ -48,17 +51,28 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
       access: runtime.access ?? null,
       promptScaffold: runtime.promptScaffold ?? null,
     },
+    next: stage.next ?? null,
+    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds } : null,
   });
 }
 
 /** SHA-256 (hex) of `stageDigestInput`. */
-export function stageDigest(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole">): string {
+export function stageDigest(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail">): string {
   return crypto.createHash("sha256").update(stageDigestInput(stage)).digest("hex");
 }
 
 /** Every stage's digest, by stage id. */
 export function stageDigests(stages: readonly PipelineStage[]): Record<string, string> {
   return Object.fromEntries(stages.map((stage) => [stage.id, stageDigest(stage)] as const));
+}
+
+/** The whole plan's digest: every stage's digest, in array order. Structural
+    edits (add, remove, reorder) name it as `expectedStageDigest`, because they
+    change the plan around a stage rather than one stage. */
+export function graphDigest(stages: readonly PipelineStage[]): string {
+  return crypto.createHash("sha256")
+    .update(JSON.stringify({ v: 1, stages: stages.map((stage) => [stage.id, stageDigest(stage)]) }))
+    .digest("hex");
 }
 
 /** A well-formed digest: 64 lowercase hex characters. */

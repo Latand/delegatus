@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipelines/engine";
-import { stageDigests } from "@/lib/pipelines/stageDigest";
-import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
+import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
+import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -25,13 +25,15 @@ type PipelineApiError = ApiError & {
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; stageDigests: Record<string, string> } | ApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
   const { id } = await ctx.params;
   try {
     const pipeline = getPipeline(id);
     if (!pipeline) return NextResponse.json({ error: "pipeline not found" }, { status: 404 });
-    /* #1695 C7: each stage's digest, which a guarded `override-stage` names as `expectedStageDigest`. */
-    return NextResponse.json({ ok: true, pipeline, stageDigests: stageDigests(pipeline.stages) });
+    /* #1695 C7 and graph slice 1: the digests a guarded graph edit names as
+       `expectedStageDigest` — a stage's for override-stage and set-edge, the
+       whole plan's for add-stage, remove-stage and reorder-stage. */
+    return NextResponse.json({ ok: true, pipeline, stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -40,7 +42,7 @@ export async function GET(
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
-): Promise<NextResponse<{ ok: true; pipeline: Pipeline; close?: PipelineCloseReport } | PipelineApiError>> {
+): Promise<NextResponse<{ ok: true; pipeline: Pipeline; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: PatchPipelineRequest;
@@ -69,7 +71,7 @@ export async function PATCH(
       ...(result.close ? { close: result.close } : {}),
     }, { status: result.status ?? 400 });
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}) });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "could not update pipeline" }, { status: 500 });
   }
