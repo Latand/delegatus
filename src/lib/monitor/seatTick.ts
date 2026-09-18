@@ -449,7 +449,7 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
  * acknowledges all of them: a child the seat was shown and answered once is
  * not shown again until it ends another turn.
  */
-export interface SeatTickHarvestEntry {
+interface SeatTickHarvestEntry {
   child: SeatTickChildInput;
   /** Every owed outcome this one line stands for, oldest first. */
   outcomeIds: readonly string[];
