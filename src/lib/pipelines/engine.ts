@@ -20,8 +20,10 @@ import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flow
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
-import { conversationTurnLiveness, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
+import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
+import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
   describeStructuredHostOwnerGeneration,
@@ -173,6 +175,12 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
       (#1678). Independent of the identity fence that withholds `sessionId`
       and `transcript` from an unpublished receipt. */
   staged?: boolean;
+  /** The artifact path the launch reserved, whether or not the identity fence
+      publishes it (#1750). Read for one purpose only — whether a transcript
+      exists on disk — which is what decides that an unverified first delivery
+      started no turn and may be sent again. Never used as a readable
+      transcript; `transcript` above stays the published one. */
+  stagedTranscript?: string | null;
 };
 
 export interface PipelinePorts {
@@ -240,6 +248,28 @@ export interface PipelinePorts {
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
+  /** The runtime host generation currently serving this process (#1747). It
+      advances on every release succession, which replaces every engine process
+      the previous generation hosted, so a change is the controller's only
+      exact witness that a deploy cut a running stage turn. Null when no host
+      answers, which is never evidence of a succession. */
+  runtimeHostEpoch?(): Promise<number | null>;
+  /** Whether a delivery for this conversation is still waiting to land. A
+      continuation is never added on top of one (#1747). */
+  conversationDeliveryOutstanding?(conversationId: string): boolean;
+  /** Whether the transcript artifact a launch receipt named exists. A delivery
+      the earlier executor could not verify is safe to re-dispatch only where
+      no transcript was ever created, which proves no turn started (#1750). */
+  transcriptPresent?(pathname: string): boolean;
+  /** Delivers the controller's one continuation to a stage whose turn a
+      runtime-host succession cut, attributed to the controller. False means
+      nothing was accepted, so the continuation is still owed. */
+  resumeSeveredTurn?(input: {
+    conversationId: string;
+    transcriptPath: string;
+    clientMessageId: string;
+    text: string;
+  }): Promise<boolean>;
   sleep?(milliseconds: number): Promise<void>;
   durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
@@ -960,9 +990,16 @@ export function defaultPipelinePorts(
     accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
       .find((candidate) => candidate.id === accountId)?.label ?? accountId,
     spawnAgent: async (input, onReserved) => {
-      const result = await spawnPipelineAgent(input, onReserved);
-      invalidateRegistryProjection();
-      return result;
+      /* Invalidated on BOTH paths (#1750): a spawn that throws is exactly when
+         the receipt it just failed has to be readable, and a projection
+         captured before the launch was reserved answers `null` for it. Six
+         production lanes parked on a transient runtime-host failure whose
+         retry the engine could not reach for want of that one read. */
+      try {
+        return await spawnPipelineAgent(input, onReserved);
+      } finally {
+        invalidateRegistryProjection();
+      }
     },
     /* Stage activation belongs to the process that hosts the structured
        delivery controller. The account-migration inventory sidecar reconciles
@@ -988,6 +1025,7 @@ export function defaultPipelinePorts(
         conversationId: receipt.conversationId,
         sessionId: identityPublished ? receipt.key?.sessionId ?? null : null,
         "transcript": identityPublished ? receipt.artifactPath : null,
+        stagedTranscript: receipt.artifactPath ?? null,
         paneId: receipt.verifiedHost?.paneId ?? receipt.pane?.paneId ?? null,
         accountId: receipt.accountId,
         error: receipt.error,
@@ -1066,6 +1104,31 @@ export function defaultPipelinePorts(
       return liveness?.state === "severed" && liveness.since !== null
         ? new Date(liveness.since).toISOString()
         : null;
+    },
+    runtimeHostEpoch: async () => {
+      const client = runtimeHostClient();
+      if (!client) return null;
+      runtimeSnapshot ??= client.snapshot();
+      try {
+        return (await runtimeSnapshot).runtime.hostEpoch;
+      } catch {
+        return null;
+      }
+    },
+    conversationDeliveryOutstanding: (conversationId) =>
+      outstandingDeliverySince(snapshot(), conversationId) !== null,
+    transcriptPresent: (pathname) => Boolean(pathname) && fs.existsSync(pathname),
+    resumeSeveredTurn: async (input) => {
+      const result = await enqueueStructuredMessage({
+        path: input.transcriptPath,
+        conversationId: input.conversationId,
+        clientMessageId: input.clientMessageId,
+        text: input.text,
+        /* #1117: the continuation is the controller's own message, and the
+           feed labels it as one rather than as the operator's. */
+        origin: { kind: "agent", role: "controller" },
+      });
+      return result?.ok === true;
     },
     sleep: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
     durableTurnEvidence: durableStageTurnEvidence,
@@ -2274,6 +2337,153 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
   return changed;
 }
 
+/**
+ * A turn a release succession cut, and the one continuation it is owed (#1747).
+ *
+ * A succession replaces every engine process the previous runtime-host
+ * generation ran. A Claude host comes back resumed and idle: the tool call it
+ * was inside is gone, the background commands it was waiting on died with the
+ * predecessor, and nothing is pending for it to answer. The registry keeps the
+ * turn `busy`, the runtime ledger keeps reading `running`, so the attempt stays
+ * `running` and the card stays working — in production, for fifty-one minutes,
+ * until somebody typed "continue" by hand.
+ *
+ * The witness is the host epoch the attempt was launched under. It moves only
+ * on a succession, which is exactly the event that cuts the turn, so this needs
+ * no CPU heuristic: while the epoch differs and the transcript's newest record
+ * has not moved since the epoch change was first sighted, the turn is open and
+ * silent because a deploy cut it.
+ *
+ * The sighting is later than the succession by up to one tick, so the witness
+ * arms only where the transcript had already been silent for the whole resume
+ * bound when the new epoch was first seen. Without that, a record written
+ * between the succession and the sighting becomes the baseline, and an agent
+ * that really did resume could be sent a second continuation — saying its
+ * in-flight work is gone — in the middle of a live turn.
+ *
+ * Every refusal the requirement asks for is that same comparison. A record
+ * later than the sighting — a resumed tool call, a prompt somebody else
+ * delivered, the agent's own answer — means a turn is in progress, and the
+ * attempt adopts the new epoch and is left alone. An outstanding delivery means
+ * a prompt is already on its way. A witness that already carries `resumedAt`
+ * has had its one continuation, and the stable `clientMessageId` makes the
+ * delivery queue's own dedupe the last line of defence behind that.
+ */
+const SEVERED_TURN_RESUME_SILENCE_MS = 3 * 60_000;
+/** Silence after the continuation before the attempt parks for the operator.
+    Generous on purpose: a resumed agent writes its next record in seconds, so
+    anything past this is a host that will not answer at all. */
+const SEVERED_TURN_PARK_SILENCE_MS = 10 * 60_000;
+const SEVERED_TURN_PARK_DETAIL =
+  "the stage turn was cut when the runtime host was replaced, and one controller continuation did not resume it";
+const SEVERED_TURN_RESUMED_DETAIL = "stage turn cut by a deploy; the controller sent one continuation";
+const SEVERED_TURN_CONTINUATION_TEXT =
+  "A Viewer deploy replaced the runtime host and cut this turn in the middle of its work."
+  + " Nothing answered it, so the pipeline controller is resuming you once."
+  + " Every background command, monitor and tool call that was in flight died with the previous host:"
+  + " re-run whatever you still need, then finish the stage and end your turn with its fenced JSON verdict.";
+
+async function reconcileSeveredStageTurn(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt: PipelineStageAttempt,
+  ports: PipelinePorts,
+  persist: () => void,
+): Promise<"handled" | "continue"> {
+  const conversationId = attempt.conversationId;
+  /* A pane-hosted stage has a transport this Viewer never severed, and only a
+     running attempt has a turn a succession could have cut. */
+  if (attempt.state !== "running" || attempt.paneId || !conversationId || !attempt.agentPath) return "continue";
+  const epoch = await ports.runtimeHostEpoch?.() ?? null;
+  if (epoch === null) return "continue";
+  const clearWitness = (): void => {
+    if (attempt.severedTurn === undefined) return;
+    delete attempt.severedTurn;
+    if (pipeline.stateDetail === SEVERED_TURN_RESUMED_DETAIL) pipeline.stateDetail = null;
+  };
+  /* An attempt launched before the witness existed adopts the generation it is
+     seen under: nothing about it says a succession happened, and a continuation
+     on a guess is the one thing this must never send. */
+  if (attempt.hostEpoch === undefined || attempt.hostEpoch === epoch) {
+    if (attempt.hostEpoch !== epoch || attempt.severedTurn !== undefined) {
+      attempt.hostEpoch = epoch;
+      clearWitness();
+      persist();
+    }
+    return "continue";
+  }
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath);
+  /* An unreadable artifact is not evidence of a cut turn. */
+  if (!durable) return "continue";
+  const adopt = (): void => {
+    attempt.hostEpoch = epoch;
+    clearWitness();
+    persist();
+  };
+  /* A turn that ended belongs to settlement, which runs on the evidence below. */
+  if (durable.turn !== "busy") {
+    adopt();
+    return "continue";
+  }
+  const lastRecordAt = durable.lastRecordAt ?? durable.message?.ts ?? null;
+  const witness = attempt.severedTurn?.epoch === epoch ? attempt.severedTurn : null;
+  if (!witness) {
+    /* The sighting is not the succession: the epoch changed at some point
+       between the previous tick and this one, and a record written inside that
+       window — the runtime's own interrupted-turn continuation, an operator's
+       "continue" — would otherwise become the baseline this measures silence
+       from. So the witness arms only on a transcript that was ALREADY silent
+       by the whole resume bound when the new epoch was first seen. That is
+       what makes the newest record older than the change rather than merely
+       older than the sighting, and it is the production shape exactly: every
+       cut lane went quiet minutes before its succession. A transcript that
+       moved more recently than that, or that carries no timestamp to judge,
+       gets no continuation at all — the generation is adopted and the attempt
+       is left alone, however long it then sits inside one tool call. */
+    const sightedAt = ports.now();
+    const silentAtSighting = lastRecordAt !== null
+      && unixMs(sightedAt) - lastRecordAt >= SEVERED_TURN_RESUME_SILENCE_MS;
+    if (!silentAtSighting) {
+      adopt();
+      return "continue";
+    }
+    attempt.severedTurn = { epoch, sightedAt, silentSince: lastRecordAt };
+    persist();
+    return "continue";
+  }
+  /* Anything written since the sighting proves a turn is in progress. */
+  if (lastRecordAt !== witness.silentSince) {
+    adopt();
+    return "continue";
+  }
+  if (conversationId && ports.conversationDeliveryOutstanding?.(conversationId) === true) return "continue";
+  const nowMs = unixMs(ports.now());
+  if (witness.resumedAt === undefined) {
+    if (nowMs - unixMs(witness.sightedAt) < SEVERED_TURN_RESUME_SILENCE_MS) return "continue";
+    /* Stable across ticks and processes, so a replay cannot mint a second
+       continuation even if this record never reaches disk. */
+    const clientMessageId = `stage-continuation-${pipeline.id}-${stage.id}-${attempt.n}-${epoch}`;
+    const resumed = await ports.resumeSeveredTurn?.({
+      conversationId,
+      transcriptPath: attempt.agentPath,
+      clientMessageId,
+      text: SEVERED_TURN_CONTINUATION_TEXT,
+    });
+    /* A refused admission leaves the continuation owed; the next tick asks
+       again under the same identity. */
+    if (resumed !== true) return "continue";
+    witness.resumedAt = ports.now();
+    witness.clientMessageId = clientMessageId;
+    pipeline.stateDetail = SEVERED_TURN_RESUMED_DETAIL;
+    persist();
+    return "handled";
+  }
+  if (nowMs - unixMs(witness.resumedAt) < SEVERED_TURN_PARK_SILENCE_MS) return "continue";
+  park(pipeline, SEVERED_TURN_PARK_DETAIL, attempt);
+  persist();
+  return "handled";
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2461,18 +2671,22 @@ async function tickRunStage(
              which stay well inside the controller's phase deadline. */
           const accountMutationContention = isAccountMutationContention(message);
           const hostUnavailable = isRuntimeHostUnavailableSpawnFailure(message);
+          /* #1750: an unverified delivery must never take the immediate
+             handshake retries below — those re-dispatch the prompt on sight.
+             It joins the receipt-gated route, where the transcript decides. */
+          const unverifiedDelivery = isUnverifiedDeliverySpawnFailure(message);
           /* A busy account or an unreachable runtime host is retryable before
              the registry publishes a launch claim. Once a callback supplied an
              id, the receipt alone knows the launch's fate (#1678): `failed` is
              the spawn layer's own retry-safe verdict and the launch is retired
              below; anything else parks, and the existing receipt recovery
              adopts a launch that settles after all. */
-          if ((accountMutationContention || hostUnavailable) && attempt.launchId !== null) {
+          if ((accountMutationContention || hostUnavailable || unverifiedDelivery) && attempt.launchId !== null) {
             const receipt = ports.spawnReceipt(attempt.launchId);
             if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
             failedReceipt = receipt;
           }
-          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable) {
+          if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable || unverifiedDelivery) {
             controllerFailure = message;
             break;
           }
@@ -2496,11 +2710,17 @@ async function tickRunStage(
           const deferred = deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, activationNow, failedAt, ports);
           if (deferred === "exhausted") throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
           if (deferred === "unsafe") throw new Error(stagedLaunchRetryRefusal(controllerFailure));
+          if (deferred === "delivered") throw new Error(unverifiedLaunchRetryRefusal(controllerFailure));
           if (deferred === "settled") throw new Error(controllerFailure);
           persist();
           return;
         }
-        if (bookControllerWaitRound(attempt, activationNow, failedAt, ports) === "exhausted") {
+        /* #1750: a busy account lock and an unreachable runtime host are the
+           same succession seen from two sides, and thirty seconds cannot
+           outlast a deploy — production spent the whole budget inside three
+           spawn calls. Both ride the host budget here, exactly as a retired
+           launch already does. */
+        if (bookControllerWaitRound(attempt, activationNow, failedAt, ports, spawnWaitBudget(controllerFailure)) === "exhausted") {
           throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
         }
         attempt.state = "pending";
@@ -2510,6 +2730,12 @@ async function tickRunStage(
         return;
       }
       if (!spawned) throw new Error("stage spawn failed without a result");
+      /* The generation that hosts this launch (#1747). A later tick that finds
+         a different one is looking at a succession, which is the only thing
+         that cuts a running turn while leaving its host alive and idle. */
+      const hostEpoch = await ports.runtimeHostEpoch?.() ?? null;
+      if (hostEpoch !== null) attempt.hostEpoch = hostEpoch;
+      delete attempt.severedTurn;
       delete attempt.controllerWait;
       attempt.launchId = spawned.launchId;
       attempt.conversationId = spawned.conversationId;
@@ -2564,6 +2790,10 @@ async function tickRunStage(
           park(pipeline, stagedLaunchRetryRefusal(receipt.error), attempt);
           return;
         }
+        if (deferred === "delivered") {
+          park(pipeline, unverifiedLaunchRetryRefusal(receipt.error), attempt);
+          return;
+        }
       }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
         park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
@@ -2607,6 +2837,12 @@ async function tickRunStage(
   const scanProjectsOpenTurn = entry?.activity === "live"
     || entry?.activityReason === "jsonl_turn_open"
     || (entry?.activityReason === "jsonl_turn_stalled" && attempt.paneId !== null);
+  /* Before every cheap path below (#1747): a turn a succession cut leaves the
+     scan projecting an open turn and the ledger projecting a running one, so
+     every reading this function trusts says "working" and returns. The epoch
+     witness is the one reading that does not, and it costs a memoized snapshot
+     field until a succession actually moves it. */
+  if (await reconcileSeveredStageTurn(pipeline, stage, attempt, ports, persist) === "handled") return;
   const unavailableSince = !attempt.paneId && attempt.conversationId
     ? await ports.conversationHostUnavailableSince?.(attempt.conversationId)
     : null;
@@ -3494,14 +3730,20 @@ function deferRetiredLaunchRetry(
   since: string,
   now: string,
   ports: PipelinePorts,
-): "waiting" | "exhausted" | "settled" | "unsafe" {
+): "waiting" | "exhausted" | "settled" | "unsafe" | "delivered" {
   if (receipt.staged === true && attempt.effectiveRole.access === "read-write") return "unsafe";
+  const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
+  /* The only class whose failure may already have reached the agent (#1750).
+     The transcript decides: an artifact the spawn layer named and never
+     created proves no turn started and the prompt is safe to send again;
+     one that exists may hold it, and a second prompt is what the requirement
+     forbids, so the attempt parks instead. */
+  const stagedTranscript = receipt.stagedTranscript ?? receipt.transcript ?? null;
+  if (isUnverifiedDeliverySpawnFailure(failure)
+    && !(stagedTranscript !== null && ports.transcriptPresent?.(stagedTranscript) === false)) return "delivered";
   const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
   if (claim !== "claimed") return "settled";
-  const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
-  if (bookControllerWaitRound(attempt, since, now, ports, isRuntimeHostUnavailableSpawnFailure(failure)
-    ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
-    : undefined) === "exhausted") return "exhausted";
+  if (bookControllerWaitRound(attempt, since, now, ports, spawnWaitBudget(failure)) === "exhausted") return "exhausted";
   const retired = attempt.retiredLaunches ?? [];
   retired.push({
     launchId: receipt.launchId,
@@ -3530,6 +3772,10 @@ function stagedLaunchRetryRefusal(failure: string): string {
   return `${controllerFailureReason(failure)}; a session was staged for this launch, so the worktree needs retry-stage's reset before another attempt`;
 }
 
+function unverifiedLaunchRetryRefusal(failure: string): string {
+  return `${controllerFailureReason(failure)}; the stage transcript exists, so the prompt may already have reached the agent and is not sent again`;
+}
+
 function syncControllerWaitStateDetail(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt,
@@ -3543,12 +3789,42 @@ function syncControllerWaitStateDetail(
   }
 }
 
+/** The delivery queue's own wording for a send an earlier executor started and
+    could not account for (#1750). A release succession leaves two executors
+    over one journal, which is what mints it, so a stage that meets it met a
+    deploy. Whether the prompt landed is decided by the transcript, never by
+    this string: the classifier stays a pure test and the retirement path holds
+    the evidence gate. */
+function isUnverifiedDeliverySpawnFailure(failure: string): boolean {
+  return failure.includes(DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+}
+
 function isTransientStructuredSpawnFailure(failure: string): boolean {
   return isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
     || isRuntimeHostUnavailableSpawnFailure(failure)
+    || isUnverifiedDeliverySpawnFailure(failure)
     || failure.includes("structured initial message")
     || failure.includes("runtime host request timed out");
+}
+
+/**
+ * The bounded wait one transient spawn class gets (#1750).
+ *
+ * A runtime host whose RPCs fail, an account mutation lock held by a
+ * succession, and a delivery an earlier executor left unaccounted for are all
+ * the same condition seen from three sides: a release is changing hands. A
+ * deploy runs about eight minutes end to end, so all three ride the host
+ * budget. Only a delivery controller between publications keeps the
+ * seconds-scale budget — that gap genuinely closes in seconds, and a longer
+ * wait there would only delay a truthful park.
+ */
+function spawnWaitBudget(failure: string): { budgetMs: number; retryMaxMs: number } | undefined {
+  return isRuntimeHostUnavailableSpawnFailure(failure)
+    || isAccountMutationContention(failure)
+    || isUnverifiedDeliverySpawnFailure(failure)
+    ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
+    : undefined;
 }
 
 /** Wall-clock milliseconds this activation has already spent waiting for the
