@@ -5151,3 +5151,65 @@ test("a stall one seat was shown is shown again to the seat that succeeds it (#1
   await runSeatTickCheck(fixture.project, settled.deps);
   expect(agendaOf(settled.sent[0]!.text).filter((line) => line.includes("reports gone"))).toEqual([]);
 });
+
+/* ------------------------------------------------------------------------- *
+ * The third place the same list is read (#1783, round two review).
+ *
+ * The item list filters the running children; the two clauses that decide a
+ * wake is WARRANTED at all did not. So a board whose only children are the
+ * August workers and the unreadable one raised an interval wake every hour
+ * that named nothing — the empty hourly agenda this whole mechanism exists to
+ * stop sending, arriving under the reason that says work is open. One test
+ * per side of that: a board of nothing but ineligible children ends quiet, and
+ * a board with one eligible child beside them still wakes and names it.
+ * ------------------------------------------------------------------------- */
+
+test("a board whose only children are ineligible ends quiet rather than raising an interval wake (#1783)", async () => {
+  const fixture = childFixture("ineligible-children-quiet");
+  /* The production shape with the lane taken away: two workers whose hosts
+     died over an open turn, one last written to twenty-five days before the
+     designation and one whose transcript no scanner root holds. Nothing else
+     on the board — no lane, no task, no signal. */
+  const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  ageTranscript(fixture, aged.path, 25 * 24 * 60);
+  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat });
+  /* The stall memory saw both, so the check below is the one on which the
+     stall path would speak — and the one the interval clause spoke on. */
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "quiet" });
+  expect(fixture.row().stalledSeen).toEqual([`child:${aged.id}`, `child:${unreadable.id}`]);
+  expect(first.sent).toEqual([]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  /* No wake at all. Neither child is work this seat can act on, so neither is
+     open work, and an hour elapsing over them is not an agenda. */
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(second.sent).toEqual([]);
+});
+
+test("one eligible child beside the ineligible ones still raises the interval wake and is named (#1783)", async () => {
+  const fixture = childFixture("eligible-child-still-wakes");
+  /* The same two, and one worker this seat spawned minutes ago whose host is
+     alive: the clause the fix narrows must still let this one through. */
+  const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  ageTranscript(fixture, aged.path, 25 * 24 * 60);
+  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  const live = fixture.spawn({ title: "build the exporter", turn: "busy", host: "live" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const rig = childRig(fixture, {
+    seat,
+    childActivity: { [live.id]: { lifecycle: "running", reason: "host_alive_turn_active" } },
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"], items: 1 });
+  const agenda = agendaOf(rig.sent[0]!.text);
+  expect(agenda).toEqual([`- [child] ${live.id} — build the exporter — spawned child running`]);
+  expect(agenda.join("\n")).not.toContain(aged.id);
+  expect(agenda.join("\n")).not.toContain(unreadable.id);
+});

@@ -210,12 +210,16 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
     || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
-    || input.children.some(isRunningChild)
-    /* A stale child is not open work either (#1749): its outcome belongs to a
-       seat that has been retired for weeks, and counting it keeps a board with
-       nothing left on it from ever being able to say so. */
-    || input.children.some((child) => isTerminalChild(child) && isHarvestable(child)
-      && !(input.seat && isStaleChild(child, input.seat)));
+    /* Both child clauses ask the same question of the child as the item list
+       does (#1749, #1783): a child no seat can read, or whose own clock is a
+       predecessor's board, is not this seat's work whether it is still running
+       or has already finished. Counting one kept a board with nothing left on
+       it from ever being able to say so, and kept the interval agenda below
+       naming children it had just refused to name. What being SHOWN a child
+       costs is a repeated line, never the standing of the work, so that clause
+       is the item list's alone. */
+    || input.children.some((child) => isRunningChild(child) && isActionableChild(child, input.seat))
+    || input.children.some((child) => isTerminalChild(child) && isActionableChild(child, input.seat));
 }
 
 /**
@@ -512,10 +516,43 @@ function childSkipReason(
   shows: string | null,
   shown: ReadonlySet<string>,
 ): SeatTickChildSkip | null {
+  const fact = childFactsSkipReason(child, seat);
+  if (fact) return fact;
+  return shown.has(childStateToken(child, shows)) ? "unchanged" : null;
+}
+
+/**
+ * The two clauses of that test that are facts about the CHILD, apart from the
+ * one that is a fact about what this seat has been told (#1783 round two).
+ *
+ * They are apart because {@link hasOpenWork} needs exactly these two and must
+ * not have the third. Whether a seat may be woken over a child is a question
+ * about the child — can anything read it, and is its own clock this seat's
+ * board or a predecessor's — and having been shown it an hour ago is no answer
+ * to it. What being shown it governs is whether a wake REPEATS a line, which
+ * is the item list's business and stays there.
+ *
+ * Both places had to take these, and only the item list did. A child the same
+ * check had just declined to name still counted as open work, and still put
+ * the interval agenda's clause about running children to true, so the hour
+ * elapsing over two dead August workers raised a wake whose whole agenda was
+ * the parenthetical saying they had been left out. That is the empty hourly
+ * tick the interval clause exists to refuse, arriving under the reason that
+ * says work is open.
+ */
+function childFactsSkipReason(child: SeatTickChildInput, seat: SeatTickSeatInput): SeatTickChildSkip | null {
   if (!isHarvestable(child)) return "unreadable";
   if (!Number.isFinite(childOwnInstant(child))) return "unreadable";
   if (isStaleChild(child, seat)) return "stale";
-  return shown.has(childStateToken(child, shows)) ? "unchanged" : null;
+  return null;
+}
+
+/** A child a seat can act on: the two child-fact clauses above, asked where
+    there may be no seat to ask them of. With no seat designated there is no
+    designation to measure an age against and nothing to be stale relative to,
+    so only the readable half is left. */
+function isActionableChild(child: SeatTickChildInput, seat: SeatTickSeatInput | null): boolean {
+  return seat ? childFactsSkipReason(child, seat) === null : isHarvestable(child);
 }
 
 /**
@@ -1094,7 +1131,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        operator's move to assigned is what starts it — leaves that agenda empty,
        and an hourly wake with an empty agenda is the burnt-quota tick this
        replaces. */
-    const intervalAgenda = input.pipelines.some(isOpenLane) || input.children.some(isRunningChild) || input.signals.length > 0;
+    /* The running children here are the ones the agenda could actually NAME —
+       the filtered list composed above, not the raw one. An agenda whose only
+       entry is a child the same check has already declined to name carries
+       nothing, and a wake carrying nothing is what this clause refuses. */
+    const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
     if (openWork && intervalAgenda && candidates.length === 0) {
       candidates.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
     }
