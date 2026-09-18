@@ -1022,6 +1022,155 @@
         ]
       }
     },
+    "390-en-light": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "language": {
+        "documentLang": "en",
+        "stored": "en"
+      },
+      "measured": {
+        "board": "mobile2",
+        "marks": [
+          "codex",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "codex",
+          "codex"
+        ],
+        "markBoxes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "pipelineRows": 2
+      },
+      "stages": {
+        "rows": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "model": "Fable",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 89,
+            "overflowX": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "model": "Sonnet",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": false,
+            "returnBudget": "fail 2/3",
+            "returnBudgetState": "left",
+            "returnArea": 256,
+            "nameWidth": 82,
+            "overflowX": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 108,
+            "overflowX": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 85,
+            "overflowX": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "model": "claude-opus-5-20260101-preview",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 79,
+            "overflowX": 0
+          }
+        ]
+      },
+      "spentStages": {
+        "rows": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": true,
+            "returnBudget": "fail 2/2 · none left",
+            "returnBudgetState": "spent",
+            "returnArea": 400,
+            "nameWidth": 66,
+            "overflowX": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 91,
+            "overflowX": 0
+          }
+        ]
+      }
+    },
     "1280-en-dark": {
       "viewport": {
         "width": 1280,
@@ -2044,7 +2193,7 @@
         ]
       }
     },
-    "390-en": {
+    "390-en-dark": {
       "viewport": {
         "width": 390,
         "height": 844
@@ -3215,6 +3364,155 @@
         ]
       }
     },
+    "390-uk-light": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "language": {
+        "documentLang": "uk",
+        "stored": "uk"
+      },
+      "measured": {
+        "board": "mobile2",
+        "marks": [
+          "codex",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "claude",
+          "codex",
+          "codex"
+        ],
+        "markBoxes": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "pipelineRows": 2
+      },
+      "stages": {
+        "rows": [
+          {
+            "stage": "plan",
+            "engineMark": "claude",
+            "effortStep": "1",
+            "identity": "launched",
+            "model": "Fable",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 102,
+            "overflowX": 0
+          },
+          {
+            "stage": "build",
+            "engineMark": "claude",
+            "effortStep": "2",
+            "identity": "launched",
+            "model": "Sonnet",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": false,
+            "returnBudget": "невдача 2/3",
+            "returnBudgetState": "left",
+            "returnArea": 256,
+            "nameWidth": 81,
+            "overflowX": 0
+          },
+          {
+            "stage": "critique",
+            "engineMark": "claude",
+            "effortStep": "3",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 121,
+            "overflowX": 0
+          },
+          {
+            "stage": "verify",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "configured",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 121,
+            "overflowX": 0
+          },
+          {
+            "stage": "ship",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "configured",
+            "model": "claude-opus-5-20260101-preview",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 76,
+            "overflowX": 0
+          }
+        ]
+      },
+      "spentStages": {
+        "rows": [
+          {
+            "stage": "fix",
+            "engineMark": "claude",
+            "effortStep": "5",
+            "identity": "launched",
+            "model": "Opus 5",
+            "returns": "2",
+            "returnFilled": true,
+            "returnSpent": true,
+            "returnBudget": "невдача 2/2 · більше немає",
+            "returnBudgetState": "spent",
+            "returnArea": 400,
+            "nameWidth": 65,
+            "overflowX": 0
+          },
+          {
+            "stage": "review",
+            "engineMark": "codex",
+            "effortStep": "4",
+            "identity": "launched",
+            "model": "6-Astra",
+            "returns": null,
+            "returnFilled": false,
+            "returnSpent": false,
+            "returnBudget": "",
+            "returnBudgetState": null,
+            "returnArea": 0,
+            "nameWidth": 127,
+            "overflowX": 0
+          }
+        ]
+      }
+    },
     "1280-uk-dark": {
       "viewport": {
         "width": 1280,
@@ -4237,7 +4535,7 @@
         ]
       }
     },
-    "390-uk": {
+    "390-uk-dark": {
       "viewport": {
         "width": 390,
         "height": 844

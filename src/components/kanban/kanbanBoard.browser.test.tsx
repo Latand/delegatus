@@ -3501,8 +3501,9 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
    *   640 px      — the narrowest desktop, where the card graph falls to legend
    *                 mode and the arrow carries a bare badge
    *   modal graph — the same graph inside the Stages sheet, with its pane headers
-   *   390 px      — the phone: its board rows AND its pipeline screen, which draws
-   *                 a pipeline as stage rows rather than as a graph
+   *   390 px      — the phone: its board rows AND its pipeline screen, which
+   *                 draws a pipeline as stage rows rather than as a graph, for
+   *                 the live pipeline and the one whose budget is spent
    *
    * What it measures, as numbers: the count on each travelled edge, whether the
    * spent edge is drawn exhausted, the engine mark and effort step on every node,
@@ -4000,10 +4001,10 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
       }
     };
 
-    const phone = async (lang: "en" | "uk") => {
-      const label = `390-${lang}`;
+    const phone = async (lang: "en" | "uk", scheme: Scheme) => {
+      const label = `390-${lang}-${scheme}`;
       const viewport = { width: 390, height: 844 };
-      const opened = await openFixture(browser, base, viewport, "light", lang);
+      const opened = await openFixture(browser, base, viewport, scheme, lang);
       try {
         await opened.page.waitForSelector('[data-mobile2-row="pipeline"]', { state: "attached", timeout: 20_000 });
         await opened.page.waitForTimeout(400);
@@ -4091,8 +4092,10 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
           /* The narrowest desktop the board supports: the card graph falls to
              legend mode and the arrow carries a bare badge. */
           await desktop(lang, scheme, 640, false);
+          /* The phone in both schemes too: the finding that sent this round
+             back was a phone one, and it named light and dark (#1743). */
+          await phone(lang, scheme);
         }
-        await phone(lang);
       }
     } finally {
       await browser.close();
