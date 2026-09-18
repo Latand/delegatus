@@ -8,7 +8,11 @@
  * the Viewer saying it cannot tell. Read through the production handler, so
  * what these cases assert is what a browser receives.
  */
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { NextRequest } from "next/server";
 
@@ -111,6 +115,52 @@ test("an admitted send is not classified as refused", async () => {
   const body = await response.json() as Record<string, unknown>;
   expect(body.delivery).toBeUndefined();
   expect(body).toMatchObject({ operationId: "operation-fixture", receipt: { status: "pending" } });
+});
+
+/** An isolated config root whose inbox cannot be written: `<root>/inbox/files`
+    is a FILE, so staging a batch under it fails with ENOTDIR — a real inbox
+    failure that is not a batch conflict, reached with nothing mocked. The
+    migration sentinel is written first so resolving the inbox never reads the
+    operator's own directories. */
+function unwritableInboxRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-refused-inbox-"));
+  const inbox = path.join(root, "agent-log-viewer", "inbox");
+  fs.mkdirSync(inbox, { recursive: true });
+  fs.writeFileSync(path.join(inbox, ".migrated-from-legacy"), "test\n");
+  fs.writeFileSync(path.join(inbox, "files"), "not a directory\n");
+  return root;
+}
+
+const configHome = process.env.XDG_CONFIG_HOME;
+afterEach(() => {
+  if (configHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = configHome;
+});
+
+test("a send whose attachments cannot be saved to the inbox is refused, not left unclassified", async () => {
+  const root = unwritableInboxRoot();
+  process.env.XDG_CONFIG_HOME = root;
+  try {
+    const response = await handleRuntimeCommand(request({
+      ...send,
+      idempotencyKey: "send-fixture-attachment",
+      files: [{ name: "notes.txt", base64: Buffer.from("attachment bytes").toString("base64") }],
+    }), "send", { enabled: () => true, structuredEnabled: () => true, client: () => admittingClient });
+    expect(response.status).toBe(503);
+    const body = await response.json() as Record<string, unknown>;
+    /* The sixth exit of the same shape as the five: nothing journaled, no
+       operation minted, nothing on any wire. It keeps `retryable`, which says
+       the operator may try again — never that something went out. */
+    expect(body).toEqual({
+      error: "the attachments could not be saved to the inbox",
+      retryable: true,
+      delivery: "refused",
+    });
+    expect(body.operationId).toBeUndefined();
+    expect(body.receipt).toBeUndefined();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("a validation refusal keeps its own status and is not dressed as a delivery classification", async () => {

@@ -211,8 +211,92 @@ test("a refused send puts its text and its image back in the composer and parks 
     expect(mounted.host.querySelector("textarea")?.value).toBe("check the release status");
     expect(mounted.host.querySelectorAll("img")).toHaveLength(1);
     expect(mounted.host.querySelector('[data-testid="composer-status"]')?.textContent).toBe(REASON);
+    /* ONE message, ONE place. An attachment-bearing send keeps a durable saved
+       copy, and leaving it beside the returned draft would put the same
+       message in two independently sendable places: sending the saved copy
+       would deliver these words again and take the restored image out of the
+       tray without saying so. The copy went with the bubble. */
+    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).toBeNull();
+    expect(mounted.host.querySelector("[data-payload-retry]")).toBeNull();
+    expect(mounted.host.querySelector('[data-testid="composer-payload-recovery"]')).toBeNull();
     /* No second attempt: a refusal is not a retry loop. */
     expect(sends).toHaveLength(1);
+  } finally { await act(async () => mounted.root.unmount()); }
+});
+
+test("the returned draft is still sendable — ending the saved copy does not fence its next attempt", async () => {
+  const sends: SendBody[] = [];
+  const release = gatedWire(sends, { error: REASON, delivery: "refused" });
+  const mounted = await renderInto(surface());
+  try {
+    await settle(() => composerControls(mounted.host).type("resend me"));
+    await pasteImage(mounted.host, "resent-image");
+    await settle(() => composerControls(mounted.host).submit());
+    await settle(release);
+    expect(mounted.host.querySelector("textarea")?.value).toBe("resend me");
+    /* The copy was discarded under the refused attempt's key. A queued
+       submission mints a fresh key, so the tombstone cannot fence the retry —
+       and if it could, the payload store would refuse to retain the bytes and
+       this second send would never leave the composer. */
+    globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
+      const url = String(input);
+      if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
+      if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
+      const body = JSON.parse(init?.body ?? "{}") as SendBody;
+      sends.push(body);
+      return { ok: true, status: 202, json: async () => ({
+        ok: true,
+        operationId: "operation-accepted",
+        receipt: { operationId: "operation-accepted", idempotencyKey: body.idempotencyKey,
+          conversationId: cardId, kind: "send", status: "queued", at: "2026-09-18T00:00:00.000Z", revision: 1 },
+      }) } as Response;
+    }) as typeof fetch;
+    await settle(() => composerControls(mounted.host).submit());
+    expect(sends).toHaveLength(2);
+    expect(sends[1]!.idempotencyKey).not.toBe(sends[0]!.idempotencyKey);
+    expect(sends[1]!.text).toContain("resend me");
+    expect(sends[1]!.images).toHaveLength(1);
+    expect(mounted.host.querySelector('[data-testid="composer-status"]')?.textContent).not.toBe(REASON);
+  } finally { await act(async () => mounted.root.unmount()); }
+});
+
+test("a refusal answered after newer words keeps the bubble AND the saved copy, so the message is still in one place", async () => {
+  const sends: SendBody[] = [];
+  const release = gatedWire(sends, { error: REASON, delivery: "refused" });
+  const mounted = await renderInto(surface());
+  try {
+    await settle(() => composerControls(mounted.host).type("the release notes with the screenshot"));
+    await pasteImage(mounted.host, "kept-image");
+    await settle(() => composerControls(mounted.host).submit());
+    await settle(() => composerControls(mounted.host).type("words typed while it was in flight"));
+    await settle(release);
+    /* The draft could not come back — newer words hold the composer — so the
+       bubble owns the message and its saved copy is the only thing that still
+       carries the image. Discarding it here would lose the attachment. */
+    const entry = readOutbox(cardId)[0];
+    expect(entry?.state).toBe("failed");
+    expect(entry?.error).toBe(REASON);
+    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
+    expect(mounted.host.querySelector("[data-payload-retry]")).not.toBeNull();
+    expect(mounted.host.querySelector("textarea")?.value).toBe("words typed while it was in flight");
+  } finally { await act(async () => mounted.root.unmount()); }
+});
+
+test("an uncertain send keeps its saved copy, and that copy offers no retry", async () => {
+  const sends: SendBody[] = [];
+  const release = gatedWire(sends, { error: "host write failed", delivery: "uncertain" });
+  const mounted = await renderInto(surface());
+  try {
+    await settle(() => composerControls(mounted.host).type("a message whose fate nobody knows"));
+    await pasteImage(mounted.host, "uncertain-image");
+    await settle(() => composerControls(mounted.host).submit());
+    await settle(release);
+    /* Untouched: the command may be on the wire, so the copy stays and
+       nothing here offers to send it a second time. */
+    expect(readOutbox(cardId)[0]?.deliveryUncertain).toBe(true);
+    expect(mounted.host.querySelector(`[data-payload-key="${sends[0]!.idempotencyKey}"]`)).not.toBeNull();
+    expect(mounted.host.querySelector("[data-payload-retry]")).toBeNull();
+    expect(mounted.host.querySelector("[data-payload-discard]")).toBeNull();
   } finally { await act(async () => mounted.root.unmount()); }
 });
 

@@ -117,8 +117,8 @@ function retryRecordUnavailable(recorded: Evidence<boolean>): NextResponse {
  * reason the operator is shown, so it stays a short fixed sentence — never a
  * path, an id or an account.
  */
-function refusedBeforeDispatch(error: string): NextResponse {
-  return NextResponse.json({ error, delivery: "refused" satisfies AttachmentDeliveryOutcome }, { status: 503 });
+function refusedBeforeDispatch(error: string, extra?: { retryable: true }): NextResponse {
+  return NextResponse.json({ error, ...extra, delivery: "refused" satisfies AttachmentDeliveryOutcome }, { status: 503 });
 }
 
 /**
@@ -232,7 +232,13 @@ async function dispatchRuntimeCommand(
       if (error instanceof InboxFileConflictError) {
         return NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 });
       }
-      return NextResponse.json({ error: "the attachments could not be saved to the inbox", retryable: true }, { status: 503 });
+      /* The sixth exit of the same shape: the inbox write failed for something
+         that is not a batch conflict, so nothing was journaled, no operation
+         was minted and nothing reached a host. Classified with the other five
+         — a client that reads this as possibly sent parks a bubble no receipt
+         can ever settle — and it keeps `retryable`, which says the operator
+         may try again, not that anything went out. */
+      return refusedBeforeDispatch("the attachments could not be saved to the inbox", { retryable: true });
     }
   }
   const client = dependencies.client();

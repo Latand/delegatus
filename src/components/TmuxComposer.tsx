@@ -2642,23 +2642,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      * started the next message, and putting these words beside newer ones would
      * be a second loss; then the bubble stays instead, saying the server's
      * reason and carrying the ordinary retry and cancel a failure always had.
+     *
+     * Answers `true` only when the draft actually came back, because the
+     * durable saved copy has to end in that same step — see the caller.
      */
-    const returnRefusedSubmission = (reason: string) => {
+    const returnRefusedSubmission = (reason: string): boolean => {
       /* A direct send never left the composer — the draft is still on screen,
          and the status line below says why it did not go. */
-      if (!outboxId) return;
+      if (!outboxId) return false;
       const entry = readOutbox(cardId).find((candidate) => candidate.id === outboxId);
-      if (!entry || entry.state === "delivered") return;
+      if (!entry || entry.state === "delivered") return false;
       /* An entry already parked by an EARLIER attempt is not this refusal's to
          reinterpret: that attempt may have landed, and this one proves nothing
          about it. */
-      if (entry.deliveryUncertain) return;
+      if (entry.deliveryUncertain) return false;
       const keepAsFailure = () => updateOutbox(cardId, outboxId, {
         state: "failed", error: reason, settledAt: nowMs(), awaitingTurn: undefined, heldForSwitch: undefined,
       });
-      if (textRef.current.trim() || attachments.attachmentsRef.current.length) { keepAsFailure(); return; }
+      if (textRef.current.trim() || attachments.attachmentsRef.current.length) { keepAsFailure(); return false; }
       cancelOutbox(cardId, outboxId);
-      if (readOutbox(cardId).some((candidate) => candidate.id === outboxId)) { keepAsFailure(); return; }
+      if (readOutbox(cardId).some((candidate) => candidate.id === outboxId)) { keepAsFailure(); return false; }
       outboxImages.current.delete(outboxId);
       outboxFiles.current.delete(outboxId);
       outboxKeys.current.delete(outboxId);
@@ -2666,6 +2669,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setText(requestedText);
       if (requestedImages.length || requestedFiles.length) attachments.replace(requestedImages, requestedFiles);
       inputRef.current?.focus();
+      return true;
     };
     const settleOutboxFromReceipt = (receipt: RuntimeReceipt) => {
       /* The late admission: a send that answered `pending` and settled on the receipt
@@ -3098,7 +3102,23 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         // A queued submission retains its bubble and the receipt evidence.
         const failure = json.error ?? t("common.failedSend");
         if (json.receipt) settleOutboxFromReceipt(json.receipt);
-        else if (refusedBeforeDispatch) returnRefusedSubmission(failure);
+        else if (refusedBeforeDispatch) {
+          /* ONE message, ONE place. An attachment-bearing send keeps a durable
+             saved copy beside its bubble, and the refusal above put a recorded
+             refusal on it — which is exactly what makes the recovery panel
+             offer that copy its own retry. Handing the draft back while the
+             copy stays would leave the same message in two independently
+             sendable places, and sending the copy would take the restored
+             image out of the tray without saying so. So the copy ends in the
+             same step the draft returns, and the returned draft persists on
+             its own. When the draft did NOT come back — the composer already
+             held newer words — the bubble and the saved copy keep the message
+             between them exactly as before. */
+          if (returnRefusedSubmission(failure) && durable) {
+            await composerSubmissionPayloads.discardUnprepared(durable.ref).catch(() => false);
+            await refreshPayloads();
+          }
+        }
         else if (possiblyAccepted && outboxId) markOutboxUnknown();
         else settleOutbox("failed", failure);
         setStatus({ kind: "err", text: failure });
