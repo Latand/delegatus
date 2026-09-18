@@ -29,7 +29,7 @@ function file(path: string): FileEntry {
 /** A root BranchGroup wrapping one placed transcript (a materialized stage). */
 function group(path: string): BranchGroup {
   const root = file(path);
-  return { key: path, columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime, orphanTask: false };
+  return { key: path, columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime };
 }
 
 type StageSpec = { id: string; kind: PipelineStageKind; surface: "completed" | "running" | "queued" };

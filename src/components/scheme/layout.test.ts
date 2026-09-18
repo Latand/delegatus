@@ -141,7 +141,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [quiet],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
     const layout = buildSchemeLayout([group], [], [root, quiet], [flow({ id: "f1", implementerPath: "/root" })], []);
 
@@ -182,7 +181,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
     const reviewFlow = flow({
       id: "f-retry",
@@ -216,7 +214,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
     const layout = buildSchemeLayout([group], [], [root], [flow({ id: "f1", implementerPath: "/root" })], []);
 
@@ -237,7 +234,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
     const layout = buildSchemeLayout([group], [], [root], [flow({ id: "f1", implementerPath: "/elsewhere" })], []);
     expect(layout.links).toHaveLength(0);
@@ -262,7 +258,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
 
     const layout = buildSchemeLayout(
@@ -295,7 +290,6 @@ describe("buildSchemeLayout byPath", () => {
       returnable: [],
       finished: [],
       smt: root.mtime,
-      orphanTask: false,
     };
     const layout = buildSchemeLayout([group], [], [root, child], [flow({ id: "f1", implementerPath: "/implementer" })], []);
     const halo = layout.groups.find((g) => g.kind === "flow")!;
@@ -366,7 +360,7 @@ describe("planned-stage pipelines grow a placeholder halo (#353 desktop ownershi
 
   test("a pipeline already framed by a materialized stage node gets no duplicate placeholder", () => {
     const root = entry({ path: "/stage" });
-    const group: BranchGroup = { key: "/stage", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/stage", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime };
     const withNode = pipeline({ runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", agentPath: "/stage", flowId: null } as unknown as Record<string, unknown>] }] });
     const layout = buildSchemeLayout([group], [], [root], [], [], [withNode], [withNode]);
     const halos = layout.groups.filter((g) => g.kind === "pipeline" && g.id === "p1");
@@ -405,7 +399,7 @@ describe("planned-stage pipelines grow a placeholder halo (#353 desktop ownershi
        pane owns build's slot; only the future review stage remains a placeholder —
        no lingering placeholder over the materialized pane. */
     const root = entry({ path: "/build" });
-    const group: BranchGroup = { key: "/build", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/build", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime };
     const placed = pipeline({
       stages: [
         { id: "build", kind: "run", prompt: "", next: "review" },
@@ -445,7 +439,7 @@ describe("planned-stage pipelines grow a placeholder halo (#353 desktop ownershi
       ],
     });
     const planRoot = entry({ path: "/plan" });
-    const planGroup: BranchGroup = { key: "/plan", columns: [{ file: planRoot, tasks: [] }], returnable: [], finished: [], smt: planRoot.mtime, orphanTask: false };
+    const planGroup: BranchGroup = { key: "/plan", columns: [{ file: planRoot, tasks: [] }], returnable: [], finished: [], smt: planRoot.mtime };
 
     /* The build slot's incident rails: pass in from plan, pass out to review, and
        the review→build fail loop back in. All three must survive the park. */
@@ -477,7 +471,7 @@ describe("planned-stage pipelines grow a placeholder halo (#353 desktop ownershi
     /* Placed board rect: /build is scanned and laid out. The live pane owns build's
        slot; the placeholder dissolves with no duplicate — only review remains. */
     const buildRoot = entry({ path: "/build" });
-    const buildGroup: BranchGroup = { key: "/build", columns: [{ file: buildRoot, tasks: [] }], returnable: [], finished: [], smt: buildRoot.mtime, orphanTask: false };
+    const buildGroup: BranchGroup = { key: "/build", columns: [{ file: buildRoot, tasks: [] }], returnable: [], finished: [], smt: buildRoot.mtime };
     const placedPipeline = parkedPipeline({ n: 1, state: "needs_decision", agentPath: "/build", flowId: null } as unknown as Record<string, unknown>);
     const placedLayout = buildSchemeLayout([planGroup, buildGroup], [], [planRoot, buildRoot], [], [], [placedPipeline], [placedPipeline]);
     const placedSlots = new Map(placedLayout.slots.map((slot) => [slot.stage.id, slot]));
@@ -493,7 +487,7 @@ describe("planned-stage pipelines grow a placeholder halo (#353 desktop ownershi
        placeholder, so the conversation graph stays continuous inside the region
        instead of stopping at the last live card. */
     const root = entry({ path: "/build" });
-    const group: BranchGroup = { key: "/build", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/build", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime };
     const twoStage = pipeline({
       stages: [
         { id: "build", kind: "run", prompt: "", next: "review" },
@@ -674,7 +668,7 @@ describe("pipeline world ownership (#353/#388)", () => {
 
   test("a materialized current stage keeps its full pane and future stages become placeholders", () => {
     const root = entry({ path: "/arch", activity: "live" });
-    const group: BranchGroup = { key: "/arch", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/arch", columns: [{ file: root, tasks: [] }], returnable: [], finished: [], smt: root.mtime };
     const running = staged({
       state: "running",
       cursor: { stageId: "builder", state: "spawning", input: null, activatedBy: null },
@@ -702,7 +696,7 @@ describe("pipeline world ownership (#353/#388)", () => {
   test("an active review stage keeps one conversation pane and folds its review deck", () => {
     const implementer = entry({ path: "/builder", activity: "live" });
     const reviewer = entry({ path: "/reviewer", parent: "/builder", kind: "subagent", activity: "live" });
-    const group: BranchGroup = { key: "/builder", columns: [{ file: implementer, tasks: [] }], returnable: [], finished: [], smt: implementer.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/builder", columns: [{ file: implementer, tasks: [] }], returnable: [], finished: [], smt: implementer.mtime };
     const reviewing = staged({
       state: "reviewing",
       cursor: { stageId: "review", state: "reviewing", input: null, activatedBy: null },
@@ -773,7 +767,7 @@ describe("buildSchemeLayout favorites band (issue #224)", () => {
     const file = entry({ path, mtime, activity: "live" });
     return {
       file,
-      group: { key: path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: mtime, orphanTask: false },
+      group: { key: path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: mtime },
     };
   };
 
@@ -828,7 +822,6 @@ describe("bounded attention-first rest bands (#343)", () => {
       returnable: [],
       finished: [],
       smt: file.mtime,
-      orphanTask: false,
     };
     return { file, group };
   };
@@ -863,7 +856,7 @@ describe("bounded attention-first rest bands (#343)", () => {
   test("a pipeline whose only transcript is folded into an under-deck moves to the shelf", () => {
     const host = entry({ path: "/host", activity: "live" });
     const folded = entry({ path: "/host/old", parent: "/host" });
-    const group: BranchGroup = { key: "/host", columns: [{ file: host, tasks: [] }], returnable: [], finished: [folded], smt: host.mtime, orphanTask: false };
+    const group: BranchGroup = { key: "/host", columns: [{ file: host, tasks: [] }], returnable: [], finished: [folded], smt: host.mtime };
     const pipeline = ({
       id: "folded-pipe", task: "Folded attempt", project: "demo", repoDir: "/r", worktreeDir: "/w",
       branch: "b", baseBranch: "main", baseRef: "a", lastPassedCommit: "a",
@@ -923,7 +916,6 @@ describe("direct one-shot review groups on the scheme (issue #325)", () => {
       returnable: [],
       finished: [],
       smt: builder.mtime,
-      orphanTask: false,
     };
     return { files, projected, group };
   }
@@ -965,7 +957,6 @@ describe("direct one-shot review groups on the scheme (issue #325)", () => {
       returnable: [],
       finished: [],
       smt: impl.mtime,
-      orphanTask: false,
     };
     const layout = buildSchemeLayout([group, managedGroup], [], [...files, impl], [...projected, managed], []);
 
@@ -999,7 +990,7 @@ describe("a pipeline's stages read in execution order (#658)", () => {
     }) as unknown as Pipeline;
 
   const rootGroup = (file: FileEntry): BranchGroup =>
-    ({ key: file.path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: file.mtime, orphanTask: false });
+    ({ key: file.path, columns: [{ file, tasks: [] }], returnable: [], finished: [], smt: file.mtime });
 
   test("separate stage roots place stage 1 before the fresher live stage 2, not after it", () => {
     /* The band ranks trees by activity+recency, which put the LIVE stage 2 first

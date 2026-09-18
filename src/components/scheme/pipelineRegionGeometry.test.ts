@@ -485,7 +485,6 @@ describe("every pipeline conversation surface stays inside its colored region (#
       returnable: [quiet],
       finished: [],
       smt: builder.mtime,
-      orphanTask: false,
     };
     const pipeline = pipe({
       stages: [

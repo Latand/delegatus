@@ -12,6 +12,7 @@ import {
   isConversation,
   isSubagent,
   kidsIndex,
+  parentlessBackgroundTasks,
   quietHistoryRows,
   quietRootsWithActiveDescendants,
   projectDraftWorkingDirectory,
@@ -368,6 +369,59 @@ describe("buildBranchGroups", () => {
     expect(group.finished.map((file) => file.path)).toContain("/root/quiet");
   });
 
+  /* Issue #1758. Two live background processes with no owning conversation used
+     to become stub groups, which the dashboard docked as full-width strips
+     above the board header — pushing the whole board down. The builder now
+     draws nothing for them: the board a live conversation produces is
+     identical whether or not they exist. */
+  test("two live parentless background tasks add nothing to the board", () => {
+    const conversation = entry({ path: "/conv.jsonl", activity: "live", mtime: 5_000 });
+    const tasks = ["/tasks/aaa.output", "/tasks/bbb.output"].map((path) => entry({
+      path,
+      root: "claude-tasks",
+      engine: "shell",
+      kind: "background",
+      fmt: "plain",
+      activity: "live",
+      mtime: 6_000,
+    }));
+
+    const withTasks = buildBranchGroups([conversation, ...tasks], "demo");
+    const without = buildBranchGroups([conversation], "demo");
+
+    expect(withTasks.map((group) => group.key)).toEqual([conversation.path]);
+    expect(withTasks).toEqual(without);
+    for (const task of tasks) {
+      expect(withTasks.flatMap((group) => group.columns.map((column) => column.file.path))).not.toContain(task.path);
+      expect(withTasks.flatMap((group) => group.finished.map((file) => file.path))).not.toContain(task.path);
+    }
+  });
+
+  /* The other half of the same issue: a background process whose conversation
+     IS on the board keeps its collapsed row under that conversation's column,
+     so nothing the operator can act on is lost with the dock. */
+  test("a conversation-owned live background task stays a row under its column", () => {
+    const conversation = entry({ path: "/conv.jsonl", activity: "live", mtime: 5_000 });
+    const owned = entry({
+      path: "/tasks/owned.output",
+      root: "claude-tasks",
+      engine: "shell",
+      kind: "background",
+      fmt: "plain",
+      parent: conversation.path,
+      activity: "live",
+      mtime: 6_000,
+    });
+
+    const groups = buildBranchGroups([conversation, owned], "demo");
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.columns).toHaveLength(1);
+    expect(groups[0]!.columns[0]!.tasks.map((task) => task.path)).toEqual([owned.path]);
+    /* And it is host detail for nobody: it has an owner on the board. */
+    expect(parentlessBackgroundTasks([conversation, owned], "demo")).toEqual([]);
+  });
+
   test("a promoted engine child opens its parent group even when the parent is idle", () => {
     const idleParent = entry({ path: "/parent", activity: "idle" });
     const promoted = entry({ path: "/parent/attn", parent: "/parent", kind: "subagent", activity: "idle", spawnOrigin: "engine" });
@@ -671,6 +725,57 @@ describe("buildArchiveBranchGroups", () => {
     expect(groups.find((group) => group.key === projectRoot.path)!.columns.map((column) => column.file.path)).toEqual([
       projectRoot.path,
     ]);
+  });
+
+  /* The quiet-history fallback drew the same stub group the live board did
+     (#1758). It opens no group for a background process either — the process
+     stays in the file list, where it belongs. */
+  test("a parentless background task opens no archive group", () => {
+    const conversation = entry({ path: "/archive-conv.jsonl", mtime: 30 });
+    const task = entry({
+      path: "/tasks/archive.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain", mtime: 40,
+    });
+
+    const groups = buildArchiveBranchGroups([conversation, task], "demo", 100);
+
+    expect(groups.map((group) => group.key)).toEqual([conversation.path]);
+  });
+});
+
+describe("parentlessBackgroundTasks", () => {
+  /* They take no board space (#1758) and must stay reachable all the same:
+     this is what the phone's host sheet lists and counts. */
+  test("returns the live parentless processes of the project, freshest first", () => {
+    const conversation = entry({ path: "/conv.jsonl", activity: "live", mtime: 5_000 });
+    const owned = entry({
+      path: "/tasks/owned.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain",
+      parent: conversation.path, activity: "live", mtime: 6_000,
+    });
+    const older = entry({
+      path: "/tasks/older.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain",
+      activity: "live", mtime: 6_000,
+    });
+    const newer = entry({
+      path: "/tasks/newer.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain",
+      activity: "live", mtime: 9_000,
+    });
+    const elsewhere = entry({
+      path: "/tasks/elsewhere.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain",
+      project: "other", activity: "live", mtime: 9_000,
+    });
+
+    const tasks = parentlessBackgroundTasks([conversation, owned, older, newer, elsewhere], "demo");
+
+    expect(tasks.map((task) => task.path)).toEqual([newer.path, older.path]);
+  });
+
+  test("a settled parentless process is not host detail", () => {
+    const settled = entry({
+      path: "/tasks/settled.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain",
+      activity: "idle", mtime: 10,
+    });
+
+    expect(parentlessBackgroundTasks([settled], "demo")).toEqual([]);
   });
 });
 
