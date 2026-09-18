@@ -398,6 +398,15 @@ function childOwnInstant(child: SeatTickChildInput): number {
  * has nothing to acknowledge at all: a host that died over one leaves it open
  * for ever, so its token is the child's own last record, and the child is
  * offered again the moment it writes another one.
+ *
+ * The token carries no seat epoch, and does not need one: what a seat was shown
+ * is that seat's, and `seatTickStateForEpoch` drops the whole record when a
+ * check observes an epoch the row was not written under — alongside the stall
+ * memory, so a successor re-observes a stall and reports it on its own second
+ * check, as its predecessor did. Were the record instead read across a
+ * rotation, this child would be the one it hurt: a dead host over an open turn
+ * never writes another record, so its token never changes and a successor told
+ * "unchanged" would never be told at all.
  */
 function childStateToken(child: SeatTickChildInput, shows: string | null): string {
   const state = shows === null ? String(childOwnInstant(child)) : shows.slice(-32);

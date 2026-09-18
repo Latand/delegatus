@@ -886,13 +886,22 @@ export interface SeatTickProjectState {
    * {@link SEAT_TICK_CHILDREN_SHOWN_LIMIT} of them.
    *
    * It is the third clause of the one eligibility test both child paths share,
-   * and the stall path is why it is durable. A harvest line discharges itself:
-   * the landing acknowledges the owed outcomes behind it, and the gather stops
-   * offering them. A stalled child has nothing to acknowledge — a host that
-   * died over an open turn leaves that turn open for ever — so before this,
-   * every wake for as long as the record stood carried the same dead child
-   * again. A rotation clears it with the rest of the seat's judgement: a
-   * successor has been shown nothing.
+   * and the stall path is why it is kept at all. A harvest line discharges
+   * itself: the landing acknowledges the owed outcomes behind it, and the
+   * gather stops offering them. A stalled child has nothing to acknowledge — a
+   * host that died over an open turn leaves that turn open for ever — so before
+   * this, every wake for as long as the record stood carried the same dead
+   * child again.
+   *
+   * It is THIS seat's, and the epoch is around the record rather than inside
+   * its tokens: `seatTickStateForEpoch` keeps only the fields that are the
+   * project's rather than the seat's, so a check that observes a rotation reads
+   * this one empty, and the stall memory beside it empty too — the successor
+   * re-observes the stall on its first check and is told on its second, the way
+   * its predecessor was. Carried across a rotation instead, this record would
+   * silence precisely the child it exists for: a dead host over an open turn
+   * writes no further record, so the token never changes and a successor
+   * answered "unchanged" would never be told at all.
    */
   childrenShown: string[];
 }

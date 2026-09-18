@@ -240,11 +240,17 @@ export function seatTickWakeMessage(input: {
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
   }
+  /* One line per reason, counting CHILDREN. Both of these lines used to speak
+     of the children's outcomes, which was true while only the harvest applied
+     the test and false the moment the stall path shared it (#1783 round two):
+     a child held back here may be a worker that is still open, or one whose
+     host died over an open turn, and neither owes an outcome at all. So each
+     line describes the child. */
   if (input.skippedChildren && input.skippedChildren.stale > 0) {
-    lines.push(`(${input.skippedChildren.stale} spawned child(ren) not listed: their outcomes predate this seat's designation or an earlier seat epoch harvested them.)`);
+    lines.push(`(${input.skippedChildren.stale} spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)`);
   }
   if (input.skippedChildren && input.skippedChildren.unreadable > 0) {
-    lines.push(`(${input.skippedChildren.unreadable} spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read or harvest their outcome.)`);
+    lines.push(`(${input.skippedChildren.unreadable} spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)`);
   }
   if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
     lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);

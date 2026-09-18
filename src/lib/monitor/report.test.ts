@@ -47,6 +47,26 @@ test("a wake with nothing deferred and no signals says neither", () => {
   expect(text).not.toContain("Signals:");
 });
 
+test("the skipped-child summary describes the children, not an outcome they may not have (#1783)", () => {
+  const text = seatTickWakeMessage({
+    project: PROJECT,
+    reasons: [{ kind: "interval", detail: "the wake interval elapsed while work is open" }],
+    items: [],
+    deferred: 0,
+    signals: [],
+    skippedChildren: { stale: 3, unreadable: 2, unchanged: 1 },
+  });
+  /* Both child paths share the eligibility test, so a child counted here may
+     be a worker still running or one whose host died over an open turn, and
+     neither owes an outcome. Each line says what is true of the CHILD, and
+     each count is a count of children. */
+  expect(text).toContain("(3 spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)");
+  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
+  expect(text).toContain("(1 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
+  expect(text).not.toContain("their outcomes predate");
+  expect(text).not.toContain("harvest their outcome");
+});
+
 test("the proposal brief asks for one ranked card and forbids opening issues or lanes from it", () => {
   const text = seatTickProposalMessage({
     project: PROJECT,

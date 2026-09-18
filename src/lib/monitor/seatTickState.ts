@@ -251,10 +251,14 @@ function readFile(filePath: string): SeatTickStateFile {
  * The row a check should start from.
  *
  * A seat epoch that moved means a rotation happened: the successor inherits the
- * clock but none of the predecessor's JUDGEMENT, so its stall memory, its
- * retry-guard counters and the reasons it was last woken for start empty. That
- * is the whole handover — the incoming seat is ticking without anyone
- * configuring it, and it is not carrying a record of wakes it never received.
+ * clock but none of the predecessor's JUDGEMENT, so its stall memory, the record
+ * of which children a landed wake showed it (#1783 round two), its retry-guard
+ * counters and the reasons it was last woken for start empty. That is the whole
+ * handover — the incoming seat is ticking without anyone configuring it, and it
+ * is not carrying a record of wakes it never received. The showings matter most
+ * for the child that can never change again, a host dead over an open turn:
+ * carried across the rotation, its token would answer "unchanged" to every
+ * successor for ever and the stall would be told to nobody.
  *
  * Three things are not the seat's, and survive:
  *
