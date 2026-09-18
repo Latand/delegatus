@@ -2165,15 +2165,28 @@ test("a busy account mutation waits between ticks and claims one host on the sam
   expect(scheduled).toEqual([1_000, 2_000]);
 });
 
-test("busy account contention exhausts the existing wait with a truthful terminal failure", async () => {
+/* #1750: the lock a release succession holds is the same condition as the host
+   it is replacing, so the busy class rides the budget that outlasts a deploy
+   rather than the delivery controller's thirty seconds. Production spent the
+   whole of those thirty seconds inside three spawn calls — "failed after 3
+   retries over 146s" — because the budget is wall-clock from the activation
+   and each failing call burns tens of seconds of it. This drives that same
+   arithmetic: every call costs fifty seconds, and the wait still has to
+   outlast the eight minutes a deploy takes end to end. */
+const DEPLOY_WINDOW_MS = 8 * 60_000;
+
+test("a busy account mutation rides out a deploy-length outage and parks naming the class and the count (#1750)", async () => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
+  const startedAt = Date.parse(h.ports.now());
   let spawnCalls = 0;
+  let stillRunningAfterTheDeploy = false;
   const scheduled: number[] = [];
   h.ports.spawnAgent = async () => {
     spawnCalls += 1;
+    advance(50_000);
     throw new Error("account mutation is busy; retry shortly");
   };
   Object.assign(h.ports, {
@@ -2181,26 +2194,31 @@ test("busy account contention exhausts the existing wait with a truthful termina
     sleep: forbiddenSleep,
   });
 
-  for (let round = 0; round < 8 && loadPipelines()[0]!.state === "running"; round += 1) {
+  for (let round = 0; round < 40 && loadPipelines()[0]!.state === "running"; round += 1) {
     const scheduledBefore = scheduled.length;
     await tickPipelines([], h.ports);
-    if (loadPipelines()[0]!.state === "running") {
-      expect(scheduled.length).toBe(scheduledBefore + 1);
-      advance(scheduled.at(-1)!);
-    }
+    if (loadPipelines()[0]!.state !== "running") break;
+    expect(scheduled.length).toBe(scheduledBefore + 1);
+    if (Date.parse(h.ports.now()) - startedAt >= DEPLOY_WINDOW_MS) stillRunningAfterTheDeploy = true;
+    advance(scheduled.at(-1)!);
   }
 
   const parked = loadPipelines()[0]!;
-  expect(spawnCalls).toBe(7);
-  expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 7_000]);
+  const attempt = parked.runs[0]!.attempts[0]!;
+  /* The lane was still retrying when the deploy window had passed. */
+  expect(stillRunningAfterTheDeploy).toBe(true);
+  expect(Date.parse(h.ports.now()) - startedAt).toBeGreaterThan(DEPLOY_WINDOW_MS);
+  expect(attempt.controllerWait).toMatchObject({ budgetMs: 600_000, retryMaxMs: 60_000 });
+  expect(Math.max(...scheduled)).toBe(60_000);
+  expect(spawnCalls).toBe(attempt.controllerWait!.rounds + 1);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: "stage spawn failed after 6 retries over 30s: account mutation is busy",
+    stateDetail: `stage spawn failed after ${attempt.controllerWait!.rounds} retries over ${Math.round((Date.parse(h.ports.now()) - Date.parse(attempt.controllerWait!.startedAt)) / 1_000)}s: account mutation is busy`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
-  expect(parked.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "needs_decision", launchId: null, conversationId: null });
-  expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+  expect(attempt).toMatchObject({ n: 1, state: "needs_decision", launchId: null, conversationId: null });
+  expect(attempt.error).toBe(parked.stateDetail);
 });
 
 test("mixed controller waits publish only the current busy retry time", async () => {
@@ -9117,6 +9135,216 @@ test("a pipeline spawn that finds no runtime host fails its own receipt before i
   }
 });
 
+/* #1750: six production lanes parked on a transient runtime-host failure whose
+   retry the engine could not reach. The receipts were `failed` on disk within
+   two seconds, and the catch that retires a failed launch read them through a
+   registry projection captured BEFORE the launch was reserved, so it saw
+   `null` and rethrew. A controller tick always reads the projection before it
+   spawns — the pass reconciles every running attempt first — so the projection
+   is primed here exactly as a tick primes it. */
+test("a spawn that throws leaves its own failed receipt readable through the same ports (#1750)", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pipeline-failure-projection-registry.json"));
+  const cwd = process.env.LLV_STATE_DIR!;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  setAgentRegistryForTests(registry);
+  const resolveSpawn = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({
+    kind: "available",
+    account: {
+      engine: "codex",
+      accountId: "stale-projection",
+      kind: "managed",
+      home: process.env.LLV_STATE_DIR!,
+      transcriptRoot: process.env.LLV_STATE_DIR!,
+      env: { NODE_ENV: "test" },
+    },
+  }));
+  const reservations: Array<{ launchId: string; conversationId: string }> = [];
+  try {
+    const ports = defaultPipelinePorts();
+    /* The read a tick makes before it ever reaches the spawn. */
+    expect(ports.spawnReceipt("launch-not-yet-reserved")).toBeNull();
+    await expect(ports.spawnAgent({
+      role: {
+        roleId: "builder",
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+        access: "read-write",
+        promptScaffold: "Builder guidance",
+      },
+      runtimeProfile: { access: "read-write", sandbox: "full" },
+      cwd,
+      project: "repo-00000000000000000000000000000001",
+      requestedAccountId: null,
+      title: "Build scoped change · build",
+      ["prompt"]: "Build the scoped change",
+      parentPath: null,
+      clientAttemptId: "pipeline_stale_projection_attempt",
+      membership: {
+        kind: "pipeline",
+        containerId: "pipeline-stale-projection",
+        role: "builder",
+        slot: "build:1",
+        stageId: "build",
+        stageOrder: 0,
+        round: 1,
+        parentConversationId: null,
+      },
+      creatorConversationId: null,
+    }, (created) => { reservations.push(created); })).rejects.toThrow("pipeline structured runtime host is unavailable");
+    const reservation = reservations[0];
+    if (!reservation) throw new Error("pipeline reservation was not captured");
+    expect(ports.spawnReceipt(reservation.launchId)).toMatchObject({
+      state: "failed",
+      launchId: reservation.launchId,
+      conversationId: reservation.conversationId,
+    });
+  } finally {
+    resolveSpawn.mockRestore();
+    setAgentRegistryForTests(null);
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+/* #1750: the delivery queue writes this when a release succession leaves two
+   executors over one journal and the later one cannot learn what became of the
+   first one's send. It is a succession artefact, so a stage that meets it met
+   a deploy — and the transcript, not the message, decides whether the prompt
+   it carried can be sent again. */
+const UNVERIFIED_DELIVERY = "delivery was started by an earlier executor; whether it reached the recipient is unverified";
+
+test("an unverified first delivery retries when the stage transcript was never created (#1750)", async () => {
+  const h = harness();
+  const created = await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  const scheduled: number[] = [];
+  const probed: string[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    spawnCalls += 1;
+    if (spawnCalls === 1) {
+      onReserved({ launchId: "launch-unverified", conversationId: "conversation_unverified" });
+      throw new Error(UNVERIFIED_DELIVERY);
+    }
+    return baseSpawn(input, onReserved);
+  };
+  h.ports.spawnReceipt = (launchId) => launchId === "launch-unverified"
+    ? {
+      state: "failed",
+      launchId,
+      conversationId: "conversation_unverified",
+      sessionId: null,
+      ["transcript"]: null,
+      stagedTranscript: "/codex/never-created.jsonl",
+      paneId: null,
+      staged: true,
+      error: UNVERIFIED_DELIVERY,
+    }
+    : null;
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+    transcriptPresent: (pathname: string) => { probed.push(pathname); return false; },
+  });
+
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(probed).toEqual(["/codex/never-created.jsonl"]);
+  const waiting = pipeline.runs[0]!.attempts.at(-1)!;
+  expect(waiting).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, error: null });
+  /* The class rides the budget that outlasts a deploy, not the controller's
+     thirty seconds. */
+  expect(waiting.controllerWait).toMatchObject({ rounds: 1, budgetMs: 600_000, retryMaxMs: 60_000 });
+  expect(waiting.retiredLaunches).toEqual([{
+    launchId: "launch-unverified",
+    conversationId: "conversation_unverified",
+    error: UNVERIFIED_DELIVERY,
+    retiredAt: expect.any(String),
+  }]);
+  expect(created.id).toBe(pipeline.id);
+
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(2);
+  expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "running" } });
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", conversationId: "conversation_stage_1" });
+});
+
+test("an unverified first delivery never sends a second prompt where the stage transcript exists (#1750)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  const claims: string[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    spawnCalls += 1;
+    onReserved({ launchId: "launch-unverified-live", conversationId: "conversation_unverified_live" });
+    throw new Error(UNVERIFIED_DELIVERY);
+  };
+  h.ports.spawnReceipt = (launchId) => ({
+    state: "failed",
+    launchId,
+    conversationId: "conversation_unverified_live",
+    sessionId: null,
+    ["transcript"]: null,
+    stagedTranscript: "/codex/stage-unverified.jsonl",
+    paneId: null,
+    staged: true,
+    error: UNVERIFIED_DELIVERY,
+  });
+  h.ports.claimSpawnRetry = (launchId) => { claims.push(launchId); return "claimed"; };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+    transcriptPresent: () => true,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  /* Nothing was claimed, nothing was retired, and no second prompt was made. */
+  expect(claims).toEqual([]);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({
+    state: "needs_decision",
+    stateDetail: `${UNVERIFIED_DELIVERY}; the stage transcript exists, so the prompt may already have reached the agent and is not sent again`,
+  });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+});
+
+test("a non-transient spawn failure still parks at once (#1750)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const scheduled: number[] = [];
+  let spawnCalls = 0;
+  h.ports.spawnAgent = async () => {
+    spawnCalls += 1;
+    throw new Error("stage worktree is not a git repository");
+  };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(spawnCalls).toBe(1);
+  expect(scheduled).toEqual([]);
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: "stage worktree is not a git repository" });
+  expect(parked.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
 test("a failed receipt that settles before its retry claim parks instead of re-dispatching (#1678)", async () => {
   const h = harness();
   await create(h.ports);
@@ -9572,7 +9800,13 @@ test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute 
   expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1" });
 });
 
-test("a busy-lock wait alone still ends at thirty seconds (#1678 review 2)", async () => {
+/* #1750 moved this: a busy lock sighted on its own used to end at thirty
+   seconds, and #1678 review 2 only kept a host outage's ten minutes from being
+   cut down to it. The lock a release succession holds is the same condition,
+   so the busy class now opens on the host budget rather than inheriting it,
+   and a delivery controller between publications is the only class left on
+   thirty seconds. */
+test("a busy-lock wait alone opens on the budget that outlasts a deploy (#1750)", async () => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -9587,9 +9821,29 @@ test("a busy-lock wait alone still ends at thirty seconds (#1678 review 2)", asy
     await tickPipelines([], h.ports);
     if (loadPipelines()[0]!.state === "running") advance(scheduled.at(-1)!);
   }
+  const pipeline = loadPipelines()[0]!;
+  expect(pipeline.state).toBe("running");
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 8, budgetMs: 600_000, retryMaxMs: 60_000 });
+});
+
+test("a delivery controller between publications keeps the thirty-second budget (#1750)", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  h.ports.spawnAgent = async () => { throw new Error("structured delivery controller is unavailable"); };
+  Object.assign(h.ports, {
+    scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
+    sleep: forbiddenSleep,
+  });
+  for (let round = 0; round < 12 && loadPipelines()[0]!.state === "running"; round += 1) {
+    await tickPipelines([], h.ports);
+    if (loadPipelines()[0]!.state === "running") advance(scheduled.at(-1)!);
+  }
   expect(loadPipelines()[0]).toMatchObject({
     state: "needs_decision",
-    stateDetail: "stage spawn failed after 6 retries over 30s: account mutation is busy",
+    stateDetail: "stage spawn failed after 6 retries over 30s: structured delivery controller is unavailable",
   });
 });
 

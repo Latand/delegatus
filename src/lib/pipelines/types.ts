@@ -337,6 +337,26 @@ export type PipelineStageAttempt = {
       Left in place when the budget runs out, as the record of the retries the
       park counts. */
   remoteHeadWait?: PipelineBoundedWait;
+  /** Runtime-host generation this attempt's agent was launched under (#1747).
+      A release succession mints a new epoch and replaces every engine process
+      it hosted, so an attempt still carrying the previous epoch is the only
+      witness the controller has that a deploy cut its turn. Absent on attempts
+      recorded before the field existed and on pane-hosted ones. */
+  hostEpoch?: number;
+  /** The succession this attempt's turn was open across, and the one
+      continuation the controller owes it (#1747). `silentSince` is the newest
+      transcript record at the moment the new epoch was first sighted: while it
+      does not move, the transcript has been silent since the handover, and any
+      later record — a resumed tool call, a prompt somebody else delivered —
+      cancels the continuation. `resumedAt` is set once, so a replayed tick
+      can never send a second one. */
+  severedTurn?: {
+    epoch: number;
+    sightedAt: string;
+    silentSince: number | null;
+    resumedAt?: string;
+    clientMessageId?: string;
+  };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:

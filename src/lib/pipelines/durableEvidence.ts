@@ -23,6 +23,12 @@ export type StageTurnEvidence = {
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
+  /** Timestamp of the newest record in the artifact, whatever its kind — the
+      witness that a transcript has been silent since a runtime-host succession
+      cut its turn (#1747). Distinct from `message.ts`, which moves only on an
+      assistant message: a delivered prompt and a tool result move this and not
+      that. Null when the read found no record carrying a timestamp. */
+  lastRecordAt?: number | null;
   /** The provider's own end-of-turn notice, when the record that closed the
       turn is one: a session or model limit, an expired credential, a refusal —
       a message the CLI writes *instead of* the agent's answer, so the turn
@@ -163,9 +169,11 @@ export async function durableStageTurnEvidence(
        timestamp fallback for records that carry no timestamp of their own. */
   }
   const message = lastAssistantMessageFromRecords(read.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
+  const newest = read.records.at(-1);
   return {
     turn: turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message,
+    lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex
       && !read.prefixTruncated
       && read.records.length === 1
