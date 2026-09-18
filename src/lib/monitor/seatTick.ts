@@ -213,7 +213,8 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
     /* A stale child is not open work either (#1749): its outcome belongs to a
        seat that has been retired for weeks, and counting it keeps a board with
        nothing left on it from ever being able to say so. */
-    || input.children.some((child) => isTerminalChild(child) && !(input.seat && isStaleChild(child, input.seat)));
+    || input.children.some((child) => isTerminalChild(child) && isHarvestable(child)
+      && !(input.seat && isStaleChild(child, input.seat)));
 }
 
 /**
@@ -341,6 +342,21 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   return found;
 }
 
+/**
+ * Whether the Viewer can read this child's transcript at all (#1783).
+ *
+ * A child whose transcript is outside every scanner root, or gone from disk,
+ * cannot be read by the seat and can never be harvested by anyone: the wake
+ * that lists it asks for work no seat can do, and it asks again every hour for
+ * ever, because nothing the seat does can discharge it. One of these reached a
+ * single wake five times. It is skipped with its own reason in the summary,
+ * which is the one thing that IS actionable about it — the transcript is
+ * somewhere this Viewer does not scan.
+ */
+function isHarvestable(child: SeatTickChildInput): boolean {
+  return child.transcript !== "unresolvable";
+}
+
 /** A day, the grace the designation clock is read with (#1749). */
 const STALE_CHILD_GRACE_MS = 24 * 60 * MINUTE_MS;
 
@@ -361,6 +377,15 @@ const STALE_CHILD_GRACE_MS = 24 * 60 * MINUTE_MS;
  * the same wake twice, once as failed and once as finished. The stamp a landed
  * wake leaves on the child answers it: an earlier epoch harvested this
  * conversation, and nothing has happened to it since.
+ *
+ * What the age test READS is the third thing, and #1749 got it wrong (#1783):
+ * `terminalAt` used to fall back to the instant the registry last observed the
+ * turn, or last rewrote the conversation. Both are the registry's own clock,
+ * and a rescan or a host-retirement sweep stamps hundreds of conversations
+ * with one of them — 773 of them shared a single instant on the board this was
+ * filed from — so the test compared the sweep's clock against the designation
+ * and excluded nothing. The source now offers the child's own terminal instant
+ * or the last record of its transcript, and nothing else.
  *
  * Both are narrow on purpose, and both are measured against the designation. A
  * child that went terminal after this seat was designated is owed however many
@@ -405,6 +430,51 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
       ? "a stage failed"
       : "parked on a decision";
   return `${lane.title} — lane you launched: ${settled}`;
+}
+
+/**
+ * One entry per child, in harvest order, carrying its latest state and every
+ * owed outcome behind it (#1783).
+ *
+ * An outcome identity is one turn of one ledger generation, so a worker the
+ * seat spawned once holds as many owed rows as it has ended turns. On the
+ * board this was filed from, 209 owed rows stood for 67 children and one of
+ * them held 63 of the rows; the agenda took them one row at a time, so a
+ * single wake said the same child had finished and failed five times over and
+ * held thirty-five items back behind it.
+ *
+ * The child keeps the place of its OLDEST owed outcome — the order the bound
+ * cuts on is unchanged — and is described by its latest one, which is what the
+ * seat has to act on. The outcomes behind it travel with the line so a landing
+ * acknowledges all of them: a child the seat was shown and answered once is
+ * not shown again until it ends another turn.
+ */
+interface SeatTickHarvestEntry {
+  child: SeatTickChildInput;
+  /** Every owed outcome this one line stands for, oldest first. */
+  outcomeIds: readonly string[];
+}
+
+function collapseHarvest(owed: readonly SeatTickChildInput[]): SeatTickHarvestEntry[] {
+  const order: string[] = [];
+  const held = new Map<string, { child: SeatTickChildInput; outcomeIds: string[] }>();
+  for (const child of owed) {
+    const entry = held.get(child.conversationId);
+    if (!entry) {
+      order.push(child.conversationId);
+      held.set(child.conversationId, { child, outcomeIds: child.outcomeId ? [child.outcomeId] : [] });
+      continue;
+    }
+    /* Harvest order is oldest first, so the last row seen is the latest state. */
+    entry.child = child;
+    if (child.outcomeId) entry.outcomeIds.push(child.outcomeId);
+  }
+  return order.map((id) => held.get(id)!);
+}
+
+/** Children, not owed outcomes: what the skipped summary counts (#1783). */
+function distinctChildren(children: readonly SeatTickChildInput[]): number {
+  return new Set(children.map((child) => child.conversationId)).size;
 }
 
 /** The terminal children in harvest order: the one that finished first is
@@ -754,12 +824,19 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const persistedStalls = stalled.filter((entry) => input.state.stalledSeen.includes(entry.pipeline.id));
   const persistedChildStalls = stalledKids.filter((entry) => input.state.stalledSeen.includes(childStallId(entry.child)));
   const ownLanes = ownSettledLanes(input);
-  /* The harvest, minus the children that are not this seat's to harvest
-     (#1749). The skipped ones are counted and never named: a wake that listed
-     them is precisely the wake this issue was filed on. */
+  /* The harvest: the terminal children, minus the ones that are not this
+     seat's to harvest (#1749) and the ones nobody can harvest (#1783), and
+     then one entry per child rather than one per owed outcome (#1783). What
+     is left out is counted by reason and never named — a wake that named them
+     is precisely the wake each of those issues was filed on. */
   const settledChildren = terminalChildren(input);
-  const harvest = settledChildren.filter((child) => !isStaleChild(child, input.seat!));
-  const staleChildren = settledChildren.length - harvest.length;
+  const readableChildren = settledChildren.filter(isHarvestable);
+  const stale = readableChildren.filter((child) => isStaleChild(child, input.seat!));
+  const harvest = collapseHarvest(readableChildren.filter((child) => !isStaleChild(child, input.seat!)));
+  const skippedChildren = {
+    stale: distinctChildren(stale),
+    unreadable: distinctChildren(settledChildren.filter((child) => !isHarvestable(child))),
+  };
   const unknownChildren = input.children.filter((child) => child.status === "unknown").length;
   const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
   const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned).length - unstarted.length;
@@ -825,7 +902,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (harvest.length > 0) {
       const first = harvest[0]!;
       const more = harvest.length > 1 ? ` and ${harvest.length - 1} more` : "";
-      candidates.push({ kind: "child-terminal", detail: `a spawned child ${first.outcome ?? "finished"} and its outcome is unharvested${more}` });
+      candidates.push({ kind: "child-terminal", detail: `a spawned child ${first.child.outcome ?? "finished"} and its outcome is unharvested${more}` });
     }
     /* The mirror image (#1289), and it is a wake reason rather than a silence
        for one reason: a lane that finished with its pull request unmerged is
@@ -924,7 +1001,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         reasons,
         items: all.slice(0, input.policy.itemsPerWake),
         deferred: Math.max(0, all.length - input.policy.itemsPerWake),
-        staleChildren,
+        skippedChildren,
         gaps,
       },
       state,
@@ -1011,8 +1088,8 @@ function wakeItems(context: {
   ownLanes: readonly SeatTickOwnLaneInput[];
   stalled: { pipeline: SeatTickPipelineInput; reason: string }[];
   stalledChildren: { child: SeatTickChildInput; reason: string }[];
-  /** Terminal children in harvest order, oldest outcome first. */
-  harvest: readonly SeatTickChildInput[];
+  /** One entry per terminal child, in harvest order, oldest outcome first. */
+  harvest: readonly SeatTickHarvestEntry[];
   laneEvents: readonly SeatTickEventInput[];
   unstarted: SeatTickTaskInput[];
 }): SeatTickItem[] {
@@ -1044,12 +1121,15 @@ function wakeItems(context: {
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest
      and the child that has waited longest is harvested first. Only the items
      that fit are recorded as harvested when the wake lands; the rest stay owed. */
-  for (const child of context.harvest) {
+  for (const entry of context.harvest) {
+    /* One line per child, with its latest state and every owed outcome behind
+       it (#1783). */
     items.push({
       kind: "child",
-      id: child.conversationId,
-      outcomeId: child.outcomeId,
-      label: `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`,
+      id: entry.child.conversationId,
+      outcomeId: entry.child.outcomeId,
+      outcomeIds: entry.outcomeIds,
+      label: `${entry.child.title} — spawned child ${entry.child.outcome ?? "finished"}, outcome unharvested`,
     });
   }
   /* A lane parked on a decision is open, so it can be BOTH the seat's own
@@ -1109,7 +1189,14 @@ export function seatTickWakeCommitPlan(
   if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [] };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
-  const children = verdict.items.filter((item) => item.kind === "child" && terminal.has(item.outcomeId ?? item.id)).map((item) => item.outcomeId ?? item.id);
+  /* Every outcome the line stood for, not just the one that described it
+     (#1783): a child the wake showed once with its latest state was shown all
+     of what it was owed on, so a landing acknowledges all of it. Leaving the
+     rest owed is what put the same child on the next wake unchanged. */
+  const children = verdict.items
+    .filter((item) => item.kind === "child")
+    .flatMap((item) => (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id]))
+    .filter((id) => terminal.has(id));
   return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children };
 }
 
