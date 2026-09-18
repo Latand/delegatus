@@ -13,21 +13,6 @@ on:
 permissions:
   contents: read
 
-# A branch pushed three times ran three full rounds to completion: 7 percent of
-# pull-request runs in the audit window (#1761) finished work for a commit that
-# had already been replaced. One round per publication, and the newest wins.
-# This group is step 1 of the cut order on #1761.
-#
-# `pull_request_target` runs in the context of the base branch, so `github.ref`
-# here is `refs/heads/main` for every publication alike — keying on it would put
-# all open publications in one group and let a push on one cancel the required
-# gate on another. The number the gate reports on is the key instead, and a run
-# started by hand carries the branch ref, so it never shares a group with a
-# publication's own runs.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   privacy-publication:
     runs-on: ubuntu-latest

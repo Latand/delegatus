@@ -30,10 +30,18 @@ permissions:
 # had already been replaced. One round per ref, and the newest wins. This group
 # is step 1 of the cut order on #1761.
 #
-# The ref is what keeps this off anything that must not be cancelled. After step
-# 2 none of these workflows runs on a push to main or a tag at all, and a run
-# started by hand carries the branch ref while a pull-request run carries
-# `refs/pull/<n>/merge`, so the two never share a group.
+# Nothing that must not be cancelled is in reach of this group. After step 2 none
+# of these workflows runs on a push to main or a tag at all, and on `pull_request`
+# the ref is `refs/pull/<n>/merge` while a run started by hand carries the branch
+# ref, so the two never share a group.
+#
+# The two required workflows get no group at all, deliberately. They run on
+# `pull_request_target` and, for the tracker audit, on issue and review events,
+# where `github.ref` is the base branch for every publication alike; any group
+# narrow enough to be correct there still lets a comment cancel the required run
+# in flight and strand a cancelled check on the head, which blocks the merge.
+# They finish in 40 to 90 seconds and have never failed, so there is nothing
+# worth saving in cancelling them.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

@@ -23,17 +23,6 @@ permissions:
   issues: read
   pull-requests: read
 
-# Same rule as the other pull-request workflows, with one difference: this
-# workflow also runs on issue and review events, where `github.ref` is the
-# default branch for every publication alike. Keying on the number it audits
-# keeps two different publications from cancelling each other, and falls back to
-# the ref when no number is in the payload. A dispatched audit names the same
-# number, so a later event for that publication supersedes it, which is the
-# intent: both read the branch head.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.publication_number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   privacy-tracker-audit:
     runs-on: ubuntu-latest
