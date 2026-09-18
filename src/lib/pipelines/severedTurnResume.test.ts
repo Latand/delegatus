@@ -35,7 +35,10 @@ const PARK_DETAIL =
  */
 function harness() {
   const continuations: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string }> = [];
-  let wall = Date.parse("2026-09-18T16:02:00.000Z");
+  /* The production clock of the third deploy: the lane's last transcript
+     record at 15:59:11, the succession that cut it at 16:02:32 — silent for
+     three minutes and twenty-one seconds before its host was replaced. */
+  let wall = Date.parse("2026-09-18T16:02:32.000Z");
   let hostEpoch = 1_015;
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: Date.parse("2026-09-18T15:59:11.000Z") };
   let deliveryOutstanding = false;
@@ -116,6 +119,7 @@ function harness() {
     refuseResume: () => { resumeAccepted = false; },
     acceptResume: () => { resumeAccepted = true; },
     spawnCount: () => spawns,
+    wallClock: () => wall,
   };
 }
 
@@ -207,6 +211,36 @@ test("an attempt whose transcript moved since the succession is never messaged (
   await tickPipelines([], h.ports);
   expect(h.continuations).toEqual([]);
   expect(loadPipelines()[0]!.state).toBe("running");
+});
+
+/* Review round 1: the sighting is one tick later than the succession, and a
+   record written inside that window — the runtime's own interrupted-turn
+   continuation, or somebody's "continue" — used to become the baseline the
+   silence was measured from. An agent that really had resumed would then be
+   sent a continuation saying its in-flight work was gone, in the middle of a
+   live turn: exactly what the requirement forbids. */
+test("an attempt whose transcript moved just before the sighting is never messaged, however long it then goes quiet (#1747)", async () => {
+  const h = harness();
+  await runningStage(h);
+  h.succeed();
+  /* The resumed turn wrote thirty seconds ago: whatever the controller can
+     see, this is not silence since the handover. */
+  h.setTurn({ turn: "busy", message: null, lastRecordAt: h.wallClock() - 30_000 });
+  await tickPipelines([], h.ports);
+
+  const adopted = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(h.continuations).toEqual([]);
+  expect(adopted.severedTurn).toBeUndefined();
+  expect(adopted.hostEpoch).toBe(1_017);
+
+  /* And it now sits inside one long tool call for longer than both bounds:
+     still no continuation, and still no park. */
+  h.advance(RESUME_SILENCE_MS + PARK_SILENCE_MS);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toEqual([]);
+  expect(loadPipelines()[0]!).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "running" } });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.severedTurn).toBeUndefined();
 });
 
 test("an attempt with a delivery already outstanding is never messaged (#1747)", async () => {

@@ -2354,6 +2354,13 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
  * has not moved since the epoch change was first sighted, the turn is open and
  * silent because a deploy cut it.
  *
+ * The sighting is later than the succession by up to one tick, so the witness
+ * arms only where the transcript had already been silent for the whole resume
+ * bound when the new epoch was first seen. Without that, a record written
+ * between the succession and the sighting becomes the baseline, and an agent
+ * that really did resume could be sent a second continuation — saying its
+ * in-flight work is gone — in the middle of a live turn.
+ *
  * Every refusal the requirement asks for is that same comparison. A record
  * later than the sighting — a resumed tool call, a prompt somebody else
  * delivered, the agent's own answer — means a turn is in progress, and the
@@ -2421,7 +2428,26 @@ async function reconcileSeveredStageTurn(
   const lastRecordAt = durable.lastRecordAt ?? durable.message?.ts ?? null;
   const witness = attempt.severedTurn?.epoch === epoch ? attempt.severedTurn : null;
   if (!witness) {
-    attempt.severedTurn = { epoch, sightedAt: ports.now(), silentSince: lastRecordAt };
+    /* The sighting is not the succession: the epoch changed at some point
+       between the previous tick and this one, and a record written inside that
+       window — the runtime's own interrupted-turn continuation, an operator's
+       "continue" — would otherwise become the baseline this measures silence
+       from. So the witness arms only on a transcript that was ALREADY silent
+       by the whole resume bound when the new epoch was first seen. That is
+       what makes the newest record older than the change rather than merely
+       older than the sighting, and it is the production shape exactly: every
+       cut lane went quiet minutes before its succession. A transcript that
+       moved more recently than that, or that carries no timestamp to judge,
+       gets no continuation at all — the generation is adopted and the attempt
+       is left alone, however long it then sits inside one tool call. */
+    const sightedAt = ports.now();
+    const silentAtSighting = lastRecordAt !== null
+      && unixMs(sightedAt) - lastRecordAt >= SEVERED_TURN_RESUME_SILENCE_MS;
+    if (!silentAtSighting) {
+      adopt();
+      return "continue";
+    }
+    attempt.severedTurn = { epoch, sightedAt, silentSince: lastRecordAt };
     persist();
     return "continue";
   }
