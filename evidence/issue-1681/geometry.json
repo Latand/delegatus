@@ -1,0 +1,1294 @@
+{
+  "issue": 1681,
+  "roomy": {
+    "key": "desktop-1440-dock-440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "dock": 440,
+    "chip": {
+      "x": 501.640625,
+      "y": 74,
+      "width": 102.71875,
+      "height": 24,
+      "face": "every 30 min",
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 612.359375,
+      "y": 74,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "hostWidth": 440,
+      "hostContentWidth": 416,
+      "identityLines": 48,
+      "faceShown": true,
+      "rowLines": 80,
+      "pageOverflow": false
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 284.359375,
+      "y": 106,
+      "width": 320,
+      "height": 621.5,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": false,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
+  "wide": {
+    "key": "desktop-1280-dock-440",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "dock": 440,
+    "chip": {
+      "x": 484.359375,
+      "y": 74,
+      "width": 40,
+      "height": 24,
+      "face": null,
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 532.359375,
+      "y": 74,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "hostWidth": 360,
+      "hostContentWidth": 336,
+      "identityLines": 48,
+      "faceShown": false,
+      "rowLines": 80,
+      "pageOverflow": false
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 204.359375,
+      "y": 106,
+      "width": 320,
+      "height": 560,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": false,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
+  "narrow": {
+    "key": "desktop-640-dock-360",
+    "viewport": {
+      "width": 640,
+      "height": 600
+    },
+    "dock": 360,
+    "chip": {
+      "x": 484.359375,
+      "y": 74,
+      "width": 40,
+      "height": 24,
+      "face": null,
+      "title": "Tick: every 30 min · stale: last check 23m ago",
+      "dot": "warn"
+    },
+    "rotate": {
+      "x": 532.359375,
+      "y": 74,
+      "width": 63.640625,
+      "height": 24
+    },
+    "row": {
+      "dockOverflow": false,
+      "hostWidth": 360,
+      "hostContentWidth": 336,
+      "identityLines": 48,
+      "faceShown": false,
+      "rowLines": 80,
+      "pageOverflow": true
+    },
+    "chipBeforeRotate": true,
+    "controlsShareALine": true,
+    "chipInsideDock": true,
+    "rotateInsideDock": true,
+    "popover": {
+      "x": 204.359375,
+      "y": 106,
+      "width": 320,
+      "height": 420,
+      "portalled": true,
+      "state": "stale",
+      "summary": "Tick: every 30 min · stale: last check 23m ago",
+      "sentence": "Enabled, and stale: the last check was 23m ago. Checks run every 5 min, so the tick itself may be down.",
+      "detailsOpen": false,
+      "pageOverflow": true,
+      "insideDock": false
+    },
+    "popoverInViewport": true,
+    "closesOnEscape": true,
+    "closesOnOutsideClick": true,
+    "errors": []
+  },
+  "seatWide": {
+    "key": "seat-1280-en-designated-configured",
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 571,
+    "hostContentWidth": 571,
+    "identityWidth": 551,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": "every 30 min",
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 103,
+    "controlsWidth": 174,
+    "modelWidth": 111,
+    "modelFullWidth": 111,
+    "modelTruncated": false,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 52,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 12,
+    "predecessorText": "",
+    "predecessorLabel": "Replaced an earlier orchestrator",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1048": {
+    "key": "seat-1048-en-designated-configured",
+    "viewport": {
+      "width": 1048,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 547,
+    "hostContentWidth": 547,
+    "identityWidth": 527,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": "every 30 min",
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 103,
+    "controlsWidth": 174,
+    "modelWidth": 111,
+    "modelFullWidth": 111,
+    "modelTruncated": false,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 52,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 12,
+    "predecessorText": "",
+    "predecessorLabel": "Replaced an earlier orchestrator",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1048Uk": {
+    "key": "seat-1048-uk-designated-configured",
+    "viewport": {
+      "width": 1048,
+      "height": 800
+    },
+    "locale": "uk",
+    "hostWidth": 547,
+    "hostContentWidth": 547,
+    "identityWidth": 527,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": "кожні 30 хв",
+    "chipTitle": "Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipWidth": 98,
+    "controlsWidth": 183,
+    "modelWidth": 111,
+    "modelFullWidth": 111,
+    "modelTruncated": false,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 52,
+    "rotateVisible": true,
+    "predecessorShown": true,
+    "predecessorWidth": 12,
+    "predecessorText": "",
+    "predecessorLabel": "Замінив попереднього оркестратора",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1024": {
+    "key": "seat-1024-en-designated-configured",
+    "viewport": {
+      "width": 1024,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 523,
+    "hostContentWidth": 523,
+    "identityWidth": 523,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 40,
+    "controlsWidth": 112,
+    "modelWidth": 111,
+    "modelFullWidth": 111,
+    "modelTruncated": false,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 52,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "predecessorText": "",
+    "predecessorLabel": "Replaced an earlier orchestrator",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat1024Uk": {
+    "key": "seat-1024-uk-designated-configured",
+    "viewport": {
+      "width": 1024,
+      "height": 800
+    },
+    "locale": "uk",
+    "hostWidth": 523,
+    "hostContentWidth": 523,
+    "identityWidth": 523,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipWidth": 40,
+    "controlsWidth": 125,
+    "modelWidth": 111,
+    "modelFullWidth": 111,
+    "modelTruncated": false,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 52,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "predecessorText": "",
+    "predecessorLabel": "Замінив попереднього оркестратора",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat900": {
+    "key": "seat-900-en-designated-configured",
+    "viewport": {
+      "width": 900,
+      "height": 800
+    },
+    "locale": "en",
+    "hostWidth": 399,
+    "hostContentWidth": 399,
+    "identityWidth": 399,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Tick: every 30 min · stale: last check 23m ago",
+    "chipLabel": "Seat tick settings. Tick: every 30 min · stale: last check 23m ago",
+    "chipWidth": 40,
+    "controlsWidth": 112,
+    "modelWidth": 103,
+    "modelFullWidth": 111,
+    "modelTruncated": true,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 49,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "predecessorText": "",
+    "predecessorLabel": "Replaced an earlier orchestrator",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "seat900Uk": {
+    "key": "seat-900-uk-designated-configured",
+    "viewport": {
+      "width": 900,
+      "height": 800
+    },
+    "locale": "uk",
+    "hostWidth": 399,
+    "hostContentWidth": 399,
+    "identityWidth": 399,
+    "controlsSpill": 0,
+    "spillPastPredecessor": 0,
+    "headOverflow": 0,
+    "rowOverflow": 0,
+    "chipFace": null,
+    "chipTitle": "Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipLabel": "Налаштування тікера. Тікер: кожні 30 хв · застаріло: остання перевірка 23 хв тому",
+    "chipWidth": 40,
+    "controlsWidth": 125,
+    "modelWidth": 93,
+    "modelFullWidth": 111,
+    "modelTruncated": true,
+    "modelText": "claude-opus-5 · high",
+    "accountShown": true,
+    "accountWidth": 46,
+    "rotateVisible": true,
+    "predecessorShown": false,
+    "predecessorWidth": 0,
+    "predecessorText": "",
+    "predecessorLabel": "Замінив попереднього оркестратора",
+    "overlapsSiblings": false,
+    "pageOverflow": false,
+    "errors": []
+  },
+  "sweepEnDefault": {
+    "key": "sweep-en-designated-default",
+    "locale": "en",
+    "face": "default",
+    "incumbent": "designated",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 900,
+      "to": 1280,
+      "step": 8,
+      "samples": 51
+    },
+    "hostContentWidths": {
+      "min": 399,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 103,
+      "modelFullWidth": 111
+    },
+    "minModelWidthAtBar": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 103
+    },
+    "maxControlsSpill": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 543,
+    "narrowestHostWithPredecessor": 543,
+    "narrowestHostWithWholeModel": 415,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 103,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 49
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 52
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 73,
+        "chipFace": "hourly",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 73,
+        "chipFace": "hourly",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1280,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 73,
+        "chipFace": "hourly",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      }
+    ]
+  },
+  "sweepEnLongest": {
+    "key": "sweep-en-designated-longest",
+    "locale": "en",
+    "face": "longest",
+    "incumbent": "designated",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 900,
+      "to": 1280,
+      "step": 8,
+      "samples": 51
+    },
+    "hostContentWidths": {
+      "min": 399,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 103,
+      "modelFullWidth": 111
+    },
+    "minModelWidthAtBar": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 103
+    },
+    "maxControlsSpill": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 543,
+    "narrowestHostWithPredecessor": 543,
+    "narrowestHostWithWholeModel": 415,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 103,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 49
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 52
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 113,
+        "chipFace": "every 1439 min",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 113,
+        "chipFace": "every 1439 min",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1280,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 113,
+        "chipFace": "every 1439 min",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      }
+    ]
+  },
+  "sweepUkDefault": {
+    "key": "sweep-uk-designated-default",
+    "locale": "uk",
+    "face": "default",
+    "incumbent": "designated",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 900,
+      "to": 1280,
+      "step": 8,
+      "samples": 51
+    },
+    "hostContentWidths": {
+      "min": 399,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 93,
+      "modelFullWidth": 111
+    },
+    "minModelWidthAtBar": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 93
+    },
+    "maxControlsSpill": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 543,
+    "narrowestHostWithPredecessor": 543,
+    "narrowestHostWithWholeModel": 423,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 93,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 46
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 52
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 92,
+        "chipFace": "щогодини",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 92,
+        "chipFace": "щогодини",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1280,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 92,
+        "chipFace": "щогодини",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      }
+    ]
+  },
+  "sweepUkLongest": {
+    "key": "sweep-uk-designated-longest",
+    "locale": "uk",
+    "face": "longest",
+    "incumbent": "designated",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 900,
+      "to": 1280,
+      "step": 8,
+      "samples": 51
+    },
+    "hostContentWidths": {
+      "min": 399,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 93,
+      "modelFullWidth": 111
+    },
+    "minModelWidthAtBar": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 93
+    },
+    "maxControlsSpill": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 543,
+    "narrowestHostWithPredecessor": 543,
+    "narrowestHostWithWholeModel": 423,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 93,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 46
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 52
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1280,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      }
+    ]
+  },
+  "sweepFirstPaintEn": {
+    "key": "sweep-en-board-configured",
+    "locale": "en",
+    "face": "configured",
+    "incumbent": "board",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 768,
+      "to": 1100,
+      "step": 8,
+      "samples": 44
+    },
+    "hostContentWidths": {
+      "min": 267,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "modelWidth": 28,
+      "modelFullWidth": 79
+    },
+    "minModelWidthAtBar": {
+      "width": 800,
+      "hostContentWidth": 299,
+      "modelWidth": 60
+    },
+    "maxControlsSpill": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 547,
+    "narrowestHostWithPredecessor": 547,
+    "narrowestHostWithWholeModel": 323,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 0
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 0
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 103,
+        "chipFace": "every 30 min",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 103,
+        "chipFace": "every 30 min",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      }
+    ]
+  },
+  "sweepFirstPaintUk": {
+    "key": "sweep-uk-board-configured",
+    "locale": "uk",
+    "face": "configured",
+    "incumbent": "board",
+    "keptAtEveryWidth": null,
+    "band": {
+      "from": 768,
+      "to": 1100,
+      "step": 8,
+      "samples": 44
+    },
+    "hostContentWidths": {
+      "min": 267,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "modelWidth": 15,
+      "modelFullWidth": 79
+    },
+    "minModelWidthAtBar": {
+      "width": 800,
+      "hostContentWidth": 299,
+      "modelWidth": 47
+    },
+    "maxControlsSpill": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 547,
+    "narrowestHostWithPredecessor": 547,
+    "narrowestHostWithWholeModel": 331,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 0
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 0,
+        "accountWidth": 0
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 98,
+        "chipFace": "кожні 30 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 98,
+        "chipFace": "кожні 30 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      }
+    ]
+  },
+  "sweepUkLongestWordKept": {
+    "key": "sweep-uk-designated-longest-word-kept",
+    "locale": "uk",
+    "face": "longest",
+    "incumbent": "designated",
+    "keptAtEveryWidth": "word",
+    "band": {
+      "from": 900,
+      "to": 1280,
+      "step": 8,
+      "samples": 51
+    },
+    "hostContentWidths": {
+      "min": 399,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 42,
+      "modelFullWidth": 111
+    },
+    "minModelWidthAtBar": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "modelWidth": 42
+    },
+    "maxControlsSpill": {
+      "width": 900,
+      "hostContentWidth": 399,
+      "controlsSpill": 0
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 399,
+    "narrowestHostWithPredecessor": 543,
+    "narrowestHostWithWholeModel": 495,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 42,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 0,
+        "accountWidth": 29
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 0,
+        "accountWidth": 52
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      },
+      {
+        "width": 1280,
+        "hostContentWidth": 571,
+        "modelWidth": 111,
+        "modelFullWidth": 111,
+        "chipWidth": 108,
+        "chipFace": "кожні 1439 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 52
+      }
+    ]
+  },
+  "sweepFirstPaintUkLinkKept": {
+    "key": "sweep-uk-board-configured-link-kept",
+    "locale": "uk",
+    "face": "configured",
+    "incumbent": "board",
+    "keptAtEveryWidth": "link",
+    "band": {
+      "from": 768,
+      "to": 1100,
+      "step": 8,
+      "samples": 44
+    },
+    "hostContentWidths": {
+      "min": 267,
+      "max": 571
+    },
+    "minModelWidth": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "modelWidth": 0,
+      "modelFullWidth": 79
+    },
+    "minModelWidthAtBar": {
+      "width": 800,
+      "hostContentWidth": 299,
+      "modelWidth": 27
+    },
+    "maxControlsSpill": {
+      "width": 768,
+      "hostContentWidth": 267,
+      "controlsSpill": 5
+    },
+    "maxSpillPastPredecessor": 0,
+    "maxHeadOverflow": 0,
+    "overlapsSiblings": false,
+    "narrowestHostWithFace": 547,
+    "narrowestHostWithPredecessor": 267,
+    "narrowestHostWithWholeModel": 355,
+    "named": [
+      {
+        "width": 900,
+        "hostContentWidth": 399,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      },
+      {
+        "width": 1024,
+        "hostContentWidth": 523,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 40,
+        "chipFace": null,
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      },
+      {
+        "width": 1048,
+        "hostContentWidth": 547,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 98,
+        "chipFace": "кожні 30 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      },
+      {
+        "width": 1100,
+        "hostContentWidth": 571,
+        "modelWidth": 79,
+        "modelFullWidth": 79,
+        "chipWidth": 98,
+        "chipFace": "кожні 30 хв",
+        "predecessorWidth": 12,
+        "accountWidth": 0
+      }
+    ]
+  },
+  "phone": {
+    "key": "phone-390-en-stale",
+    "locale": "en",
+    "tick": "stale",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "stale",
+      "text": "Seat tickevery 30 min · stale: last check 23m ago",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 50,
+      "labelText": "Seat tick",
+      "summaryWidth": 192,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Seat tick · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 214.484375,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneUk": {
+    "key": "phone-390-uk-stale",
+    "locale": "uk",
+    "tick": "stale",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "stale",
+      "text": "Тікер оркестраторакожні 30 хв · застаріло: остання перевірка 23 хв тому",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 118,
+      "labelText": "Тікер оркестратора",
+      "summaryWidth": 134,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Тікер оркестратора · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 190.21875,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneBlocked": {
+    "key": "phone-390-en-blocked",
+    "locale": "en",
+    "tick": "blocked",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "blocked",
+      "text": "Seat tickevery 30 min · blocked: unresolved wake since 2h ago (dispatch refused)",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 50,
+      "labelText": "Seat tick",
+      "summaryWidth": 202,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Seat tick · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 214.484375,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  },
+  "phoneBlockedUk": {
+    "key": "phone-390-uk-blocked",
+    "locale": "uk",
+    "tick": "blocked",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "row": {
+      "x": 16,
+      "y": 575.5,
+      "width": 358,
+      "height": 44,
+      "state": "blocked",
+      "text": "Тікер оркестраторакожні 30 хв · стримується: нерозв'язане пробудження від 2 год тому (відправлення: відхилено)",
+      "dot": "warn",
+      "belowIdentity": true,
+      "aboveMandate": true,
+      "pageOverflow": false,
+      "labelWidth": 118,
+      "labelText": "Тікер оркестратора",
+      "summaryWidth": 134,
+      "dotRight": 338,
+      "chevronRight": 358,
+      "rowRight": 374
+    },
+    "rowMeetsTouchTarget": true,
+    "sheet": {
+      "x": 0,
+      "y": 101.28125,
+      "width": 390,
+      "height": 742.71875,
+      "seatSheets": 0,
+      "title": "Тікер оркестратора · Atlas",
+      "bodyScrolls": true,
+      "saveInBody": false,
+      "sheetShare": 0.8799985189573459,
+      "pageOverflow": false
+    },
+    "save": {
+      "x": 16,
+      "y": 794,
+      "width": 190.21875,
+      "height": 44
+    },
+    "saveAboveKeyboard": true,
+    "closeReturnsToSeatSheet": true,
+    "errors": []
+  }
+}

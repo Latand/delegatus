@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { createReceiptStore, type ReceiptTimers } from "./MobileReceipt";
-import { MobileSheet, SHEET_CLOSE_DRAG_PX } from "./MobileSheet";
+import { MobileSheet, MobileSheetRow, SHEET_CLOSE_DRAG_PX } from "./MobileSheet";
 
 /*
  * The sheet primitive (mobile v2 §2 rule 1, §3.3, §5): a modal over the
@@ -227,4 +227,37 @@ test("a fullscreen sheet has no handle and never drags", () => {
   flushSync(() => header.dispatchEvent(pointer("pointerup", 400)));
   expect(dialog.style.transform).toBe("");
   expect(closes).toBe(0);
+});
+
+/*
+ * Which of a row's two texts gives way (#1681).
+ *
+ * The default is the label, because a trailing slot is normally a word or a
+ * count. A row whose trailing text is a whole clause has to invert it, and the
+ * opt-in is what keeps every other row byte-identical.
+ */
+test("a row truncates its label by default and its trailing text on request", () => {
+  const host = mount(
+    <>
+      <MobileSheetRow label="Seat tick" trailing={<span data-probe="default">a very long trailing clause indeed</span>} testId="row-default" />
+      <MobileSheetRow label="Seat tick" trailingShrinks trailing={<span data-probe="inverted">a very long trailing clause indeed</span>} testId="row-inverted" />
+    </>,
+  );
+  const parts = (testId: string) => {
+    const row = host.querySelector(`[data-testid="${testId}"]`) as unknown as HTMLElement;
+    return { label: row.children[0] as unknown as HTMLElement, trailing: row.children[1] as unknown as HTMLElement };
+  };
+
+  /* Default: the label is the flexible, truncating element. */
+  const fixed = parts("row-default");
+  expect(fixed.label.className).toContain("flex-1");
+  expect(fixed.label.className).toContain("truncate");
+  expect(fixed.trailing.className).toContain("shrink-0");
+
+  /* Inverted: the label holds its size and the clause beside it truncates. */
+  const inverted = parts("row-inverted");
+  expect(inverted.label.className).toContain("shrink-0");
+  expect(inverted.label.className).not.toContain("flex-1");
+  expect(inverted.trailing.className).toContain("flex-1");
+  expect(inverted.trailing.className).not.toContain("shrink-0");
 });

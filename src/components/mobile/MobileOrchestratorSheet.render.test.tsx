@@ -83,6 +83,7 @@ function quietBannerCount(file: FileEntry): number {
       viewerMcpRegistered={false}
       submitting={false}
       rotate={{ open: false, seat: null, vacated: false, opening: false, submitting: false, failure: null, onOpen: () => undefined, onCancel: () => undefined, onConfirm: () => undefined }}
+      tick={{ onOpen: () => undefined, onClose: () => undefined }}
       onConfirm={() => undefined}
       onRecheck={() => undefined}
       onOpenConversation={() => undefined}
@@ -120,6 +121,7 @@ for (const reason of ["catalog", "surface", null] as const) {
         file={reason === "catalog" ? null : stalledFile()} incumbent={null} pendingMandate=""
         viewerMcpRegistered={false} submitting={false}
         rotate={{ open: false, seat: null, vacated: false, opening: false, submitting: false, failure: null, onOpen() {}, onCancel() {}, onConfirm() {} }}
+        tick={{ onOpen() {}, onClose() {} }}
         onConfirm={() => {}} onRecheck={() => {}} onOpenConversation={() => {}} onClose={() => {}} />,
     );
     expect(html.includes("data-orchestrator-rebind")).toBe(reason !== null);
