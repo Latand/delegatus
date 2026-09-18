@@ -326,6 +326,61 @@ test("server startup resumes a legacy-owned Claude row against its own home and 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("server startup says so when a Claude row no account owns loses its MCP grant (#1732)", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-ownerless-"));
+  const stateDirectory = path.join(directory, "state");
+  const previousStateDirectory = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = stateDirectory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "ownerless-startup-thread";
+  registry.upsert({
+    key: { engine: "claude", sessionId },
+    artifactPath: `${directory}/retired/projects/-repo/${sessionId}.jsonl`,
+    cwd: "/repo",
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", mcpServers: ["viewer"] }),
+    status: "dead",
+    host: null,
+    claimEpoch: 1,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const logged: unknown[][] = [];
+  const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args); });
+  let claudeOptions: unknown;
+  try {
+    await adoptStructuredHostsAtStartup({
+      registry,
+      client: null,
+      orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {},
+      resolveCodexOwner: () => null,
+      /* A retired account's rows: `listClaudeAccounts` no longer returns the
+         owner, so nothing answers for the transcript. */
+      resolveClaudeOwner: () => null,
+      adopt: async () => [],
+      adoptClaude: async (received, optionsFor) => {
+        claudeOptions = optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
+        return [];
+      },
+    });
+  } finally {
+    errors.mockRestore();
+    if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDirectory;
+  }
+  /* The launch still happens — a failed adoption is worse than a degraded one,
+     and no home is invented for a transcript nothing owns — but the drop is on
+     the record instead of surfacing a turn later as a retracted toolset. */
+  expect(claudeOptions).toMatchObject({ claudeConfigDir: undefined, mcpStatePath: undefined, mcpServers: ["viewer"] });
+  const dropped = logged.filter((args) =>
+    typeof args[0] === "string" && args[0].includes("without the MCP grant it carries"));
+  expect(dropped).toHaveLength(1);
+  expect(dropped[0]![1]).toMatchObject({ host: `claude:${sessionId}`, mcpServers: ["viewer"] });
+  (claudeOptions as { releaseCleanup?: () => void }).releaseCleanup?.();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
 function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
     snapshot: async () => journal.snapshot(),

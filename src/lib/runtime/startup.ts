@@ -1031,12 +1031,27 @@ export async function adoptStructuredHostsAtStartup(
     reportProgress("adopting Claude hosts");
     const claude = await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
-      (entry) => claudeStartupHostOptions(
-        entry,
-        resolveClaudeOwner(entry),
-        registry.rotateSpawnCapabilityForPath(entry.artifactPath),
-        startupEnvironment,
-      ),
+      (entry) => {
+        const options = claudeStartupHostOptions(
+          entry,
+          resolveClaudeOwner(entry),
+          registry.rotateSpawnCapabilityForPath(entry.artifactPath),
+          startupEnvironment,
+        );
+        /* A transcript no live account answers for — a retired account's rows,
+           say — gets no config dir, so no `--mcp-config` is written and the
+           grant it carries is dropped. Inventing a home would be worse than
+           dropping it, but the session only finds out a turn later, when its
+           tools are already gone. Say it here instead (#1732). */
+        if (!options.claudeConfigDir && options.mcpServers.length > 0) {
+          console.error("[structured hosts] resuming a Claude row without the MCP grant it carries", {
+            host: sessionKeyId(entry.key),
+            mcpServers: options.mcpServers,
+            reason: "no Claude account owns this transcript",
+          });
+        }
+        return options;
+      },
       startupEnvironment,
       shouldAdopt,
       () => {

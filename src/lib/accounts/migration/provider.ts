@@ -409,9 +409,14 @@ async function publishClaudeSuccessorHost(
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       claudeProjectsDir: input.target.transcriptRoot,
-      /* The successor is a re-host like any other, so it carries the viewer
-         connector the same way boot adoption and a fresh spawn do (#1732). */
+      /* The successor is a re-host like any other, so it carries the grant the
+         row already holds, the same way boot adoption and a fresh spawn do
+         (#1732). The durable profile's list is already bounded by
+         `grantedMcpServers`, so replaying it can only narrow, never widen.
+         `allowSubagents` is deliberately not replayed here: it has no such
+         bound, and widening native sub-agents is not a re-host's decision. */
       ...claudeHostLaunchPaths(input.target),
+      mcpServers: input.profile.mcpServers,
       env: access.env,
       /* Transcripts keep dated provider ids the CLI may refuse as a launch
          argument; the launcher that used to project them is gone, so the
