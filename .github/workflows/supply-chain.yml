@@ -2,8 +2,6 @@ name: Supply-chain audit
 
 on:
   pull_request:
-  push:
-    branches: [main]
   # dependabot-lockfile.yml commits the regenerated bun.lock with the repository
   # GITHUB_TOKEN, and GitHub raises no `synchronize` for that push, so the audit
   # is dispatched against the refreshed branch instead.
@@ -11,6 +9,15 @@ on:
 
 permissions:
   contents: read
+
+# A branch pushed three times ran three full rounds to completion: 7 percent of
+# pull-request runs in the audit window (#1761) finished work for a commit that
+# had already been replaced. One round per ref, and the newest wins. The guard
+# on `cancel-in-progress` keeps a run started by hand from being cancelled by an
+# unrelated event on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   audit:
