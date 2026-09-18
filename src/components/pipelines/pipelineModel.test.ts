@@ -650,6 +650,37 @@ describe("stageFailEdgeFrozen (#353)", () => {
     expect(stageFailEdgeFrozen(p, verify)).toBe(true);
   });
 
+  test("retries of the fail edge's target spend no round; a retry of the source that fails again does (#1754)", () => {
+    const verify = { ...stage("verify"), onFail: { to: "build", maxRounds: 2 } };
+    const activation = { stageId: "verify", attempt: 1, edge: "fail" as const };
+    const retried = pipeline({
+      stages: [stage("build"), verify],
+      runs: [
+        { stageId: "build", attempts: [
+          { n: 1, state: "passed" } as never,
+          /* The first round's spawn failed and the operator retried it. */
+          { n: 2, state: "failed", activatedBy: activation } as never,
+          { n: 3, state: "running", activatedBy: activation } as never,
+        ] },
+        { stageId: "verify", attempts: [{ n: 1, state: "failed" } as never] },
+      ],
+    });
+    expect(stageFailEdgeRoundsUsed(retried, verify)).toBe(1);
+
+    const again = pipeline({
+      stages: [stage("build"), verify],
+      runs: [
+        { stageId: "build", attempts: [
+          { n: 1, state: "passed" } as never,
+          { n: 2, state: "passed", activatedBy: activation } as never,
+          { n: 3, state: "running", activatedBy: { stageId: "verify", attempt: 2, edge: "fail" as const } } as never,
+        ] },
+        { stageId: "verify", attempts: [{ n: 1, state: "failed" } as never, { n: 2, state: "failed" } as never] },
+      ],
+    });
+    expect(stageFailEdgeRoundsUsed(again, verify)).toBe(2);
+  });
+
   test("an untraversed fail edge stays editable", () => {
     const verify = { ...stage("verify"), onFail: { to: "build", maxRounds: 3 } };
     const p = pipeline({ stages: [stage("build"), verify], cursor: { stageId: "build", state: "pending", input: null, activatedBy: null } });

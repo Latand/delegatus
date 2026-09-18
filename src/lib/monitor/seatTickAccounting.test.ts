@@ -329,11 +329,15 @@ test("an attempt retired to a superseded seat keeps everything except its fence"
     expect(held.dispatch).toMatchObject({ state: "refused" });
 
     const supersededBy = { conversationId: CONVERSATION, seatEpoch: 155 };
-    expect(accounting.retire({ ...held, clientMessageId: "another" }, "2026-09-09T15:47:00.000Z", supersededBy)).toBe(false);
-    expect(accounting.retire(held, "2026-09-09T15:47:00.000Z", supersededBy)).toBe(true);
+    const superseded = { reason: "seat-superseded" as const, supersededBy };
+    expect(accounting.retire({ ...held, clientMessageId: "another" }, "2026-09-09T15:47:00.000Z", superseded)).toEqual({ retired: false, evicted: null });
+    expect(accounting.retire(held, "2026-09-09T15:47:00.000Z", superseded)).toEqual({ retired: true, evicted: null });
     const retired = accounting.readState();
     expect(retired.outstandingWake).toBeNull();
-    expect(retired.retiredWakes).toEqual([{ wake: held, retiredAt: "2026-09-09T15:47:00.000Z", supersededBy }]);
+    expect(retired.retiredWakes).toEqual([{ wake: held, retiredAt: "2026-09-09T15:47:00.000Z", supersededBy, reason: "seat-superseded" }]);
+    /* The retired key stays bound in the layers that hold it, so the next wake
+       folds it into its own identity rather than replaying it (#1746). */
+    expect(retired.releasedWake).toEqual({ clientMessageId: "original", releasedAt: "2026-09-09T15:47:00.000Z" });
 
     /* The one thing it can never do again is enter transport: the admission
        fence claims the OUTSTANDING attempt, which this is no longer, and
@@ -353,38 +357,82 @@ test("an attempt retired to a superseded seat keeps everything except its fence"
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-/* Two bounds on the move. A transport call that was still out when the seat was
-   superseded reports back to wherever its attempt now is, or the retired entry
-   would claim a call is in flight for as long as the row lives. And a row that
-   has reached its retention bound refuses to retire another — keeping the
-   fence, which is what the tick did before any of this, rather than discarding
-   an obligation to make room. */
-test("a transport return follows a retired attempt, and the retention bound refuses the next one", () => {
+/* A transport call that was still out when the seat was superseded reports back
+   to wherever its attempt now is, or the retired entry would claim a call is in
+   flight for as long as the row lives. And a row at its retention bound makes
+   room rather than refusing (#1746): refusing there kept the fence, which is
+   the permanent fence #1602 said would come back after twenty rotations. What
+   is dropped is the entry fenced longest ago, which credits nothing and fences
+   nothing; a row with nothing old enough to drop still refuses. */
+test("a transport return follows a retired attempt, and the retention bound makes room for the next one", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-retire-bound-"));
   try {
     const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
     accounting.initialize(emptySeatTickState(), null);
     const supersededBy = { conversationId: CONVERSATION, seatEpoch: 999 };
+    const superseded = { reason: "seat-superseded" as const, supersededBy };
+    const prepared = (n: number) => new Date(Date.parse("2026-09-08T05:14:24.000Z") + n * 60_000).toISOString();
     const attempt = (n: number) => ({ clientMessageId: `attempt-${n}`, conversationId: CONVERSATION, seatEpoch: n, operationId: null,
-      text: "frozen payload", preparedAt: "2026-09-08T05:14:24.000Z",
+      text: "frozen payload", preparedAt: prepared(n),
       commit: { proposal: false, reasons: [], fingerprint: `fp-${n}`, eventsThrough: n, children: [] } });
 
     expect(accounting.prepare(accounting.readState(), attempt(0))).toBe(true);
     const token = accounting.beginDispatch(accounting.readState().outstandingWake!)!;
-    expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", supersededBy)).toBe(true);
+    expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", superseded)).toEqual({ retired: true, evicted: null });
     accounting.returnedDispatch("attempt-0", token, true);
     expect(accounting.readState().retiredWakes[0]!.wake.dispatch).toEqual({ token, state: "refused" });
 
     for (let n = 1; n < SEAT_TICK_RETIRED_WAKE_LIMIT; n++) {
       expect(accounting.prepare(accounting.readState(), attempt(n))).toBe(true);
-      expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", supersededBy)).toBe(true);
+      expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", superseded)).toEqual({ retired: true, evicted: null });
     }
     expect(accounting.readState().retiredWakes).toHaveLength(SEAT_TICK_RETIRED_WAKE_LIMIT);
 
+    /* Nothing on the row is old enough to drop, so the bound still refuses and
+       the attempt stays outstanding — a fence, but one that ends by itself as
+       soon as an entry ages out. */
     const overflow = attempt(SEAT_TICK_RETIRED_WAKE_LIMIT);
     expect(accounting.prepare(accounting.readState(), overflow)).toBe(true);
-    expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", supersededBy)).toBe(false);
+    expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", superseded, Date.parse("2026-09-08T00:00:00.000Z"))).toEqual({ retired: false, evicted: null });
     expect(accounting.readState().outstandingWake).toMatchObject({ clientMessageId: overflow.clientMessageId });
-    expect(accounting.readState().retiredWakes).toHaveLength(SEAT_TICK_RETIRED_WAKE_LIMIT);
+
+    /* With entries past their own bound, the one prepared longest ago makes
+       room and is named, so the journal can record which key left the row. */
+    expect(accounting.retire(accounting.readState().outstandingWake!, "2026-09-09T15:47:00.000Z", superseded, Date.parse(prepared(1)))).toEqual({ retired: true, evicted: "attempt-0" });
+    const after = accounting.readState();
+    expect(after.retiredWakes).toHaveLength(SEAT_TICK_RETIRED_WAKE_LIMIT);
+    expect(after.retiredWakes.map((entry) => entry.wake.clientMessageId)).not.toContain("attempt-0");
+    expect(after.retiredWakes.at(-1)!.wake.clientMessageId).toBe(overflow.clientMessageId);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+/* The age retirement (#1746) is the second reason an attempt may leave the
+   fence, and the row has to be able to hold one: it names no superseding seat,
+   because the seat never moved. */
+test("an attempt retired on its age bound is stored with its reason and no superseding seat", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-retire-age-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const wake = { clientMessageId: "aged", conversationId: CONVERSATION, seatEpoch: 169, operationId: null,
+      text: "frozen payload", preparedAt: "2026-09-18T03:31:36.000Z",
+      commit: { proposal: false, reasons: [], fingerprint: "fp-1", eventsThrough: 7, children: [] } };
+    expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+    const held = accounting.readState().outstandingWake!;
+    expect(accounting.retire(held, "2026-09-18T05:31:36.000Z", { reason: "unresolved-age", supersededBy: null }))
+      .toEqual({ retired: true, evicted: null });
+
+    /* Written, and read back through the row decoder the way a later check
+       reads it. */
+    const stored = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project").readState();
+    expect(stored.outstandingWake).toBeNull();
+    expect(stored.retiredWakes).toEqual([{ wake: held, retiredAt: "2026-09-18T05:31:36.000Z", supersededBy: null, reason: "unresolved-age" }]);
+    expect(stored.releasedWake).toEqual({ clientMessageId: "aged", releasedAt: "2026-09-18T05:31:36.000Z" });
+
+    /* And it is as unable to enter transport again as a superseded one. */
+    expect(accounting.beginDispatch(held)).toBeNull();
+    expect(accounting.settle("aged", stored, "unsent")).toBe(false);
+    expect(accounting.settleRetired("aged")).toBe(true);
+    expect(accounting.readState().retiredWakes).toEqual([]);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

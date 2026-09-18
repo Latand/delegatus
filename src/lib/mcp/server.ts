@@ -17,12 +17,15 @@ import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
   MAX_PIPELINE_STAGES,
+  MAX_STAGE_FINDING_CHARS,
   MAX_STAGE_OUTPUTS,
   MAX_STAGE_OUTPUT_PATH_LENGTH,
   MAX_STAGE_PROMPT_LENGTH,
+  MAX_STAGE_REPORT_FINDINGS,
+  MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
 } from "@/lib/pipelines/limits";
-import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS } from "@/lib/pipelines/types";
+import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
@@ -47,6 +50,7 @@ export const MCP_TOOL_NAMES = [
   "update_task",
   "create_pipeline",
   "pipeline_action",
+  "stage_report",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
@@ -91,6 +95,11 @@ const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "update_task",
   "create_pipeline",
   "pipeline_action",
+  /* Records the calling attempt's own completion, which the stage then settles
+     on. A replayed clientRequestId must answer with the report the first call
+     recorded rather than replace it a second time, and that record outlives
+     this process. */
+  "stage_report",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -2709,13 +2718,24 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
   ].join(" "),
   pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation.",
+  stage_report: [
+    "Report the completion of the pipeline run stage THIS conversation is running.",
+    "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
+    "Findings are returned and shown most severe first; pass cannot carry findings.",
+    "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
+    "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
+    "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",
+    "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
+    "A fenced JSON verdict in the final turn remains the second input of the same form; when both exist, this call wins.",
+    "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
+  ].join(" "),
   link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline.",
   list_conversations: "List scanned Viewer conversations with durable ids and transcript paths.",
   search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns match snippets with speaker, timestamp, transcript path and byte offset. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
-  deploy_exact_sha: "Deploy one full commit SHA. The designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host.",
+  deploy_exact_sha: "Deploy one full commit SHA of the Agent Log Viewer application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Viewer project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit.",
   board_snapshot: "Read a bounded, redacted snapshot of the Viewer board, durable placement, and the selected project's hidden conversation count.",
   list_flows: "List durable implement-review flows.",
@@ -3024,6 +3044,22 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
     action: z.enum(PIPELINE_ACTIONS),
+  }).passthrough(),
+  stage_report: z.object({
+    clientRequestId: clientRequestIdSchema,
+    verdict: z.enum(["pass", "fail", "needs_decision"])
+      .describe("pass when the stage contract is complete, fail for a retryable stage failure, needs_decision when operator judgment is required."),
+    findings: z.array(z.object({
+      severity: z.enum(STAGE_FINDING_SEVERITIES).describe("P0 highest, P3 lowest. Findings are ranked by it."),
+      text: z.string().min(1).max(MAX_STAGE_FINDING_CHARS).describe(
+        `What is wrong, in plain words. No SHAs, paths or links from memory: the server reads provenance itself. A finding is recorded in its rendered form "P1 — text", and the ${MAX_STAGE_FINDING_CHARS}-character bound is on that form, so a text within five characters of it keeps its rank and loses that tail.`,
+      ),
+    })).max(MAX_STAGE_REPORT_FINDINGS).optional()
+      .describe("Unresolved work, ranked. Empty or omitted for pass, which cannot carry findings."),
+    summary: z.string().max(MAX_STAGE_REPORT_SUMMARY_CHARS).optional()
+      .describe("One or two sentences on what was done. Shown on the card and relayed to the next stage."),
+    stageId: z.string().min(1).optional()
+      .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
   link_task_to_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,

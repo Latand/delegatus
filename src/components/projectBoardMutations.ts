@@ -3,12 +3,11 @@ import type { FileEntry } from "@/lib/types";
 
 import { isChildConversation, projectKey } from "./projectModel";
 
-/** The minimal branch-group shape the board planner needs: a group's root key
-    and whether it is a parentless background task. Orphan-task groups dock as
-    strips and never seed a durable root, so they are excluded from reconciliation. */
+/** The minimal branch-group shape the board planner needs: a group's root key.
+    Every group the board draws is opened by a conversation, so every key here
+    seeds a durable root. */
 export interface RootGroupLike {
   key: string;
-  orphanTask: boolean;
 }
 
 /**
@@ -17,7 +16,7 @@ export interface RootGroupLike {
  * derives the mutation that seeds every current root and retires the entries that
  * never belonged there:
  *
- * - `roots` is every non-orphan group key. Children/subagents derive their
+ * - `roots` is every group key. Children/subagents derive their
  *   placement from lineage and expansion, so only roots are seeded — this is the
  *   fix for the 40-entry churn where every column (children included) piled into
  *   `manual` and oscillated under the old positional cap.
@@ -33,7 +32,7 @@ export function planRootReconciliation(input: {
   catalog: ReadonlyMap<string, FileEntry>;
   catalogComplete?: boolean;
 }): Extract<BoardMutationV1, { kind: "reconcile-roots" }> {
-  const roots = input.groups.filter((group) => !group.orphanTask).map((group) => group.key);
+  const roots = input.groups.map((group) => group.key);
   const rootSet = new Set(roots);
   const removeManual = input.manual.filter((path) => {
     if (rootSet.has(path)) return false;

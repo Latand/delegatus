@@ -10,7 +10,7 @@ import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
 import { normalizeStageOutputPath } from "./stageAccess";
 import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
 import { stageVerdictFrom } from "./verdict";
@@ -172,6 +172,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.error) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
+    isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isUnresolvedTermination(attempt.unresolvedTermination)
   );
@@ -193,14 +194,62 @@ function isAttemptDefinition(value: unknown): boolean {
 
 const GRAPH_EDIT_ACTION_NAMES: readonly string[] = ["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"];
 
+function isActor(value: unknown): boolean {
+  const actor = value as Record<string, unknown> | null;
+  return Boolean(actor && typeof actor === "object" && !Array.isArray(actor) && (actor.kind === "operator"
+    || (actor.kind === "agent" && isNullableString(actor.role) && isNullableString(actor.conversationId))));
+}
+
+function isStageProvenance(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const provenance = value as Record<string, unknown>;
+  const pullRequest = provenance.pullRequest as Record<string, unknown> | null;
+  return isNullableString(provenance.head)
+    && typeof provenance.branch === "string"
+    && (provenance.uncommitted === null
+      || (Array.isArray(provenance.uncommitted) && provenance.uncommitted.every((path) => typeof path === "string")))
+    && (pullRequest === null || Boolean(pullRequest && typeof pullRequest === "object" && !Array.isArray(pullRequest)
+      && typeof pullRequest.url === "string" && Number.isSafeInteger(pullRequest.number) && typeof pullRequest.state === "string"))
+    && Array.isArray(provenance.outputs)
+    && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
+      && typeof (output as { path: unknown }).path === "string"
+      && typeof (output as { present: unknown }).present === "boolean"));
+}
+
+/** A stage attempt's own completion report (graph slice 2). */
+function isStageReport(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  return Number.isSafeInteger(report.seq) && (report.seq as number) >= 1
+    && typeof report.at === "string"
+    && isActor(report.actor)
+    && stageVerdictFrom(report.verdict) !== null
+    && isNullableString(report.summary)
+    && isStageProvenance(report.provenance)
+    && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
+}
+
+function isStageReportEntry(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return Number.isSafeInteger(entry.seq) && (entry.seq as number) >= 1
+    && typeof entry.at === "string"
+    && isActor(entry.actor)
+    && typeof entry.stageId === "string"
+    && Number.isSafeInteger(entry.attempt) && (entry.attempt as number) >= 1
+    && ["pass", "fail", "needs_decision"].includes(String(entry.status))
+    && Number.isSafeInteger(entry.findings) && (entry.findings as number) >= 0
+    && (entry.replaces === null || (Number.isSafeInteger(entry.replaces) && (entry.replaces as number) >= 1))
+    && isNullableString(entry.summary);
+}
+
 function isGraphEdit(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const edit = value as Record<string, unknown>;
-  const actor = edit.actor as Record<string, unknown> | null;
   return Number.isSafeInteger(edit.seq) && (edit.seq as number) >= 1
     && typeof edit.at === "string"
-    && Boolean(actor && typeof actor === "object" && (actor.kind === "operator"
-      || (actor.kind === "agent" && isNullableString(actor.role) && isNullableString(actor.conversationId))))
+    && isActor(edit.actor)
     && GRAPH_EDIT_ACTION_NAMES.includes(String(edit.action))
     && isNullableString(edit.stageId)
     && typeof edit.pipelineState === "string"
@@ -429,6 +478,7 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
+    (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
       Number.isFinite(pipeline.pos.x) && Number.isFinite(pipeline.pos.y)

@@ -49,7 +49,7 @@ function delivery(overrides: Partial<HeldDelivery> & { id: string }): HeldDelive
 /* The #1117 cases are about delivery evidence, not seats. They pass this
    explicitly so no case in this file reads whatever seat store happens to be
    on the machine running it. */
-const noSeats = () => ({ schemaVersion: 1, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [] });
+const noSeats = () => ({ schemaVersion: 1, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [], rollbacks: {} });
 
 function snapshot(deliveries: HeldDelivery[]): RegistryFile {
   return {
@@ -257,6 +257,7 @@ function seatFile(seats: OrchestratorSeat[], history: OrchestratorSeat[] = []) {
     pending: {},
     revocations: [],
     history: history.map((entry) => ({ seat: entry, reason: "terminal_error" as const, terminalizedAt: "2026-08-24T08:00:00.000Z" })),
+    rollbacks: {},
   };
 }
 

@@ -274,8 +274,6 @@ export interface BranchGroup {
   finished: FileEntry[];
   /** Latest mtime across the group subtree, drives left-to-right freshness order. */
   smt: number;
-  /** A parentless background task rendered as a narrow collapsed column. */
-  orphanTask: boolean;
 }
 
 function rootOf(file: FileEntry, byPath: Map<string, FileEntry>): FileEntry {
@@ -436,7 +434,7 @@ function assembleGroup(
   const finished = descendants.filter((file) => !taken.has(file.path)).sort((a, b) => b.mtime - a.mtime);
   const returnable: FileEntry[] = [];
   const smt = Math.max(...columns.map((column) => column.file.mtime), ...liveTasks.map((task) => task.mtime));
-  return { key: root.path, columns, returnable, finished, smt, orphanTask: false };
+  return { key: root.path, columns, returnable, finished, smt };
 }
 
 
@@ -498,8 +496,9 @@ function singleOwnership(groups: BranchGroup[], byPath: Map<string, FileEntry>):
  * One group per active branch tree: the root conversation opens the group,
  * live descendant agents (subagents, codex rollouts) get their own columns.
  * Live background tasks (bash, codex job logs) never take a full column —
- * they attach to their parent's column as collapsed rows; a parentless one
- * becomes a narrow stub group. Every other descendant of the tree — finished
+ * they attach to their parent's column as collapsed rows, and a parentless one
+ * takes no board space at all (#1758): it is host detail, read through
+ * {@link parentlessBackgroundTasks}. Every other descendant of the tree — finished
  * subagents, quiet tasks, compaction-chain predecessor sessions — stays
  * visible as a collapsed chip in the group's `finished` stack. Root
  * conversations with activity inside the placement age horizon (~48 h,
@@ -533,11 +532,20 @@ export interface BranchGroupOptions {
   keepExpandedPaths?: ReadonlySet<string>;
 }
 
-export function buildBranchGroups(files: FileEntry[], project: string, options: BranchGroupOptions = {}): BranchGroup[] {
-  const byPath = new Map(files.map((file) => [file.path, file]));
-  const kids = kidsIndex(files);
+/**
+ * The single placement pass the board and the host reader share: which
+ * conversation opens each group, and which live background processes have no
+ * conversation of this board to belong to. Both public readers below run it, so
+ * a parentless process is decided once and cannot drift between them.
+ */
+function collectPlacement(
+  files: FileEntry[],
+  project: string,
+  options: BranchGroupOptions,
+  byPath: Map<string, FileEntry>,
+): { roots: Map<string, FileEntry>; parentless: Map<string, FileEntry>; placeableByAge: (file: FileEntry) => boolean } {
   const roots = new Map<string, FileEntry>();
-  const orphanTasks = new Map<string, FileEntry>();
+  const parentless = new Map<string, FileEntry>();
   const { expandedConversationPaths, enginePlacement, keepExpandedPaths } = options;
   const now = options.now ?? 0;
   const ageHorizon = options.ageHorizonSeconds ?? schemeAgeHorizonSeconds();
@@ -598,31 +606,42 @@ export function buildBranchGroups(files: FileEntry[], project: string, options: 
       (expanded && (isConversation(file) || isChildConversation(file)))
     )) {
       const root = groupRootFor(file);
-      if (isAuxTask(root)) orphanTasks.set(root.path, root);
+      if (isAuxTask(root)) parentless.set(root.path, root);
       else roots.set(root.path, root);
       continue;
     }
     if (keepExpanded && recentlyActive(file) && isConversation(file)) roots.set(file.path, file);
   }
+  return { roots, parentless, placeableByAge };
+}
+
+export function buildBranchGroups(files: FileEntry[], project: string, options: BranchGroupOptions = {}): BranchGroup[] {
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const kids = kidsIndex(files);
+  const { expandedConversationPaths, enginePlacement, keepExpandedPaths } = options;
+  const { roots, placeableByAge } = collectPlacement(files, project, options, byPath);
   const groups = singleOwnership(
     [...roots.values()].map((root) => assembleGroup(root, kids, expandedConversationPaths, enginePlacement, placeableByAge, keepExpandedPaths)),
     byPath,
   );
-  for (const task of orphanTasks.values()) {
-    groups.push({
-      key: task.path,
-      columns: [{ file: task, tasks: [] }],
-      returnable: [],
-      finished: [],
-      smt: task.mtime,
-      orphanTask: true,
-    });
-  }
-  /* Conversations own the freshness order; parentless task stubs trail the row. */
-  return groups.sort((a, b) => {
-    if (a.orphanTask !== b.orphanTask) return a.orphanTask ? 1 : -1;
-    return tick5(b.smt) - tick5(a.smt) || a.key.localeCompare(b.key);
-  });
+  return groups.sort((a, b) => tick5(b.smt) - tick5(a.smt) || a.key.localeCompare(b.key));
+}
+
+/**
+ * The live background processes of this project that no conversation on the
+ * board owns — a bash or job log whose spawning session is absent, aged out or
+ * closed. They are HOST DETAIL, never board content: issue #1758 removed the
+ * full-width strips that docked them above the board header, where they pushed
+ * the whole board down and carried nothing to act on. The phone's «Details &
+ * host» sheet lists them with their PIDs, and the sidebar and the file list
+ * keep every one of them reachable. A background task whose conversation IS on
+ * the board never appears here — it stays a collapsed row under that
+ * conversation's column (`BranchColumn.tasks`).
+ */
+export function parentlessBackgroundTasks(files: FileEntry[], project: string, options: BranchGroupOptions = {}): FileEntry[] {
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const { parentless } = collectPlacement(files, project, options, byPath);
+  return [...parentless.values()].sort((a, b) => tick5(b.mtime) - tick5(a.mtime) || a.path.localeCompare(b.path));
 }
 
 /**
@@ -651,14 +670,16 @@ export function buildArchiveBranchGroups(files: FileEntry[], project: string, li
   }
 
   const roots = new Map<string, FileEntry>();
-  const orphanTasks = new Map<string, FileEntry>();
   for (const path of keep) {
     const file = byPath.get(path);
     if (!file) continue;
     const root = rootOf(file, byPath);
     if (projectKey(root) !== project) continue;
-    if (isAuxTask(root)) orphanTasks.set(root.path, root);
-    else roots.set(root.path, root);
+    /* A background process whose owning conversation is gone opens no group of
+       its own. The quiet-history fallback used to build the same stub group the
+       live board did, and #1758 removes both. */
+    if (isAuxTask(root)) continue;
+    roots.set(root.path, root);
   }
 
   const groups: BranchGroup[] = [];
@@ -671,17 +692,7 @@ export function buildArchiveBranchGroups(files: FileEntry[], project: string, li
     const columns: BranchColumn[] = [root, ...fullNodes].map((file) => ({ file, tasks: [] }));
     const finished = descendants.filter((file) => !fullPaths.has(file.path));
     const smt = Math.max(root.mtime, ...descendants.map((file) => file.mtime));
-    groups.push({ key: root.path, columns, returnable: [], finished, smt, orphanTask: false });
-  }
-  for (const task of orphanTasks.values()) {
-    groups.push({
-      key: task.path,
-      columns: [{ file: task, tasks: [] }],
-      returnable: [],
-      finished: [],
-      smt: task.mtime,
-      orphanTask: true,
-    });
+    groups.push({ key: root.path, columns, returnable: [], finished, smt });
   }
   return groups.sort((a, b) => tick5(b.smt) - tick5(a.smt) || a.key.localeCompare(b.key));
 }

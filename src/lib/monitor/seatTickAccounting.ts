@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { seatTickWakeCommit } from "./seatTick";
 import type { SeatChildrenAnchor } from "@/lib/agent/registry";
-import { emptySeatTickState, SEAT_TICK_RETIRED_WAKE_LIMIT, type SeatTickChildInput, type SeatTickProjectState, type SeatTickOutstandingWake, type SeatTickRetiredWake } from "./types";
+import { emptySeatTickState, SEAT_TICK_RETIRED_WAKE_LIMIT, type SeatTickChildInput, type SeatTickProjectState, type SeatTickOutstandingWake, type SeatTickRetiredWake, type SeatTickRetirementReason } from "./types";
 import { emptyLedgerCursor, type LedgerCursor, type LedgerOutcome } from "./seatTickChildLedger";
 
 type Base = { key: string; schemaVersion: 1; project: string };
@@ -111,11 +111,21 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
          is still a row full of obligations, and refusing to read it would take
          the whole project's tick down rather than let it work them off. */
       if (!Array.isArray(retired)) return null;
+      const entries: SeatTickRetiredWake[] = [];
       for (const entry of retired) {
-        if (!entry || typeof entry !== "object" || !validWake(entry.wake) || !string(entry.retiredAt)
-          || !entry.supersededBy || !string(entry.supersededBy.conversationId) || !integer(entry.supersededBy.seatEpoch)) return null;
+        if (!entry || typeof entry !== "object" || !validWake(entry.wake) || !string(entry.retiredAt)) return null;
+        /* An entry from before #1746 carries no reason and a supersession is
+           the only thing it can be; one written since must carry a reason it
+           has the evidence for — a supersession names the seat, an age
+           retirement names none because the seat never moved. */
+        const reason = entry.reason ?? "seat-superseded";
+        if (reason !== "seat-superseded" && reason !== "unresolved-age") return null;
+        const by = entry.supersededBy ?? null;
+        if (reason === "seat-superseded" && (!by || !string(by.conversationId) || !integer(by.seatEpoch))) return null;
+        if (reason === "unresolved-age" && by !== null) return null;
+        entries.push({ ...entry, supersededBy: by, reason });
       }
-      return row;
+      return { ...row, state: { ...state, retiredWakes: entries } };
     }
     case "owner": {
       if (!string(row.conversationId) || !integer(row.epoch)) return null;
@@ -638,23 +648,51 @@ export class SeatTickAccounting {
    * travels with it. Nothing else about it changes: same key, same payload,
    * same landing plan. What changes is that it no longer fences the next wake.
    *
-   * Refused when the row moved on to another attempt, and refused at the bound
-   * — a project that has reached it keeps the fence, which is what the tick did
-   * before this existed, rather than discarding an obligation to make room.
-   * That is a count bound and not an age bound: an attempt whose holder never
-   * answers conclusively is kept and asked after for ever, so a project that
-   * rotates its seat past the bound leaving those behind stops being woken
-   * again. Tracked in #1602, with the same shape #906 needed for held
-   * deliveries; nothing here may discard an obligation to avoid it.
+   * Refused when the row moved on to another attempt. At the retention bound
+   * it makes room instead of refusing (#1746, #1602): the oldest entry whose
+   * own bound is spent, and which has no transport call out, is dropped. Refusing there was itself a permanent fence — the count bound
+   * reached is the pre-#1594 behaviour returning — and what is dropped fences
+   * nothing, credits nothing whatever becomes of it, and has its retirement
+   * recorded in the journal, which is the audit trail an operator is pointed
+   * at. A row with nothing evictable still refuses, and the next check that
+   * ages one out retires this attempt instead.
    */
-  retire(expected: SeatTickOutstandingWake, retiredAt: string, supersededBy: SeatTickRetiredWake["supersededBy"]): boolean {
+  retire(
+    expected: SeatTickOutstandingWake,
+    retiredAt: string,
+    retirement: { reason: SeatTickRetirementReason; supersededBy: SeatTickRetiredWake["supersededBy"] },
+    /* Entries prepared at or before this instant have spent their own bound, so
+       they fence nothing. Omitted, nothing is evictable and a full row refuses,
+       which is what this did before the bound existed. */
+    evictPreparedAtOrBefore?: number,
+  ): { retired: boolean; evicted: string | null } {
     return this.mutate((tx, row) => {
       const wake = row.state.outstandingWake;
-      if (!wake || wake.clientMessageId !== expected.clientMessageId) return false;
-      const retired = row.state.retiredWakes ?? [];
-      if (retired.length >= SEAT_TICK_RETIRED_WAKE_LIMIT) return false;
-      row.state = { ...row.state, outstandingWake: null, retiredWakes: [...retired, { wake, retiredAt, supersededBy }] };
-      return true;
+      if (!wake || wake.clientMessageId !== expected.clientMessageId) return { retired: false, evicted: null };
+      let retired = row.state.retiredWakes ?? [];
+      let evicted: string | null = null;
+      if (retired.length >= SEAT_TICK_RETIRED_WAKE_LIMIT) {
+        const index = retired.findIndex((entry) => {
+          if (entry.wake.dispatch?.state === "active") return false;
+          const prepared = Date.parse(entry.wake.preparedAt ?? entry.retiredAt);
+          return Number.isFinite(prepared) && evictPreparedAtOrBefore !== undefined && prepared <= evictPreparedAtOrBefore;
+        });
+        if (index < 0) return { retired: false, evicted: null };
+        evicted = retired[index]!.wake.clientMessageId;
+        retired = [...retired.slice(0, index), ...retired.slice(index + 1)];
+      }
+      row.state = {
+        ...row.state,
+        outstandingWake: null,
+        retiredWakes: [...retired, { wake, retiredAt, supersededBy: retirement.supersededBy, reason: retirement.reason }],
+        /* The retired key stays bound in the layers that hold it, so the wake
+           raised in its place must not be it (#1672). Inside one epoch that is
+           the whole difference between the two keys, and a replacement the
+           delivery layer reads as a replay of the fenced send would fence the
+           project again under a new name. */
+        releasedWake: { clientMessageId: wake.clientMessageId, releasedAt: retiredAt },
+      };
+      return { retired: true, evicted };
     });
   }
   /** End a retired attempt, once its holder has accounted for it (#1594). It

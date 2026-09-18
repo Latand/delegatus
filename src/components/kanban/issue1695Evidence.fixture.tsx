@@ -42,6 +42,9 @@ const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
+/* #1765: one task carrying five pipelines — two running, three completed — so
+   a card's rows can be read for what each pipeline actually does. */
+const MANY = SCENARIO === "issue1765";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -144,7 +147,35 @@ const searchRevFirst = STAGES ? add(conversation("search-rev-1", "Round 2 approv
 const exportReview = LOOSE ? add(conversation("export-review", "Reviewer: two presets share a name", { mtime: now - 12 * MIN, engine: "codex", model: "gpt-5.6" })) : null;
 const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both anchors against the published notes", working({ engine: "codex", model: "gpt-5.6", plan: { current: "Reading the published notes" } }))) : null;
 
+/* #1765: each of the five pipelines on t-many gets its own pair of stages and
+   its own conversations, so no row borrows another's identity. */
+const manyStages = (critique: string, fix: string) => [stage(critique, "reviewer", fix), stage(fix, "builder", null)];
+const manyPipelines: Pipeline[] = MANY ? ([
+  ["p-many-pills", "Name every pipeline row on a task card", "running", null, ["critique", "fix"]],
+  ["p-many-drawers", "Remove the legacy drawers under the board columns", "running", null, ["diagnose", "cut"]],
+  ["p-many-pill", "Take the floating waiting pill out of the corner", "completed", 40, ["critique", "fix"]],
+  ["p-many-collapse", "Fold the completed pipelines of a task behind their count", "completed", 6 * 60, ["review-plan", "apply"]],
+  ["p-many-report", "Read a stage report as role, outcome and age", "completed", 26 * 60, ["critique", "repair"]],
+] as const).map(([id, task, state, closedAgo, [first, second]]) => {
+  const opened = add(conversation(`${id}-1`, `Opened ${task}`, { mtime: now - 90 * MIN, engine: "codex", model: "gpt-5.6" }));
+  const closing = add(conversation(`${id}-2`, `Finished ${task}`, state === "running"
+    ? working({ plan: { current: task } })
+    : { mtime: now - 30 * MIN }));
+  return pipeline(id, task, "t-many", state, manyStages(first, second), [
+    { stageId: first, attempts: [attempt(1, "passed", opened, { startedAt: iso(120 * MIN) })] },
+    { stageId: second, attempts: [attempt(1, state === "running" ? "running" : "passed", closing, { startedAt: iso(80 * MIN), activatedBy: { stageId: first, attempt: 1, edge: "pass" } })] },
+  ], state === "running" ? { stageId: second, state: "running", input: null, activatedBy: null } : null, {
+    closedAt: closedAgo === null ? null : iso(closedAgo * MIN),
+    /* The last completed pipeline carries a stage report: role, outcome, age —
+       and no conversation id anywhere on the card. */
+    ...(id === "p-many-report"
+      ? { stageReports: [{ seq: 1, at: iso(30 * MIN), actor: { kind: "agent", role: "builder", conversationId: closing.conversationId }, stageId: second, attempt: 1, status: "pass", findings: 0, replaces: null, summary: "Read the line as words." }] }
+      : {}),
+  });
+}) : [];
+
 const pipelines: Pipeline[] = [
+  ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
     [stage("implement", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 2 } }), stage("merge", "cleaner", null)],
     [
@@ -313,6 +344,7 @@ const tasks: BoardTask[] = [
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
+  ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);

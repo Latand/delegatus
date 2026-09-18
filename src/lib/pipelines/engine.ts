@@ -46,11 +46,13 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
+import { failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
   MAX_PIPELINE_GRAPH_EDITS,
+  MAX_PIPELINE_STAGE_REPORTS,
   MAX_PIPELINE_STAGES,
   MAX_SPEC_LENGTH,
   MAX_STAGE_OUTPUTS,
@@ -63,6 +65,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { normalizeStageOutputPath } from "./stageAccess";
+import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
@@ -85,11 +88,13 @@ import type {
   PipelineStage,
   PipelineStageInput,
   PipelineStageAttempt,
+  PipelineStageReport,
+  PipelineStageReportEntry,
   PipelineTerminalReap,
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
 } from "./types";
-import { parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict } from "./verdict";
+import { MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
   launchId: string;
@@ -2063,16 +2068,6 @@ function retryTerminalStagePublication(
   advancePipeline(pipeline, stage, ports, attempt);
 }
 
-/** Attempts of the fail edge's target that this stage's fail edge activated —
-    the derived (never stored) loop budget, so counts cannot drift from the
-    durable evidence. */
-function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): number {
-  if (!stage.onFail) return 0;
-  const target = runFor(pipeline, stage.onFail.to);
-  if (!target) return 0;
-  return target.attempts.filter((attempt) => !attempt.historical && attempt.activatedBy?.edge === "fail" && attempt.activatedBy.stageId === stage.id).length;
-}
-
 /** The `{{prev.output}}` payload a fail edge forwards: the failed attempt's
     narrative output plus its structured findings, so the loop target sees what
     to fix without re-deriving it from transcripts. */
@@ -2168,6 +2163,32 @@ function commitPassedStage(
   if (published.remote === "unreachable") {
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
   }
+}
+
+/**
+ * The completion an attempt reported for itself, when it reported one (graph
+ * slice 2). The call outranks the fenced JSON verdict in the transcript: it is
+ * an explicit statement the server attributed to the calling conversation,
+ * while the fenced block is the second input, for an attempt whose engine
+ * cannot make the call or whose scaffold still ends in one. The prose keeps
+ * its place as the relay payload when the call carried no summary, so nothing
+ * the next stage reads is lost.
+ *
+ * This is consulted only where settlement is already decided — at a terminal
+ * turn — which is what keeps the call an intent: an attempt that reports and
+ * then keeps working settles when its turn ends.
+ */
+function reportedStageVerdict(
+  attempt: PipelineStageAttempt,
+  fenced: ParsedStageVerdict | { failureReason: string; output: string } | null,
+  text: string,
+): ParsedStageVerdict | null {
+  const report = attempt.report;
+  if (!report) return null;
+  return {
+    verdict: report.verdict,
+    output: (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
+  };
 }
 
 /** One-shot settlement of a completed stage turn. Semantic contradictions park
@@ -2627,7 +2648,8 @@ async function tickRunStage(
   }
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
-    const parsed = parsePipelineStageVerdict(durable.message!.text);
+    const fenced = parsePipelineStageVerdict(durable.message!.text);
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text) ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -2731,7 +2753,8 @@ async function tickRunStage(
     }
     return;
   }
-  const parsed = parsePipelineStageVerdict(message.text);
+  const fenced = parsePipelineStageVerdict(message.text);
+  const parsed = reportedStageVerdict(attempt, fenced, message.text) ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
@@ -5608,6 +5631,208 @@ export async function patchPipeline(
     }
     persist();
     return graphEdit ? { pipeline, graphEdit } : { pipeline };
+  });
+}
+
+/** A run attempt whose own turn is under way, so its conversation can still
+    say how the stage ended. Every other state counts as settled, and a settled
+    attempt holds the verdict the graph already routed on. `committing` is one
+    of them: settleStageVerdict writes `attempt.verdict` and only then marks
+    that state, so an attempt found committing has already answered, and a call
+    taken there would record a second answer over the verdict the graph routed
+    on. `reviewing` is a review-loop state, and a review-loop stage is refused
+    by kind in {@link resolveStageCompletionTarget}. */
+const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running"]);
+
+export type StageCompletionRequest = StageCompletionInput & { stageId?: unknown };
+
+export type StageCompletionSlot = { pipelineId: string; stageId: string; attempt: number; state: PipelineStageAttempt["state"] };
+
+export type StageCompletionResult = {
+  pipelineId?: string;
+  stageId?: string;
+  attempt?: number;
+  report?: PipelineStageReport;
+  /** True when this call replaced an earlier report of the same attempt. */
+  replaced?: boolean;
+  error?: string;
+  status?: number;
+  code?: string;
+  /** What the calling conversation actually holds, on a refusal that turns on
+      which stage it is: the caller names one of these and calls again. */
+  slots?: StageCompletionSlot[];
+};
+
+type StageCompletionTarget = { pipeline: Pipeline; stageId: string; attempt: PipelineStageAttempt };
+
+/** The kind the graph gives the stage an attempt belongs to, or null once an
+    edit has removed that stage. An attempt's bound definition never carries a
+    kind (attemptStage keeps the stage's identity), so the graph is the only
+    place this can be read from. */
+function stageKindOf({ pipeline, stageId }: StageCompletionTarget): PipelineStage["kind"] | null {
+  return pipeline.stages.find((stage) => stage.id === stageId)?.kind ?? null;
+}
+
+/** Which attempt a completion call is about, decided from the conversation the
+    server attributed the call to. Nothing the caller says takes part beyond
+    `stageId`, which only narrows the attempts it already holds. */
+function resolveStageCompletionTarget(
+  pipelines: readonly Pipeline[],
+  conversationId: string,
+  requestedStageId: string | null,
+): { target: StageCompletionTarget } | { refusal: StageCompletionResult } {
+  const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
+    .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
+    .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
+  const slots = (entries: readonly StageCompletionTarget[]): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
+    ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
+  if (held.length === 0) {
+    return { refusal: {
+      error: "this conversation is not running a pipeline stage, so it has no stage completion to report",
+      status: 403,
+      code: "STAGE_REPORT_NOT_AN_ATTEMPT",
+    } };
+  }
+  const named = requestedStageId ? held.filter(({ stageId }) => stageId === requestedStageId) : held;
+  if (named.length === 0) {
+    return { refusal: {
+      error: `this conversation does not hold stage ${requestedStageId}`,
+      status: 403,
+      code: "STAGE_REPORT_NOT_HELD",
+      slots: slots(held),
+    } };
+  }
+  /* A completion is a run stage's to report. A review-loop stage's attempt
+     carries its flow's reviewer conversation (attachReviewFlowAttempt), and
+     tickReviewStage settles it from the flow's own outcome and never reads a
+     report — so a reviewer's call would be recorded on the attempt and shown
+     on the card while nothing acted on it. A stage an edit has since removed
+     from the graph is refused the same way: it has nothing left to route. */
+  const runStages = named.filter((candidate) => stageKindOf(candidate) === "run");
+  if (runStages.length === 0) {
+    const other = named.at(-1)!;
+    const kind = stageKindOf(other);
+    return { refusal: {
+      error: kind === "review-loop"
+        ? `stage ${other.stageId} is a review-loop stage, whose completion its review flow decides; only a run stage's own attempt reports its completion`
+        : `stage ${other.stageId} is no longer a stage of this pipeline's graph, so it has no completion to report`,
+      status: 403,
+      code: "STAGE_REPORT_NOT_A_RUN_STAGE",
+      slots: slots(named),
+    } };
+  }
+  const live = runStages.filter(({ attempt }) => REPORTABLE_ATTEMPT_STATES.has(attempt.state));
+  if (live.length === 0) {
+    const settled = runStages.at(-1)!;
+    return { refusal: {
+      error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
+      status: 409,
+      code: "STAGE_REPORT_SETTLED",
+      slots: slots(runStages),
+    } };
+  }
+  if (live.length > 1) {
+    return { refusal: {
+      error: "this conversation holds more than one live stage; name the one being reported in stageId",
+      status: 409,
+      code: "STAGE_REPORT_AMBIGUOUS",
+      slots: slots(live),
+    } };
+  }
+  return { target: live[0]! };
+}
+
+/**
+ * A stage attempt reports its own completion (graph slice 2, #1730).
+ *
+ * The caller is resolved server-side: the calling conversation is matched to
+ * the attempt it is running, so a conversation cannot report for a stage it
+ * does not hold and `stageId` is needed only to disambiguate a conversation
+ * that holds more than one. What can report is a run stage's live attempt: a
+ * review-loop stage's attempt holds its flow's reviewer conversation and is
+ * settled from the flow's own outcome, so a call there is refused with
+ * STAGE_REPORT_NOT_A_RUN_STAGE. The call records an intent: it writes the verdict
+ * on the attempt and returns, and the attempt settles when its turn completes,
+ * on the existing lifecycle-aware path. A second call before settlement replaces the
+ * first, and a call after it is refused, because by then the verdict is the
+ * record the graph already routed on.
+ *
+ * Provenance is never taken from the caller. The head, the branch's pull
+ * request and the declared outputs are read by the server at the moment of the
+ * call, so what the attempt shows is what the server observed. Those reads —
+ * one of them the forge, over the network — are made BEFORE the record lease
+ * is taken, the way creation resolves its base commit: a refused call never
+ * reads git at all, and no forge latency is spent holding the lease the
+ * controller tick needs. The attempt is resolved a second time under the
+ * lease, and that read is the authority: an attempt that settled in between is
+ * refused with nothing written.
+ */
+export async function reportStageCompletion(
+  request: StageCompletionRequest,
+  actor: PauseResumeActor,
+  ports: PipelinePorts = defaultPipelinePorts(),
+): Promise<StageCompletionResult> {
+  const conversationId = actor.kind === "agent" ? actor.conversationId?.trim() || null : null;
+  if (!conversationId) {
+    return {
+      error: "a stage completion is reported by the stage's own conversation, and this call carries no conversation identity",
+      status: 403,
+      code: "STAGE_REPORT_NOT_AN_ATTEMPT",
+    };
+  }
+  const requestedStageId = typeof request.stageId === "string" && request.stageId.trim() ? request.stageId.trim() : null;
+  const previewed = resolveStageCompletionTarget(loadPipelines(), conversationId, requestedStageId);
+  if ("refusal" in previewed) return previewed.refusal;
+  const normalized = normalizeStageCompletion(request);
+  if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
+  const preview = previewed.target;
+  const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
+  const provenance = collectStageProvenance(
+    preview.pipeline,
+    previewStage ? attemptStage(previewStage, preview.attempt).outputs ?? [] : [],
+    ports.exec,
+  );
+
+  return withPipelineMutation((pipelines, persist) => {
+    const resolved = resolveStageCompletionTarget(pipelines, conversationId, requestedStageId);
+    if ("refusal" in resolved) return resolved.refusal;
+    const { pipeline, stageId, attempt } = resolved.target;
+    if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n) {
+      return {
+        error: `the attempt changed while its provenance was read; it is now ${pipeline.id} stage ${stageId} attempt ${attempt.n}. Report it again`,
+        status: 409,
+        code: "STAGE_REPORT_CHANGED",
+        slots: [{ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }],
+      };
+    }
+    const prior = attempt.report ?? null;
+    const entries = pipeline.stageReports ?? [];
+    const seq = (entries.at(-1)?.seq ?? 0) + 1;
+    const report: PipelineStageReport = {
+      seq,
+      at: ports.now(),
+      actor,
+      verdict: normalized.verdict,
+      summary: normalized.summary,
+      provenance,
+      calls: (prior?.calls ?? 0) + 1,
+    };
+    attempt.report = report;
+    const entry: PipelineStageReportEntry = {
+      seq,
+      at: report.at,
+      actor,
+      stageId,
+      attempt: attempt.n,
+      status: report.verdict.status,
+      findings: report.verdict.findings?.length ?? 0,
+      replaces: prior?.seq ?? null,
+      summary: report.summary,
+    };
+    /* Replaced, never pushed into: loaded records share leaves with the cache. */
+    pipeline.stageReports = [...entries, entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
+    persist();
+    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null };
   });
 }
 

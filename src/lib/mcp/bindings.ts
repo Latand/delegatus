@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/* The Viewer's own repository metadata. Bundled into the server and the MCP
+   binary, so a packaged release with no checkout can still name the repository
+   it deploys (#1321). */
+import viewerPackageManifest from "../../../package.json";
+
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
@@ -72,12 +77,14 @@ import {
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
+import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline } from "@/lib/pipelines/engine";
+import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
@@ -86,6 +93,7 @@ import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -586,6 +594,7 @@ export interface ViewerMcpDomainDependencies {
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
   patchPipeline: typeof patchPipeline;
+  reportStageCompletion: typeof reportStageCompletion;
   loadTasks: typeof loadTasks;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
@@ -643,6 +652,14 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  /** The canonical project of the repository this Viewer deploys (#1321) — the
+      only project whose designated seat may execute a deploy. Production derives
+      it from the canonical Viewer remote, never from the caller's working
+      directory, because an MCP client launches inside the caller's own
+      repository. Optional so partial harnesses fall back to the production
+      resolver; null means the Viewer cannot name what it deploys, and the
+      deploy refusal then fails closed. */
+  viewerProject?(): string | null;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -676,6 +693,31 @@ function productionCallerProject(): string | null {
   const conversationId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
   if (!conversationId) return null;
   return callerProjectFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
+}
+
+/**
+ * The canonical project of the Agent Log Viewer this process IS — the one
+ * question `deploy_exact_sha` refuses on (#1321), and the only caller there is.
+ *
+ * The cwd cannot answer it. An MCP client launches wherever the CALLER works,
+ * which is exactly the foreign repository the deploy refusal has to tell apart
+ * from the Viewer's own, and a packaged release has no `.git` of its own to
+ * read either. The one fact that travels with the code is the canonical remote
+ * it is deployed from — `LLV_VIEWER_CANONICAL_REMOTE` when the host configures
+ * one, else the repository metadata bundled in the Viewer's own manifest —
+ * resolved through the SAME repository-key algorithm that names live checkouts,
+ * so a clone of that remote and the release built from it land on one project
+ * id.
+ *
+ * Folded through the operator's project aliases because seats are stored
+ * alias-resolved: comparing a raw repository id against an aliased seat project
+ * would refuse the Viewer's own deploy.
+ */
+function viewerOwnProject(): string | null {
+  const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
+  const remote = configured || viewerPackageManifest.repository.url.trim();
+  const project = projectIdentityFromRemote(remote, process.cwd())?.project ?? null;
+  return project ? canonicalOrchestratorProject(project) : null;
 }
 
 /**
@@ -975,6 +1017,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
   patchPipeline,
+  reportStageCompletion,
   loadTasks,
   collectSnapshot,
   readResources,
@@ -992,6 +1035,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     (conversationId) => authorizedManagerSeats(productionManagerAuthoritySources())
       .some((seat) => seat.conversationId === conversationId),
   ),
+  viewerProject: viewerOwnProject,
 };
 
 function text(value: unknown): string {
@@ -1366,6 +1410,38 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     pipeline: result.pipeline,
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+  };
+}
+
+/**
+ * A stage attempt reports its own completion (graph slice 2, #1730).
+ *
+ * The caller never names itself: the attempt is resolved server-side from this
+ * server's own attribution, the same derivation a graph edit's actor comes
+ * from, so a conversation cannot report for a stage it does not hold. A
+ * refusal carries the code and, where the answer turns on which stage, the
+ * live slots the caller does hold.
+ */
+async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const request = withoutKeys(args, ["clientRequestId"]) as StageCompletionRequest;
+  const result = await dependencies.reportStageCompletion(request, pauseResumeActorOf(dependencies));
+  if (!result.report) {
+    throw new McpToolRefusal(result.error ?? "could not report the stage completion", {
+      ...(result.code ? { code: result.code } : {}),
+      ...(result.status ? { status: result.status } : {}),
+      ...(result.slots ? { slots: result.slots } : {}),
+    });
+  }
+  /* The tick the settlement path needs is the ordinary one: the report is an
+     intent, and the attempt settles when its turn ends. Asking for a tick here
+     only shortens the wait between the turn ending and the stage moving. */
+  requestPipelineTick();
+  return {
+    pipelineId: result.pipelineId,
+    stageId: result.stageId,
+    attempt: result.attempt,
+    replaced: result.replaced ?? false,
+    report: result.report,
   };
 }
 
@@ -2125,6 +2201,22 @@ async function deployExactSha(
     );
   }
 
+  /* #1321: being a designated seat says WHO may deploy, never WHAT. This tool
+     ships one repository — the Viewer serving this MCP — so a designated seat of
+     any other project holds no authority here at all, whatever SHA it names. The
+     refusal is placed ahead of the POST on purpose: past it the runtime host
+     fetches the canonical mirror and resolves the revision, so a foreign caller
+     would otherwise learn only "revision not found" and go looking for a better
+     SHA. Fails closed when the Viewer cannot name its own repository — a deploy
+     whose target is unproven is the one this closes. */
+  const viewerProject = dependencies.viewerProject ? dependencies.viewerProject() : viewerOwnProject();
+  if (seat.project !== viewerProject) {
+    throw new McpToolRefusal(
+      "this tool deploys the Agent Log Viewer application that serves this MCP, and nothing else; it cannot deploy the caller's project, and no Viewer surface can. Report the request over the bridge instead.",
+      { code: "deploy_foreign_project", revision },
+    );
+  }
+
   const receipt = await control.post("/api/runtime/deployments", {
     revision,
     idempotencyKey: requestId(args),
@@ -2577,7 +2669,8 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
-  const effective = effectiveSeatTickSettings(settings, Date.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const now = Date.now();
+  const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
   return redactPayload({
     project,
     changed,
@@ -2607,7 +2700,38 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        see what it is restoring before it restores it. */
     defaults: defaultSeatTickSettings(project),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+    /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
+       twenty-minute interval and receiving nothing was reading a settings
+       answer that said everything was fine: the fence lived in the accounting
+       row and no surface carried it. This says which attempt holds the
+       project's wakes, since when and when it lapses on its own. */
+    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
   });
+}
+
+/**
+ * The fence, for the settings answer, from a read that changes nothing.
+ *
+ * Peeked rather than read the way a check reads it, so asking about a project
+ * nobody has ticked mints no accounting row, and wrapped because one
+ * unreadable store may not take a seat's tick controls away — an answer that
+ * cannot name the fence says so instead of throwing.
+ *
+ * The row is all this reads: it names the attempt the next check would meet,
+ * and whether that check may then move it depends on what the layer holding the
+ * payload answers, which only a check asks for. The sentence says as much.
+ */
+function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: number): McpToolPayload {
+  try {
+    const state = peekSeatTickState(project);
+    const active = orchestratorSeatFor(project).active;
+    const fence = seatTickReportedFence(state, active ? { conversationId: active.conversationId ?? null } : null, now, wakeIntervalMs);
+    return { fence, fenceDetail: seatTickFenceDetail(fence), fenceError: null };
+  } catch (error) {
+    /* The whole answer goes through `redactPayload`, so the store's own words
+       reach the caller with secrets already taken out of them. */
+    return { fence: null, fenceDetail: "the tick row could not be read, so whether a wake is fenced is unknown", fenceError: error instanceof Error ? error.message : "unknown error" };
+  }
 }
 
 
@@ -4372,6 +4496,7 @@ export function viewerMcpBindings(
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: createPipeline,
     pipeline_action: (args) => pipelineAction(args, domainDependencies),
+    stage_report: (args) => stageReport(args, domainDependencies),
     link_task_to_pipeline: (args) => linkTaskToPipeline(args, linkTaskDependencies),
     list_conversations: (args, context) => listConversations(args, viewerControlForCall(controlDependencies, context)),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),

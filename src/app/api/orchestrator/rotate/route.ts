@@ -26,6 +26,17 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
-  const result = await handleOrchestratorRotationRequest(req, body);
-  return NextResponse.json(result.body, { status: result.status });
+  /* No throw leaves this route as a bodyless 500 (#1757). The rotation itself
+     records the reason on its own intent and answers it; this is the outer
+     guard for everything before that — resolving the actor, reaching the
+     command at all — so a caller always gets a reason it can read and report,
+     and never a rotation that simply vanished. */
+  try {
+    const result = await handleOrchestratorRotationRequest(req, body);
+    return NextResponse.json(result.body, { status: result.status });
+  } catch (thrown) {
+    const error = thrown instanceof Error ? thrown.message : String(thrown);
+    console.error(`orchestrator rotation route failed: ${error}`);
+    return NextResponse.json({ error, code: "rotation_failed" }, { status: 500 });
+  }
 }

@@ -638,17 +638,38 @@ export interface SeatTickOutstandingWake {
 export interface SeatTickRetiredWake {
   /** The attempt exactly as the row held it, key and payload unchanged. */
   wake: SeatTickOutstandingWake;
-  /** When the check that proved the supersession moved it here. */
+  /** When the check that retired it moved it here. */
   retiredAt: string;
-  /** The seat whose existence is the proof. Recorded because "the fence was
-      released" is a claim, and this is the evidence behind it. */
-  supersededBy: { conversationId: string; seatEpoch: number };
+  /** The seat whose existence is the proof, for a supersession; null for an
+      age retirement, where the seat never moved and the evidence is the clock
+      (#1746). Recorded because "the fence was released" is a claim, and this
+      is the evidence behind it. */
+  supersededBy: { conversationId: string; seatEpoch: number } | null;
+  /** Why the attempt stopped fencing. Absent on every row written before
+      #1746, and absent means `seat-superseded`: retirement had no other
+      reason then. */
+  reason?: SeatTickRetirementReason;
 }
 
-/** Retired attempts one project's row may carry (#1594). Reached only by a
-    project that rotates its seat faster than its holders settle, and a row at
-    the bound refuses further retirement — keeping the fence, which is the
-    behaviour that stands today — rather than discarding an obligation. */
+/**
+ * Why an attempt was retired (#1746).
+ *
+ * - `seat-superseded` is #1594's reason: the conversation the attempt was
+ *   addressed to no longer holds the seat, so the payload cannot reach the
+ *   seat the tick is about to wake.
+ * - `unresolved-age` is this issue's: the attempt has been fenced for its
+ *   whole age bound and its holder has proved nothing either way. It is
+ *   retired as unresolved rather than ended — never re-sent, crediting
+ *   nothing — and the obligations it named are re-derived by the next check.
+ */
+export type SeatTickRetirementReason = "seat-superseded" | "unresolved-age";
+
+/** Retired attempts one project's row may carry (#1594). A project that
+    rotates or ages past the bound evicts the oldest entry whose own bound is
+    spent to make room (#1746): that entry credits nothing whatever becomes of
+    it and fences nothing, its retirement is in the journal, and keeping it
+    would mean refusing to retire — which is the permanent fence this bound was
+    quietly re-creating. */
 export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */

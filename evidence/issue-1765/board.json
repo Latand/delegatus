@@ -1,0 +1,144 @@
+{
+  "frames": {
+    "390": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "measured": {
+        "board": "mobile2",
+        "pipelineRows": [
+          "Repair old links in the release notesstage 1/2 · builder·1hneeds a decision",
+          "Show the account limit reset time on the cardstage 3/3 · architect·1hneeds a decision"
+        ],
+        "rawConversationIds": [],
+        "retired": {
+          "readiness": 0,
+          "launchHistory": 0,
+          "workerStacks": 0
+        },
+        "cornerPill": [],
+        "headerCounts": [
+          "atlas"
+        ]
+      }
+    },
+    "1280": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "folded": {
+        "rows": [
+          {
+            "pipeline": "p-many-drawers",
+            "title": "Remove the legacy drawers under the board columns",
+            "hover": "Remove the legacy drawers under the board columns",
+            "state": "stages running",
+            "pills": [
+              "Diagnose",
+              "Cut"
+            ]
+          },
+          {
+            "pipeline": "p-many-pills",
+            "title": "Name every pipeline row on a task card",
+            "hover": "Name every pipeline row on a task card",
+            "state": "stages running",
+            "pills": [
+              "Critique",
+              "Fix"
+            ]
+          }
+        ],
+        "completedToggle": "3 completed",
+        "completedCount": 3,
+        "reportLines": [],
+        "rawConversationIds": [],
+        "retired": {
+          "readiness": 0,
+          "launchHistory": 0,
+          "workerStacks": 0
+        },
+        "cornerPill": [],
+        "headerCounts": [
+          "7 agents working",
+          "2 need you",
+          "18 tasks on the board"
+        ]
+      },
+      "expanded": {
+        "rows": [
+          {
+            "pipeline": "p-many-drawers",
+            "title": "Remove the legacy drawers under the board columns",
+            "hover": "Remove the legacy drawers under the board columns",
+            "state": "stages running",
+            "pills": [
+              "Diagnose",
+              "Cut"
+            ]
+          },
+          {
+            "pipeline": "p-many-pills",
+            "title": "Name every pipeline row on a task card",
+            "hover": "Name every pipeline row on a task card",
+            "state": "stages running",
+            "pills": [
+              "Critique",
+              "Fix"
+            ]
+          },
+          {
+            "pipeline": "p-many-pill",
+            "title": "Take the floating waiting pill out of the corner",
+            "hover": "Take the floating waiting pill out of the corner",
+            "state": "completed",
+            "pills": [
+              "Critique",
+              "Fix"
+            ]
+          },
+          {
+            "pipeline": "p-many-collapse",
+            "title": "Fold the completed pipelines of a task behind their count",
+            "hover": "Fold the completed pipelines of a task behind their count",
+            "state": "completed",
+            "pills": [
+              "Review plan",
+              "Apply"
+            ]
+          },
+          {
+            "pipeline": "p-many-report",
+            "title": "Read a stage report as role, outcome and age",
+            "hover": "Read a stage report as role, outcome and age",
+            "state": "completed",
+            "pills": [
+              "Critique",
+              "Repair"
+            ]
+          }
+        ],
+        "completedToggle": "3 completed",
+        "completedCount": 3,
+        "reportLines": [
+          "Builder passed · 30m ago"
+        ],
+        "rawConversationIds": [],
+        "retired": {
+          "readiness": 0,
+          "launchHistory": 0,
+          "workerStacks": 0
+        },
+        "cornerPill": [],
+        "headerCounts": [
+          "7 agents working",
+          "2 need you",
+          "18 tasks on the board"
+        ]
+      }
+    }
+  },
+  "failures": []
+}

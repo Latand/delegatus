@@ -28,6 +28,8 @@ import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings } from 
 import type { SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { SEAT_TICK_PROMPT_LIMIT } from "@/lib/monitor/seatTickSettings";
+import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { emptySeatTickState } from "@/lib/monitor/types";
 import {
   createMcpToolService,
   MemoryMcpReceiptStore,
@@ -482,10 +484,12 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "c".repeat(43);
   /* #795: the deploy tool authorizes off the SERVER-ATTRIBUTED caller identity, so
      the control-surface check attributes this session as the designated seat of its
-     own project. `deployAuthority.test.ts` covers the refusals directly. */
+     own project — and (#1321) that project is the one owning the Viewer this MCP
+     serves. `deployAuthority.test.ts` covers the refusals directly. */
   const designatedSeat = {
     callerAttribution: () => ({ kind: "manager" as const, conversationId: "conversation_seat", role: null }),
     callerProject: () => "proj-a",
+    viewerProject: () => "proj-a",
     authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
     /* #845: the send resolves the conversation it names from ONE injected registry
        projection rather than reaching for the registry itself. */
@@ -2039,6 +2043,52 @@ test("a graph edit through MCP carries the calling conversation and answers with
   ]);
 });
 
+test("a stage completion call is attributed by the server, and a caller cannot name itself (graph slice 2)", async () => {
+  const calls: Array<[unknown, unknown]> = [];
+  const report = {
+    seq: 1,
+    at: "2026-09-18T00:00:00.000Z",
+    actor: { kind: "agent", role: "builder", conversationId: "conversation_stage_1" },
+    verdict: { status: "fail", findings: ["P0 — the fence is missing"], rankedFindings: [{ severity: "P0", text: "the fence is missing" }] },
+    summary: "One finding left.",
+    provenance: { head: "0".repeat(40), branch: "pipeline/x", uncommitted: [], pullRequest: null, outputs: [] },
+    calls: 1,
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    reportStageCompletion: async (request: { stageId?: unknown }, actor: unknown) => {
+      calls.push([request, actor]);
+      return request.stageId === "not-mine"
+        ? { error: "this conversation does not hold stage not-mine", status: 403, code: "STAGE_REPORT_NOT_HELD", slots: [{ pipelineId: "pipeline_1", stageId: "build", attempt: 1, state: "running" }] }
+        : { pipelineId: "pipeline_1", stageId: "build", attempt: 1, report, replaced: false };
+    },
+    callerAttribution: () => ({ kind: "worker", conversationId: "conversation_stage_1", role: "builder" }),
+  } as never);
+  const service = createMcpToolService(bindings, {
+    claim: async () => ({ kind: "fresh" as const }),
+    complete: async () => {},
+  } as never);
+
+  const accepted = await service.callTool("stage_report", {
+    clientRequestId: "report-1",
+    verdict: "fail",
+    findings: [{ severity: "P0", text: "the fence is missing" }],
+    summary: "One finding left.",
+    /* A caller claim about who it is reaches the controller as an argument and
+       never as the actor: the actor below is the server's own attribution. */
+    conversationId: "conversation_somebody_else",
+  });
+  expect(accepted).toMatchObject({ ok: true, pipelineId: "pipeline_1", stageId: "build", attempt: 1, replaced: false, report });
+  expect(calls[0]![1]).toEqual({ kind: "agent", role: "builder", conversationId: "conversation_stage_1" });
+
+  const refused = await service.callTool("stage_report", { clientRequestId: "report-2", verdict: "pass", stageId: "not-mine" });
+  expect(refused).toMatchObject({
+    ok: false,
+    code: "tool_failed",
+    error: "this conversation does not hold stage not-mine",
+    details: { code: "STAGE_REPORT_NOT_HELD", status: 403, slots: [{ stageId: "build", attempt: 1, state: "running" }] },
+  });
+});
+
 test("agent_activity reports the liveness snapshot and journals the stalls it finds (#645)", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-activity-"));
   sandboxes.push(sandbox);
@@ -2537,6 +2587,48 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
      itself does at its next check. */
   const read = await bindings.seat_tick_settings({ clientRequestId: "tick-read-back" });
   expect(read).toMatchObject({ changed: false, effective: { enabled: false } });
+});
+
+/* Why the tick is mute, in the answer the seat reads when it asks (#1746). The
+   seat in #1672 was enabled, on its cadence, and receiving nothing for hours;
+   the fence lived in the accounting row and no surface carried it. */
+test("seat_tick_settings says which attempt holds this project's wakes, since when and when that ends (#1746)", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-tick-fence-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+
+  /* A project whose tick is on and whose row carries one unresolved attempt,
+     prepared inside its own bound: the shape a seat asks about. */
+  const key = "seat-tick:viewer:169:2026-09-18T03:31:36.000Z:child-terminal:fp-1";
+  const preparedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+  writeSeatTickState("viewer", {
+    ...emptySeatTickState(),
+    seatEpoch: 169,
+    outstandingWake: {
+      clientMessageId: key, conversationId: TICK_SEAT, seatEpoch: 169, operationId: null, preparedAt,
+      commit: { proposal: false, reasons: ["child-terminal"], fingerprint: "fp-1", eventsThrough: 7, children: [] },
+    },
+  });
+
+  const { bindings } = tickSettingsBindings();
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as {
+    fence: { clientMessageId: string; slot: string; since: string; lapsesAt: string; keptPastBound: boolean } | null;
+    fenceDetail: string;
+    fenceError: string | null;
+  };
+  expect(read.fence).toMatchObject({ clientMessageId: key, slot: "outstanding", since: preparedAt, keptPastBound: false });
+  /* Two of the project's wake intervals, and never less than an hour. */
+  expect(read.fence!.lapsesAt).toBe(new Date(Date.parse(preparedAt) + 2 * 60 * 60_000).toISOString());
+  expect(read.fenceDetail).toContain(`under key ${key}`);
+  expect(read.fenceDetail).toContain("the fence lapses at");
+  expect(read.fenceError).toBeNull();
+
+  /* And a project with nothing prepared says that, rather than nothing. */
+  const other = tickSettingsBindings({ callerProject: "quiet-project" });
+  const quiet = await other.bindings.seat_tick_settings({ clientRequestId: "tick-fence-quiet" }) as { fence: unknown; fenceDetail: string };
+  expect(quiet.fence).toBeNull();
+  expect(quiet.fenceDetail).toBe("no attempt is holding this project's wakes back");
 });
 
 test("seat_tick_settings sets a cadence and restores the default", async () => {

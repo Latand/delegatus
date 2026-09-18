@@ -99,15 +99,27 @@ export interface OrchestratorSeat {
   activatedAt: string | null;
 }
 
-/** A pending intent moved out of the blocking position — never deleted. The
-    full seat snapshot (key, mandate, epoch, mode, error, timestamps) stays
-    readable so the operator can see what was attempted and why it failed. */
+/** A designation attempt that ended — never deleted. The full seat snapshot
+    (key, mandate, epoch, mode, error, timestamps) stays readable so the
+    operator can see what was attempted and why it failed. Written the moment
+    the attempt fails (issue #1757), so a burnt epoch is never silent: a
+    pending intent that records a terminal error, a pending intent whose epoch
+    fell below the project's active seat, and a provisional activation rolled
+    back because its launch never produced a readable conversation all land
+    here. */
 export interface OrchestratorSeatTerminalization {
   seat: OrchestratorSeat;
   /** Why it stopped blocking: it recorded a terminal error, or its epoch fell
       below the project's active seat (something else already seated it). */
   reason: "terminal_error" | "superseded_epoch";
   terminalizedAt: string;
+}
+
+/** What a stillborn seat's rollback did: the attempt it terminalized, and the
+    predecessor — if any survived the check — that holds the project now. */
+export interface StillbornSeatRollback {
+  terminalized: OrchestratorSeatTerminalization;
+  restored: OrchestratorSeat | null;
 }
 
 /** Newest-last bound on terminalized history, so the file cannot grow without
@@ -139,6 +151,22 @@ interface OrchestratorSeatFile {
   /** Terminalized pending intents, oldest first, bounded by
       ORCHESTRATOR_SEAT_HISTORY_CAP. */
   history: OrchestratorSeatTerminalization[];
+  /**
+   * Per project, the seat an ACTIVE PROVISIONAL one replaced (issue #1757) —
+   * one activated on a launch that was durably accepted but has not yet
+   * produced a conversation the Viewer can read.
+   *
+   * It is the rollback the operator's authority depends on: if that launch dies
+   * before its conversation exists, the seat it seated was stillborn and the
+   * predecessor recorded here is designated again, rather than the project
+   * being left holding an orchestrator nobody can reach. Written at the
+   * provisional activation, dropped the moment the successor proves readable.
+   *
+   * Kept OUT of the seat row on purpose: it is internal recovery state, and a
+   * copy of a mandate-sized row riding along on every surface that reports a
+   * seat is a cost nobody asked for.
+   */
+  rollbacks: Record<string, OrchestratorSeat>;
 }
 
 const seatsFile = () => statePath("orchestrator-seats.json");
@@ -149,7 +177,7 @@ export function canonicalOrchestratorProject(project: string): string {
 }
 
 function emptyFile(): OrchestratorSeatFile {
-  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [] };
+  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [], rollbacks: {} };
 }
 
 function atomicWriteJson(filePath: string, value: unknown): void {
@@ -215,6 +243,19 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
   };
 }
 
+/** Append one terminalization, oldest-first, trimming to the cap. THE one
+    place a burnt epoch becomes readable history (issue #1757). */
+function recordTerminalization(
+  file: OrchestratorSeatFile,
+  entry: OrchestratorSeatTerminalization,
+): OrchestratorSeatTerminalization {
+  file.history.push(entry);
+  if (file.history.length > ORCHESTRATOR_SEAT_HISTORY_CAP) {
+    file.history.splice(0, file.history.length - ORCHESTRATOR_SEAT_HISTORY_CAP);
+  }
+  return entry;
+}
+
 function retainNewestSeat(collection: Record<string, OrchestratorSeat>, seat: OrchestratorSeat): void {
   const current = collection[seat.project];
   if (!current || seat.seatEpoch > current.seatEpoch) collection[seat.project] = seat;
@@ -257,6 +298,10 @@ function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
         retainNewestSeat(file.pending, { ...seat, project: canonicalOrchestratorProject(project) });
       }
     }
+    for (const [project, candidate] of Object.entries(parsed.rollbacks ?? {})) {
+      const seat = normalizeSeat(candidate);
+      if (seat && seat.conversationId) file.rollbacks[canonicalOrchestratorProject(project)] = seat;
+    }
     for (const candidate of Array.isArray(parsed.revocations) ? parsed.revocations : []) {
       const revocation = candidate as Partial<OrchestratorRevocation>;
       if (typeof revocation.project === "string" && typeof revocation.conversationId === "string"
@@ -291,6 +336,7 @@ function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
     const highest = Math.max(0,
       ...Object.values(file.seats).map((seat) => seat.seatEpoch),
       ...Object.values(file.pending).map((seat) => seat.seatEpoch),
+      ...Object.values(file.rollbacks).map((seat) => seat.seatEpoch),
       ...file.revocations.map((revocation) => revocation.seatEpoch),
       ...file.history.map((entry) => entry.seat.seatEpoch));
     if (file.nextSeatEpoch <= highest) file.nextSeatEpoch = highest + 1;
@@ -499,15 +545,11 @@ export function beginOrchestratorSeatIntent(input: {
     if (pending) {
       const abandoned = pending.intent.error !== null || (active !== undefined && pending.seatEpoch < active.seatEpoch);
       if (!abandoned) return { kind: "in_progress", seat: pending };
-      terminalized = {
+      terminalized = recordTerminalization(file, {
         seat: pending,
         reason: pending.intent.error !== null ? "terminal_error" : "superseded_epoch",
         terminalizedAt: input.now ?? new Date().toISOString(),
-      };
-      file.history.push(terminalized);
-      if (file.history.length > ORCHESTRATOR_SEAT_HISTORY_CAP) {
-        file.history.splice(0, file.history.length - ORCHESTRATOR_SEAT_HISTORY_CAP);
-      }
+      });
       delete file.pending[project];
     }
     const seat: OrchestratorSeat = {
@@ -585,6 +627,17 @@ export function completeOrchestratorSeatIntent(input: {
       };
       file.revocations.push(revoked);
     }
+    /* PROVISIONAL (issue #1757): a spawn that was durably accepted but has not
+       produced a readable transcript yet. The seat is real — the launch owns
+       the conversation id and the mandate is delivered exactly once by the
+       receipt — but it is not yet PROVEN, so the predecessor it replaced is
+       kept as the rollback until it is. */
+    const provisional = pending.intent.mode === "spawn" && input.path === null;
+    if (provisional && active?.conversationId && active.conversationId !== input.conversationId) {
+      file.rollbacks[project] = active;
+    } else {
+      delete file.rollbacks[project];
+    }
     const seat: OrchestratorSeat = {
       ...pending,
       conversationId: input.conversationId,
@@ -627,20 +680,187 @@ export function repairOrchestratorSeatRuntimeIdentity(input: {
   });
 }
 
-/** Record why a pending intent could not complete; the previous active seat
-    (if any) stays authoritative. The recorded error is the intent's TERMINAL
-    state (issue #1067): the row keeps its `pending` position only until the
-    next `beginOrchestratorSeatIntent` for the project, which moves it into
-    `history` as `terminal_error` and proceeds. Nothing has to expire it, and
-    no designation stays pending forever. */
-export function failOrchestratorSeatIntent(project: string, clientRequestId: string, error: string): void {
-  withAccountMutationLock(() => {
+/**
+ * Record why a pending intent could not complete; the previous active seat
+ * (if any) stays authoritative.
+ *
+ * The recorded error is the intent's TERMINAL state (issue #1067) — and since
+ * #1757 the row is terminalized in the SAME write: it leaves the blocking
+ * `pending` position and lands in `history` as `terminal_error`, carrying the
+ * epoch it burnt and the reason it burnt it. It used to sit in `pending` until
+ * the next `beginOrchestratorSeatIntent`, which is a call that may never come:
+ * three rotation attempts died in one morning and `intentHistory` — the record
+ * the operator actually reads — held nothing newer than eight days before.
+ * A failure is history the moment it happens, not the next time somebody tries.
+ *
+ * Returns the terminalization so the refusing caller can answer with the very
+ * row it just wrote, rather than reading back a `pending` slot that is now
+ * empty; null when no pending intent under that key was there to fail.
+ */
+export function failOrchestratorSeatIntent(
+  project: string,
+  clientRequestId: string,
+  error: string,
+  now?: string,
+): OrchestratorSeatTerminalization | null {
+  return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const canonical = canonicalOrchestratorProject(project);
     const pending = file.pending[canonical];
-    if (!pending || pending.intent.clientRequestId !== clientRequestId) return;
+    if (!pending || pending.intent.clientRequestId !== clientRequestId) return null;
     pending.intent.error = error.slice(0, 500);
+    const terminalized = recordTerminalization(file, {
+      seat: pending,
+      reason: "terminal_error",
+      terminalizedAt: now ?? new Date().toISOString(),
+    });
+    delete file.pending[canonical];
     writeSeatFile(file);
+    return terminalized;
+  });
+}
+
+/**
+ * Roll back a PROVISIONAL activation whose launch died before it ever produced
+ * a conversation the Viewer can read (issue #1757).
+ *
+ * The incident: a rotation's spawn was durably accepted (202) with a reserved
+ * conversation id, the seat activated on that acceptance, and the deferred
+ * launch then failed. The seat held a conversation with no transcript and no
+ * registry row for as long as anyone cared to look — `get_conversation`
+ * answered «not found», the successor's handover pointed at it, and the
+ * operator typed two messages into its composer that nothing could receive.
+ * Nothing in the store repaired an ALREADY ACTIVE seat when its launch receipt
+ * turned terminal; only pending intents were reconciled.
+ *
+ * So: the stillborn seat is revoked and terminalized into `history` with its
+ * reason, and the predecessor it superseded — kept in `rollbacks` since the
+ * provisional activation for exactly this — is designated again at a FRESH
+ * epoch, which is what lifts the revocation that ended it. A rollback with no predecessor on
+ * record leaves the project undesignated, which is the honest answer and the
+ * one `create_orchestrator` exists for.
+ *
+ * Two things the restoration is not allowed to assume, both of them ways the
+ * repair would reach the state it exists to prevent:
+ *
+ *  - that the recorded predecessor is STILL reachable. It can stop being so
+ *    inside the provisional window, so `resolvable` is asked before the project
+ *    is designated onto it again, and a predecessor that fails leaves the
+ *    project undesignated with that said in the terminalization reason.
+ *  - that a `rollbacks` entry exists at all. A seat already standing on a
+ *    stillborn conversation when this shipped has none, so the revocation
+ *    lineage — which names the predecessor each successor superseded — is the
+ *    fallback, and `restorableSeat` composes the row from that identity.
+ *
+ * Refuses (null) unless the active seat is the one named, is still provisional
+ * and came from a spawn: a seat that has proved readable is a live
+ * orchestrator, and nothing here may unseat one of those.
+ */
+export function abandonStillbornOrchestratorSeat(input: {
+  project: string;
+  clientRequestId: string;
+  error: string;
+  now?: string;
+  /** Whether the Viewer can still resolve a conversation. Absent means the
+      caller is not asking — only this store's own tests pass nothing. */
+  resolvable?: (conversationId: string) => boolean;
+  /** Compose the row for a predecessor the lineage names and `rollbacks` does
+      not hold. The store supplies the identity; naming a mandate and reading a
+      transcript belong to the caller. */
+  restorableSeat?: (input: { conversationId: string; stillborn: OrchestratorSeat }) => OrchestratorSeat | null;
+}): StillbornSeatRollback | null {
+  return withAccountMutationLock(() => {
+    const file = readOrchestratorSeatFile();
+    const project = canonicalOrchestratorProject(input.project);
+    const active = file.seats[project];
+    if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
+    if (active.state !== "active" || active.intent.mode !== "spawn" || active.path !== null) return null;
+    if (!active.conversationId) return null;
+    const now = input.now ?? new Date().toISOString();
+    const recorded = file.rollbacks[project] ?? null;
+    /* Newest-first, so a project rotated more than once follows the revocation
+       that actually seated the stillborn conversation. */
+    const lineagePredecessor = recorded
+      ? null
+      : [...file.revocations].reverse().find((revocation) =>
+        revocation.project === project && revocation.successorConversationId === active.conversationId)?.conversationId ?? null;
+    const candidate = recorded
+      ?? (lineagePredecessor ? input.restorableSeat?.({ conversationId: lineagePredecessor, stillborn: active }) ?? null : null);
+    const unresolvable = Boolean(
+      candidate?.conversationId && input.resolvable && !input.resolvable(candidate.conversationId),
+    );
+    const predecessor = unresolvable ? null : candidate;
+    let restored: OrchestratorSeat | null = null;
+    if (predecessor?.conversationId) {
+      restored = {
+        ...predecessor,
+        project,
+        /* A fresh epoch, strictly newer than the revocation that ended this
+           seat: the ABA guard reads an identity as dead while its newest
+           revocation stands at or above every seat naming it, so restoring at
+           the old epoch would designate a conversation that still reads as
+           revoked. */
+        seatEpoch: file.nextSeatEpoch,
+        state: "active",
+        activatedAt: now,
+      };
+      file.nextSeatEpoch += 1;
+      file.seats[project] = restored;
+    } else {
+      delete file.seats[project];
+    }
+    file.revocations.push({
+      project,
+      conversationId: active.conversationId,
+      seatEpoch: active.seatEpoch,
+      revokedAt: now,
+      successorConversationId: restored?.conversationId ?? null,
+      triggeredBy: active.triggeredBy ?? null,
+    });
+    delete file.rollbacks[project];
+    /* WHY the project ends undesignated, on the row the operator reads. A bare
+       «the launch failed» beside an empty seat reads as a second, unexplained
+       failure. */
+    const reason = unresolvable
+      ? `${input.error}; the predecessor ${candidate!.conversationId} it would have been rolled back to is no longer resolvable either, so the project is left undesignated`
+      : input.error;
+    const terminalized = recordTerminalization(file, {
+      seat: { ...active, intent: { ...active.intent, error: reason.slice(0, 500) } },
+      reason: "terminal_error",
+      terminalizedAt: now,
+    });
+    writeSeatFile(file);
+    return { terminalized, restored };
+  });
+}
+
+/**
+ * Drop a provisional seat's rollback once its launch has proved readable, and
+ * record the transcript path the launch produced.
+ *
+ * The other half of {@link abandonStillbornOrchestratorSeat}: a seat stops
+ * being provisional the moment the Viewer can resolve its conversation, and
+ * from then on it holds no copy of the predecessor it replaced. Idempotent,
+ * and refuses any seat but the named one.
+ */
+export function confirmOrchestratorSeatMaterialization(input: {
+  project: string;
+  clientRequestId: string;
+  conversationId: string;
+  path: string;
+}): OrchestratorSeat | null {
+  return withAccountMutationLock(() => {
+    const file = readOrchestratorSeatFile();
+    const project = canonicalOrchestratorProject(input.project);
+    const active = file.seats[project];
+    if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
+    if (active.conversationId !== input.conversationId) return null;
+    if (active.path === input.path && !file.rollbacks[project]) return active;
+    const confirmed: OrchestratorSeat = { ...active, path: input.path };
+    file.seats[project] = confirmed;
+    delete file.rollbacks[project];
+    writeSeatFile(file);
+    return confirmed;
   });
 }
 

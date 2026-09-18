@@ -29,6 +29,12 @@ import type { OrchestratorIncumbent } from "./incumbent";
 export interface OrchestratorSeatStatus {
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
+  /** The last designation attempt that failed, after it left the pending
+      position (issue #1757). A failure is durable history the moment it
+      happens, so this is what keeps the reason on the panel — including a
+      failure this browser never submitted: a rotation ordered from the seat
+      itself, or an accepted launch that died after the request returned. */
+  lastFailure?: SeatFailureRecord | null;
   /** False once the active seat's transcript has left the disk — the operator
       closed the conversation card, so the panel returns to the draft. */
   exists: boolean;
@@ -37,16 +43,64 @@ export interface OrchestratorSeatStatus {
   viewerMcpRegistered: boolean;
 }
 
+/** One terminalized designation attempt, as the panel reads it. */
+export interface SeatFailureRecord {
+  error: string;
+  clientRequestId: string;
+  seatEpoch: number;
+  designatedAt: string;
+  terminalizedAt: string;
+}
+
 /** Crash-safe read of the seat route's body: anything malformed reads as «no
     seat», which lands the panel on the draft rather than on a broken render. */
 export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
-  const raw = body as { seat?: unknown; pending?: unknown; exists?: unknown; viewerMcpRegistered?: unknown } | null;
+  const raw = body as {
+    seat?: unknown;
+    pending?: unknown;
+    lastFailure?: unknown;
+    exists?: unknown;
+    viewerMcpRegistered?: unknown;
+  } | null;
   return {
     seat: seatOf(raw?.seat),
     pending: seatOf(raw?.pending),
+    lastFailure: failureOf(raw?.lastFailure),
     exists: raw?.exists !== false,
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
   };
+}
+
+function failureOf(value: unknown): SeatFailureRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const failure = value as Partial<SeatFailureRecord>;
+  if (typeof failure.error !== "string" || !failure.error) return null;
+  if (typeof failure.clientRequestId !== "string") return null;
+  return {
+    error: failure.error,
+    clientRequestId: failure.clientRequestId,
+    seatEpoch: typeof failure.seatEpoch === "number" ? failure.seatEpoch : 0,
+    designatedAt: typeof failure.designatedAt === "string" ? failure.designatedAt : "",
+    terminalizedAt: typeof failure.terminalizedAt === "string" ? failure.terminalizedAt : "",
+  };
+}
+
+/**
+ * The failure the panel should still be SAYING, if any.
+ *
+ * A terminalized attempt is permanent history, so showing every one of them
+ * forever would hang a dead banner over a healthy seat. It is shown while it is
+ * the LAST thing that happened to this project's seat: no active seat, or one
+ * whose activation it postdates — which is exactly the shape of a rotation that
+ * failed and left the previous seat in place, including one rolled back after
+ * its launch died (#1757).
+ */
+function standingFailure(status: OrchestratorSeatStatus | null, active: OrchestratorSeat | null): SeatFailureRecord | null {
+  const failure = status?.lastFailure ?? null;
+  if (!failure) return null;
+  const activatedAt = active?.activatedAt ?? null;
+  if (!activatedAt) return failure;
+  return failure.terminalizedAt >= activatedAt ? failure : null;
 }
 
 function seatOf(value: unknown): OrchestratorSeat | null {
@@ -336,7 +390,9 @@ export function deriveOrchestratorPanelState(input: {
   const active = status?.seat && status.exists ? status.seat : null;
   const pending = status?.pending ?? null;
   const clientError = unsettledClientError(status, input.submitFailure);
-  const pendingError = pending?.intent.error ?? null;
+  const failure = standingFailure(status, active);
+  const pendingError = pending?.intent.error ?? failure?.error ?? null;
+  const failedAt = pending?.designatedAt ?? failure?.designatedAt ?? "";
 
   if (active?.conversationId) {
     const liveness = seatLivenessOf({
@@ -379,10 +435,10 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (pendingError) {
-    return { kind: "intent-error", error: pendingError, retry: "fresh", designatedAt: pending?.designatedAt ?? "" };
+    return { kind: "intent-error", error: pendingError, retry: "fresh", designatedAt: failedAt };
   }
   if (clientError) {
-    return { kind: "intent-error", error: clientError.error, retry: clientError.retry, designatedAt: pending?.designatedAt ?? "" };
+    return { kind: "intent-error", error: clientError.error, retry: clientError.retry, designatedAt: failedAt };
   }
   if (pending) {
     return {
@@ -622,6 +678,11 @@ export function seatRequestSettled(status: OrchestratorSeatStatus | null, client
      closed (`exists: false`), which is the vacancy the next draft creates into. */
   if (status.seat?.intent.clientRequestId === clientRequestId) return true;
   if (status.pending?.intent.clientRequestId === clientRequestId) return status.pending.intent.error !== null;
+  /* ...or it reached the durable record as a FAILURE (#1757), which leaves the
+     pending position at once. Holding the key past that is the same trap in the
+     other direction: the retry would carry a key the server has already
+     answered for. */
+  if (status.lastFailure?.clientRequestId === clientRequestId) return true;
   return false;
 }
 

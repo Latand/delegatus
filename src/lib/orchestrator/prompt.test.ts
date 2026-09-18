@@ -91,13 +91,13 @@ test("bridge reports survive as the second channel, for the operator away from t
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 14, and a v13 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(14);
-  /* #1720 — a seat already running keeps the mandate it was delivered, so the
-     version bump is the only thing that surfaces the missing section until its
-     next spawn, adoption or rotation. */
-  expect(orchestratorMandateStale(13)).toBe(true);
-  expect(orchestratorMandateStale(14)).toBe(false);
+test("the default mandate is at version 16, and a v15 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(16);
+  /* #1720, and again #1760 — a seat already running keeps the mandate it was
+     delivered, so the version bump is the only thing that surfaces a changed
+     section until its next spawn, adoption or rotation. */
+  expect(orchestratorMandateStale(15)).toBe(true);
+  expect(orchestratorMandateStale(16)).toBe(false);
 });
 
 /* #1428 v13 — agents kept re-solving what an earlier conversation had already
@@ -345,22 +345,17 @@ test("the prompt carries the directive trailer contract in the exact wire form",
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never read one into unrelated prose");
 });
 
-/* #795 (superseding contract) — the designated agent decides the deploy and
-   executes it directly. The prompt must say where the authority comes from
-   (the server-attributed seat), that the SHA is resolved internally, and that
-   nothing is ever routed back through the user for approval. */
-test("the prompt encodes the designated-agent deploy contract and its refusals", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("YOU decide when to deploy, and you execute it yourself");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Your authority is your designated seat, attributed server-side");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("a seat acts only for its own project");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Resolve origin/main to a full 40-hex commit SHA yourself");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never route it through the user");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Deployments serialize");
-});
-
-test("the prompt forbids any user-facing confirmation step outright", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("ever asks the user to confirm, approve, repeat, or say a commit hash");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("There is no confirmation step for the user, anywhere");
+/* #1760 — the mandate is the prompt for a manager of ANY project, and the
+   deploy section described deploying Agent Log Viewer itself. It is gone from
+   the body for every project, the Viewer's own included; the protocol it
+   carried lives in the llv-conveyor skill the fences already name. The rule
+   that no user is ever asked to confirm anything stays with every project in
+   its general form. */
+test("the mandate body says nothing about deploying the Viewer", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("deploy_exact_sha");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("batched deploy");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("without a confirmation step or draft");
 });
 
 test("the prompt tells the manager to re-derive board state rather than accumulate it", () => {
@@ -559,4 +554,36 @@ test("the ownership section precedes the start-by-default pipeline contract", ()
   const start = ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Start-by-default pipeline contract");
   expect(ownership).toBeGreaterThan(-1);
   expect(start).toBeGreaterThan(ownership);
+});
+
+/** The `## Deploys` section exactly as it shipped in the mandate body through
+    v15, copied here from that body rather than read off the module, so the
+    removal is checked against the bytes stored mandates actually carry. */
+const SHIPPED_DEPLOYS_SECTION = [
+  `## Deploys`,
+  `YOU decide when to deploy, and you execute it yourself. Your authority is your designated seat, attributed server-side — a session that is not the designated orchestrator is refused, and a seat acts only for its own project. Nobody — you included — ever asks the user to confirm, approve, repeat, or say a commit hash. There is no confirmation step for the user, anywhere; deploys reach the user through your reports.`,
+  `1. Prepare: merges landed on origin/main, gates green. Never deploy red.`,
+  `2. Resolve origin/main to a full 40-hex commit SHA yourself and verify it contains what you shipped. The SHA is machine evidence — never route it through the user.`,
+  `3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.`,
+  `4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`,
+].join("\n");
+
+/* #1760 — a stored mandate composed from the body of v15 or earlier still
+   carries those bytes, and it is replayed verbatim on a pending retry and
+   carried through a rotation. Delivery removes the block that shipped by exact
+   string match, so what surrounds it survives untouched. */
+test("delivery removes the deploy section a stored mandate carries from the old body", () => {
+  const stored = `You run the conveyor for this project.\n\n${SHIPPED_DEPLOYS_SECTION}\n\n## Fences\n- Report, never ask.`;
+
+  const delivered = orchestratorMandateForDelivery(stored);
+  expect(delivered).not.toContain("deploy_exact_sha");
+  expect(delivered.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
+  expect(delivered).toStartWith("You run the conveyor for this project.\n\n## Fences\n- Report, never ask.");
+});
+
+/* A seat's own section about ITS project's release is not the block that
+   shipped, so nothing takes it off: delivery matches text, never a heading. */
+test("a seat's own deploy section survives delivery", () => {
+  const stored = "## Deploys\nPush the tag and let the pipeline build it.\n\n## Fences\n- Report, never ask.";
+  expect(orchestratorMandateForDelivery(stored)).toStartWith(stored);
 });
