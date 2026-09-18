@@ -10,6 +10,7 @@ import type {
   SeatTickEvidenceGap,
   SeatTickItem,
   SeatTickSignalInput,
+  SeatTickSkippedChildren,
   SeatTickWakeReason,
 } from "./types";
 
@@ -209,10 +210,11 @@ export function seatTickWakeMessage(input: {
   reasons: readonly SeatTickWakeReason[];
   items: readonly SeatTickItem[];
   deferred: number;
-  /** Terminal children the check declined to list (#1749). Said as one line
-      and no more: naming them is what filled six consecutive wakes with work
-      that had been harvested a fortnight earlier. */
-  staleChildren?: number;
+  /** Terminal children the check declined to list (#1749, #1783). Said as one
+      line per reason and no more: naming them is what filled six consecutive
+      wakes with work that had been harvested a fortnight earlier, or that no
+      seat can harvest at all. */
+  skippedChildren?: SeatTickSkippedChildren;
   signals: readonly SeatTickSignalInput[];
   /** Evidence this check could not read (#1298). The reasons above stand
       without it, and the seat is told what is missing from the picture rather
@@ -238,8 +240,11 @@ export function seatTickWakeMessage(input: {
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
   }
-  if (input.staleChildren && input.staleChildren > 0) {
-    lines.push(`(${input.staleChildren} spawned child(ren) not listed: their outcomes predate this seat's designation or an earlier seat epoch harvested them.)`);
+  if (input.skippedChildren && input.skippedChildren.stale > 0) {
+    lines.push(`(${input.skippedChildren.stale} spawned child(ren) not listed: their outcomes predate this seat's designation or an earlier seat epoch harvested them.)`);
+  }
+  if (input.skippedChildren && input.skippedChildren.unreadable > 0) {
+    lines.push(`(${input.skippedChildren.unreadable} spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read or harvest their outcome.)`);
   }
   if (input.signals.length > 0) {
     lines.push("", "Signals:", ...input.signals.map((signal) => `- ${signal.label}`));

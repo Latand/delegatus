@@ -5,12 +5,22 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-controller-"));
-const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR };
+const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
+process.env.OPENCLAW_STATE_DIR = path.join(SANDBOX, "openclaw");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+/* A scanner root of this sandbox's own, and the one directory a fixture child's
+   transcript may live in (#1783). A spawned child whose transcript the Viewer
+   cannot resolve is never offered as harvestable work, so a fixture that writes
+   its children nowhere the scanner looks stops exercising the harvest at all.
+   `OPENCLAW_STATE_DIR` is resolved per call, which is what lets a test process
+   own a root; `os.homedir()` does not read `HOME`, so the other roots stay the
+   operator's whatever this file sets. */
+const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
+fs.mkdirSync(SESSIONS, { recursive: true });
 
 const { reconcileSeatTick, runSeatTickCheck, seatTickWakeUnresolvedRef, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
@@ -1899,6 +1909,13 @@ interface ChildFixture {
     memberships?: DurableMembershipInput[];
     /** No conversation record at all: a reservation nothing has settled. */
     unobserved?: boolean;
+    /** Where this child's transcript is, as the Viewer would find it (#1783).
+        `rooted` is a real spawn's; `outside-roots` is a file the scanner never
+        looks at; `missing` is a path the transcript has gone from. The last
+        two are the same fact to the seat — it can never read or harvest that
+        child — and between them they are sixteen of the sixty-seven children
+        owed on the board #1783 was filed from. */
+    transcript?: "rooted" | "outside-roots" | "missing";
   }): { id: string; launchId: string; path: string };
 }
 
@@ -1946,7 +1963,11 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
       .flatMap((row) => row.kind === "outcome" && row.status === "acknowledged" ? [row.input.conversationId] : row.kind === "legacy" && row.reconciled ? [row.conversationId] : []),
     spawn(options) {
       const childCwd = options.cwd ?? cwd;
-      const childPath = path.join(dir, `${crypto.randomUUID()}.jsonl`);
+      /* Under a scanner root and on disk, the way a real spawn's transcript is
+         (#1783): the harvest skips a child the Viewer cannot resolve. */
+      const placement = options.transcript ?? "rooted";
+      const childPath = path.join(placement === "outside-roots" ? dir : SESSIONS, `${crypto.randomUUID()}.jsonl`);
+      if (placement !== "missing") fs.writeFileSync(childPath, "");
       const observedChild = options.unobserved ? null : registry.ensureConversation("claude", childPath, null);
       const parent = options.parent === undefined ? seatConversation.id : options.parent;
       const begun = registry.beginSpawnRequest({
@@ -2726,9 +2747,10 @@ test("the projection uses bounded keyed registry reads and targeted liveness wit
      project-wide: there is no lane to sweep for. */
   expect(rig.liveness).toEqual([{ conversationId: busy.id }]);
   expect(rig.liveness.some((read) => read.project)).toBe(false);
-  /* The fixture wrote no transcript; nothing here could have read one. */
-  expect(fs.existsSync(busy.path)).toBe(false);
-  expect(fs.existsSync(idle.path)).toBe(false);
+  /* The fixture's transcripts exist, so the harvest can resolve them (#1783),
+     and they are empty: nothing here read a byte of transcript CONTENT. */
+  expect(fs.statSync(busy.path).size).toBe(0);
+  expect(fs.statSync(idle.path).size).toBe(0);
 });
 
 test("two later turns between ticks are separately owed across controller replacement and seat rotation (#1465)", async () => {
@@ -2746,7 +2768,10 @@ test("two later turns between ticks are separately owed across controller replac
   ledger.append(generation, { kind: "turn-ended", turnId: "turn-three", status: "error", seq: 6 });
   const next = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 } });
   const result = await runSeatTickCheck(fixture.project, next.deps);
-  expect(result).toMatchObject({ verdict: "wake", items: 2 });
+  /* Two later turns of ONE child are one line since #1783, described by the
+     latest of them — and the line still stands for both, so both are
+     acknowledged by its landing and neither is offered again. */
+  expect(result).toMatchObject({ verdict: "wake", items: 1 });
   const accounting = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project);
   const outcomes = accounting.collection.snapshot().filter((row) => row.kind === "outcome");
   expect(outcomes).toHaveLength(3);
@@ -4765,4 +4790,156 @@ test("the wake a settled own lane raises composes a key the runtime journal admi
   } finally {
     journal.close();
   }
+});
+
+/* ------------------------------------------------------------------------- *
+ * One line per child, and only children a seat can act on (#1783).
+ *
+ * The shape this was filed on, read out of production state before anything
+ * was changed: 209 owed outcome rows standing for 67 children, one child
+ * holding 63 of them; 130 of the rows frozen with no terminal instant at all;
+ * 16 of the children with a transcript this Viewer cannot resolve; and 773
+ * conversations carrying one single `observedAt`, which is the instant a sweep
+ * writes and the instant #1749's age test was reading. Every case below drives
+ * the production controller over its own registry, row and state directory.
+ * ------------------------------------------------------------------------- */
+
+/** Age the child's own record — the file a sweep never touches (#1783). */
+function ageTranscript(fixture: ChildFixture, transcriptPath: string, minutes: number): void {
+  const at = new Date(fixture.now - minutes * MINUTE);
+  fs.utimesSync(transcriptPath, at, at);
+}
+
+/** What a host-retirement sweep does to a child: the conversation row is
+    re-observed and rewritten NOW, while the child's transcript gains no
+    record and its work stays where it ended (#1783). */
+function sweepRegistryRow(fixture: ChildFixture, child: { path: string }, title: string): void {
+  fixture.registry.reconcileConversations([{
+    engine: "claude",
+    path: child.path,
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd, title }),
+    turn: { state: "terminal", source: "assistant", terminalAt: null },
+    observedAt: new Date(fixture.now).toISOString(),
+  }]);
+}
+
+test("a child whose record is weeks old is skipped though a sweep refreshed its registry row (#1783)", async () => {
+  const fixture = childFixture("swept-stale-child");
+  const child = fixture.spawn({ title: "historical worker", turn: "terminal", terminalAt: null });
+  ageTranscript(fixture, child.path, 20 * 24 * 60);
+  sweepRegistryRow(fixture, child, "historical worker");
+  fixture.seed();
+
+  /* The condition under test, on the row itself: nothing says when this child
+     ended except its transcript, and what the registry does say is younger
+     than the seat. An age test reading the registry lists it. */
+  const conversation = fixture.registry.conversation(child.id as never)!;
+  expect(conversation.turn.terminalAt).toBeNull();
+  expect(Date.parse(conversation.turn.observedAt!)).toBeGreaterThan(Date.parse(ago(fixture, 120)));
+
+  const rig = childRig(fixture, {
+    seat: { ...fixture.seat, designatedAt: ago(fixture, 120) },
+    pipelines: [ownLane(fixture)],
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = rig.sent[0]!.text;
+  expect(text).not.toContain(child.id);
+  expect(text).toContain("(1 spawned child(ren) not listed: their outcomes predate this seat's designation");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("one child with a failed and a finished turn is one line carrying its latest state (#1783)", async () => {
+  const fixture = childFixture("one-line-per-child");
+  const child = fixture.spawn({ title: "iterative worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  /* A second ended turn out of the same ledger: a second owed outcome for one
+     child, which is how the same child reached one wake five times. */
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-two", seq: 3 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-two", status: "error", seq: 4 });
+  fixture.seed();
+
+  const rig = childRig(fixture, { seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1, deferred: 0 });
+  const text = rig.sent[0]!.text;
+  /* One line, and the failure is the one it carries: the wake describes the
+     child by its latest state, not once per owed row. */
+  expect(text.split(child.id)).toHaveLength(2);
+  expect(text).toContain(`${child.id} — iterative worker — spawned child failed, outcome unharvested`);
+
+  /* The line stood for both rows, so the landing acknowledged both. */
+  const outcomes = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project).collection.snapshot()
+    .filter((row) => row.kind === "outcome");
+  expect(outcomes).toHaveLength(2);
+  expect(outcomes.every((row) => row.status === "acknowledged")).toBe(true);
+});
+
+test("a child whose transcript the Viewer cannot resolve is counted, never listed (#1783)", async () => {
+  const fixture = childFixture("unresolvable-transcript");
+  const unscanned = fixture.spawn({ title: "worker outside the roots", turn: "terminal", terminalAt: ago(fixture, 20), transcript: "outside-roots" });
+  const gone = fixture.spawn({ title: "worker whose transcript is gone", turn: "terminal", terminalAt: ago(fixture, 20), transcript: "missing" });
+  fixture.seed();
+
+  const rig = childRig(fixture, {
+    seat: { ...fixture.seat, designatedAt: ago(fixture, 600) },
+    pipelines: [ownLane(fixture)],
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  /* No child reason at all: neither of these is work any seat can do. */
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = rig.sent[0]!.text;
+  expect(text).not.toContain(unscanned.id);
+  expect(text).not.toContain(gone.id);
+  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript,");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("a child a delivered wake showed is not shown again until it ends another turn (#1783)", async () => {
+  const fixture = childFixture("shown-once-per-state");
+  const child = fixture.spawn({ title: "worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-two", seq: 3 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-two", status: "completed", seq: 4 });
+  fixture.seed();
+
+  const shown = childRig(fixture, { seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
+  expect(await runSeatTickCheck(fixture.project, shown.deps)).toMatchObject({ verdict: "wake", items: 1 });
+  expect(fixture.acknowledged()).toEqual([child.id, child.id]);
+
+  /* An hour later, with the child in exactly the state the seat was shown. */
+  const unchanged = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
+  expect(await runSeatTickCheck(fixture.project, unchanged.deps)).toMatchObject({ verdict: "quiet" });
+  expect(unchanged.sent).toEqual([]);
+
+  /* Its state changes: it ends another turn, and that IS owed. */
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-three", seq: 5 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-three", status: "error", seq: 6 });
+  const moved = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
+  expect(await runSeatTickCheck(fixture.project, moved.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
+  expect(moved.sent[0]!.text).toContain(`${child.id} — worker — spawned child failed, outcome unharvested`);
+});
+
+test("a failure this seat's own worker just had is listed beside the history that is not (#1783)", async () => {
+  const fixture = childFixture("new-failure-still-listed");
+  const historical = fixture.spawn({ title: "historical worker", turn: "terminal", terminalAt: null });
+  ageTranscript(fixture, historical.path, 20 * 24 * 60);
+  sweepRegistryRow(fixture, historical, "historical worker");
+  const recent = fixture.spawn({ title: "current worker", turn: "terminal", terminalAt: ago(fixture, 15) });
+  const generation = fixture.registry.conversation(recent.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-two", seq: 3 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-two", status: "error", seq: 4 });
+  fixture.seed();
+
+  const rig = childRig(fixture, { seat: { ...fixture.seat, designatedAt: ago(fixture, 120) } });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
+  const text = rig.sent[0]!.text;
+  expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome unharvested`);
+  expect(text).not.toContain(historical.id);
+  expect(text).toContain("(1 spawned child(ren) not listed: their outcomes predate this seat's designation");
 });
