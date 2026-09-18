@@ -217,7 +217,7 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(card(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
     /* The helper stays reachable, listed as what it is. */
     const helpers = [...card(host).querySelectorAll('details.history [data-past-kind="helper"] .lbl')].map((node) => node.textContent);
-    expect(helpers).toEqual(["Builder · helper conversation 1"]);
+    expect(helpers).toEqual(["Implement · helper conversation 1"]);
     expect(card(host).querySelector("details.history .hsub")?.textContent).toBe("Helper conversations · 1");
   } finally {
     files.pop();
@@ -229,10 +229,11 @@ test("Past attempts lists every finished attempt and settled round, the latest o
   await tick();
   const past = card(host).querySelector<HTMLDetailsElement>("details.history")!;
   const labels = [...past.querySelectorAll('[data-past-kind] .lbl')].map((node) => node.textContent);
-  expect(labels.sort()).toEqual(["Builder · attempt 1", "Builder · attempt 2", "Reviewer · attempt 1", "Reviewer · round 1", "Verifier · attempt 1"]);
+  /* Named by stage id, which says more than the role here (#1765). */
+  expect(labels.sort()).toEqual(["Implement · attempt 1", "Implement · attempt 2", "Review · attempt 1", "Review · round 1", "Verify · attempt 1"]);
   expect(past.querySelector(".hl")?.textContent).toBe("Past attempts · 5");
-  expect(labels).not.toContain("Verifier · attempt 2");
-  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verifier · attempt 1")!;
+  expect(labels).not.toContain("Verify · attempt 2");
+  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verify · attempt 1")!;
   expect(verify.querySelector(".verdict")?.textContent).toBe("failed");
   click(verify.querySelector(".hopen"));
   await tick();
@@ -322,7 +323,9 @@ test("a pipeline whose graph was edited shows the latest edit, signed by the con
   const line = card(host).querySelector<HTMLElement>(".graph-edit")!;
   expect(line.dataset.graphEdit).toBe("2");
   expect(line.dataset.graphEditActor).toBe("agent");
-  expect(line.textContent).toContain("orchestrator conversation_orchestrator");
+  /* The role signs the line; the raw conversation id is gone (#1765). */
+  expect(line.textContent).toContain("Orchestrator");
+  expect(line.textContent).not.toContain("conversation_orchestrator");
   expect(line.textContent).toContain("changed verify · applies from attempt 3");
   expect(line.getAttribute("title")).toBe("changed prompt of stage verify; applies from attempt 3");
 });
@@ -357,7 +360,9 @@ test("a stage that reported its own completion shows it on the card, findings mo
   expect(line.dataset.stageReport).toBe("2");
   expect(line.dataset.stageReportActor).toBe("agent");
   expect(line.dataset.stageReportStatus).toBe("fail");
-  expect(line.textContent).toContain("verifier conversation_verify");
+  /* Role, outcome and age — no raw conversation id on the card (#1765). */
+  expect(line.textContent).toContain("Verifier failed");
+  expect(line.textContent).not.toContain("conversation_verify");
   expect(line.getAttribute("title")).toBe("Four findings left.");
 
   const findings = card(host).querySelector<HTMLElement>(".stage-findings")!;
@@ -371,4 +376,70 @@ test("a stage that reported its own completion shows it on the card, findings mo
     ["P2", "a nit"],
   ]);
   expect(findings.querySelector(".more")?.textContent).toContain("1 more finding");
+});
+
+/* ── Naming the pipelines of one task (#1765) ──────────────────────────── */
+
+/** One pipeline of the shared task, named by what it was created to do. */
+function namedPipeline(id: string, task: string, state: string, endedAgo: number | null): Pipeline {
+  return {
+    id, task, taskIds: ["t-search"], project: "fixture", state,
+    stages: [stage("critique", "reviewer", "fix"), stage("fix", "builder", null)],
+    runs: [
+      { stageId: "critique", attempts: [attempt(1, "passed", review1, 6000)] },
+      { stageId: "fix", attempts: [attempt(1, state === "running" ? "running" : "passed", implement1, 5000)] },
+    ],
+    cursor: { stageId: "fix", state: "running", input: null, activatedBy: null },
+    worktreeDir: `/fixture/${id}`, createdAt: iso(9000),
+    closedAt: endedAgo === null ? null : iso(endedAgo),
+  } as unknown as Pipeline;
+}
+
+/** Two running pipelines and three completed ones, all on the same task. */
+const manyPipelines = (): Pipeline[] => [
+  namedPipeline("p-live-1", "Rework the stage pills so a row says what it does\nSecond line nobody reads on the card.", "running", null),
+  namedPipeline("p-live-2", "Remove the legacy drawers under the columns", "running", null),
+  namedPipeline("p-done-1", "Name the completed pipelines of a task", "completed", 1_200),
+  namedPipeline("p-done-2", "Drop the raw conversation id from the report line", "completed", 600),
+  namedPipeline("p-done-3", "Fold the finished rows behind their count", "completed", 3_600),
+];
+
+test("every pipeline row leads with its own title, truncated to the first line, with the whole task on hover (#1765)", async () => {
+  const { host } = mount(manyPipelines());
+  await tick();
+  const titles = [...card(host).querySelectorAll<HTMLElement>(".stage-section .ptitle")];
+  expect(titles.map((node) => node.textContent)).toEqual([
+    "Rework the stage pills so a row says what it does",
+    "Remove the legacy drawers under the columns",
+  ]);
+  /* The generic «Pipeline» chip is gone, and the full task is the hover text. */
+  expect(card(host).querySelector(".stage-section .kind")).toBeNull();
+  expect(titles[0]!.getAttribute("title")).toContain("Second line nobody reads on the card.");
+  /* Stage pills read by stage id, which says more than the role here. */
+  expect([...card(host).querySelectorAll(".stage-section .psummary .pname")].map((pill) => pill.textContent))
+    .toEqual(["Critique", "Fix", "Critique", "Fix"]);
+});
+
+test("past three rows a task folds its completed pipelines behind one count, newest first, running ones on top (#1765)", async () => {
+  const { host } = mount(manyPipelines());
+  await tick();
+  const rows = () => [...card(host).querySelectorAll<HTMLElement>(".stage-section")].map((row) => row.dataset.pipeline);
+  expect(rows()).toEqual(["p-live-1", "p-live-2"]);
+  const disclosure = card(host).querySelector<HTMLElement>("[data-completed-toggle]")!;
+  expect(disclosure.textContent).toBe("3 completed");
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+
+  click(disclosure);
+  await tick();
+  /* Newest first: the pipeline that ended last leads the folded rows. */
+  expect(rows()).toEqual(["p-live-1", "p-live-2", "p-done-2", "p-done-1", "p-done-3"]);
+  expect(card(host).querySelector("[data-completed-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+});
+
+test("three rows or fewer stay unfolded, whatever their state (#1765)", async () => {
+  const { host } = mount(manyPipelines().slice(0, 3));
+  await tick();
+  expect([...card(host).querySelectorAll<HTMLElement>(".stage-section")].map((row) => row.dataset.pipeline))
+    .toEqual(["p-live-1", "p-live-2", "p-done-1"]);
+  expect(card(host).querySelector("[data-completed-toggle]")).toBeNull();
 });

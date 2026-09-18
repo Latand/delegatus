@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
@@ -38,15 +39,24 @@ const LIVE_CHIP_STATES = new Set<StageChipState>(["running", "reviewing", "commi
 /** How many findings of the card's ranked list it shows before counting. */
 const SHOWN_STAGE_FINDINGS = 3;
 
+/** Who acted, by role. The conversation id it used to carry is left out (#1765):
+    a raw `conversation_<uuid>` names nothing the operator reads, and the
+    conversation itself is one click away on the stage's own pill. */
 function actorName(t: TFunction, actor: PipelineGraphEdit["actor"]): string {
-  return actor.kind === "operator"
-    ? t("kanban.graph.editedByOperator")
-    : [actor.role ?? "agent", actor.conversationId].filter(Boolean).join(" ");
+  if (actor.kind === "operator") return t("kanban.graph.editedByOperator");
+  return actor.role ? roleNameById(t, actor.role) : t("kanban.actor.agent");
 }
 
-/** The latest completion a stage reported for itself, signed by the
-    conversation that reported it, with its findings in severity order
-    (graph slice 2). */
+/** The title a pipeline carries on a card: the first line of the task it was
+    created with. An empty one falls back to the generic word. */
+export function pipelineTitle(t: TFunction, pipeline: Pipeline): string {
+  const first = (pipeline.task ?? "").split("\n").map((line) => line.trim()).find(Boolean);
+  return first || t("kanban.pipeline");
+}
+
+/** The latest completion a stage reported for itself, with its findings in
+    severity order (graph slice 2): the role that reported, its outcome and how
+    long ago (#1765). */
 function StageReportLine({ pipeline, entry, names }: {
   pipeline: Pipeline;
   entry: PipelineStageReportEntry;
@@ -69,11 +79,12 @@ function StageReportLine({ pipeline, entry, names }: {
         data-stage-report-status={entry.status}
         title={entry.summary ?? ""}
       >
-        {t("kanban.stageReport.reported", {
-          who: actorName(t, entry.actor),
+        {t("kanban.stageReport.line", {
+          who: entry.actor.kind === "agent" && entry.actor.role
+            ? roleNameById(t, entry.actor.role)
+            : names.get(entry.stageId) ?? entry.stageId,
           age: Number.isFinite(at) ? fmtAge(at / 1000) : "",
-          stage: names.get(entry.stageId) ?? entry.stageId,
-          verdict: t(`kanban.past.stageVerdict.${entry.status}`),
+          outcome: t(`kanban.stageReport.outcome.${entry.status}`),
         })}
       </p>
       {findings.length ? (
@@ -109,17 +120,30 @@ function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   );
 }
 
-/** A stage's name: its role, unless another stage of the same pipeline has that
-    role too, where the stage's own id tells them apart. */
+/** A stage id that names nothing the role does not already say. */
+const GENERIC_STAGE_ID = /^(?:stage|step|s|run|task)[-_ ]?\d*$/i;
+/** A stage id that is an identifier rather than a word: never drawn as a name. */
+const OPAQUE_STAGE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{8,}$|^\d+$/i;
+
+/**
+ * A stage's name: its own id where the id says more than the role — `critique`,
+ * `fix`, `diagnose` — and the role's name where the id only repeats the role or
+ * names nothing (`stage-2`) (#1765). Stage ids are unique inside a pipeline, so
+ * two stages of one pipeline never read alike.
+ */
+export function stageDisplayName(t: TFunction, stage: PipelineStage): string {
+  const role = stageChipLabel(t, stage);
+  const words = stage.id.replace(/[-_]+/g, " ").trim();
+  if (!words || GENERIC_STAGE_ID.test(stage.id) || OPAQUE_STAGE_ID.test(stage.id)) return role;
+  const humanized = words[0]!.toUpperCase() + words.slice(1);
+  /* An id that IS the role (however it is cased) says nothing more; a role-less
+     stage falls back to its own id anyway, and reads better capitalized. */
+  if (stage.role?.roleId && stage.id.toLowerCase() === stage.role.roleId.toLowerCase()) return role;
+  return humanized;
+}
+
 export function stageNames(t: TFunction, pipeline: Pipeline): Map<string, string> {
-  const roles = pipeline.stages.map((stage) => stageChipLabel(t, stage));
-  const repeated = new Set(roles.filter((label, index) => roles.indexOf(label) !== index));
-  return new Map(pipeline.stages.map((stage, index) => {
-    const role = roles[index]!;
-    if (!repeated.has(role)) return [stage.id, role] as const;
-    const words = stage.id.replace(/[-_]+/g, " ").trim();
-    return [stage.id, words ? words[0]!.toUpperCase() + words.slice(1) : role] as const;
-  }));
+  return new Map(pipeline.stages.map((stage) => [stage.id, stageDisplayName(t, stage)] as const));
 }
 
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
@@ -167,6 +191,9 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
      supersedes the prototype's graph-by-default rule for active pipelines). */
   const showGraph = open ?? false;
   const progress = pipelineProgress(t, summary, nameOf);
+  /* What this pipeline is, in its own words (#1765): several pipelines on one
+     card used to draw the same generic chip, so nothing told them apart. */
+  const title = pipelineTitle(t, pipeline);
   const slot = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState<number | null>(null);
   useLayoutEffect(() => {
@@ -184,10 +211,10 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
       className={`stage-section ${showGraph ? "open" : "compact"}`}
       data-pipeline={pipeline.id}
       role="group"
-      aria-label={t("kanban.pipelineAria", { progress })}
+      aria-label={t("kanban.pipelineAria", { title, progress })}
     >
       <div className="sec-head">
-        <span className="kind">{t("kanban.pipeline")}</span>
+        <span className="ptitle" data-pipeline-title={pipeline.id} title={pipeline.task || title}>{title}</span>
         <span className="pstate-chip" data-pstate={pipeline.state}>{pipelineStateLabel(t, pipeline.state)}</span>
         <span className="progress">{progress}</span>
         {acting ? <span className="acting" role="status" data-pipeline-acting={acting}>{t(`kanban.pipelineAct.pending.${acting}`)}</span> : null}

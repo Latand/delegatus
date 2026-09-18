@@ -4,6 +4,7 @@ import { applyBoardMutations } from "@/lib/board/mutations";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import type { FileEntry } from "@/lib/types";
 
+import { buildBranchGroups } from "./projectModel";
 import { planBoardConvergence, planClose, planRootReconciliation, planSuccessionRemap } from "./projectBoardMutations";
 
 function entry(overrides: Partial<FileEntry> & { path: string }): FileEntry {
@@ -41,7 +42,7 @@ const catalogOf = (files: FileEntry[]): Map<string, FileEntry> => new Map(files.
 /* 17: the reconciliation planner seeds only root group keys and retires the
    child/subagent and catalog-absent pollution — with no positional cap. */
 test("17: planRootReconciliation seeds only root group keys past the former cap", () => {
-  const groups = Array.from({ length: 41 }, (_, i) => ({ key: `/root-${i}`, orphanTask: false }));
+  const groups = Array.from({ length: 41 }, (_, i) => ({ key: `/root-${i}` }));
   const child = entry({ path: "/root-0/child", parent: "/root-0", kind: "subagent" });
   const catalog = catalogOf([child, ...groups.map((group) => entry({ path: group.key }))]);
   const manual = ["/root-0", child.path, "/absent.jsonl"];
@@ -64,20 +65,23 @@ test("17: planRootReconciliation seeds only root group keys past the former cap"
   expect(twice.prefs.manual).toEqual(once.prefs.manual);
 });
 
-/* An orphan-task group never seeds a durable root. */
-test("17b: planRootReconciliation excludes orphan-task groups", () => {
-  const groups = [
-    { key: "/conv", orphanTask: false },
-    { key: "/bash-task", orphanTask: true },
-  ];
-  const mutation = planRootReconciliation({ groups, manual: [], catalog: new Map() });
-  expect(mutation.roots).toEqual(["/conv"]);
+/* A live background process no conversation owns seeds no durable root — since
+   #1758 the board builds no group for one at all, so none can reach the
+   planner. Fed the real builder's output, not a hand-made group list. */
+test("17b: a parentless background task never reaches the planner as a root", () => {
+  const conversation = entry({ path: "/conv.jsonl", activity: "live" });
+  const task = entry({ path: "/bash-task.output", root: "claude-tasks", engine: "shell", kind: "background", fmt: "plain", activity: "live" });
+  const groups = buildBranchGroups([conversation, task], "demo");
+
+  const mutation = planRootReconciliation({ groups, manual: [], catalog: catalogOf([conversation, task]) });
+
+  expect(mutation.roots).toEqual([conversation.path]);
 });
 
 test("capped reconciliation preserves manual paths omitted from the scheme window", () => {
   const visibleChild = entry({ path: "/visible-child", parent: "/visible-root", kind: "subagent" });
   const mutation = planRootReconciliation({
-    groups: [{ key: "/visible-root", orphanTask: false }],
+    groups: [{ key: "/visible-root" }],
     manual: [visibleChild.path, "/capped-out-root"],
     catalog: catalogOf([visibleChild]),
     catalogComplete: false,
@@ -102,7 +106,7 @@ test("complete conversation membership preserves a capped-out background task pl
    successor is never re-seeded into manual. */
 test("18: planBoardConvergence orders remap before reconciliation and keeps a hidden successor hidden", () => {
   const successor = entry({ path: "/new", predecessorPath: "/old" });
-  const groups = [{ key: "/new", orphanTask: false }];
+  const groups = [{ key: "/new" }];
   const catalog = catalogOf([successor]);
 
   const batch = planBoardConvergence({ files: [successor], groups, manual: [], catalog, project: "demo" });

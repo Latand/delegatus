@@ -347,7 +347,6 @@ test("a direct review group's deck shows on the minimap like any managed deck (#
     returnable: [],
     finished: [],
     smt: builder.mtime,
-    orphanTask: false,
   };
   const layout = buildSchemeLayout([group], [], [builder, reviewer], projected, []);
   expect(layout.decks).toHaveLength(1);
@@ -383,7 +382,6 @@ test("a terminal group keeps its deck slot beside a placed anchor but never forc
     returnable: [],
     finished: [],
     smt: quietBuilder.mtime,
-    orphanTask: false,
   };
   /* Since #289 + #325 the dashboard hands the layout EVERY direct group: with
      the reviewed anchor placed for its own reasons, the terminal group keeps a

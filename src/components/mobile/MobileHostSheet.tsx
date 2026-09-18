@@ -7,7 +7,7 @@ import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import type { ConnectionState } from "../runtime/runtimeModel";
-import { MobileSheet, MobileSheetDivider, MobileSheetSection } from "./MobileSheet";
+import { MobileSheet, MobileSheetSection } from "./MobileSheet";
 import { showReceipt } from "./MobileReceipt";
 
 /*
@@ -132,19 +132,18 @@ export function MobileHostSheet({
   onOpenCatalog,
   onClose,
   onKilled,
-  children,
 }: {
   projectName: string;
   runtime: ConnectionState;
-  /** The parentless background processes that used to dock above the board. */
+  /** The live background processes no conversation on the board owns. Since
+      #1758 nothing is drawn for them on the desktop board, so this sheet and
+      its count in the board menu are the phone's whole reach to them. */
   tasks: readonly FileEntry[];
   /** Conversations the board is not showing, reachable through the catalog. */
   hiddenCount: number;
   onOpenCatalog?: () => void;
   onClose: () => void;
   onKilled?: (path: string) => void;
-  /** The folded worker / quiet / readiness strips (retired in lane 10). */
-  children?: React.ReactNode;
 }) {
   const { t } = useLocale();
   return (
@@ -176,12 +175,6 @@ export function MobileHostSheet({
             <span className="min-w-0 flex-1 truncate">{t("mobile2.host.quiet", { count: hiddenCount })}</span>
             <span className="ml-auto shrink-0 text-label font-medium text-muted">{t("mobile2.host.catalog")}</span>
           </button>
-        </>
-      ) : null}
-      {children ? (
-        <>
-          <MobileSheetDivider />
-          {children}
         </>
       ) : null}
     </MobileSheet>

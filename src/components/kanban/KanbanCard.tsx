@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -14,7 +14,7 @@ import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineMo
 import { CardInlineText, withinEdit } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
-import type { KanbanCard as KanbanCardModel, KanbanMember } from "./kanbanModel";
+import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
 import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -27,6 +27,17 @@ import type { PipelineActionKind } from "./stagesModel";
    (`renderCard`): colour label, saving bar, title and tools, description,
    activity line, the compact pipeline summary, conversation tiles, and the
    footer whose status pill is the one place status changes. */
+
+/** Pipelines that have ended: the rows a card folds away once it holds many. */
+const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
+/** Rows a card draws in full before the finished ones fold behind their count. */
+const PIPELINE_ROWS_BEFORE_FOLD = 3;
+
+/** When a pipeline ended, for the newest-first order of the folded rows. */
+function pipelineEndedAtMs(pipeline: Pipeline): number {
+  const ended = Date.parse(pipeline.closedAt ?? pipeline.createdAt ?? "");
+  return Number.isFinite(ended) ? ended : 0;
+}
 
 const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
@@ -212,6 +223,30 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   if (card.conversations) activity.push({ key: "conversations", node: <span className="quiet num">{t("kanban.activityConversations", { count: card.conversations })}</span> });
   else if (card.pipelines.length === 0) activity.push({ key: "none", node: <span className="quiet">{t("kanban.activityNoAgent")}</span> });
   if (pipelinesWaiting) activity.push({ key: "waiting", node: <span className="quiet num">{t("kanban.activityStagesWaiting", { count: pipelinesWaiting })}</span> });
+  /* Several pipelines on one card: the running ones stay on top, and once the
+     card holds more than three rows the finished ones fold behind one count,
+     newest first (#1765). */
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const livePipelines = card.pipelines.filter((summary) => !ENDED_PIPELINE_STATES.has(summary.pipeline.state));
+  const endedPipelines = card.pipelines
+    .filter((summary) => ENDED_PIPELINE_STATES.has(summary.pipeline.state))
+    .sort((a, b) => pipelineEndedAtMs(b.pipeline) - pipelineEndedAtMs(a.pipeline));
+  const foldCompleted = card.pipelines.length > PIPELINE_ROWS_BEFORE_FOLD && endedPipelines.length > 0;
+  const shownPipelines = foldCompleted ? livePipelines : [...livePipelines, ...endedPipelines];
+  const foldedPipelines = foldCompleted ? endedPipelines : [];
+  const pipelineRow = (summary: KanbanPipeline) => (
+    <PipelineSection
+      key={summary.pipeline.id}
+      summary={summary}
+      open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
+      selected={selectedStages(summary.pipeline, readerKeys, panels)}
+      acting={acting.get(summary.pipeline.id) ?? null}
+      onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
+      onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
+      onOpenSheet={(pipeline) => props.onOpenSheet(card.id, pipeline)}
+      onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
+    />
+  );
   const hex = card.color ? TASK_COLOR_HEX[card.color] : null;
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
@@ -366,19 +401,27 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         ))}
       </div>
 
-      {!collapsed ? card.pipelines.map((summary) => (
-        <PipelineSection
-          key={summary.pipeline.id}
-          summary={summary}
-          open={props.graphChoices.get(`${card.id}|${summary.pipeline.id}`) ?? null}
-          selected={selectedStages(summary.pipeline, readerKeys, panels)}
-          acting={acting.get(summary.pipeline.id) ?? null}
-          onToggle={(open) => props.onToggleGraph(card.id, summary.pipeline.id, open)}
-          onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
-          onOpenSheet={(pipeline) => props.onOpenSheet(card.id, pipeline)}
-          onMenu={(pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
-        />
-      )) : null}
+      {!collapsed ? (
+        <>
+          {shownPipelines.map(pipelineRow)}
+          {foldedPipelines.length ? (
+            <div className="done-pipelines" data-completed-pipelines={foldedPipelines.length}>
+              <button
+                type="button"
+                className="btn quiet completed-toggle"
+                aria-expanded={completedOpen}
+                aria-label={t(completedOpen ? "kanban.pipelines.completedHide" : "kanban.pipelines.completedShow", { count: foldedPipelines.length })}
+                data-completed-toggle={card.id}
+                onClick={() => setCompletedOpen((open) => !open)}
+              >
+                {completedOpen ? <ChevronDown /> : <ChevronRight />}
+                <span>{t("kanban.pipelines.completed", { count: foldedPipelines.length })}</span>
+              </button>
+              {completedOpen ? foldedPipelines.map(pipelineRow) : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       {!collapsed && (stageReaders.length || panels.length) ? (
         <div className="readers">
