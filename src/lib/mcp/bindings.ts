@@ -77,6 +77,8 @@ import {
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { seatTickFenceDetail, seatTickReportedFence } from "@/lib/monitor/seatTickFence";
+import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
@@ -2665,7 +2667,8 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     changed = true;
   }
 
-  const effective = effectiveSeatTickSettings(settings, Date.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const now = Date.now();
+  const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
   return redactPayload({
     project,
     changed,
@@ -2695,7 +2698,38 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        see what it is restoring before it restores it. */
     defaults: defaultSeatTickSettings(project),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+    /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
+       twenty-minute interval and receiving nothing was reading a settings
+       answer that said everything was fine: the fence lived in the accounting
+       row and no surface carried it. This says which attempt holds the
+       project's wakes, since when and when it lapses on its own. */
+    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
   });
+}
+
+/**
+ * The fence, for the settings answer, from a read that changes nothing.
+ *
+ * Peeked rather than read the way a check reads it, so asking about a project
+ * nobody has ticked mints no accounting row, and wrapped because one
+ * unreadable store may not take a seat's tick controls away — an answer that
+ * cannot name the fence says so instead of throwing.
+ *
+ * The row is all this reads: it names the attempt the next check would meet,
+ * and whether that check may then move it depends on what the layer holding the
+ * payload answers, which only a check asks for. The sentence says as much.
+ */
+function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: number): McpToolPayload {
+  try {
+    const state = peekSeatTickState(project);
+    const active = orchestratorSeatFor(project).active;
+    const fence = seatTickReportedFence(state, active ? { conversationId: active.conversationId ?? null } : null, now, wakeIntervalMs);
+    return { fence, fenceDetail: seatTickFenceDetail(fence), fenceError: null };
+  } catch (error) {
+    /* The whole answer goes through `redactPayload`, so the store's own words
+       reach the caller with secrets already taken out of them. */
+    return { fence: null, fenceDetail: "the tick row could not be read, so whether a wake is fenced is unknown", fenceError: error instanceof Error ? error.message : "unknown error" };
+  }
 }
 
 

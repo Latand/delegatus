@@ -12,6 +12,7 @@ import {
   type SeatTickProjectState,
   type SeatTickPullRequestGap,
   type SeatTickRetiredWake,
+  type SeatTickRetirementReason,
   type SeatTickSourceGap,
   type SeatTickWakeCommit,
   type SeatTickWakeReasonKind,
@@ -128,17 +129,26 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
  * being free.
  */
 function normalizeRetiredWakes(value: unknown): SeatTickRetiredWake[] {
-  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+  return (Array.isArray(value) ? value : []).flatMap((entry): SeatTickRetiredWake[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const raw = entry as Record<string, unknown>;
     const wake = normalizeOutstandingWake(raw.wake);
     const retiredAt = isoOrNull(raw.retiredAt);
+    if (!wake || !retiredAt) return [];
+    /* An entry with no reason predates #1746, when a supersession was the only
+       retirement there was; one that says `unresolved-age` is this issue's and
+       names no seat, because the seat never moved. */
+    const reason: SeatTickRetirementReason = raw.reason === undefined ? "seat-superseded" : raw.reason as SeatTickRetirementReason;
+    if (reason !== "seat-superseded" && reason !== "unresolved-age") return [];
+    /* The two halves have to agree: an age retirement names no seat because the
+       seat never moved, and one that names a seat is a row nobody wrote. */
+    if (reason === "unresolved-age") return raw.supersededBy ? [] : [{ wake, retiredAt, supersededBy: null, reason }];
     const by = raw.supersededBy as Record<string, unknown> | undefined;
-    if (!wake || !retiredAt || !by || typeof by !== "object") return [];
+    if (!by || typeof by !== "object") return [];
     const conversationId = typeof by.conversationId === "string" ? by.conversationId : "";
     const seatEpoch = by.seatEpoch;
     if (!conversationId || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return [];
-    return [{ wake, retiredAt, supersededBy: { conversationId, seatEpoch } }];
+    return [{ wake, retiredAt, supersededBy: { conversationId, seatEpoch }, reason }];
   }).slice(0, SEAT_TICK_RETIRED_WAKE_LIMIT);
 }
 

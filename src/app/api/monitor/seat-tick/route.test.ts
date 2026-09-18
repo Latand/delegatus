@@ -100,17 +100,29 @@ test("a fenced attempt is described whole â€” record, journal answer and exits â
   });
   expect(JSON.stringify(body)).not.toContain("WAKE-PAYLOAD-SENTINEL");
   expect(attempt.exits.some((exit) => exit.includes("superseded by a different conversation"))).toBe(true);
+  /* And the surface says, in one sentence, which attempt holds this project's
+     wakes and since when, so a mute tick is never indistinguishable from a
+     quiet one (#1746). */
+  expect(body.fence).toMatchObject({ slot: "outstanding", clientMessageId: key, seatEpoch: 7, since: "2026-09-11T15:44:11.502Z" });
+  expect(body.fenceDetail).toContain(`under key ${key}`);
+  expect(body.fenceDetail).toContain("2026-09-11 15:44 UTC");
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries).find((row) => row.id === held.id)!.state).toBe("delivery-uncertain");
   /* The journal is this project's alone, newest last, bounded. */
   expect(body.journal.map((record) => [record.project, record.verdict])).toEqual([[PROJECT, "uncertain"], [PROJECT, "wake"]]);
 
   /* The same attempt once the settlement has ended it unrecorded: the record
-     is failed and unverified, the journal cannot be asked here (no runtime
-     host socket in this sandbox), and the fence stands. */
+     is failed and unverified, the journal cannot be asked here (no runtime host
+     socket in this sandbox), and no evidence will ever settle it either way.
+     What ends it is its age bound (#1746), which for an attempt prepared this
+     long before the read is already spent: it withholds nothing, the exits say
+     so, and the lapse it passed is on the attempt. */
   registry.recordDeliveryOutcome(held.id, "failed", SEND_UNRECORDED_REASON, "unverified");
   const ended = await (await GET(get(`?project=${PROJECT}`))).json() as SeatTickDiagnostics;
   expect(ended.attempts[0]!.observation).toMatchObject({ state: "uncertain", evidence: { record: { state: "failed", resend: "verify-first" }, journal: "unreachable" } });
-  expect(ended.attempts[0]!.exits.at(-1)).toBe("age alone ends nothing");
+  expect(ended.attempts[0]).toMatchObject({ withholds: false, fenceLapsesAt: "2026-09-11T17:44:11.502Z", retiredFor: null });
+  expect(ended.attempts[0]!.exits.at(-1)).toContain("its age bound at 2026-09-11 17:44 UTC, which retires it unresolved");
+  expect(ended.fence).toMatchObject({ clientMessageId: key, keptPastBound: true, lapsesAt: "2026-09-11T17:44:11.502Z" });
+  expect(ended.fenceDetail).toContain("age bound was spent at 2026-09-11 17:44 UTC");
 });
 
 test("a project nobody has ticked reads as empty, and the read leaves no row behind", async () => {
