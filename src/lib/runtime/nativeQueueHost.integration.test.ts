@@ -50,7 +50,7 @@ for (const scenario of ["small", "large", "two-image-turns"]) test.skipIf(!binar
   fs.writeFileSync(path.join(env.CODEX_HOME!, "config.toml"), `model = "fixture-model"
 model_provider = "fixture"
 approval_policy = "never"
-sandbox_mode = "read-only"
+sandbox_mode = "danger-full-access"
 web_search = "disabled"
 [model_providers.fixture]
 name = "Runtime integration fixture"
@@ -65,12 +65,25 @@ apps = false
 plugins = false
 `);
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  /** What each spawned CLI did when it went away, for the wait that outlived it. */
+  const exits: string[] = [];
+  /** The tail of what each CLI said on the way out. Unread, this pipe fills at
+   *  64 KiB and the child blocks inside a write — which is a fixture that stops
+   *  the process it is testing, and a child exit with no reason to report. */
+  const diagnostics: string[] = [];
+  let liveChildren = 0;
   let dropAdd = false;
   let hideCanonicalClient: string | null = null;
   // Only authentication/catalog projection is synthetic. Queue, history,
   // native IDs, dispatch and persistence execute in the real installed CLI.
   const spawnProcess = (_command: string, args: string[]) => {
     const child = spawn(binary!, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    liveChildren++;
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      diagnostics.push(chunk);
+      while (diagnostics.length > 64) diagnostics.shift();
+    });
     const input = new PassThrough(); const output = new PassThrough();
     const methods = new Map<number, string>();
     const inbound = createInterface({ input });
@@ -96,23 +109,80 @@ plugins = false
       }
       output.write(JSON.stringify(message) + "\n");
     });
-    child.once("close", () => { inbound.close(); outbound.close(); output.end(); });
+    child.once("close", (code, signal) => {
+      liveChildren--;
+      exits.push(`pid ${child.pid ?? "?"} code=${code} signal=${signal}`);
+      inbound.close(); outbound.close(); output.end();
+    });
     return new Proxy(child, { get(target, property) {
       if (property === "stdin") return input;
       if (property === "stdout") return output;
       const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
     } }) as ChildProcessWithoutNullStreams;
   };
-  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model",
-    // The background-history case uses the production timeout. The other
-    // cases retain their shorter lost-acknowledgement fault-injection budget.
-    ...(scenario === "two-image-turns" ? {} : {requestTimeoutMs: 1000}),
+  /* The fixture CLI never runs a command: its model backend answers with a
+     message and nothing else. Asking for a sandboxed thread anyway makes this
+     case depend on a Linux sandbox helper the runner does not install, and the
+     child exits when a path reaches for it (#1715) — a failure that has
+     nothing to do with the contracts under test. The dependency is removed
+     rather than satisfied, and the mode named here is the one the Viewer's own
+     spawn path already asks for in production. */
+  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", sandbox: "danger-full-access",
+    /* The background-history case uses the production timeout. The other two
+       inject a lost acknowledgement, and the host's request budget is what
+       ends that one deliberately unanswered request — it is spent exactly
+       once per case. It has to be wide, because every other request under it
+       is a legitimate reply from the real CLI: a 3 MiB queue add and a cold
+       `thread/resume` come back in a small fraction of this budget on an idle
+       machine and in a large multiple of that fraction on a contended one,
+       and the old one second was near enough to the CLI's own cost that a
+       slow runner could turn a delivered add into the injected fault. Nothing
+       asserts how long any of this took; only a genuinely unanswered request
+       reaches the budget below. */
+    ...(scenario === "two-image-turns" ? {} : {requestTimeoutMs: 15_000}),
     eventStore: new FileRuntimeEventStore(path.join(base, "events")), resolveImagePath: (image: {sha256: string}) => imagePaths.get(image.sha256)!, spawnProcess };
   let host: CodexAppServerHost | undefined;
   const journal = new RuntimeJournal(path.join(base, "journal.sqlite"), { structuredHosts: true });
+  /* Every wait below is on a real Codex CLI doing real work in another
+     process, so this budget is real time and cannot be anything else. It is
+     generous on purpose: nothing in this case asserts how long the CLI took,
+     and the budget exists only so a wedge fails readably instead of hanging
+     the job. The old five seconds was small enough that a loaded runner
+     decided the verdict; this one names the wait and what the child did, so a
+     failure here is a diagnosis rather than another unattributable red round. */
+  const nativeWaitMs = 60_000;
+  const cliSaid = () => diagnostics.length ? `\nwhat the CLI said:\n${diagnostics.join("")}` : "";
   async function until(predicate: () => boolean | Promise<boolean>) {
-    const deadline = Date.now() + 5000;
-    while (!await predicate()) { if (Date.now() >= deadline) throw new Error("native fixture deadline"); await new Promise(resolve => setTimeout(resolve, 20)); }
+    /* The budget bounds the wait, not the gap between two polls. A predicate
+       that drains the delivery queue against a host whose child has gone can
+       hang inside a single call, and a deadline checked between calls is then
+       never reached at all — which is how this case used to spend its whole
+       test budget and report nothing about why. */
+    let expire: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      expire = setTimeout(() => reject(new Error(
+        `native fixture deadline: ${nativeWaitMs} ms waiting for ${predicate}`
+        + (exits.length ? `; CLI exits: ${exits.join("; ")}` : "; no CLI has exited")
+        + cliSaid())), nativeWaitMs);
+    });
+    const poll = (async () => {
+      while (!await predicate()) {
+        /* Every wait here is driven by a running CLI, and each one is entered
+           with a generation started or adopted. None left alive means nothing
+           can still move this predicate, so the budget is not worth spending. */
+        if (liveChildren === 0) {
+          throw new Error(`no Codex CLI is running under this fixture; exits: ${exits.join("; ") || "none recorded"}`
+            + cliSaid());
+        }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    })();
+    try {
+      await Promise.race([poll, deadline]);
+    } finally {
+      clearTimeout(expire);
+      poll.catch(() => { /* a poll abandoned at the deadline reports through it */ });
+    }
   }
   try {
     host = await CodexAppServerHost.start(options);
@@ -245,4 +315,7 @@ plugins = false
     for (const response of responses) response.end();
     backend.closeAllConnections(); await new Promise<void>(resolve => backend.close(() => resolve()));
   }
-}, 30_000);
+/* Three real Codex CLI generations, a real HTTP backend and up to 48 MiB of
+   image input crossing them. The budget is explicit and generous for the same
+   reason the wait above is: no assertion in this case is about elapsed time. */
+}, 180_000);

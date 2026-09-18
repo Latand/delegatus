@@ -7,8 +7,56 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rena
 import { join } from "node:path";
 import {
   readCodexHistory, readCodexDeliveryHistory, findCodexHistoryDelivery,
-  type CodexHistoryRpc, type CodexHistoryOptions, type CodexHistoryDeliveryTarget,
+  type CodexHistoryClock, type CodexHistoryRpc, type CodexHistoryOptions, type CodexHistoryDeliveryTarget,
 } from "./codexHistoryReader";
+
+/**
+ * A clock the test owns. `now` moves only when the test moves it, and the
+ * reader's deadline timer is scheduled against the same instant, so the
+ * relationship between a page's cost and the remaining budget is a value this
+ * file sets rather than a measurement of how fast the runner happened to be.
+ */
+function manualClock(start = 1_000_000) {
+  let now = start;
+  let serial = 0;
+  const timers = new Map<number, { at: number; fire: () => void }>();
+  const clock: CodexHistoryClock = {
+    now: () => now,
+    after: (ms, fire) => {
+      const id = serial++;
+      timers.set(id, { at: now + ms, fire });
+      return () => { timers.delete(id); };
+    },
+  };
+  return {
+    clock,
+    now: () => now,
+    /** Everything the reader queued behind an `await` runs before the clock moves again. */
+    settle: () => new Promise<void>(resolve => { setImmediate(resolve); }),
+    /** A timer scheduled on this clock, for a fixture that "takes" time. */
+    takes: (ms: number) => new Promise<void>(resolve => { clock.after(ms, resolve); }),
+    /** Jump to the earliest scheduled timer and fire it. False when none is left. */
+    fireNextTimer(): boolean {
+      const due = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (!due) return false;
+      timers.delete(due[0]);
+      now = Math.max(now, due[1].at);
+      due[1].fire();
+      return true;
+    },
+  };
+}
+
+/** Drives `pending` to settlement by advancing `timeline`, never the wall clock. */
+async function onTimeline<T>(timeline: ReturnType<typeof manualClock>, pending: Promise<T>): Promise<T> {
+  let settled = false;
+  const answer = pending.then(value => { settled = true; return value; }, error => { settled = true; throw error; });
+  for (;;) {
+    await timeline.settle();
+    if (settled) return answer;
+    if (!timeline.fireNextTimer()) throw new Error("the read is waiting on something this clock does not schedule");
+  }
+}
 
 const identity = { threadId: "thread-a", path: "/fixture/session.jsonl" };
 const content = [{ type: "text", text: "Повідомлення 🌍 e\u0301", text_elements: [] }];
@@ -17,7 +65,11 @@ const target: CodexHistoryDeliveryTarget = { clientId: user.clientId, content, t
 const turn = (items: unknown[] = [user], itemsView = "full", id = "turn-a") => ({ id, status: "completed", items, itemsView });
 const page = (data: unknown[], nextCursor: string | null = null) => ({ data, nextCursor, backwardsCursor: null });
 const metadata = { thread: { id: identity.threadId, path: identity.path, ephemeral: false } };
-const options = (extra: Partial<CodexHistoryOptions> = {}): CodexHistoryOptions => ({ deadlineAt: Date.now() + 2000, ...extra });
+const frozen = manualClock();
+/** Fixture reads: a clock nothing advances, so no assertion below can be decided by a stalled runner. */
+const options = (extra: Partial<CodexHistoryOptions> = {}): CodexHistoryOptions => ({ deadlineAt: frozen.now() + 2000, clock: frozen.clock, ...extra });
+/** The live-CLI read below drives a real process, and its deadline is real time. */
+const liveOptions = (extra: Partial<CodexHistoryOptions> = {}): CodexHistoryOptions => ({ deadlineAt: Date.now() + 2000, ...extra });
 function fixture(responses: unknown[]) {
   const calls: { method: string; params: Record<string, unknown>; timeout: number }[] = [];
   const rpc: CodexHistoryRpc = async (method, params, timeout) => {
@@ -279,16 +331,24 @@ describe("bounded canonical history", () => {
 
   test("bounds pages, enforces one deadline even if RPC never settles, ignores late results", async () => {
     expect((await lookup([metadata, page([turn()])], target, { maxPages: 1 })).history).toEqual({ state: "unknown", reason: "pages" });
+    // One 22-unit budget, and a page that costs 15 of it: the second page is
+    // granted the 7 that are left rather than a fresh 22, and the deadline
+    // ends the read inside it. Both numbers belong to this clock, so the only
+    // way the assertions below can fail is a reader that renews the budget.
+    const timeline = manualClock();
     const calls: number[] = [];
     const rpc: CodexHistoryRpc = async (_method, _params, timeout) => {
       calls.push(timeout);
-      await new Promise(resolve => setTimeout(resolve, 15));
+      await timeline.takes(15);
       return calls.length === 1 ? metadata : page([turn()]);
     };
-    const result = await readCodexHistory(rpc, identity, options({ deadlineAt: Date.now() + 22 }));
+    const result = await onTimeline(timeline, readCodexHistory(rpc, identity, options({ deadlineAt: timeline.now() + 22, clock: timeline.clock })));
     expect(result).toEqual({ state: "unknown", reason: "deadline" });
+    expect(calls).toEqual([22, 7]);
     expect(calls[1]).toBeLessThan(calls[0]);
-    expect(await readCodexHistory(() => new Promise(() => {}), identity, options({ deadlineAt: Date.now() + 10 }))).toEqual({ state: "unknown", reason: "deadline" });
+    const never = manualClock();
+    expect(await onTimeline(never, readCodexHistory(() => new Promise(() => {}), identity, options({ deadlineAt: never.now() + 10, clock: never.clock }))))
+      .toEqual({ state: "unknown", reason: "deadline" });
   });
 });
 
@@ -322,7 +382,7 @@ test.skipIf(!nativeCli)("real Codex 0.154: isolated Responses, multi-page histor
   writeFileSync(join(env.CODEX_HOME, "config.toml"), `model = "fixture-model"
 model_provider = "fixture"
 approval_policy = "never"
-sandbox_mode = "read-only"
+sandbox_mode = "danger-full-access"
 web_search = "disabled"
 [model_providers.fixture]
 name = "Credential-free local Responses"
@@ -377,11 +437,13 @@ plugins = false
   try {
     expect(spawnSync(nativeCli!, ["--version"], { env, cwd, encoding: "utf8" }).stdout.trim()).toBe("codex-cli 0.154.0");
     let client = startClient(); await init(client);
-    const started = await client.rpc("thread/start", { cwd, model: "fixture-model", modelProvider: "fixture", approvalPolicy: "never", sandbox: "read-only", historyMode: "paginated" }, 5000) as { thread: { id: string; path: string } };
+    // Same reason as the native queue fixture: no command is ever run here, and
+    // a sandboxed thread makes this case depend on a helper the runner lacks.
+    const started = await client.rpc("thread/start", { cwd, model: "fixture-model", modelProvider: "fixture", approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated" }, 5000) as { thread: { id: string; path: string } };
     const nativeIdentity = { threadId: started.thread.id, path: started.thread.path };
     // Before the first native turn, preserve the precise unavailable-history
     // classification that the host's first-delivery preflight consumes.
-    expect(await readCodexHistory(client.rpc, nativeIdentity, options({ deadlineAt: Date.now() + 8000 })))
+    expect(await readCodexHistory(client.rpc, nativeIdentity, liveOptions({ deadlineAt: Date.now() + 8000 })))
       .toEqual({ state: "unknown", reason: "not-materialized" });
     const targets: CodexHistoryDeliveryTarget[] = [];
     for (let i = 0; i < 3; i++) {
@@ -397,7 +459,7 @@ plugins = false
       }
     }
     expect(requests).toBe(3);
-    const read = (view: "notLoaded" | "summary" | "full") => readCodexHistory(client.rpc, nativeIdentity, options({ deadlineAt: Date.now() + 8000, itemsView: view, turnsPerPage: 1, itemsPerPage: 1 }));
+    const read = (view: "notLoaded" | "summary" | "full") => readCodexHistory(client.rpc, nativeIdentity, liveOptions({ deadlineAt: Date.now() + 8000, itemsView: view, turnsPerPage: 1, itemsPerPage: 1 }));
     const history = await read("notLoaded");
     expect(history.state).toBe("complete");
     if (history.state !== "complete") throw new Error(JSON.stringify(history));
@@ -429,7 +491,7 @@ plugins = false
     // protocol data; it never launches a helper or contacts a model service.
     const fork = await client.rpc("thread/fork", { threadId: nativeIdentity.threadId, lastTurnId: targets[1].turnId, excludeTurns: true, cwd }, 5000) as { thread: { id: string; path: string } };
     const forkIdentity = { threadId: fork.thread.id, path: fork.thread.path };
-    const forkHistory = await readCodexHistory(client.rpc, forkIdentity, options({ deadlineAt: Date.now() + 8000, turnsPerPage: 1, itemsPerPage: 1 }));
+    const forkHistory = await readCodexHistory(client.rpc, forkIdentity, liveOptions({ deadlineAt: Date.now() + 8000, turnsPerPage: 1, itemsPerPage: 1 }));
     expect(findCodexHistoryDelivery(forkHistory, targets[1]).state).toBe("found");
     expect(findCodexHistoryDelivery(forkHistory, targets[2]).state).toBe("unknown");
     await client.stop();
@@ -450,7 +512,7 @@ plugins = false
     const restarted = await read("notLoaded");
     expect(findCodexHistoryDelivery(restarted, targets[1]).state).toBe("found");
     expect(findCodexHistoryDelivery(restarted, { ...targets[1], clientId: "missing-original" }).state).toBe("unknown");
-    const compressedFork = await readCodexHistory(client.rpc, forkIdentity, options({ deadlineAt: Date.now() + 8000, turnsPerPage: 1, itemsPerPage: 1 }));
+    const compressedFork = await readCodexHistory(client.rpc, forkIdentity, liveOptions({ deadlineAt: Date.now() + 8000, turnsPerPage: 1, itemsPerPage: 1 }));
     expect(findCodexHistoryDelivery(compressedFork, targets[1]).state).toBe("found");
     expect(findCodexHistoryDelivery(compressedFork, targets[2]).state).toBe("unknown");
     expect(requests).toBe(3);
