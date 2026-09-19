@@ -57,7 +57,7 @@ export const LAYER = {
   overlay: 76,
   /** Transient notices: task toasts, the deployment status pill. */
   toast: 84,
-  /** Hover and focus hints. */
+  /** Hover and focus hints, portalled and placed from their control like the menus. */
   tooltip: 88,
   /** Pointer feedback drawn over everything while it lasts: the drag-to-link arrow. */
   feedback: 92,

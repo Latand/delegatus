@@ -13,6 +13,11 @@
  * record of what covers what. A case passes only when every point lands on the
  * overlay itself.
  *
+ * An overlay opened over a modal also has to close on its own: the preview and
+ * the menu opened inside the expanded conversation are closed with one Escape
+ * and the conversation has to still be open afterwards. The hover hints are
+ * read the same way as the menus, from a real hover (a focus on the phone).
+ *
  * Everything runs against the invented demo home (`fixtures/demo-home`) copied
  * under the temp root, on a production server this script starts on a port it
  * chose and stops by the handle it holds. The one addition to the fixture is a
@@ -287,6 +292,11 @@ function readCoverage(selector: string): Coverage | null {
     while (node && !formsContext(node)) node = node.parentElement;
     return node ?? document.documentElement;
   };
+  /* A hint bubble never takes the pointer, so hit-testing would pass through it
+     wherever it is; it is made hittable for the reading, then put back. */
+  const passive = [overlay, ...Array.from(overlay.querySelectorAll<HTMLElement>("*"))].filter((el) => getComputedStyle(el).pointerEvents === "none");
+  const restore = passive.map((el) => [el, el.style.pointerEvents] as const);
+  for (const el of passive) el.style.pointerEvents = "auto";
   const r = overlay.getBoundingClientRect();
   const own = contextOf(overlay);
   const coverers = new Map<string, Coverer>();
@@ -310,6 +320,7 @@ function readCoverage(selector: string): Coverage | null {
       if (!coverers.has(key)) coverers.set(key, { element: key, context: describe(context), contextZ: getComputedStyle(context).zIndex });
     }
   }
+  for (const [el, value] of restore) el.style.pointerEvents = value;
   return {
     overlay: describe(overlay),
     rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
@@ -407,9 +418,22 @@ async function rightClickMic(page: Page, scope: string, steps: string[], where: 
   await page.locator(`${MIC_MENU} [role="menuitemradio"]`).first().waitFor({ state: "visible", timeout: 10_000 });
 }
 
-/** Clicks the picture, then closes the preview the way an operator does and
-    reads what is on top afterwards: the picture again, inside its host. */
-async function previewPicture(page: Page, scope: string, steps: string[]): Promise<Opened> {
+/** One Escape press, as the operator's keyboard delivers it to the page. */
+async function pressEscape(page: Page, steps: string[], what: string): Promise<void> {
+  await page.keyboard.press("Escape");
+  steps.push(`pressed Escape once to close ${what}`);
+  await page.waitForTimeout(400);
+}
+
+/** Whether the surface the overlay was opened from is still open. */
+async function stillOpen(page: Page, host: string): Promise<boolean> {
+  return page.locator(host).first().isVisible().catch(() => false);
+}
+
+/** Clicks the picture, then closes the preview with one Escape and reads what
+    is on top afterwards: the picture again, inside the conversation it was
+    opened from, which must still be open. */
+async function previewPicture(page: Page, scope: string, steps: string[], host: string): Promise<Opened> {
   const picture = page.locator(`${scope} ${PICTURE}`).first();
   await picture.scrollIntoViewIfNeeded();
   const box = await picture.boundingBox();
@@ -420,21 +444,17 @@ async function previewPicture(page: Page, scope: string, steps: string[]): Promi
   return {
     selector: LIGHTBOX,
     after: async () => {
-      try {
-        await page.locator(`${LIGHTBOX} button[aria-label="Close"]`).click({ timeout: 4_000 });
-        steps.push("closed the preview with its Close button");
-      } catch (error) {
-        steps.push(`the preview's Close button could not be clicked: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
-        return { closed: false, host: null };
-      }
-      await page.waitForTimeout(400);
+      await pressEscape(page, steps, "the preview");
       const closed = (await page.locator(LIGHTBOX).count()) === 0;
-      return { closed, host: await coverage(page, `${scope} ${PICTURE}`) };
+      const keptOpen = await stillOpen(page, host);
+      return { closed, keptOpen, host: keptOpen ? await coverage(page, `${scope} ${PICTURE}`) : null };
     },
   };
 }
 
-interface After { closed: boolean; host: Coverage | null }
+/** Escape closed the overlay (`closed`) and left the surface it was opened from open
+    (`keptOpen`); `host`, when read, is what is on top of the opener afterwards. */
+interface After { closed: boolean; keptOpen: boolean; host?: Coverage | null }
 interface Opened { selector: string; after?: () => Promise<After>; note?: string }
 type Step = (page: Page, steps: string[]) => Promise<Opened>;
 
@@ -448,6 +468,40 @@ async function accountsDialog(page: Page, steps: string[]): Promise<Opened> {
   steps.push("opened the menu inside the accounts dialog");
   return { selector: '[role="menu"], [role="listbox"]' };
 }
+
+/** Closes the microphone's menu with one Escape; the conversation it was opened in stays. */
+function micMenuEscape(page: Page, steps: string[], host: string): Opened {
+  return {
+    selector: MIC_MENU,
+    after: async () => {
+      await pressEscape(page, steps, "the microphone's menu");
+      return { closed: (await page.locator(MIC_MENU).count()) === 0, keptOpen: await stillOpen(page, host) };
+    },
+  };
+}
+
+/** Rests the pointer on a composer control (focuses it on a phone) and reads its hint bubble. */
+async function hintOf(page: Page, scope: string, label: string, steps: string[], where: string, touch: boolean): Promise<Opened> {
+  const control = page.locator(`${scope} button[aria-label="${label}"]`).first();
+  await control.scrollIntoViewIfNeeded();
+  if (touch) {
+    await control.focus();
+    steps.push(`focused "${label}" on ${where}`);
+  } else {
+    await control.hover();
+    steps.push(`rested the pointer on "${label}" on ${where}`);
+  }
+  const probe = await page.waitForFunction((text) => {
+    const bubble = Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]')).find((el) => el.textContent?.trim() === text && el.getBoundingClientRect().width > 0);
+    if (!bubble) return false;
+    bubble.setAttribute("data-layering-probe", "");
+    return true;
+  }, label, { timeout: 5_000 });
+  await probe.dispose();
+  return { selector: "[data-layering-probe]" };
+}
+
+const PHONE_CONVERSATION = 'button[aria-label="Dictate"]';
 
 const CASES: Record<string, { desktop: Step; phone: Step }> = {
   /* Symptom 1: the dropdown under the composer row and the role chip. */
@@ -479,20 +533,38 @@ const CASES: Record<string, { desktop: Step; phone: Step }> = {
     desktop: async (page, steps) => {
       const full = await expandOrchestrator(page, steps);
       await rightClickMic(page, full, steps, "the expanded conversation");
-      return { selector: MIC_MENU };
+      return micMenuEscape(page, steps, full);
     },
     phone: async (page, steps) => {
       await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation (full screen on a phone)");
       await rightClickMic(page, "body", steps, "the full-screen conversation");
-      return { selector: MIC_MENU };
+      return micMenuEscape(page, steps, PHONE_CONVERSATION);
     },
   },
   /* Symptom 2: the picture opens behind the expanded conversation. */
   "image-preview-from-expanded-conversation": {
-    desktop: async (page, steps) => previewPicture(page, await expandOrchestrator(page, steps), steps),
+    desktop: async (page, steps) => {
+      const full = await expandOrchestrator(page, steps);
+      return previewPicture(page, full, steps, full);
+    },
     phone: async (page, steps) => {
       await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation (full screen on a phone)");
-      return previewPicture(page, "body", steps);
+      return previewPicture(page, "body", steps, PHONE_CONVERSATION);
+    },
+  },
+  /* The tooltip layer: hover hints on the composer's edge controls, whole and on top. */
+  "composer-hint-orchestrator": {
+    desktop: async (page, steps) => hintOf(page, "section.seat", "Launch the agent", steps, "the orchestrator seat's composer", false),
+    phone: async (page, steps) => {
+      await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation");
+      return hintOf(page, "body", "Add files or images", steps, "the orchestrator's conversation", true);
+    },
+  },
+  "composer-hint-in-expanded-conversation": {
+    desktop: async (page, steps) => hintOf(page, await expandOrchestrator(page, steps), "Launch the agent", steps, "the expanded conversation's composer", false),
+    phone: async (page, steps) => {
+      await openOnPhone(page, steps, "Open Ship the review evidence for the readiness board and keep the verdict linked.", "a task's conversation from the board");
+      return hintOf(page, "body", "Add files or images", steps, "the task's conversation", true);
     },
   },
   "menu-inside-accounts-dialog": {
@@ -547,7 +619,8 @@ async function runCase(browser: Browser, baseUrl: string, project: string, viewp
     if (SHOTS) await page.screenshot({ path: path.join(BASE, `${id}-${viewport.name}.png`) });
     const afterReading = after ? await after() : undefined;
     const ok = Boolean(reading && reading.points > 0 && reading.covered === 0)
-      && (afterReading === undefined || (afterReading.closed && Boolean(afterReading.host && afterReading.host.covered === 0)));
+      && (afterReading === undefined || (afterReading.closed && afterReading.keptOpen
+        && (afterReading.host === undefined || Boolean(afterReading.host && afterReading.host.covered === 0))));
     return { id, viewport: viewport.name, ok, steps, coverage: reading, ...(afterReading ? { after: afterReading } : {}), ...(note ? { note } : {}) };
   } catch (error) {
     if (SHOTS) await page.screenshot({ path: path.join(BASE, `${id}-${viewport.name}-error.png`) }).catch(() => undefined);

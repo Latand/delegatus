@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import { Check, Copy, Loader2, Mic, Square, X } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { fmtElapsed, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictationResult } from "@/hooks/useDictation";
 import { micVisual } from "@/lib/dictationTimer";
 import { translate, useLocale } from "@/lib/i18n";
@@ -103,20 +104,15 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
     };
   }, [locale]);
 
-  /* Click-away and Escape both dismiss; the menu never outlives the composer. */
+  /* Click-away and Escape both dismiss; the menu never outlives the composer,
+     and its Escape never reaches a modal it was opened in. */
+  useOverlayEscape(onClose);
   useEffect(() => {
     const away = (event: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) onClose();
     };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
     window.addEventListener("pointerdown", away);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", away);
-      window.removeEventListener("keydown", key);
-    };
+    return () => window.removeEventListener("pointerdown", away);
   }, [onClose]);
 
   const pick = async (id: BackendId, available: boolean) => {

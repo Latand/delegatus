@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import { Check, Loader2 } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { useLocale } from "@/lib/i18n";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 
@@ -166,23 +167,15 @@ export function SpeakAlert({
   const rootRef = useRef<HTMLDivElement>(null);
   const { style, onScreen } = useAnchoredBox(anchorRef, rootRef, ALERT_WIDTH);
 
+  useOverlayEscape(onDismiss);
   useEffect(() => {
     const away = (event: Event) => {
       const target = event.target as Node | null;
       if (rootRef.current?.contains(target ?? null) || anchorRef.current?.contains(target ?? null)) return;
       onDismiss();
     };
-    const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onDismiss();
-    };
     window.addEventListener("pointerdown", away);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", away);
-      window.removeEventListener("keydown", key);
-    };
+    return () => window.removeEventListener("pointerdown", away);
   }, [anchorRef, onDismiss]);
 
   if (typeof document === "undefined" || !onScreen) return null;
@@ -247,24 +240,17 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
   useEffect(() => subscribeTtsCache(() => setCacheTick((tick) => tick + 1)), []);
 
   /* Click-away and Escape both dismiss; a pointerdown on the trigger is left
-     alone so its own contextmenu handler can toggle the menu shut. */
+     alone so its own contextmenu handler can toggle the menu shut. Escape
+     closes the menu alone, never a modal it was opened in. */
+  useOverlayEscape(() => onClose(true));
   useEffect(() => {
     const away = (event: Event) => {
       const target = event.target as Node | null;
       if (rootRef.current?.contains(target ?? null) || anchorRef.current?.contains(target ?? null)) return;
       onClose(false);
     };
-    const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onClose(true);
-    };
     window.addEventListener("pointerdown", away);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", away);
-      window.removeEventListener("keydown", key);
-    };
+    return () => window.removeEventListener("pointerdown", away);
   }, [anchorRef, onClose]);
 
   /* Keyboard: the menu opens on the context-menu key (Shift+F10 / the Menu key
