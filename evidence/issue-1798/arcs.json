@@ -1,0 +1,5731 @@
+{
+  "frames": {
+    "1680-en-light": {
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "lang": "en",
+      "scheme": "light",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "1280-en-light": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "light",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "640-en-light": {
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "light",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed"
+            }
+          ],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 108,
+          "pillsBottom": 108,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "arcs",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "1",
+              "max": "1",
+              "count": "1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline",
+              "stroke": "",
+              "strokeWidth": "",
+              "dash": "",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "right": 0,
+                "bottom": 0
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        }
+      ]
+    },
+    "1680-uk-light": {
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "1280-uk-light": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.423529 0.423529 0.47451 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "640-uk-light": {
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов"
+            }
+          ],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(138, 95, 0)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(138, 95, 0)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(198, 40, 40)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 108,
+          "pillsBottom": 108,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "arcs",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "1",
+              "max": "1",
+              "count": "1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн",
+              "stroke": "",
+              "strokeWidth": "",
+              "dash": "",
+              "countFill": "rgb(198, 40, 40)",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "right": 0,
+                "bottom": 0
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        }
+      ]
+    },
+    "390-en-light": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "board": "mobile2",
+      "collapsedRows": 0,
+      "arcLayers": 0
+    },
+    "1680-en-dark": {
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "1280-en-dark": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "If Review fails, work returns to Fix · up to 3 rounds",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "640-en-dark": {
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "documentLang": "en",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed"
+            }
+          ],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 3 times. · Fix is running now because Review failed",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Fail edge: when Critique fails, Fix runs again. Fired 1 of 3 times."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Review fails, Fix runs again. Fired 1 of 2 times. · Fix is running now because Review failed"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Fail edge: when Verify fails, Implement runs again. Fired 1 of 2 times."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 108,
+          "pillsBottom": 108,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "arcs",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "1",
+              "max": "1",
+              "count": "1/1",
+              "title": "Fail edge: when Build fails, Diagnose runs again. Fired 1 of 1 times. · No rounds left · another failure of Build parks the pipeline",
+              "stroke": "",
+              "strokeWidth": "",
+              "dash": "",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "right": 0,
+                "bottom": 0
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        }
+      ]
+    },
+    "1680-uk-dark": {
+      "viewport": {
+        "width": 1680,
+        "height": 950
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 552,
+          "rowWidth": 476,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 264,
+          "rowWidth": 190,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "1280-uk-dark": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "rest",
+              "live": "0",
+              "fired": "0",
+              "max": "3",
+              "count": null,
+              "title": "Якщо Review не проходить, робота повертається до Fix · до 3 раундів",
+              "stroke": "color(srgb 0.545098 0.545098 0.596078 / 0.45)",
+              "strokeWidth": "1.5px",
+              "dash": "4px, 3px",
+              "countFill": "",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 288,
+                "bottom": 38.6
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 55,
+          "pillsBottom": 24,
+          "band": 31,
+          "arcs": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "live": "0",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів.",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "1.5px",
+              "dash": "none",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 162,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "2",
+              "count": "1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 47,
+                "y": 27,
+                "right": 288,
+                "bottom": 52.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 480,
+          "rowWidth": 404,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "suffix",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "text": "↺1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 280,
+          "rowWidth": 206,
+          "rowHeight": 80,
+          "pillsBottom": 80,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        }
+      ]
+    },
+    "640-uk-dark": {
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "documentLang": "uk",
+      "rows": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов"
+            }
+          ],
+          "gapBelow": 17
+        }
+      ],
+      "plain": [
+        {
+          "pipeline": "p-arc-fired",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "live": "1",
+              "fired": "1",
+              "max": "3",
+              "count": "1/3",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 3 разів. · Fix виконується зараз, бо Review не пройшов",
+              "stroke": "rgb(224, 174, 69)",
+              "strokeWidth": "2.25px",
+              "dash": "7px, 5px",
+              "countFill": "rgb(224, 174, 69)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-rest",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-spent",
+          "mode": "arcs",
+          "chips": [
+            "fix",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 46,
+          "pillsBottom": 24,
+          "band": 22,
+          "arcs": [
+            {
+              "edge": "review:fail:fix",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "2",
+              "max": "2",
+              "count": "2/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн",
+              "stroke": "rgb(240, 113, 113)",
+              "strokeWidth": "2px",
+              "dash": "none",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 41,
+                "y": 27,
+                "right": 160,
+                "bottom": 43.73
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 21
+        },
+        {
+          "pipeline": "p-arc-two",
+          "mode": "suffix",
+          "chips": [
+            "fix",
+            "critique",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "critique:fail:fix",
+              "state": "fired",
+              "text": "↺1/3",
+              "title": "Ребро невдачі: коли Critique не проходить, знову запускається Fix. Спрацювало 1 з 3 разів."
+            },
+            {
+              "edge": "review:fail:fix",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 1 з 2 разів. · Fix виконується зараз, бо Review не пройшов"
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-links",
+          "mode": null,
+          "chips": [
+            "implement",
+            "review"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 24,
+          "pillsBottom": 24,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 19
+        },
+        {
+          "pipeline": "p-search",
+          "mode": "suffix",
+          "chips": [
+            "implement",
+            "review",
+            "verify",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 52,
+          "pillsBottom": 52,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [
+            {
+              "edge": "verify:fail:implement",
+              "state": "fired",
+              "text": "↺1/2",
+              "title": "Ребро невдачі: коли Verify не проходить, знову запускається Implement. Спрацювало 1 з 2 разів."
+            }
+          ],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-upload",
+          "mode": "suffix",
+          "chips": [
+            "plan",
+            "build-api",
+            "review-api",
+            "build-ui",
+            "review-ui",
+            "verify",
+            "docs",
+            "merge"
+          ],
+          "loopChips": 0,
+          "columnWidth": 368,
+          "rowWidth": 292,
+          "rowHeight": 108,
+          "pillsBottom": 108,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 17
+        },
+        {
+          "pipeline": "p-limits",
+          "mode": "arcs",
+          "chips": [
+            "build",
+            "review",
+            "diagnose"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [
+            {
+              "edge": "build:fail:diagnose",
+              "state": "exhausted",
+              "live": "0",
+              "fired": "1",
+              "max": "1",
+              "count": "1/1",
+              "title": "Ребро невдачі: коли Build не проходить, знову запускається Diagnose. Спрацювало 1 з 1 разів. · Раундів не лишилося · ще одна невдача Build зупиняє пайплайн",
+              "stroke": "",
+              "strokeWidth": "",
+              "dash": "",
+              "countFill": "rgb(240, 113, 113)",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "right": 0,
+                "bottom": 0
+              },
+              "intoPills": 0,
+              "pastCard": 0,
+              "pastRow": 0
+            }
+          ],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-attach",
+          "mode": null,
+          "chips": [
+            "build",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        },
+        {
+          "pipeline": "p-compact",
+          "mode": null,
+          "chips": [
+            "build",
+            "review",
+            "verify"
+          ],
+          "loopChips": 0,
+          "columnWidth": 0,
+          "rowWidth": 0,
+          "rowHeight": 0,
+          "pillsBottom": 0,
+          "band": 0,
+          "arcs": [],
+          "suffixes": [],
+          "gapBelow": 0
+        }
+      ]
+    },
+    "390-en-dark": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "board": "mobile2",
+      "collapsedRows": 0,
+      "arcLayers": 0
+    }
+  },
+  "failures": []
+}

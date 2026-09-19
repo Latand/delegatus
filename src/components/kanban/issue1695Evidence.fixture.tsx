@@ -50,6 +50,11 @@ const MANY = SCENARIO === "issue1765";
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* #1798: one task carrying the four lanes a return arc has to tell apart — a
+   fail edge at rest, one that fired once and is carrying the work back right
+   now, one whose budget is spent, and a lane with two fail edges into the same
+   stage. */
+const ARCS = SCENARIO === "issue1798";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -237,7 +242,84 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
   ];
 })() : [];
 
+/* #1798. Four lanes on one card, each with the fail edge in one state, so the
+   arcs under the rows can be read side by side at any width: at rest, fired
+   once with the returned stage running because of it, a spent budget, and two
+   edges into one target. The stages are short on purpose — the row of a real
+   card is 220-264 px wide, and both the one-line row (arcs) and the wrapped
+   row (the pill suffix) have to be visible in one frame. */
+const arcPipelines: Pipeline[] = ARCS ? (() => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
+  const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
+  const restCrit = conv("arc-rest-crit", "Reading the draft", working({ plan: { current: "Reading the draft" } }));
+  const firedFix = conv("arc-fired-fix", "Second pass after the review sent it back", working({ plan: { current: "Rewriting the summary row" } }));
+  const firedRev = conv("arc-fired-rev", "Sent it back: the summary row still lies", { mtime: now - 55 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const spentFix = conv("arc-spent-fix", "Third pass on the limit notice", { mtime: now - 40 * MIN });
+  const spentRev = conv("arc-spent-rev", "Out of returns", { mtime: now - 20 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const twoFix = conv("arc-two-fix", "Third pass on the picker", working({ plan: { current: "Reworking the picker" } }));
+  const twoCrit = conv("arc-two-crit", "Sent it back: the picker hides the default", { mtime: now - 140 * MIN });
+  const twoRev = conv("arc-two-rev", "Sent it back: the default is still not marked", { mtime: now - 90 * MIN, engine: "codex", model: "gpt-6-astra" });
+  return [
+    /* At rest: three stages, one fail edge, nothing used. The arc is faint and
+       wordless — the budget is in its tooltip only. */
+    pipeline("p-arc-rest", "Write the empty state of the pipelines list", "t-arcs", "running", [
+      stage("fix", "builder", "critique"),
+      stage("critique", "architect", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 3 } }),
+    ], [
+      { stageId: "fix", attempts: [attempt(1, "passed", restFix, { startedAt: iso(70 * MIN) })] },
+      { stageId: "critique", attempts: [attempt(1, "running", restCrit, { startedAt: iso(20 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "critique", state: "running", input: null, activatedBy: null }),
+    /* Fired once of three, and the stage it returned to is running BECAUSE of
+       it: the arc is the live one. */
+    pipeline("p-arc-fired", "Make the summary row say what actually ran", "t-arcs", "running", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 3 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", firedFix, { startedAt: iso(120 * MIN) }),
+        attempt(2, "running", firedFix, { startedAt: iso(40 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "failed", firedRev, { startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* Two of two used: the arc and its counter turn danger. */
+    pipeline("p-arc-spent", "Show the account limit reset on the card", "t-arcs", "running", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", spentFix, { startedAt: iso(150 * MIN) }),
+        attempt(2, "passed", spentFix, { startedAt: iso(110 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(3, "passed", spentFix, { startedAt: iso(60 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", spentRev, { startedAt: iso(130 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", spentRev, { startedAt: iso(80 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+    ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    /* Two fail edges into one target: two arcs at two depths, neither crossing
+       a pill and neither crossing the other. */
+    pipeline("p-arc-two", "Mark the default account in the picker", "t-arcs", "running", [
+      stage("fix", "builder", "critique"),
+      stage("critique", "architect", "review", { onFail: { to: "fix", maxRounds: 3 } }),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", twoFix, { startedAt: iso(200 * MIN) }),
+        attempt(2, "passed", twoFix, { startedAt: iso(150 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
+        attempt(3, "running", twoFix, { startedAt: iso(70 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", twoCrit, { startedAt: iso(170 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "passed", twoCrit, { startedAt: iso(130 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "failed", twoRev, { startedAt: iso(100 * MIN), activatedBy: { stageId: "critique", attempt: 2, edge: "pass" } })] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
 const pipelines: Pipeline[] = [
+  ...arcPipelines,
   ...marksPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -410,6 +492,7 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "Four lanes: an edge at rest, one fired once, a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);

@@ -263,7 +263,7 @@
 .kb .pstate-chip[data-pstate="needs_decision"] { color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 45%, var(--border-default)); background: var(--color-warning-soft); }
 .kb .pstate-chip[data-pstate="provisioning"] { color: var(--color-accent); border-style: dashed; }
 .kb .pstate-chip[data-pstate="completed"] { color: var(--color-secondary); }
-.kb .psummary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 4px; margin-top: 4px; }
+.kb .psummary { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 4px; margin-top: 4px; }
 .kb .pchip-wrap { display: inline-flex; align-items: center; gap: 4px; }
 .kb .pchip {
   display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 999px;
@@ -345,6 +345,42 @@
 .kb .ploop .lnames { min-width: 3ch; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .kb .ploop .lbudget, .kb .ploop .lnone, .kb .ploop .lglyph { flex-shrink: 0; }
 .kb .ploop .lnone { font-weight: 700; }
+
+/* ── A fail edge under the collapsed row (#1798) ───────────────────────────
+   The row of pills is the row of STEPS, so a fail edge is not in it: it is an
+   arc below the line the pills sit on, from the failing stage back to its
+   target, arrowhead at the target. Nothing here can cross a pill — the whole
+   layer starts under the pills' bottom edge — and the row reserves the band's
+   height as padding, so the arcs never paint onto what follows the row.
+
+   At rest the arc is the faint dashed line that means "configured, not
+   travelled" everywhere else on this board, and it says nothing: the budget is
+   in its tooltip and in the expanded graph. Firing turns it solid and warning
+   and puts the count on the arc itself; a spent budget turns it danger and
+   thickens it, so exhaustion is never the lighter drawing. */
+.kb .parcs { position: absolute; left: 0; width: 100%; overflow: visible; pointer-events: none; }
+.kb .parc { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 45%, transparent); stroke-dasharray: 4 3; pointer-events: stroke; }
+.kb .parc-head { fill: color-mix(in srgb, var(--color-muted) 45%, transparent); }
+.kb [data-arc-state="fired"] .parc { stroke: var(--color-warning); stroke-dasharray: none; }
+.kb [data-arc-state="fired"] .parc-head { fill: var(--color-warning); }
+.kb [data-arc-state="exhausted"] .parc { stroke: var(--color-danger); stroke-width: 2; stroke-dasharray: none; }
+.kb [data-arc-state="exhausted"] .parc-head { fill: var(--color-danger); }
+/* The arc that carried the work that is running right now, drawn as the graph
+   draws its live edge: the same moving dashes, the same width. */
+.kb [data-arc-live="1"] .parc { stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-edge-flow 700ms linear infinite; }
+/* The counter rides the arc, so the stroke is haloed out from behind the digits
+   rather than boxed away — one less rectangle on a 256 px card. */
+.kb .parc-count {
+  font: 700 var(--text-caption)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; text-anchor: middle; dominant-baseline: middle;
+  paint-order: stroke; stroke: var(--surface-card); stroke-width: 3px; stroke-linejoin: round;
+  fill: var(--color-warning); pointer-events: all;
+}
+.kb [data-arc-state="exhausted"] .parc-count { fill: var(--color-danger); }
+/* The wrapped row has no line to hang an arc under, so the failing pill carries
+   the count instead — and only once the edge has fired. */
+.kb .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
+.kb .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
 .kb .tone-active .pdot { background: var(--color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
 .kb .tone-review .pdot { background: var(--color-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-info) 22%, transparent); }
@@ -763,6 +799,7 @@
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
+  .kb [data-arc-live="1"] .parc { animation: none; stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
   .kb .card .history summary, .kb .card .history .hopen { min-height: 44px; }

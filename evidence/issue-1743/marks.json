@@ -54,15 +54,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique fails → Build2 of 3 used",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 186,
-            "scrollWidth": 186,
-            "budget": "2 of 3 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Fail edge: when Critique fails, Build runs again. Fired 2 of 3 times. · Build is running now because Critique failed"
           }
         ]
       },
@@ -87,15 +83,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review fails → Fix2 of 2 usednone left",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 219,
-            "scrollWidth": 219,
-            "budget": "2 of 2 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline · Fix is running now because Review failed"
           }
         ]
       },
@@ -746,15 +738,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique fails → Build2 of 3 used",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 186,
-            "scrollWidth": 186,
-            "budget": "2 of 3 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Fail edge: when Critique fails, Build runs again. Fired 2 of 3 times. · Build is running now because Critique failed"
           }
         ]
       },
@@ -779,15 +767,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review fails → Fix2 of 2 usednone left",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 219,
-            "scrollWidth": 219,
-            "budget": "2 of 2 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline · Fix is running now because Review failed"
           }
         ]
       },
@@ -1225,15 +1209,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique fails → Build2 of 3 used",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 186,
-            "scrollWidth": 186,
-            "budget": "2 of 3 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Fail edge: when Critique fails, Build runs again. Fired 2 of 3 times. · Build is running now because Critique failed"
           }
         ]
       },
@@ -1258,15 +1238,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review fails → Fix2 of 2 usednone left",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 219,
-            "scrollWidth": 219,
-            "budget": "2 of 2 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline · Fix is running now because Review failed"
           }
         ]
       },
@@ -1917,15 +1893,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique fails → Build2 of 3 used",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 186,
-            "scrollWidth": 186,
-            "budget": "2 of 3 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Fail edge: when Critique fails, Build runs again. Fired 2 of 3 times. · Build is running now because Critique failed"
           }
         ]
       },
@@ -1950,15 +1922,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review fails → Fix2 of 2 usednone left",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 219,
-            "scrollWidth": 219,
-            "budget": "2 of 2 used",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Fail edge: when Review fails, Fix runs again. Fired 2 of 2 times. · No rounds left · another failure of Review parks the pipeline · Fix is running now because Review failed"
           }
         ]
       },
@@ -2396,15 +2364,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 260,
-            "scrollWidth": 260,
-            "budget": "використано 2 з 3",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Ребро невдачі: коли Critique не проходить, знову запускається Build. Спрацювало 2 з 3 разів. · Build виконується зараз, бо Critique не пройшов"
           }
         ]
       },
@@ -2429,15 +2393,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 318,
-            "scrollWidth": 318,
-            "budget": "використано 2 з 2",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн · Fix виконується зараз, бо Review не пройшов"
           }
         ]
       },
@@ -3088,15 +3048,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 260,
-            "scrollWidth": 260,
-            "budget": "використано 2 з 3",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Ребро невдачі: коли Critique не проходить, знову запускається Build. Спрацювало 2 з 3 разів. · Build виконується зараз, бо Critique не пройшов"
           }
         ]
       },
@@ -3121,15 +3077,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 292,
-            "scrollWidth": 292,
-            "budget": "використано 2 з 2",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн · Fix виконується зараз, бо Review не пройшов"
           }
         ]
       },
@@ -3567,15 +3519,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 260,
-            "scrollWidth": 260,
-            "budget": "використано 2 з 3",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Ребро невдачі: коли Critique не проходить, знову запускається Build. Спрацювало 2 з 3 разів. · Build виконується зараз, бо Critique не пройшов"
           }
         ]
       },
@@ -3600,15 +3548,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 318,
-            "scrollWidth": 318,
-            "budget": "використано 2 з 2",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн · Fix виконується зараз, бо Review не пройшов"
           }
         ]
       },
@@ -4259,15 +4203,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/3",
             "spent": false,
-            "text": "2Critique не пройшов → Buildвикористано 2 з 3",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 260,
-            "scrollWidth": 260,
-            "budget": "використано 2 з 3",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "3",
+            "text": "Ребро невдачі: коли Critique не проходить, знову запускається Build. Спрацювало 2 з 3 разів. · Build виконується зараз, бо Critique не пройшов"
           }
         ]
       },
@@ -4292,15 +4232,11 @@
         ],
         "loops": [
           {
-            "count": "2",
+            "count": "2/2",
             "spent": true,
-            "text": "2Review не пройшов → Fixвикористано 2 з 2більше немає",
-            "clientHeight": 22,
-            "scrollHeight": 22,
-            "clientWidth": 292,
-            "scrollWidth": 292,
-            "budget": "використано 2 з 2",
-            "budgetTruncated": false
+            "fired": "2",
+            "max": "2",
+            "text": "Ребро невдачі: коли Review не проходить, знову запускається Fix. Спрацювало 2 з 2 разів. · Раундів не лишилося · ще одна невдача Review зупиняє пайплайн · Fix виконується зараз, бо Review не пройшов"
           }
         ]
       },

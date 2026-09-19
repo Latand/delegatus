@@ -3689,21 +3689,16 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         scaleWidth: Math.round((chip.querySelector("[data-effort-pills]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         nextDiffers: Boolean(chip.querySelector("[data-next-differs]")),
       })),
-      loops: [...scope.querySelectorAll<HTMLElement>(".ploop")].map((loop) => ({
-        count: loop.querySelector(".ccircle")?.textContent?.trim() ?? null,
-        spent: loop.className.includes("spent"),
-        text: loop.textContent?.trim() ?? "",
-        /* The chip is a fixed 22 px pill: text that wraps inside it paints above
-           and below the pill, which is what a 256 px card did (#1743). */
-        clientHeight: loop.clientHeight,
-        scrollHeight: loop.scrollHeight,
-        clientWidth: loop.clientWidth,
-        scrollWidth: loop.scrollWidth,
-        budget: loop.querySelector(".lbudget")?.textContent?.trim() ?? "",
-        budgetTruncated: (() => {
-          const part = loop.querySelector<HTMLElement>(".lbudget");
-          return Boolean(part && part.scrollWidth > part.clientWidth + 1);
-        })(),
+      /* The collapsed row draws a fail edge as an arc under the pills now, or,
+         on a row that wrapped, as a count on the failing pill (#1798). Either
+         way the budget it carries is the same one the chip used to print. */
+      loops: [...scope.querySelectorAll<HTMLElement>("[data-loop-arc], .pret")].map((mark) => ({
+        count: mark.querySelector(".parc-count")?.textContent?.trim() ?? (mark.classList.contains("pret") ? mark.textContent?.trim().replace(/^\u21ba/, "") ?? null : null),
+        spent: mark.dataset.arcState === "exhausted",
+        fired: mark.dataset.arcFired ?? null,
+        max: mark.dataset.arcMax ?? null,
+        /* The sentence the chip printed survives in the mark's own title. */
+        text: mark.querySelector("title")?.textContent ?? mark.getAttribute("title") ?? "",
       })),
     };
   }, scopeSelector);
@@ -3891,20 +3886,15 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
           if (chip.markWidth <= 0) failures.push(`${label}: chip ${chip.stage} mark is ${chip.markWidth} px wide`);
           if (chip.scaleWidth <= 0) failures.push(`${label}: chip ${chip.stage} effort scale is ${chip.scaleWidth} px wide`);
         }
-        if (chips?.loops[0]?.count !== "2") failures.push(`${label}: the loop chip counts ${JSON.stringify(chips?.loops[0]?.count)}`);
+        if (chips?.loops[0]?.fired !== "2") failures.push(`${label}: the return mark counts ${JSON.stringify(chips?.loops[0]?.fired)}`);
         const spentChips = await readChips(opened.page, `${CARD} ${SPENT}`);
-        if (!spentChips?.loops[0]?.spent) failures.push(`${label}: the spent loop chip is not drawn as spent`);
-        /* The loop chip is one 22 px line and the budget is the fact it exists
-           for: it may neither wrap out of its pill nor be the part cut off. */
+        if (!spentChips?.loops[0]?.spent) failures.push(`${label}: the spent return mark is not drawn as spent`);
+        /* Whatever form the mark took, the budget the chip used to print is
+           still reachable: the count on it, and the sentence in its title. */
         for (const loop of [...(chips?.loops ?? []), ...(spentChips?.loops ?? [])]) {
-          if (loop.scrollHeight > loop.clientHeight + 1) {
-            failures.push(`${label}: a loop chip wraps out of its pill (${loop.scrollHeight} in ${loop.clientHeight}) ${JSON.stringify(loop.text)}`);
-          }
-          if (loop.scrollWidth > loop.clientWidth + 1) {
-            failures.push(`${label}: a loop chip overflows its pill (${loop.scrollWidth} in ${loop.clientWidth}) ${JSON.stringify(loop.text)}`);
-          }
-          if (!loop.budget) failures.push(`${label}: a loop chip prints no budget ${JSON.stringify(loop.text)}`);
-          if (loop.budgetTruncated) failures.push(`${label}: a loop chip's budget is cut ${JSON.stringify(loop.budget)}`);
+          if (!loop.count) failures.push(`${label}: a fired return mark prints no count ${JSON.stringify(loop)}`);
+          if (!loop.max) failures.push(`${label}: a return mark carries no budget ${JSON.stringify(loop)}`);
+          if (!loop.text) failures.push(`${label}: a return mark carries no sentence ${JSON.stringify(loop)}`);
         }
 
         /* Then the card graph itself. */
@@ -4110,7 +4100,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         const uk = frames[`${width}-uk-${scheme}`] as { chips?: { loops: Array<{ text: string }> } } | undefined;
         const enText = en?.chips?.loops[0]?.text ?? "";
         const ukText = uk?.chips?.loops[0]?.text ?? "";
-        if (!enText || !ukText) failures.push(`${width}-${scheme}: a loop chip printed nothing to compare languages on`);
+        if (!enText || !ukText) failures.push(`${width}-${scheme}: a return mark printed nothing to compare languages on`);
         else if (enText === ukText) failures.push(`${width}-${scheme}: the Ukrainian frame drew the English string ${JSON.stringify(enText)}`);
       }
     }
@@ -4243,4 +4233,365 @@ describe("#1802 folding the rail footer and the orchestrator seat", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 300_000);
+});
+
+describe("#1798 a fail edge is a return arc under the collapsed row", () => {
+  /*
+   * Rendered evidence for #1798, on the harness every kanban case uses: the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=issue1798`, with the
+   * production stylesheet, in Chromium.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * One task carries the four lanes the arc has to tell apart: a fail edge at
+   * rest, one that fired once and is carrying the work back right now, one
+   * whose budget is spent, and a lane with two fail edges into the same stage.
+   *
+   * What only a browser settles, and is gated here:
+   *   - the collapsed row holds stage pills and nothing else — the fail-edge
+   *     chip is gone from it, at every width;
+   *   - an arc is drawn entirely BELOW the line the pills sit on, so it crosses
+   *     no pill, and stays inside the card, so it touches no card edge;
+   *   - the row reserves the arcs' depth, so nothing the arc paints lands on the
+   *     line under the row — and a lane with no fail edge reserves nothing;
+   *   - at rest the arc prints no count and keeps the sentence in its title;
+   *     once fired it prints `n/max` and takes the warning colour; a spent
+   *     budget takes the danger colour, which is a different colour, not a
+   *     lighter one;
+   *   - two edges into one target hang at two different depths and their boxes
+   *     do not meet;
+   *   - a row that wrapped drops the arcs altogether and puts the same count on
+   *     the failing stage's own pill, and only once the edge has fired.
+   *
+   * The phone (390 px) is recorded rather than gated: under 640 px the Viewer
+   * hands the whole board to the mobile shell, so the collapsed kanban row has
+   * no phone surface at all — the wrapped row, which is what the issue calls
+   * the phone case, is the narrow desktop column, and is gated there.
+   *
+   * Measurements go to `evidence/issue-1798/arcs.json`; frames to
+   * `.artifacts/issue-1798/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1798");
+  const EVIDENCE = path.resolve("evidence/issue-1798");
+  const CARD = card("t-arcs");
+  /* The lanes with no fail edge at all: they must reserve no band. */
+  const PLAIN = "[data-kanban-board]";
+
+  interface ArcMeasure {
+    edge: string;
+    state: string | null;
+    live: string | null;
+    fired: string | null;
+    max: string | null;
+    /** The count drawn on the arc itself, when one is. */
+    count: string | null;
+    /** The sentence the arc kept, which is where the budget lives at rest. */
+    title: string;
+    stroke: string;
+    strokeWidth: string;
+    dash: string;
+    countFill: string;
+    /** The arc's painted box, relative to the row's own box. */
+    box: { x: number; y: number; right: number; bottom: number } | null;
+    /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
+        over zero is an arc drawn into the row of pills. */
+    intoPills: number;
+    /** Pixels by which the arc paints outside the card's content box. */
+    pastCard: number;
+    /** Pixels by which the arc paints below the row's own box — onto whatever
+        the card draws under it. */
+    pastRow: number;
+  }
+
+  interface RowMeasure {
+    pipeline: string;
+    /** `arcs` on a one-line row, `suffix` on a wrapped one, absent with no edge. */
+    mode: string | null;
+    chips: string[];
+    /** Fail-edge chips still in the row of steps. There must be none. */
+    loopChips: number;
+    columnWidth: number;
+    rowWidth: number;
+    rowHeight: number;
+    /** The bottom of the line the pills sit on, relative to the row. */
+    pillsBottom: number;
+    /** The height the row reserved under the pills for the arcs. */
+    band: number;
+    arcs: ArcMeasure[];
+    suffixes: Array<{ edge: string; state: string | null; text: string; title: string }>;
+    /** The gap between the row's bottom and the next thing the card draws. */
+    gapBelow: number;
+  }
+
+  const readRows = (page: Page, scopeSelector: string) => page.evaluate((selector): RowMeasure[] => {
+    const scope = document.querySelector(selector);
+    if (!scope) return [];
+    return [...scope.querySelectorAll<HTMLElement>(".stage-section")].map((section) => {
+      const row = section.querySelector<HTMLElement>(".psummary");
+      const cardBox = section.closest<HTMLElement>(".card")!.getBoundingClientRect();
+      const column = section.closest<HTMLElement>(".column") ?? section.closest<HTMLElement>(".card")!;
+      if (!row) {
+        return {
+          pipeline: section.dataset.pipeline ?? "", mode: null, chips: [], loopChips: 0,
+          columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: 0, rowHeight: 0,
+          pillsBottom: 0, band: 0, arcs: [], suffixes: [], gapBelow: 0,
+        };
+      }
+      const rowBox = row.getBoundingClientRect();
+      const pills = [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.getBoundingClientRect());
+      const pillsBottom = pills.length ? Math.max(...pills.map((pill) => pill.bottom)) - rowBox.top : 0;
+      /* The `.psummary` is alone inside its slot, so what follows the row is
+         what follows the slot — and failing that, the section's own bottom. */
+      const slot = row.closest<HTMLElement>(".graph-slot") ?? row;
+      const next = (slot.nextElementSibling ?? section.nextElementSibling)?.getBoundingClientRect()
+        ?? { top: section.getBoundingClientRect().bottom };
+      const round = (value: number) => Math.round(value * 100) / 100;
+      const arcs = [...row.querySelectorAll<SVGGElement>("[data-loop-arc]")].map((group): ArcMeasure => {
+        const path = group.querySelector<SVGPathElement>(".parc");
+        const head = group.querySelector<SVGPolygonElement>(".parc-head");
+        const count = group.querySelector<SVGTextElement>(".parc-count");
+        /* The painted ink of the whole arc: the curve, its arrowhead and, when
+           it has one, its counter. */
+        const parts = [path, head, count].filter(Boolean).map((part) => part!.getBoundingClientRect());
+        const box = parts.length
+          ? {
+            x: round(Math.min(...parts.map((part) => part.left)) - rowBox.left),
+            y: round(Math.min(...parts.map((part) => part.top)) - rowBox.top),
+            right: round(Math.max(...parts.map((part) => part.right)) - rowBox.left),
+            bottom: round(Math.max(...parts.map((part) => part.bottom)) - rowBox.top),
+          }
+          : null;
+        const style = path ? getComputedStyle(path) : null;
+        /* A stroke is painted half outside the geometry the box reports, so the
+           half-width is added on every side before anything is called a clash. */
+        const half = style ? Number.parseFloat(style.strokeWidth) / 2 || 0 : 0;
+        const absolute = parts.length
+          ? { top: Math.min(...parts.map((part) => part.top)) - half, left: Math.min(...parts.map((part) => part.left)) - half, right: Math.max(...parts.map((part) => part.right)) + half, bottom: Math.max(...parts.map((part) => part.bottom)) + half }
+          : null;
+        return {
+          edge: group.dataset.loopArc ?? "",
+          state: group.dataset.arcState ?? null,
+          live: group.dataset.arcLive ?? null,
+          fired: group.dataset.arcFired ?? null,
+          max: group.dataset.arcMax ?? null,
+          count: count?.textContent?.trim() ?? null,
+          title: group.querySelector("title")?.textContent ?? "",
+          stroke: style?.stroke ?? "",
+          strokeWidth: style?.strokeWidth ?? "",
+          dash: style?.strokeDasharray ?? "",
+          countFill: count ? getComputedStyle(count).fill : "",
+          box,
+          intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
+          pastCard: absolute ? round(Math.max(0, cardBox.left - absolute.left, absolute.right - cardBox.right)) : 0,
+          pastRow: absolute ? round(Math.max(0, absolute.bottom - rowBox.bottom)) : 0,
+        };
+      });
+      return {
+        pipeline: section.dataset.pipeline ?? "",
+        mode: row.dataset.arcs ?? null,
+        chips: [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.dataset.stage ?? ""),
+        loopChips: row.querySelectorAll(".ploop").length,
+        columnWidth: Math.round(column.getBoundingClientRect().width),
+        rowWidth: round(rowBox.width),
+        rowHeight: round(rowBox.height),
+        pillsBottom: round(pillsBottom),
+        band: round(rowBox.height - pillsBottom),
+        arcs,
+        suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
+          edge: mark.dataset.stageReturn ?? "",
+          state: mark.dataset.arcState ?? null,
+          text: mark.textContent?.trim() ?? "",
+          title: mark.getAttribute("title") ?? "",
+        })),
+        gapBelow: round(next.top - rowBox.bottom),
+      };
+    });
+  }, scopeSelector);
+
+  browserTest("#1798: the fail-edge chip is gone, the arc hangs under the pills, and a wrapped row carries the count on the pill", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1798`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+
+    const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
+      const by = (id: string) => rows.find((row) => row.pipeline === id);
+      if (rows.length !== 4) {
+        failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
+        return;
+      }
+      for (const row of rows) {
+        /* The point of the issue: the row of steps holds steps only. */
+        if (row.loopChips) failures.push(`${label}: ${row.pipeline} still draws ${row.loopChips} fail-edge chip(s) in the row`);
+        if (!row.chips.length) failures.push(`${label}: ${row.pipeline} drew no stage pill`);
+        for (const arc of row.arcs) {
+          if (arc.intoPills > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.intoPills} px into the row of pills`);
+          if (arc.pastCard > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastCard} px outside the card`);
+          if (arc.pastRow > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastRow} px below the row, onto the line under it`);
+          if (!arc.title || arc.title.length < 12) failures.push(`${label}: ${row.pipeline} ${arc.edge} carries no sentence (${JSON.stringify(arc.title)})`);
+        }
+        if (row.mode === "arcs" && !row.arcs.length) failures.push(`${label}: ${row.pipeline} says it draws arcs and drew none`);
+        /* The band exists only for the arcs: a wrapped row reserves nothing. */
+        if (row.mode === "suffix" && row.band > 1) failures.push(`${label}: ${row.pipeline} wrapped to suffixes and still reserves ${row.band} px`);
+        if (row.mode === "suffix" && row.arcs.length) failures.push(`${label}: ${row.pipeline} wrapped and still drew ${row.arcs.length} arc(s)`);
+        /* Whatever the mode, a fired edge says its count somewhere in the row. */
+        const marks = [...row.arcs.map((arc) => [arc.state, arc.count] as const), ...row.suffixes.map((mark) => [mark.state, mark.text] as const)];
+        for (const [state, text] of marks) {
+          if (state === "rest" && text) failures.push(`${label}: ${row.pipeline} prints ${JSON.stringify(text)} for an edge that never fired`);
+          if (state !== "rest" && !text) failures.push(`${label}: ${row.pipeline} prints nothing for an edge in state ${state}`);
+        }
+      }
+      /* A lane with no fail edge reserves no band and draws no layer. */
+      const edgeless = plain.filter((row) => row.mode === null && row.chips.length);
+      if (!edgeless.length) failures.push(`${label}: the board drew no lane without a fail edge to compare against`);
+      for (const row of edgeless) {
+        if (row.band > 1) failures.push(`${label}: ${row.pipeline} has no fail edge and still reserves ${row.band} px under its row`);
+      }
+
+      const rest = by("p-arc-rest")!;
+      const fired = by("p-arc-fired")!;
+      const spent = by("p-arc-spent")!;
+      const two = by("p-arc-two")!;
+      const edgeOf = (row: RowMeasure, edge: string) => row.arcs.find((arc) => arc.edge === edge) ?? null;
+      const markOf = (row: RowMeasure, edge: string) => row.suffixes.find((mark) => mark.edge === edge) ?? null;
+
+      /* At rest: no number anywhere in the row, and the budget in the title. */
+      const restEdge = edgeOf(rest, "review:fail:fix");
+      if (rest.mode === "arcs") {
+        if (restEdge?.state !== "rest") failures.push(`${label}: the untouched edge reads ${JSON.stringify(restEdge?.state)}`);
+        if (restEdge?.count) failures.push(`${label}: the untouched edge prints ${JSON.stringify(restEdge.count)}`);
+        if (!/3/.test(restEdge?.title ?? "")) failures.push(`${label}: the untouched edge's title does not carry its budget (${JSON.stringify(restEdge?.title)})`);
+      } else if (rest.suffixes.length) {
+        failures.push(`${label}: the wrapped lane at rest still marks a pill ${JSON.stringify(rest.suffixes)}`);
+      }
+
+      /* Fired once of three, with the returned stage running because of it. */
+      const firedEdge = edgeOf(fired, "review:fail:fix");
+      const firedMark = markOf(fired, "review:fail:fix");
+      if (fired.mode === "arcs") {
+        if (firedEdge?.state !== "fired") failures.push(`${label}: the edge that fired once reads ${JSON.stringify(firedEdge?.state)}`);
+        if (firedEdge?.count !== "1/3") failures.push(`${label}: the edge that fired once counts ${JSON.stringify(firedEdge?.count)}`);
+        if (firedEdge?.live !== "1") failures.push(`${label}: the edge carrying the running work is not the live one`);
+      } else if (!/1.*3/.test(firedMark?.text ?? "")) {
+        failures.push(`${label}: the wrapped fired lane marks its pill ${JSON.stringify(firedMark?.text)}`);
+      }
+
+      /* A spent budget: a different colour, never a lighter version of the same. */
+      const spentEdge = edgeOf(spent, "review:fail:fix");
+      const spentMark = markOf(spent, "review:fail:fix");
+      if (spent.mode === "arcs") {
+        if (spentEdge?.state !== "exhausted") failures.push(`${label}: the spent edge reads ${JSON.stringify(spentEdge?.state)}`);
+        if (spentEdge?.count !== "2/2") failures.push(`${label}: the spent edge counts ${JSON.stringify(spentEdge?.count)}`);
+        if (firedEdge && spentEdge && firedEdge.stroke === spentEdge.stroke) {
+          failures.push(`${label}: the spent arc is painted the same colour as the live one (${spentEdge.stroke})`);
+        }
+        /* Exhaustion is never the lighter drawing: the spent arc carries at
+           least the ink of the untouched one. The live arc is not the subject
+           — liveness has its own width wherever it appears. */
+        if (restEdge && spentEdge && Number.parseFloat(spentEdge.strokeWidth) < Number.parseFloat(restEdge.strokeWidth) - 0.01) {
+          failures.push(`${label}: the spent arc is thinner than the untouched one`);
+        }
+        if (restEdge && spentEdge && restEdge.stroke === spentEdge.stroke) {
+          failures.push(`${label}: the spent arc is painted the colour of an untouched one (${spentEdge.stroke})`);
+        }
+      } else if (spentMark?.state !== "exhausted") {
+        failures.push(`${label}: the wrapped spent lane marks its pill ${JSON.stringify(spentMark)}`);
+      }
+
+      /* Two edges into one target: two arcs, two depths, no meeting. */
+      if (two.mode === "arcs") {
+        if (two.arcs.length !== 2) failures.push(`${label}: the two-edge lane drew ${two.arcs.length} arc(s)`);
+        const [first, second] = [...two.arcs].sort((a, b) => (a.box?.bottom ?? 0) - (b.box?.bottom ?? 0));
+        if (first?.box && second?.box) {
+          /* Both arcs end on the same pill — that IS the shape. What has to
+             differ is how deep each hangs and where each head lands, or the
+             two read as one arrow. */
+          if (second.box.bottom - first.box.bottom < 4) {
+            failures.push(`${label}: the two arcs hang at the same depth (${first.box.bottom} and ${second.box.bottom})`);
+          }
+          if (Math.abs(first.box.x - second.box.x) < 3) {
+            failures.push(`${label}: the two arrowheads land on the same point (${first.box.x} and ${second.box.x})`);
+          }
+        }
+        if (two.arcs.some((arc) => arc.count === null)) {
+          failures.push(`${label}: an edge of the two-edge lane prints no count ${JSON.stringify(two.arcs.map((arc) => [arc.edge, arc.count]))}`);
+        }
+      } else if (two.suffixes.length !== 2) {
+        failures.push(`${label}: the wrapped two-edge lane marks ${two.suffixes.length} pill(s)`);
+      }
+    };
+
+    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk") => {
+      const label = `${width}-${lang}-${scheme}`;
+      const opened = await openFixture(browser, base, { width, height }, scheme, lang);
+      try {
+        await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+        await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await opened.page.waitForTimeout(500);
+        const rows = await readRows(opened.page, CARD);
+        const plain = await readRows(opened.page, PLAIN);
+        await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `card-${label}.png`) });
+        await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+        check(label, rows, plain);
+        frames[label] = { viewport: { width, height }, lang, scheme, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The phone is recorded, not gated: the kanban board does not mount there. */
+    const phone = async (scheme: Scheme) => {
+      const label = `390-en-${scheme}`;
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en");
+      try {
+        await opened.page.waitForTimeout(800);
+        await opened.page.screenshot({ path: path.join(OUT, `phone-${label}.png`), fullPage: true });
+        frames[label] = {
+          viewport: { width: 390, height: 844 },
+          board: await opened.page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none")),
+          collapsedRows: await opened.page.evaluate(() => document.querySelectorAll(".psummary").length),
+          arcLayers: await opened.page.evaluate(() => document.querySelectorAll("[data-arc-layer]").length),
+        };
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          /* A wide board and the scroller, where every row is one line and all
+             four arcs are drawn; then 640 px, the narrowest desktop the board
+             supports, where the three-stage rows wrap and hand their count to
+             the failing pill while the two-stage ones keep their arcs. */
+          await desktop(1680, 950, scheme, lang);
+          await desktop(1280, 900, scheme, lang);
+          await desktop(640, 900, scheme, lang);
+        }
+        await phone(scheme);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    /* Both modes have to appear across the widths, or the evidence only shows
+       half the design. */
+    const modes = new Set(Object.values(frames).flatMap((frame) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode)));
+    for (const wanted of ["arcs", "suffix"]) {
+      if (!modes.has(wanted)) failures.push(`no width produced a row in ${wanted} mode; modes seen: ${[...modes].join(", ")}`);
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
 });

@@ -164,8 +164,9 @@ test("every card starts on the compact summary, the active Assigned card include
   expect(card(host).querySelector(".pnode")).toBeNull();
   expect(toggle(host)?.getAttribute("aria-pressed")).toBe("false");
   expect([...card(host).querySelectorAll(".psummary .pchip")].map((chip) => chip.getAttribute("data-stage"))).toEqual(["implement", "review", "verify", "merge"]);
-  /* The loop chip leads with the circled count the arrow draws (#1743). */
-  expect(card(host).querySelector(".ploop .ccircle")?.getAttribute("data-count")).toBe("1");
+  /* The fail edge is an arc under the row, never a chip in it (#1798). */
+  expect(card(host).querySelector(".psummary .ploop")).toBeNull();
+  expect(card(host).querySelector('.psummary [data-loop-arc="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
   click(toggle(host));
   await tick();
   expect(section().classList.contains("open")).toBe(true);
@@ -212,8 +213,8 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     record.runs[0]!.attempts.push(helperAttempt(3, helper, 3000) as never);
     const { host } = mount([record]);
     await tick();
-    /* The summary's loop chip reads the same budget. */
-    expect(card(host).querySelector(".ploop .ccircle")?.getAttribute("data-count")).toBe("1");
+    /* The summary's return arc reads the same budget. */
+    expect(card(host).querySelector('.psummary [data-loop-arc="verify:fail:implement"]')?.getAttribute("data-arc-fired")).toBe("1");
     click(toggle(host));
     await tick();
     expect(card(host).querySelector<HTMLElement>('[data-edge-label="verify:fail:implement"]')?.dataset.edgeFired).toBe("1");
@@ -455,4 +456,75 @@ test("three rows or fewer stay unfolded, whatever their state (#1765)", async ()
   expect([...card(host).querySelectorAll<HTMLElement>(".stage-section")].map((row) => row.dataset.pipeline))
     .toEqual(["p-live-1", "p-live-2", "p-done-1"]);
   expect(card(host).querySelector("[data-completed-toggle]")).toBeNull();
+});
+
+/* #1798: the collapsed row draws a fail edge as a return arc under the stages,
+   never as a chip among them. The same three-stage lane, with its fail edge in
+   each of the states the arc has to tell apart. A round is counted from the
+   target's activations, so a round is one further Fix attempt naming the source
+   attempt that sent the work back. */
+function arcPipeline(over: { max: number; fired: number; running?: boolean; fromCritique?: boolean }): Pipeline {
+  const attempts: unknown[] = [attempt(1, "passed", implement1, 7200)];
+  for (let round = 1; round <= over.fired; round += 1) {
+    const last = round === over.fired;
+    attempts.push(attempt(1 + round, last && over.running ? "running" : "passed", implement2, 4000 - round * 100, {
+      activatedBy: { stageId: over.fromCritique && round === 1 ? "critique" : "review", attempt: round, edge: "fail" },
+    }));
+  }
+  return {
+    id: "p-search", task: "Fail edges as arcs", taskIds: ["t-search"], project: "fixture", state: "running",
+    stages: [
+      stage("fix", "builder", "critique"),
+      stage("critique", "verifier", "review", over.fromCritique ? { onFail: { to: "fix", maxRounds: over.max } } : {}),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: over.max } }),
+    ],
+    runs: [{ stageId: "fix", attempts }],
+    cursor: { stageId: "fix", state: over.running ? "running" : "passed", input: null, activatedBy: null },
+    worktreeDir: "/fixture/worktree", createdAt: iso(9000),
+  } as unknown as Pipeline;
+}
+
+const arc = (host: HTMLElement, id: string) => card(host).querySelector<HTMLElement>(`.psummary [data-loop-arc="${id}"]`);
+
+test("a fail edge takes no slot in the collapsed row: it is a return arc, silent at rest and counted once it fires (#1798)", async () => {
+  /* At rest the row is the stages and nothing else: no chip for the edge, and
+     the arc that carries it prints no count — only the sentence in its title. */
+  const rest = mount([arcPipeline({ max: 3, fired: 0 })]);
+  await tick();
+  expect([...card(rest.host).querySelectorAll<HTMLElement>(".psummary .pchip")].map((chip) => chip.dataset.stage)).toEqual(["fix", "critique", "review"]);
+  expect(card(rest.host).querySelector(".psummary .ploop")).toBeNull();
+  expect(card(rest.host).querySelector<HTMLElement>(".psummary")?.dataset.arcs).toBe("arcs");
+  const atRest = arc(rest.host, "review:fail:fix")!;
+  expect(atRest.dataset.arcState).toBe("rest");
+  expect(atRest.dataset.arcFired).toBe("0");
+  expect(atRest.dataset.arcMax).toBe("3");
+  expect(atRest.querySelector(".parc-count")).toBeNull();
+  expect(atRest.querySelector("title")?.textContent).toContain("up to 3 rounds");
+  /* Nothing at rest reaches the pills either: the suffix is the wrapped row's. */
+  expect(card(rest.host).querySelector(".psummary .pret")).toBeNull();
+
+  /* One round of three spent, and the returned stage running because of it. */
+  const fired = mount([arcPipeline({ max: 3, fired: 1, running: true })]);
+  await tick();
+  const once = arc(fired.host, "review:fail:fix")!;
+  expect(once.dataset.arcState).toBe("fired");
+  expect(once.dataset.arcFired).toBe("1");
+  expect(once.dataset.arcLive).toBe("1");
+  expect(once.querySelector(".parc-count")?.textContent).toBe("1/3");
+
+  /* The budget spent: the arc turns danger and its title says what that costs. */
+  const spent = mount([arcPipeline({ max: 2, fired: 2 })]);
+  await tick();
+  const gone = arc(spent.host, "review:fail:fix")!;
+  expect(gone.dataset.arcState).toBe("exhausted");
+  expect(gone.dataset.arcLive).toBe("0");
+  expect(gone.querySelector(".parc-count")?.textContent).toBe("2/2");
+  expect(gone.querySelector("title")?.textContent).toContain("No rounds left");
+
+  /* Two edges into one target are two arcs, each with its own count. */
+  const both = mount([arcPipeline({ max: 3, fired: 2, fromCritique: true })]);
+  await tick();
+  expect([...card(both.host).querySelectorAll<HTMLElement>(".psummary [data-loop-arc]")].map((node) => [node.dataset.loopArc, node.dataset.arcFired]))
+    .toEqual([["critique:fail:fix", "1"], ["review:fail:fix", "1"]]);
+  expect(card(both.host).querySelectorAll(".psummary .pchip")).toHaveLength(3);
 });

@@ -267,8 +267,195 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
   );
 }
 
-/** The one-line summary: the pass path in order, then every loop and branch as
-    its own chip, so a cycle is never flattened. */
+/* ── A fail edge in the collapsed row (#1798) ──────────────────────────────
+   A fail edge is not a step of the chain, so it is not a chip in the row of
+   steps. It is a return arc UNDER the row, from the failing stage back to its
+   target, with the arrowhead at the target. At rest it is faint and says
+   nothing: the budget is configuration, and configuration lives in the arc's
+   tooltip and in the expanded graph. Once the edge has fired the arc warns and
+   carries its count on itself; a spent budget turns danger. A row that wrapped
+   drops the arcs — an arc across two lines reads as neither — and the failing
+   stage's pill carries the same count as a compact suffix instead. */
+
+/** What the arc says at a glance: nothing, a count, or a spent budget. */
+export type ArcState = "rest" | "fired" | "exhausted";
+
+export interface LoopArc {
+  loop: KanbanPipeline["loops"][number];
+  /** The graph's own edge id, so the two surfaces name one edge alike. */
+  id: string;
+  state: ArcState;
+  /** The target is running right now because this edge sent the work back. */
+  live: boolean;
+}
+
+const RETURNED_RUNNING = new Set<StageChipState>(["running", "reviewing", "committing"]);
+
+/** Every fail edge of a pipeline with the state its arc draws, from the data
+    graph slice 5 already records (#1743) — nothing here is a new reading. */
+export function loopArcs(summary: KanbanPipeline): LoopArc[] {
+  return summary.loops.map((loop) => {
+    const attempt = latestAttempt(summary.pipeline, loop.to.id);
+    const returned = attempt?.activatedBy?.stageId === loop.from.id && attempt.activatedBy.edge === "fail";
+    return {
+      loop,
+      id: `${loop.from.id}:fail:${loop.to.id}`,
+      state: loop.fired === 0 ? "rest" : loop.fired >= loop.max ? "exhausted" : "fired",
+      live: Boolean(returned) && RETURNED_RUNNING.has(summary.views.get(loop.to.id)?.state ?? "pending"),
+    };
+  });
+}
+
+/** The sentence the arc keeps: at rest what the edge WOULD do, once it has
+    fired what it did, and when the budget is gone what that costs the lane. */
+function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): string {
+  const { fired, max } = arc.loop;
+  if (arc.state === "rest") return t("kanban.loopRest", { from, to, max });
+  return [
+    t("kanban.loopTitle", { from, to, fired, max }),
+    arc.state === "exhausted" ? t("kanban.loopParked", { from }) : null,
+    arc.live ? t("kanban.loopLive", { from, to }) : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/* The band under the row, in px: how far below the pills the shallowest arc
+   hangs, how much deeper each arc stacked under it goes, how tall the
+   arrowhead at the target is, and the room the deepest arc's counter needs so
+   nothing paints onto what follows the row. */
+const ARC_GAP = 3;
+const ARC_DIP = 11;
+const ARC_STEP = 9;
+const ARC_HEAD = 5;
+const ARC_LABEL = 8;
+/* Two edges into one stage land on one pill, so their arrowheads are fanned
+   apart along it — stacked on the same point they read as one arrow. */
+const ARC_FAN = 6;
+
+interface ArcPath { d: string; head: string; lx: number; ly: number }
+interface ArcBand {
+  /** Serialized geometry: one compare decides whether a measurement changed. */
+  key: string;
+  /** The row runs over more than one line, so arcs are dropped for suffixes. */
+  wrapped: boolean;
+  top: number;
+  height: number;
+  paths: ReadonlyMap<string, ArcPath>;
+}
+const EMPTY_BAND: ArcBand = { key: "", wrapped: false, top: 0, height: 0, paths: new Map() };
+const round = (value: number) => Math.round(value * 2) / 2;
+
+/**
+ * The arcs' geometry, from the pills' own boxes: a cubic that leaves the
+ * failing pill's bottom edge, hangs under the row and comes back up into its
+ * target. Arcs are stacked by the distance they span, so the short one never
+ * hides under the long one and neither crosses a pill — they live entirely
+ * below the line the pills sit on. A row whose pills are not all on one line
+ * is reported wrapped and gets no arcs at all.
+ */
+function measureArcs(row: HTMLElement, chips: ReadonlyMap<string, HTMLElement>, arcs: readonly LoopArc[]): ArcBand {
+  const rowRect = row.getBoundingClientRect();
+  const boxes = new Map<string, { cx: number; left: number; right: number; top: number; bottom: number }>();
+  for (const [id, element] of chips) {
+    const rect = element.getBoundingClientRect();
+    if (!rect.width && !rect.height) continue;
+    boxes.set(id, {
+      cx: rect.left - rowRect.left + rect.width / 2,
+      left: rect.left - rowRect.left,
+      right: rect.right - rowRect.left,
+      top: rect.top - rowRect.top,
+      bottom: rect.bottom - rowRect.top,
+    });
+  }
+  if (!boxes.size) return EMPTY_BAND;
+  const tops = [...boxes.values()].map((box) => box.top);
+  if (Math.max(...tops) - Math.min(...tops) > 1) return { ...EMPTY_BAND, key: "wrapped", wrapped: true };
+  const spans = arcs.flatMap((arc) => {
+    const from = boxes.get(arc.loop.from.id);
+    const to = boxes.get(arc.loop.to.id);
+    return from && to ? [{ id: arc.id, from, to, span: Math.abs(from.cx - to.cx) }] : [];
+  });
+  if (!spans.length) return EMPTY_BAND;
+  const paths = new Map<string, ArcPath>();
+  let deepest = 0;
+  for (const [rank, entry] of [...spans].sort((a, b) => a.span - b.span).entries()) {
+    const dip = ARC_DIP + rank * ARC_STEP;
+    /* A cubic hangs three quarters of the way to its control points, so the
+       controls go deeper than the dip the arc is meant to have. */
+    const control = round((dip * 4) / 3);
+    const x1 = round(entry.from.cx);
+    /* The head is fanned towards the source, and never off its own pill. */
+    const toward = Math.sign(entry.from.cx - entry.to.cx) || 1;
+    const x2 = round(Math.min(Math.max(entry.to.cx + rank * ARC_FAN * toward, entry.to.left + ARC_FAN), entry.to.right - ARC_FAN));
+    paths.set(entry.id, {
+      d: `M ${x1} 0 C ${x1} ${control} ${x2} ${control} ${x2} ${ARC_HEAD}`,
+      head: `${x2},0 ${x2 - 3.5},${ARC_HEAD} ${x2 + 3.5},${ARC_HEAD}`,
+      lx: round((x1 + x2) / 2),
+      ly: dip,
+    });
+    deepest = Math.max(deepest, dip);
+  }
+  const top = round(Math.max(...[...boxes.values()].map((box) => box.bottom)) + ARC_GAP);
+  const height = deepest + ARC_LABEL;
+  return {
+    key: `${top}|${height}|${[...paths].map(([id, path]) => `${id}@${path.d}`).join(";")}`,
+    wrapped: false,
+    top,
+    height,
+    paths,
+  };
+}
+
+/** The arc layer: one group per fail edge, each carrying its own state so a
+    test and a rendered frame read the same thing off the same element. */
+function ReturnArcs({ arcs, band, titles }: { arcs: readonly LoopArc[]; band: ArcBand; titles: ReadonlyMap<string, string> }) {
+  return (
+    <svg className="parcs" style={{ top: band.top, height: band.height }} width="100%" height={band.height} focusable="false" data-arc-layer="1">
+      {arcs.map((arc) => {
+        const path = band.paths.get(arc.id);
+        const title = titles.get(arc.id) ?? "";
+        return (
+          <g
+            key={arc.id}
+            role="img"
+            aria-label={title}
+            data-loop-arc={arc.id}
+            data-arc-state={arc.state}
+            data-arc-live={arc.live ? "1" : "0"}
+            data-arc-fired={arc.loop.fired}
+            data-arc-max={arc.loop.max}
+          >
+            <title>{title}</title>
+            {path ? <path className="parc" d={path.d} /> : null}
+            {path ? <polygon className="parc-head" points={path.head} /> : null}
+            {arc.loop.fired ? <text className="parc-count" x={path?.lx ?? 0} y={path?.ly ?? 0}>{`${arc.loop.fired}/${arc.loop.max}`}</text> : null}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** The wrapped row's stand-in for an arc: the return glyph and the same count,
+    on the failing stage's own pill, and only once the edge has fired. */
+function ReturnSuffix({ arc, title }: { arc: LoopArc; title: string }) {
+  return (
+    <span className="pret" title={title} data-stage-return={arc.id} data-arc-state={arc.state} data-arc-fired={arc.loop.fired} data-arc-max={arc.loop.max}>
+      <span aria-hidden="true">↺</span>
+      {`${arc.loop.fired}/${arc.loop.max}`}
+    </span>
+  );
+}
+
+/** Registers a stage pill so the arcs can be drawn from its measured box. */
+const chipRef = (boxes: React.RefObject<Map<string, HTMLElement>>, id: string) =>
+  (element: HTMLElement | null) => {
+    if (element) boxes.current.set(id, element);
+    else boxes.current.delete(id);
+  };
+
+/** The one-line summary: the pass path in order, then the branches, with every
+    fail edge drawn under the row as a return arc rather than as a chip of its
+    own (#1798), so a cycle is never flattened and never reads as a step. */
 function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
   summary: KanbanPipeline;
   nameOf: (stage: PipelineStage) => string;
@@ -279,6 +466,42 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
   const { pipeline } = summary;
   const main = summary.chips.filter((chip) => !chip.branch);
   const branches = summary.chips.filter((chip) => chip.branch);
+  const arcs = useMemo(() => loopArcs(summary), [summary]);
+  const titles = useMemo(
+    () => new Map(arcs.map((arc) => [arc.id, arcTitle(t, arc, nameOf(arc.loop.from), nameOf(arc.loop.to))] as const)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the names and the translator come from the same render
+    [arcs, t],
+  );
+  const row = useRef<HTMLDivElement | null>(null);
+  const chipBoxes = useRef(new Map<string, HTMLElement>());
+  const [band, setBand] = useState<ArcBand>(EMPTY_BAND);
+  /* The arcs are the only thing here that needs the pills' boxes, so the
+     measurement runs only while a fail edge exists, and re-runs when the row
+     or a pill changes size. A band identical to the one on screen is dropped
+     rather than set, so the padding this same measurement adds to the row
+     cannot feed itself. */
+  const arcKey = arcs.map((arc) => `${arc.id}:${arc.state}:${arc.live ? 1 : 0}`).join("|");
+  useLayoutEffect(() => {
+    const element = row.current;
+    if (!element || !arcs.length) {
+      setBand((previous) => (previous.key === EMPTY_BAND.key ? previous : EMPTY_BAND));
+      return;
+    }
+    const remeasure = () => setBand((previous) => {
+      const next = measureArcs(element, chipBoxes.current, arcs);
+      return previous.key === next.key ? previous : next;
+    });
+    remeasure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(remeasure);
+    observer.observe(element);
+    for (const box of chipBoxes.current.values()) observer.observe(box);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the arcs the row draws
+  }, [arcKey]);
+  /* On a wrapped row the arc becomes a suffix on the pill of the stage that
+     fails, and only once it has fired: at rest the row says nothing extra. */
+  const suffixes = new Map(band.wrapped ? arcs.filter((arc) => arc.state !== "rest").map((arc) => [arc.loop.from.id, arc] as const) : []);
   const chip = (entry: (typeof summary.chips)[number], index: number, branch: boolean) => {
     const label = nameOf(entry.stage);
     const state = graphStateWord(t, entry.state);
@@ -289,6 +512,7 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
     /* Who runs it and how hard it thinks, without a word of text (#1743): the
        engine mark and the effort ladder ride the chip itself. */
     const identity = stageIdentity(pipeline, entry.stage);
+    const suffix = suffixes.get(entry.stage.id) ?? null;
     const body = (
       <>
         <i className="pdot" aria-hidden="true" />
@@ -298,46 +522,57 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
           name={<span className="pname">{branch ? t("kanban.branch", { stage: label }) : label}</span>}
         />
         {entry.rounds ? <CountCircle n={entry.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds })} /> : null}
+        {suffix ? <ReturnSuffix arc={suffix} title={titles.get(suffix.id) ?? ""} /> : null}
       </>
     );
     const aria = [
       entry.rounds ? t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds }) : t("kanban.stageAria", { stage: label, state }),
       identityTitle(t, identity),
-    ].join(". ");
-    const hover = `${label} · ${state} · ${identityTitle(t, identity)}`;
+      suffix ? titles.get(suffix.id) : null,
+    ].filter(Boolean).join(". ");
+    const hover = [`${label} · ${state} · ${identityTitle(t, identity)}`, suffix ? titles.get(suffix.id) : null].filter(Boolean).join(" · ");
     return openable ? (
-      <button key={entry.stage.id} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={hover} onClick={() => onOpenStage(pipeline, entry.stage)}>
+      <button key={entry.stage.id} ref={chipRef(chipBoxes, entry.stage.id)} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={hover} onClick={() => onOpenStage(pipeline, entry.stage)}>
         {body}
       </button>
     ) : (
-      <span key={entry.stage.id} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={hover} data-index={index}>
+      <span key={entry.stage.id} ref={chipRef(chipBoxes, entry.stage.id)} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={hover} data-index={index}>
         {body}
       </span>
     );
   };
+  /* The row grows by the arcs' depth, and only when an arc is actually drawn. */
+  const arcsDrawn = arcs.length > 0 && !band.wrapped;
   return (
-    <div className="psummary">
+    <div
+      className="psummary"
+      ref={row}
+      data-arcs={arcs.length ? (band.wrapped ? "suffix" : "arcs") : undefined}
+      style={arcsDrawn && band.height ? { paddingBottom: band.height + ARC_GAP } : undefined}
+    >
       {main.map((entry, index) => (
         <span key={entry.stage.id} className="pchip-wrap">
           {index > 0 ? <span className="parrow" aria-hidden="true">→</span> : null}
           {chip(entry, index, false)}
         </span>
       ))}
-      {summary.loops.map((loop) => (
-        <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
-      ))}
       {branches.map((entry, index) => chip(entry, index, true))}
+      {arcsDrawn ? <ReturnArcs arcs={arcs} band={band} titles={titles} /> : null}
     </div>
   );
 }
 
-/** The compact strip's loop chip (#1743): the leading glyph becomes the same
+/** The Stages sheet's loop chip (#1743): the leading glyph becomes the same
     circled number the arrow draws once the edge has fired, and a spent budget
     inverts the chip so "no return left" reads without colour.
 
-    The chip is one line on a 256 px column card, so its parts are separate: the
-    stage names truncate, and the budget — the fact the chip exists for — never
-    does. */
+    The sheet's nav is the one surface this still belongs on — it lists what the
+    graph holds, where a fail edge IS one of the things listed. The card's
+    collapsed row draws the same edge as a return arc instead, because a chip
+    there sits in the row of steps and reads as one (#1798).
+
+    The chip is one line, so its parts are separate: the stage names truncate,
+    and the budget — the fact the chip exists for — never does. */
 export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
   const { t } = useLocale();
   const exhausted = loop.fired >= loop.max;
