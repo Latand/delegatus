@@ -365,6 +365,17 @@ export type PipelineStageAttempt = {
       only once the delivery surface accepted the request, and `firstMissAt`
       bounds the whole wait, so a queue that never drains still parks the lane
       through the ordinary recovery checks. */
+  /** Why a turn that ended did not settle this attempt (#1441): its agent
+      still held harness-tracked background work, named in `tasks`. `since` is
+      when the controller first saw the transcript silent at `silentSince`
+      (its newest record) with that work out, and `until` is when the lane
+      parks if the work never reports. Cleared once the work has reported. */
+  backgroundWait?: {
+    since: string;
+    until: string;
+    silentSince: number | null;
+    tasks: Array<{ id: string; kind: "command" | "monitor" | "wakeup" }>;
+  };
   verdictRequest?: {
     firstMissAt: string;
     messageTs: number;

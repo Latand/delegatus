@@ -47,6 +47,7 @@ import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
+import { describeBackgroundTasks, liveBackgroundTasks } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
@@ -1213,6 +1214,12 @@ const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, 
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
+/** How long a stage waits, silent, on background work its agent started before
+    the lane parks naming it (#1441). An hour covers the longest re-invocation
+    the harness schedules itself (a wakeup clamps at 3600 s) and a long bench
+    or CI wait; parking earlier would lose the work the task is doing. */
+const BACKGROUND_TASK_WAIT_CEILING_MS = 60 * 60_000;
+const BACKGROUND_TASK_WAIT_DETAIL_PREFIX = "waiting: ";
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
     fresh attempt on the next tick (tickRunStage/tickReviewStage). */
@@ -2273,9 +2280,13 @@ function reportedStageVerdict(
   attempt: PipelineStageAttempt,
   fenced: ParsedStageVerdict | { failureReason: string; output: string } | null,
   text: string,
+  backgroundReportedAt: number | null | undefined,
 ): ParsedStageVerdict | null {
   const report = attempt.report;
   if (!report) return null;
+  /* A report filed while background work was still out is interim (#1441):
+     the answer that counts is the one given after the work reported. */
+  if (backgroundReportedAt && unixMs(report.at) < backgroundReportedAt) return null;
   return {
     verdict: report.verdict,
     output: (report.summary ?? fenced?.output ?? text.trim()).slice(0, MAX_OUTPUT_CHARS),
@@ -2601,6 +2612,68 @@ async function requestStageVerdictOnce(
   return "asked";
 }
 
+/**
+ * Holds a stage attempt open while its conversation has live background work
+ * (#1441), and says so on the lane. The wait is bounded: once the transcript
+ * has been silent for {@link BACKGROUND_TASK_WAIT_CEILING_MS} with the work
+ * still out, the lane parks naming it. Neither outcome stamps `completedAt`,
+ * so the terminal-host reaper leaves the agent and its task running.
+ */
+function holdForBackgroundTasks(
+  pipeline: Pipeline,
+  attempt: PipelineStageAttempt,
+  durable: StageTurnEvidence | null,
+  ports: PipelinePorts,
+  persist: () => void,
+): "none" | "waiting" | "parked" {
+  const now = ports.now();
+  /* A read that could not see the work cannot say it ended: a wait already
+     under way holds, to its own bound, until a read can. */
+  if (!durable?.backgroundTasks) {
+    return attempt.backgroundWait && unixMs(now) < unixMs(attempt.backgroundWait.until) ? "waiting" : "none";
+  }
+  const live = liveBackgroundTasks(durable.backgroundTasks, unixMs(now));
+  if (live.length === 0) {
+    if (attempt.backgroundWait) {
+      delete attempt.backgroundWait;
+      if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
+      persist();
+    }
+    return "none";
+  }
+  const silentSince = durable.lastRecordAt ?? null;
+  const prior = attempt.backgroundWait;
+  /* Any new record — a monitor event the agent answered, a new task — is the
+     agent at work, so the silence and its bound start again from there. */
+  const since = prior && prior.silentSince === silentSince ? prior.since : now;
+  const until = new Date(unixMs(since) + BACKGROUND_TASK_WAIT_CEILING_MS).toISOString();
+  const named = describeBackgroundTasks(live);
+  const tasks = live.map((task) => ({ id: task.id, kind: task.kind }));
+  if (unixMs(now) >= unixMs(until)) {
+    attempt.backgroundWait = { since, until, silentSince, tasks };
+    park(
+      pipeline,
+      `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_CEILING_MS / 60_000} min without a notification; the stage agent and its work were left running`,
+      attempt,
+    );
+    persist();
+    return "parked";
+  }
+  const detail = `${BACKGROUND_TASK_WAIT_DETAIL_PREFIX}${named}; the stage settles on the turn after it reports, and parks at ${until} if it never does`;
+  if (
+    !prior
+    || prior.since !== since
+    || prior.silentSince !== silentSince
+    || JSON.stringify(prior.tasks) !== JSON.stringify(tasks)
+    || pipeline.stateDetail !== detail
+  ) {
+    attempt.backgroundWait = { since, until, silentSince, tasks };
+    pipeline.stateDetail = detail;
+    persist();
+  }
+  return "waiting";
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -2857,6 +2930,7 @@ async function tickRunStage(
       if (hostEpoch !== null) attempt.hostEpoch = hostEpoch;
       delete attempt.severedTurn;
       delete attempt.verdictRequest;
+      delete attempt.backgroundWait;
       delete attempt.controllerWait;
       attempt.launchId = spawned.launchId;
       attempt.conversationId = spawned.conversationId;
@@ -3003,10 +3077,17 @@ async function tickRunStage(
     recoverUsageLimitedAttempt(pipeline, stage, attempt, terminalUsageLimit, ports);
     return;
   }
+  /* A turn that ended while its agent still holds background work is not the
+     conversation's last (#1441): the harness re-invokes the agent when the
+     work reports, and whatever this turn said is interim. Nothing settles,
+     asks or spends a recovery check until then. A host that is gone took the
+     work with it, which the recovery below already handles. */
+  if (!hostUnavailablePastGrace && durable?.turn !== "busy"
+    && holdForBackgroundTasks(pipeline, attempt, durable, ports, persist) !== "none") return;
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attempt.startedAt);
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
-    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text) ?? fenced;
+    const parsed = reportedStageVerdict(attempt, fenced, durable.message!.text, durable.backgroundReportedAt) ?? fenced;
     if (parsed && (!hostUnavailablePastGrace || "verdict" in parsed)) {
       markVerdictRecoverySucceeded(attempt, ports.now(), durable.message!.ts);
       settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist);
@@ -3115,7 +3196,7 @@ async function tickRunStage(
     return;
   }
   const fenced = parsePipelineStageVerdict(message.text);
-  const parsed = reportedStageVerdict(attempt, fenced, message.text) ?? fenced;
+  const parsed = reportedStageVerdict(attempt, fenced, message.text, durable?.backgroundReportedAt) ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
     recordVerdictRecoveryMiss(
@@ -6298,6 +6379,33 @@ function resolveStageCompletionTarget(
 }
 
 /**
+ * A report is the stage's final answer, and an agent that still holds
+ * background work has not given it yet (#1441): the harness will re-invoke it
+ * when the work reports. Refused with nothing written, so the attempt stays
+ * open and the same call is accepted once the work has reported or been
+ * stopped. An unreadable transcript refuses nothing; the controller holds the
+ * attempt on its own reading either way.
+ */
+async function backgroundWorkRefusal(target: StageCompletionTarget, ports: PipelinePorts): Promise<StageCompletionResult | null> {
+  const { attempt } = target;
+  if (!attempt.agentPath) return null;
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath);
+  const live = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now()));
+  if (live.length === 0) return null;
+  const wakeupOnly = live.every((task) => task.kind === "wakeup");
+  return {
+    error: `stage ${target.stageId} cannot be reported yet: this conversation still has ${describeBackgroundTasks(live)} running. `
+      + (wakeupOnly
+        ? "Wait for the wakeup and report on that turn, or cancel it (ScheduleWakeup with stop: true) and report again."
+        : "Wait for its task notification and report on the turn it starts, or stop it with TaskStop and report again.")
+      + " Nothing was recorded and the attempt is still open.",
+    status: 409,
+    code: "STAGE_REPORT_BACKGROUND_TASK_RUNNING",
+    slots: [{ pipelineId: target.pipeline.id, stageId: target.stageId, attempt: attempt.n, state: attempt.state }],
+  };
+}
+
+/**
  * A stage attempt reports its own completion (graph slice 2, #1730).
  *
  * The caller is resolved server-side: the calling conversation is matched to
@@ -6341,6 +6449,8 @@ export async function reportStageCompletion(
   const normalized = normalizeStageCompletion(request);
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
+  const heldWork = await backgroundWorkRefusal(preview, ports);
+  if (heldWork) return heldWork;
   const previewStage = preview.pipeline.stages.find((candidate) => candidate.id === preview.stageId);
   const provenance = collectStageProvenance(
     preview.pipeline,

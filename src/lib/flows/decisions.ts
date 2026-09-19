@@ -1,5 +1,6 @@
 import { agentRegistry } from "@/lib/agent/registry";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
+import { pendingBackgroundTasks, readBackgroundTaskLedger } from "@/lib/pipelines/backgroundTasks";
 import { loadPipelines, withPipelineMutation } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { readStableTailRecords } from "@/lib/scanner/activity";
@@ -57,9 +58,15 @@ export async function flowTurn(flow: Flow) {
       break;
     }
   }
+  /* A Claude turn that ended while the implementer still holds background work
+     is not its last (#1441): the harness re-invokes it when the work reports.
+     Reading it as busy keeps the READY marker, a pending decision and the
+     "turn ended without a decision" park all waiting for that later turn. */
+  const ledger = engine === "claude" && turn.state === "terminal" ? await readBackgroundTaskLedger(flow.implementerPath) : null;
+  const holdsBackgroundWork = ledger !== null && pendingBackgroundTasks(ledger, Date.now()).length > 0;
   return {
     turnId,
-    state: turn.state,
+    state: holdsBackgroundWork ? "busy" as const : turn.state,
     successful,
     terminalAt: turn.terminalAt,
     message: lastAssistantMessageFromRecords(read.records.slice(start), engine === "codex" ? "codex-sessions" : "claude-projects", 0),
