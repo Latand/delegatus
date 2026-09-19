@@ -7,6 +7,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
+import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -873,14 +874,36 @@ export function loadPipelinesForList(): readonly Pipeline[] {
   return cachedPipelines();
 }
 
-/** Serialize every production read-modify-write across Viewer and MCP processes. */
+/** How long a pipeline mutation waits for the registry lease before it refuses
+    (#1766). The default is the cap the attempt loop in the state store already
+    imposed; `LLV_PIPELINE_LOCK_WAIT_MS` bounds it lower, which is what lets a
+    test prove the wait cannot hang a request. The wait matters because the
+    lease is held across whole controller passes: a create issued while
+    pipelines provision waits here rather than refusing on contact. */
+const DEFAULT_PIPELINE_LOCK_WAIT_MS = 30_000;
+
+export function pipelineLockWaitMs(): number {
+  const configured = Number(process.env.LLV_PIPELINE_LOCK_WAIT_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_PIPELINE_LOCK_WAIT_MS;
+}
+
+/** Serialize every production read-modify-write across Viewer and MCP processes.
+ *
+ * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
+ * (#1766): the lease was never taken, so nothing was read, written or reserved
+ * and the same request may run again under the same idempotency key. A busy
+ * error from anywhere after that keeps its ordinary ambiguous meaning — the
+ * lease release raises the same message after the row is committed. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
     (records: readonly Pipeline[]): void;
   }) => Promise<T> | T,
 ): Promise<T> {
-  return pipelineStore().mutate(mutate);
+  return refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
+    admitted();
+    return mutate(pipelines, persist);
+  }, undefined, false, pipelineLockWaitMs()));
 }
 
 export async function withPipelineControllerMutation<T>(
