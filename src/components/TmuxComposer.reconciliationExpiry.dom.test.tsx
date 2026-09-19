@@ -1282,6 +1282,7 @@ function ComposerWithOutbox({ file }: { file: FileEntry }) {
 test.each([
   ["missing", "retry", "text"], ["disconnected", "retry", "text"], ["missing", "discard", "text"], ["missing", "receipt", "text"],
   ["missing", "retry", "image"], ["missing", "discard", "image"], ["missing", "pending-receipt", "text"],
+  ["missing", "refused-retry", "text"],
 ] as const)("%s admission reaches unconfirmed controls and recovers through %s (attachment=%s)", async (transport, recovery, payload) => {
   const attachment = payload === "image";
   setLocale("en");
@@ -1310,6 +1311,7 @@ test.each([
         if (transport === "disconnected") throw new TypeError("Network disconnected");
         return new Promise(() => {});
       }
+      if (recovery === "refused-retry") return { ok: false, status: 403, error: "pre-admission refusal", delivery: "refused" };
       const receipt: RuntimeReceipt = { operationId: "operation-recovered", idempotencyKey: options.idempotencyKey,
         conversationId, kind: "send", status: "queued", text: options.text,
         at: new Date().toISOString(), revision: 1 };
@@ -1389,6 +1391,13 @@ test.each([
     await until(() => sends.length === 2);
     expect(sends).toHaveLength(2);
     expect(sends[1]).toEqual(sends[0]);
+    if (recovery === "refused-retry") {
+      await untilSendEnabled(host);
+      expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
+      expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+      expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+      return;
+    }
     await until(() => readOutbox(conversationId)[0]?.awaitingTurn === true);
     expect(readOutbox(conversationId)[0]).toMatchObject({ awaitingTurn: true, state: "delivering" });
     expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();

@@ -3276,7 +3276,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
       const entry = localRecoveryEntry(receipt);
       if (!entry) return;
-      setImmediateRuntimeReceipts(current => current.filter(candidate => candidate.operationId !== receipt.operationId));
+      // Keep recovery visible if this attempt is refused before admission.
+      // An authoritative receipt supersedes the local placeholder by key.
       await withComposerSubmission(cardId, () => send(entry.text, { clientMessageId: entry.id, unconfirmedAdmission: true }, entry.id));
       return;
     }
