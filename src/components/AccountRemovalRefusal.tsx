@@ -1,6 +1,7 @@
 "use client";
 
 import { TriangleAlert } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import type { AccountRefusalReason, AccountRemovalRefusal as Refusal } from "@/hooks/useEngineAccounts";
 import { type MessageKey, type TFunction, useLocale } from "@/lib/i18n";
@@ -35,7 +36,9 @@ export function refusalText(t: TFunction, refusal: Refusal, reason: AccountRefus
  * Why a removal did not happen (#1857 §5.2): one message per server answer,
  * inside the refused row, never clamped. Several blockers draw as several
  * lines in one block. A failed file step offers Try again and a missing
- * answer offers Refresh; the ✕ closes it, as does the next attempt.
+ * answer offers Refresh; the ✕ closes it, as does the next attempt. A new
+ * answer scrolls its whole block into view, so a refusal on a row near the
+ * bottom of the scrolling list never lands below the fold.
  */
 export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDismiss, onRetry, onRefresh }: {
   refusal: Refusal;
@@ -47,6 +50,10 @@ export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDism
   onRefresh: () => void;
 }) {
   const { t } = useLocale();
+  const block = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    block.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [refusal]);
   const action = refusal.reasons.includes("removal_failed")
     ? { label: t("accounts.refusal.retry"), run: onRetry }
     : refusal.reasons.includes("no_answer")
@@ -54,6 +61,7 @@ export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDism
       : null;
   return (
     <div
+      ref={block}
       role="alert"
       data-account-refusal={refusal.accountId}
       className={`flex items-start gap-2 rounded-[8px] bg-danger-soft py-2.5 pl-3 ${phone ? "mb-1.5 mr-2 pr-1" : "mb-2 ml-[30px] mr-3.5 pr-1.5"}`}
@@ -77,7 +85,9 @@ export function AccountRemovalRefusal({ refusal, phone = false, disabled, onDism
               type="button"
               disabled={disabled}
               onClick={action.run}
-              className={`inline-flex items-center rounded-[6px] border border-border bg-canvas px-2 text-[10.5px] font-semibold text-primary hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "min-h-[44px]" : "min-h-[44px] sm:min-h-[24px]"}`}
+              className={phone
+                ? "-my-3 inline-flex min-h-[44px] min-w-[44px] items-center rounded-[6px] text-[11px] font-semibold text-accent underline underline-offset-2 disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                : "inline-flex min-h-[44px] items-center rounded-[6px] border border-border bg-canvas px-2 text-[10.5px] font-semibold text-primary hover:bg-sunken disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[24px]"}
             >
               {action.label}
             </button>

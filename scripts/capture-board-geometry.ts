@@ -1639,6 +1639,8 @@ interface RemovalReading {
   pathShown: string | null;
   /** Buttons inside the block, for the phone's 44 px rule. */
   targets: { name: string; w: number; h: number }[];
+  /** For a last-row refusal: the block and its buttons against the scrolling list. */
+  fold?: unknown;
 }
 
 /** Runs inside the page: one removal block (row line, refusal or card) against its surface. */
@@ -1824,6 +1826,54 @@ async function accountRemovalMain(): Promise<void> {
       must(readings.archive.pathId?.text === idB && readings.archive.pathId.visible, `${tag} archive_unavailable: the path's account id is ${JSON.stringify(readings.archive.pathId)}`);
       must(readings.archive.pathShown?.startsWith("~/") ?? false, `${tag} archive_unavailable: the path reads «${readings.archive.pathShown}»`);
       await shoot(page, `${tag}-archive`);
+
+      /* The last row, scrolled to by hand and clicked with the mouse where it is painted, so nothing
+         scrolls for the driver: the refusal has to bring its own block, action button included, into the list. */
+      const lastRow = async (reasons: string[], answer: Answer, expectAction: string | null) => {
+        const state = `last row ${reasons.join("+")}`;
+        await page.evaluate((id: string) => {
+          const row = document.querySelector(`[data-account-row="${id}"]`)!;
+          let area = row.parentElement;
+          while (area && !/(auto|scroll)/.test(getComputedStyle(area).overflowY)) area = area.parentElement;
+          if (area) area.scrollTop = area.scrollHeight;
+        }, idC);
+        await page.waitForTimeout(200);
+        const clickPainted = async (selector: string) => {
+          const r = await page.evaluate((sel: string) => {
+            const b = document.querySelector(sel)!.getBoundingClientRect();
+            return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+          }, selector);
+          await page.mouse.click(r.x, r.y);
+        };
+        stub.answer(answer);
+        await clickPainted(`[data-account-remove="${idC}"]`);
+        await page.waitForSelector(`[data-account-remove-armed="${idC}"]`);
+        await clickPainted(`[data-account-remove-confirm="${idC}"]`);
+        await page.waitForSelector(`[data-account-row="${idC}"] [data-account-refusal="${idC}"]`);
+        await page.waitForTimeout(400);
+        const reading = await page.evaluate(readRemoval, `[data-account-refusal="${idC}"]`);
+        check(tag, state, reading, {});
+        const fold = await page.evaluate((id: string) => {
+          const block = document.querySelector(`[data-account-refusal="${id}"]`)!;
+          let area = block.parentElement;
+          while (area && !/(auto|scroll)/.test(getComputedStyle(area).overflowY)) area = area.parentElement;
+          const a = area!.getBoundingClientRect();
+          const b = block.getBoundingClientRect();
+          const buttons = [...block.querySelectorAll("button")].map((button) => {
+            const r = button.getBoundingClientRect();
+            return { name: button.getAttribute("aria-label") || button.textContent?.trim() || "", inside: r.top >= a.top - 0.5 && r.bottom <= a.bottom + 0.5 };
+          });
+          return { area: { top: a.top, bottom: a.bottom }, block: { top: b.top, bottom: b.bottom }, inside: b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5, buttons };
+        }, idC);
+        must(fold.inside, `${tag} ${state}: the block (${fold.block.top}–${fold.block.bottom}) is not inside the list (${fold.area.top}–${fold.area.bottom})`);
+        for (const button of fold.buttons) must(button.inside, `${tag} ${state}: «${button.name}» is below the list's fold`);
+        if (expectAction) must(fold.buttons.some((button) => button.name === expectAction), `${tag} ${state}: no «${expectAction}» button`);
+        reading.fold = fold;
+        return reading;
+      };
+      readings.lastFailed = await lastRow(["removal_failed"], { status: 500, body: { code: "removal_failed", errno: "EACCES" } }, lang === "uk" ? "Спробувати ще раз" : "Try again");
+      readings.lastBlockers = await lastRow(["live_sessions", "login_pending", "current_conversations"], { status: 409, body: { code: "account_removal_blocked", blockers: ["live_sessions", "login_pending", "current_conversations"] } }, null);
+      await shoot(page, `${tag}-last-row`);
 
       /* The full summary: every line above zero. */
       stub.answer({ status: 200, body: { removed: { id: idB }, cleanupPending: false, moved: { archive: inventedArchive(idB), files: 1284, bytes: 2_100_000_000 }, conversationsRewritten: 37, pinsCleared: 2, deliveriesDropped: 1, migrationsSettled: 1 } });

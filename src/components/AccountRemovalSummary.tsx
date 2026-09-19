@@ -30,8 +30,9 @@ export function displayArchivePath(pathname: string): string {
   return pathname.replace(/^(?:\/home\/[^/]+|\/Users\/[^/]+|\/root)(?=\/|$)/, "~");
 }
 
-/** A path truncated in the middle: the head shrinks with an ellipsis and the
-    last segment, the account id, always stays visible. */
+/** A path cut at its front: the head shrinks from the left behind an
+    ellipsis, so the folders nearest the account (`…/shared/claude/retired/`)
+    stay readable, and the last segment, the account id, always stays visible. */
 export function ArchivePath({ path, copyLabel, phone = false }: { path: string; copyLabel: string; phone?: boolean }) {
   const [copied, setCopied] = useState(false);
   const shown = displayArchivePath(path);
@@ -41,7 +42,7 @@ export function ArchivePath({ path, copyLabel, phone = false }: { path: string; 
   return (
     <span className="flex min-w-0 items-center gap-1" data-archive-path={path}>
       <span className="flex min-w-0 font-mono text-[10.5px] text-secondary" title={path}>
-        <span className="min-w-0 truncate">{head}</span>
+        <span dir="rtl" className="min-w-0 truncate text-left"><bdi dir="ltr">{head}</bdi></span>
         <span className="shrink-0" data-archive-path-id>{tail}</span>
       </span>
       <button

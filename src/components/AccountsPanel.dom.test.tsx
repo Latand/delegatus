@@ -259,6 +259,29 @@ test("a refusal names the archive path with its account id kept, and its actions
   expect(refreshed).toBe(1);
 });
 
+test("each new refusal scrolls its whole block into view inside the list", async () => {
+  const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (options?: ScrollIntoViewOptions) => void };
+  const original = proto.scrollIntoView;
+  const calls: Array<{ refusal: string | null; options?: ScrollIntoViewOptions }> = [];
+  proto.scrollIntoView = function (this: HTMLElement, options?: ScrollIntoViewOptions) {
+    calls.push({ refusal: this.getAttribute("data-account-refusal"), options });
+  };
+  try {
+    const other = { ...managedAcc, id: "other", label: "Other" };
+    const refused = (reasons: AccountRemovalRefusal["reasons"]) => state(login({ phase: "authenticated" }), {
+      accounts: [managedAcc, other],
+      removal: { kind: "refused", refusal: { accountId: "other", label: "Other", reasons } },
+    });
+    const view = await mount(refused(["live_sessions"]));
+    mounted.push(view);
+    expect(calls).toEqual([{ refusal: "other", options: { block: "nearest", inline: "nearest" } }]);
+    await view.rerender(refused(["removal_failed"]));
+    expect(calls.map((call) => call.refusal)).toEqual(["other", "other"]);
+  } finally {
+    proto.scrollIntoView = original;
+  }
+});
+
 test("a refusal whose row left the list shows in the footer slot", async () => {
   const view = await mount(state(login({ phase: "authenticated" }), {
     accounts: [],
