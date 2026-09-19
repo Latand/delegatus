@@ -2722,6 +2722,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
     "Findings are returned and shown most severe first; pass cannot carry findings.",
+    "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for a choice only a human can make, and a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail anyway.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
     "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
     "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",

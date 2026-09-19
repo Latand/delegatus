@@ -70,7 +70,30 @@ function proseVerdictMarkers(prose: string): ProseVerdictMarker[] {
   return markers;
 }
 
-export type ParsedStageVerdict = { verdict: StageVerdict; output: string };
+export type ParsedStageVerdict = {
+  verdict: StageVerdict;
+  output: string;
+  /** The findings are the engine's own synthesis rather than a reviewer's work:
+      a review flow's state detail and the placeholder line a round with no
+      findings gets. They describe nothing to fix, so they never route a fail
+      edge (#1785). Absent on everything an agent reported for itself. */
+  syntheticFindings?: boolean;
+};
+
+/**
+ * Whether a settled verdict is the graph's fail signal (#1785). A fail always
+ * is. A needs_decision is too when it carries findings a reviewer reported:
+ * reviewers report fixable defects under that status when only their confidence
+ * in the call is partial, and the fix stage a fail edge names is where those
+ * findings belong. A needs_decision with nothing to fix, or with nothing but the
+ * engine's own synthesis, is a question for the operator and parks.
+ */
+export function verdictRoutesAsFail(parsed: ParsedStageVerdict): boolean {
+  if (parsed.verdict.status === "fail") return true;
+  return parsed.verdict.status === "needs_decision"
+    && Boolean(parsed.verdict.findings?.length)
+    && !parsed.syntheticFindings;
+}
 export type RejectedStageVerdict = { failureReason: string; output: string };
 
 export function stageVerdictFrom(value: unknown): StageVerdict | null {

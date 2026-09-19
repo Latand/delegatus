@@ -96,7 +96,7 @@ import type {
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
 } from "./types";
-import { MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
+import { MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
   launchId: string;
@@ -2133,10 +2133,13 @@ function retryTerminalStagePublication(
 
 /** The `{{prev.output}}` payload a fail edge forwards: the failed attempt's
     narrative output plus its structured findings, so the loop target sees what
-    to fix without re-deriving it from transcripts. */
+    to fix without re-deriving it from transcripts. A `needs_decision` routed
+    along the same edge (#1785) names itself, so the target reads the findings
+    knowing the reviewer was unsure of its own confidence, not of the defect. */
 function failEdgeInput(parsed: ParsedStageVerdict): string | null {
+  const heading = parsed.verdict.status === "needs_decision" ? "Needs-decision verdict findings" : "Fail verdict findings";
   const findings = parsed.verdict.findings?.length
-    ? `Fail verdict findings:\n${parsed.verdict.findings.map((finding) => `- ${finding}`).join("\n")}`
+    ? `${heading}:\n${parsed.verdict.findings.map((finding) => `- ${finding}`).join("\n")}`
     : "";
   const combined = [parsed.output, findings].filter(Boolean).join("\n\n").trim();
   return combined || null;
@@ -2148,6 +2151,10 @@ function routeFailedAttempt(
   attempt: PipelineStageAttempt,
   input: string | null,
   detail: string,
+  /** A `needs_decision` routed as a fail (#1785) parks exactly as it did before
+      when the edge has nothing left, so the operator still reads the verdict's
+      own detail rather than a budget message about a fail it never reported. */
+  parkOnExhaustedBudget = true,
 ): boolean {
   if (!stage.onFail) return false;
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
@@ -2164,7 +2171,7 @@ function routeFailedAttempt(
     pipeline.pausedState = null;
     return true;
   }
-  if (targetStage) {
+  if (targetStage && parkOnExhaustedBudget) {
     park(pipeline, `fail-edge budget exhausted after ${used} round(s): ${detail}`, attempt);
     return true;
   }
@@ -2279,18 +2286,31 @@ function settleStageVerdict(
        parking. The failed attempt keeps its truthful failed state and verdict;
        the relay record (input + fail activation) lands in the SAME atomic
        mutation as the verdict. No worktree reset — the target continues from
-       lastPassedCommit plus its own committed passes. needs_decision always
-       parks; an exhausted budget parks with an actionable detail. */
+       lastPassedCommit plus its own committed passes. An exhausted budget parks
+       with an actionable detail.
+
+       A needs_decision that carries findings is routed the same way (#1785):
+       reviewers reported a fixable defect under that status because their
+       confidence in the call was partial, and the fix stage the fail edge names
+       is exactly where those findings belong. {@link verdictRoutesAsFail} is
+       that whole rule, so the engine's own synthesized findings never spend a
+       round. The attempt records the decision request. Without routable
+       findings, without a fail edge, or with the budget spent, it parks exactly
+       as it always did. */
+    const routesAsFail = verdictRoutesAsFail(parsed);
+    const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
-      parsed.verdict.status === "fail"
+      routesAsFail
       && routeFailedAttempt(
         pipeline,
         stage,
         attempt,
         failEdgeInput(parsed),
         parsed.verdict.findings?.[0] ?? "stage verdict: fail",
+        parsed.verdict.status === "fail",
       )
     ) {
+      if (decisionRoutedAsFail) attempt.decisionRequested = true;
       return;
     }
     park(pipeline, parsed.verdict.findings?.[0] ?? `stage verdict: ${parsed.verdict.status}`, attempt);
@@ -3517,7 +3537,10 @@ function safeFlowFinding(flow: Flow, finding: ReviewFinding): string {
     Parse the latest completed artifact through the flow's canonical parser,
     then adapt it to the pipeline verdict interface so normal settlement owns
     fail-edge routing and the board receives structured findings. */
-function terminalFlowStageVerdict(flow: Flow): ParsedStageVerdict | null {
+/** The verdict a terminal review flow settles its parent stage on. Exported
+    because it is what {@link reconcileBoundReviewFlow} routes and parks on, and
+    a COMMENT flow's routing eligibility is a property of this verdict (#1785). */
+export function terminalFlowStageVerdict(flow: Flow): ParsedStageVerdict | null {
   if (flow.state !== "needs_decision" && flow.state !== "done_comment" && flow.state !== "closed") return null;
   const round = flow.rounds.findLast((candidate) => candidate.verdict !== null);
   if (!round?.findingsPath || round.verdict === "APPROVE") return null;
@@ -3539,6 +3562,12 @@ function terminalFlowStageVerdict(flow: Flow): ParsedStageVerdict | null {
       confidence: 1,
     },
     output: `Review flow round ${round.n}: ${parsed.verdict}\n\n${findings.map((finding) => `- ${finding}`).join("\n")}`,
+    /* Nothing here came from the review: the flow's state detail names where the
+       flow stopped and the line above is this function's own placeholder. A
+       COMMENT flow whose findings are only that parks, rather than spending a
+       fail-edge round on a placeholder (#1785). A REQUEST_CHANGES flow is a fail
+       and routes on its own status either way. */
+    ...(reviewFindings.length === 0 ? { syntheticFindings: true } : {}),
   };
 }
 

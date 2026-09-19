@@ -16,6 +16,15 @@ type PipelinePorts = import("./engine").PipelinePorts;
 type StageCompletionRequest = import("./engine").StageCompletionRequest;
 type Pipeline = import("./types").Pipeline;
 
+/* The board projection the operator reads, over the record the engine wrote:
+   the card's own summarize + progress path, not a hand-built fixture (#1785). */
+const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
+const { pastAttempts } = await import("@/components/kanban/pipelineGraph");
+const { pipelineProgress, stageDisplayName } = await import("@/components/kanban/PipelineSection");
+const { translate } = await import("@/lib/i18n");
+type TFunction = import("@/lib/i18n").TFunction;
+const t = ((key: string, params?: Record<string, unknown>) => translate("en", key as never, params as never)) as TFunction;
+
 registerPipelineTick(async () => {});
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
 
@@ -436,4 +445,167 @@ test("an attempt persisted in committing has already answered, so its completion
   expect(attemptsOf("build")[0]!.verdict).toEqual({ status: "pass" });
   expect(current().stageReports).toBeUndefined();
   expect(h.execCalls).toEqual([]);
+});
+
+/* ── #1785: a needs_decision carrying an actionable finding routes to the fix
+   stage, because reviewers reported fixable defects under that status when only
+   their confidence in the call was partial, and the lane stopped for a human to
+   relay one paragraph. ── */
+
+const FIX_LOOP = () => [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 2 } })];
+
+/** build passes, verify is spawned and holds the cursor. */
+async function reachedVerify(h: ReturnType<typeof harness>, stages: unknown[]): Promise<void> {
+  await started(h.ports, stages);
+  await tickPipelines([h.endTurn(1, 'Built.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+}
+
+test("a needs_decision with findings fires the fail edge and hands the findings to the fix stage (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+
+  await h.report(2, {
+    verdict: "needs_decision",
+    findings: [{ severity: "P1", text: "the fence is missing" }],
+    summary: "Fixable; my confidence in the call is partial.",
+  });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+
+  const decided = attemptsOf("verify")[0]!;
+  /* The verdict stays the one the reviewer reported; the routing is what changed. */
+  expect(decided.verdict).toMatchObject({ status: "needs_decision", findings: ["P1 — the fence is missing"] });
+  expect(decided.state).toBe("needs_decision");
+  expect(decided.decisionRequested).toBe(true);
+  expect(current().state).toBe("running");
+  expect(current().cursor).toMatchObject({
+    stageId: "build",
+    state: "pending",
+    activatedBy: { stageId: "verify", attempt: 1, edge: "fail" },
+  });
+
+  await tickPipelines([], h.ports);
+  expect(h.spawnedStages).toEqual(["build", "verify", "build"]);
+  const relayed = attemptsOf("build")[1]!.input!;
+  expect(relayed).toContain("Needs-decision verdict findings:\n- P1 — the fence is missing");
+  expect(relayed).toContain("Fixable; my confidence in the call is partial.");
+});
+
+test("a needs_decision with findings parks once the fail edge's budget is spent (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1 } })]);
+
+  /* Round one: the only round this edge has. */
+  await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await tickPipelines([], h.ports); // spawn build attempt 2
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports); // spawn verify attempt 2
+  expect(h.spawnedStages).toEqual(["build", "verify", "build", "verify"]);
+
+  await h.report(4, { verdict: "needs_decision", findings: [{ severity: "P0", text: "still broken" }] });
+  await tickPipelines([h.endTurn(4, "Reviewed again.")], h.ports);
+
+  /* Parked exactly as before the change: the verdict's own worst finding is the
+     detail, never a budget message about a fail the reviewer never reported. */
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("P0 — still broken");
+  expect(current().cursor?.stageId).toBe("verify");
+  const parked = attemptsOf("verify")[1]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.decisionRequested).toBeUndefined();
+  expect(attemptsOf("build")).toHaveLength(2);
+});
+
+test("a needs_decision parks with no fail edge, and parks with no findings (#1785)", async () => {
+  const noEdge = harness();
+  await reachedVerify(noEdge, [stage("build", "verify"), stage("verify", null)]);
+  await noEdge.report(2, { verdict: "needs_decision", findings: [{ severity: "P2", text: "nowhere to route this" }] });
+  await tickPipelines([noEdge.endTurn(2, "Reviewed.")], noEdge.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("P2 — nowhere to route this");
+  expect(current().cursor?.stageId).toBe("verify");
+  expect(attemptsOf("build")).toHaveLength(1);
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+
+  /* A fail edge with its whole budget left, and a verdict with nothing to fix. */
+  const noFindings = harness();
+  await reachedVerify(noFindings, FIX_LOOP());
+  await noFindings.report(2, { verdict: "needs_decision", summary: "Only the operator can choose here." });
+  await tickPipelines([noFindings.endTurn(2, "Reviewed.")], noFindings.ports);
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toBe("stage verdict: needs_decision");
+  expect(attemptsOf("build")).toHaveLength(1);
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+});
+
+test("a plain fail still routes under its own heading, and a plain pass still advances (#1785)", async () => {
+  const h = harness();
+  await reachedVerify(h, FIX_LOOP());
+
+  await h.report(2, { verdict: "fail", findings: [{ severity: "P1", text: "the fence is missing" }], summary: "One gap." });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+  await tickPipelines([], h.ports);
+  expect(attemptsOf("verify")[0]!.state).toBe("failed");
+  expect(attemptsOf("verify")[0]!.decisionRequested).toBeUndefined();
+  expect(attemptsOf("build")[1]!.input).toContain("Fail verdict findings:\n- P1 — the fence is missing");
+
+  /* The loop round passes and the pipeline completes, as a pass always did. */
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+  await h.report(4, { verdict: "pass", summary: "Clean." });
+  await tickPipelines([h.endTurn(4, "Approved.")], h.ports);
+  expect(attemptsOf("verify")[1]!.state).toBe("passed");
+  expect(attemptsOf("verify")[1]!.decisionRequested).toBeUndefined();
+  expect(current().state).toBe("completed");
+});
+
+/** The card's own two lines for a pipeline: every stage chip, and the progress
+    sentence the operator reads under the title. */
+function card(): { chips: Array<{ id: string; state: string }>; progress: string } {
+  const pipeline = current();
+  const summary = summarizePipeline(pipeline);
+  return {
+    chips: summary.chips.map((chip) => ({ id: chip.stage.id, state: chip.state })),
+    progress: pipelineProgress(t, summary, (stage) => stageDisplayName(t, stage)),
+  };
+}
+
+test("a routed needs_decision leaves no chip claiming the operator is needed, while a parked one still reads needs you (#1785)", async () => {
+  const routed = harness();
+  await reachedVerify(routed, FIX_LOOP());
+  await routed.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([routed.endTurn(2, "Reviewed.")], routed.ports);
+  await tickPipelines([], routed.ports); // the fix stage is spawned and running
+
+  /* The lane is running the fix stage, and the card says so: the settled
+     needs_decision is the loop source it became, not a claim on the operator. */
+  const running = card();
+  expect(running.chips.some((chip) => chip.state === "needs_decision")).toBe(false);
+  expect(running.chips.find((chip) => chip.id === "build")!.state).toBe("running");
+  expect(running.progress).toContain("Build");
+  expect(running.progress).not.toBe(t("kanban.progress.needs", { stage: "Verify" }));
+  /* The settled reviewer attempt is also in what the card has finished, so its
+     verdict line and its open button are there while the fix stage runs. */
+  const past = pastAttempts([current()], new Map());
+  expect(past.map((row) => [row.stageId, row.n, row.state, row.verdict])).toEqual([
+    ["verify", 1, "needs_decision", "needs_decision"],
+    ["build", 1, "passed", "pass"],
+  ]);
+  expect(past.find((row) => row.stageId === "verify")!.conversation)
+    .toEqual({ path: "/codex/stage-2.jsonl", conversationId: "conversation_stage_2" });
+
+  /* Same verdict with nothing to route: the pipeline parks and the card asks. */
+  const parked = harness();
+  await reachedVerify(parked, [stage("build", "verify"), stage("verify", null)]);
+  await parked.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "only you can choose" }] });
+  await tickPipelines([parked.endTurn(2, "Reviewed.")], parked.ports);
+
+  const waiting = card();
+  expect(current().state).toBe("needs_decision");
+  expect(waiting.chips.find((chip) => chip.id === "verify")!.state).toBe("needs_decision");
+  expect(waiting.progress).toBe(t("kanban.progress.needs", { stage: "Verify" }));
+  /* The parked decision is the stage's current work, listed nowhere as past. */
+  expect(pastAttempts([current()], new Map()).map((row) => [row.stageId, row.n, row.state]))
+    .toEqual([["build", 1, "passed"]]);
 });
