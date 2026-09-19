@@ -26,6 +26,7 @@ const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (re
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines } = await import("./store");
 const { durableStageTurnEvidence } = await import("./durableEvidence");
+const { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed } = await import("./failEdgeBudget");
 const { saveTasks } = await import("@/lib/tasks/store");
 type PipelinePorts = import("./engine").PipelinePorts;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
@@ -7999,7 +8000,7 @@ test("a completed stage's output is persisted once and relayed exactly once (#35
   expect(h.calls.filter((call) => call.startsWith("spawn:")).length).toBe(2);
 });
 
-test("an accepted fail verdict traverses the fail edge, loops once, then parks on budget exhaustion (#353)", async () => {
+test("an accepted fail verdict traverses the fail edge, loops once, then parks on budget exhaustion under onExhausted: park (#353, #1868)", async () => {
   const h = harness();
   const prompts: string[] = [];
   const baseSpawn = h.ports.spawnAgent;
@@ -8007,7 +8008,7 @@ test("an accepted fail verdict traverses the fail edge, loops once, then parks o
     prompts.push(input.prompt);
     return baseSpawn(input, onReserved);
   };
-  await create(h.ports, CYCLE_STAGES as never);
+  await create(h.ports, [CYCLE_STAGES[0], { ...CYCLE_STAGES[1], onFail: { to: "build", maxRounds: 1, onExhausted: "park" } }] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built v1")], h.ports);
@@ -8055,7 +8056,7 @@ test("a retry of the fail edge's target spends no round, and the budget still pa
   const h = harness();
   const CYCLE_STAGES_TWO_ROUNDS = [
     CYCLE_STAGES[0],
-    { ...CYCLE_STAGES[1], onFail: { to: "build", maxRounds: 2 } },
+    { ...CYCLE_STAGES[1], onFail: { to: "build", maxRounds: 2, onExhausted: "park" } },
   ];
   await create(h.ports, CYCLE_STAGES_TWO_ROUNDS as never);
   await tickPipelines([], h.ports);
@@ -8117,6 +8118,163 @@ test("a retry of the fail edge's target spends no round, and the budget still pa
   current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
+});
+
+/* A spent review budget (#1868): N configured rounds mean N reviews and N+1
+   builds. The last round's findings go to the fix stage once more, and that
+   fix's pass follows the reviewer's own pass edge without asking it again. */
+const BUDGET_STAGES = (onFail: Record<string, unknown>, critiqueNext: string | null = "ship") => [
+  { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}} from {{prev.output}}", next: "critique" },
+  { id: "critique", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Critique {{prev.output}}", next: critiqueNext, onFail },
+  ...(critiqueNext ? [{ id: "ship", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Ship {{prev.output}}", next: null }] : []),
+];
+
+/** Runs build → critique, failing every critique with one finding, until the
+    controller stops routing back to build or a round limit is hit. */
+async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number): Promise<void> {
+  for (let round = 1; round <= reviews + 1; round += 1) {
+    await tickPipelines([], h.ports);
+    let current = loadPipelines()[0]!;
+    if (current.cursor?.stageId !== "build") return;
+    await tickPipelines([], h.ports);
+    current = loadPipelines()[0]!;
+    const build = current.runs.find((run) => run.stageId === "build")!.attempts.at(-1)!;
+    await tickPipelines([h.finish(build.agentPath!, "pass", `built v${round}`)], h.ports);
+    current = loadPipelines()[0]!;
+    if (current.cursor?.stageId !== "critique") return;
+    await tickPipelines([], h.ports);
+    current = loadPipelines()[0]!;
+    const critique = current.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+    h.messages.set(critique.agentPath!, {
+      text: `round ${round} findings\n\n\`\`\`json\n{"status":"fail","findings":["P2 evidence gap ${round}"]}\n\`\`\``,
+      ts: Date.now() + 100_000_000,
+    });
+    await tickPipelines([entry(critique.agentPath!)], h.ports);
+  }
+}
+
+test("a spent review budget hands the last findings to the fix stage once and moves on along the reviewer's pass edge (#1868)", async () => {
+  const h = harness();
+  const prompts: string[] = [];
+  const baseSpawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    prompts.push(input.prompt);
+    return baseSpawn(input, onReserved);
+  };
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 3 }) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 3);
+
+  let current = loadPipelines()[0]!;
+  const builds = current.runs.find((run) => run.stageId === "build")!.attempts;
+  const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(builds).toHaveLength(4);
+  expect(critiques).toHaveLength(3);
+  expect(builds.every((attempt) => attempt.state === "passed")).toBe(true);
+  expect(critiques.every((attempt) => attempt.state === "failed")).toBe(true);
+  /* The fourth build carries the third critique's findings. */
+  expect(builds[3]!.activatedBy).toEqual({ stageId: "critique", attempt: 3, edge: "fail", budgetSpent: true });
+  expect(builds[3]!.input).toContain("P2 evidence gap 3");
+  /* The record says the last review was handed on unreviewed and keeps it. */
+  expect(critiques[2]).toMatchObject({
+    state: "failed",
+    budgetSpent: true,
+    verdict: { status: "fail", findings: ["P2 evidence gap 3"] },
+  });
+  expect(current.state).toBe("running");
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(FAIL_EDGE_BUDGET_SPENT_DETAIL).toBe("budget spent: last findings handed to the fix stage, not re-reviewed");
+  /* The cursor sits on the reviewer's pass successor, and the unreviewed
+     findings travel with the fix's output. */
+  expect(current.cursor).toMatchObject({
+    stageId: "ship",
+    state: "pending",
+    activatedBy: { stageId: "build", attempt: 4, edge: "pass" },
+  });
+  expect(current.cursor!.input).toContain("built v4");
+  expect(current.cursor!.input).toContain(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.cursor!.input).toContain("P2 evidence gap 3");
+  /* The handoff is the edge's last traversal: 3 of 3. */
+  expect(failEdgeRoundsUsed(current, current.stages.find((stage) => stage.id === "critique")!)).toBe(3);
+
+  /* The next stage runs, and the reviewer never runs a fourth time. */
+  await tickPipelines([], h.ports);
+  current = loadPipelines()[0]!;
+  expect(current.runs.find((run) => run.stageId === "ship")!.attempts).toHaveLength(1);
+  expect(prompts.at(-1)).toContain("P2 evidence gap 3");
+  expect(current.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+});
+
+test("onExhausted: park keeps today's park once the review budget is spent (#1868)", async () => {
+  const h = harness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "park" }) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 3);
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.stateDetail).toContain("fail-edge budget exhausted after 2 round(s)");
+  expect(current.cursor?.stageId).toBe("critique");
+  expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(current.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+  expect(current.runs.find((run) => run.stageId === "critique")!.attempts.some((attempt) => attempt.budgetSpent)).toBe(false);
+  expect(current.stages.find((stage) => stage.id === "critique")!.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
+});
+
+test("a spent review budget on the last stage completes the pipeline with the same record (#1868)", async () => {
+  const h = harness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await failEveryCritique(h, 1);
+
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.cursor).toBeNull();
+  expect(current.stateDetail).toBe(FAIL_EDGE_BUDGET_SPENT_DETAIL);
+  expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
+  const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(critiques).toHaveLength(1);
+  expect(critiques[0]).toMatchObject({ state: "failed", budgetSpent: true, verdict: { findings: ["P2 evidence gap 1"] } });
+});
+
+test("onExhausted is validated and edited with the fail edge, and freezes with it (#1868)", async () => {
+  const h = harness();
+  const { ports } = h;
+  savePipelines([]);
+  const refused = await createPipelineFromRequest({
+    task: "Bad option",
+    repoDir: "/repo",
+    stages: BUDGET_STAGES({ to: "build", maxRounds: 2, onExhausted: "stop" }) as never,
+    autoStart: false,
+  }, ports);
+  expect(refused.error).toContain("onExhausted");
+  const created = await createPipelineFromRequest({
+    task: "Edge option",
+    repoDir: "/repo",
+    stages: BUDGET_STAGES({ to: "build", maxRounds: 2 }) as never,
+    autoStart: false,
+  }, ports);
+  const id = created.pipeline!.id;
+  expect(created.pipeline!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 2 });
+  expect((await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", onExhausted: "stop" as never }, ports)).status).toBe(400);
+  expect((await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "pass", to: "ship", onExhausted: "park" }, ports)).status).toBe(400);
+  const parked = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 3, onExhausted: "park" }, ports);
+  expect(parked.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "park" });
+  const advance = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 3, onExhausted: "advance" }, ports);
+  expect(advance.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "advance" });
+
+  /* The handoff is a traversal of the edge, so it freezes the edge's option
+     with the rest of it. */
+  await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 1, onExhausted: "advance" }, ports);
+  await patchPipeline(id, { action: "start" }, ports);
+  await tickPipelines([], ports);
+  await failEveryCritique(h, 1);
+  const handedOff = loadPipelines()[0]!;
+  expect(handedOff.runs.find((run) => run.stageId === "critique")!.attempts[0]!.budgetSpent).toBe(true);
+  const frozen = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 1, onExhausted: "park" }, ports);
+  expect(frozen.status).toBe(409);
+  expect(frozen.error).toContain("frozen evidence");
+  expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 1, onExhausted: "advance" });
 });
 
 /* A needs_decision that carries findings routes along the fail edge (#1785);
