@@ -8,11 +8,12 @@ import path from "node:path";
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
 
-import { listClaudeAccounts } from "@/lib/accounts/claude";
-import { listCodexAccounts } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
+  allowedAccountIdsForProject,
   bindAccountToProject,
   projectsForAccount,
   unbindAccountFromProject,
@@ -87,7 +88,7 @@ import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelin
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
-import { PIPELINE_LIST_DEFAULT_LIMIT, projectPipelineListRows } from "@/lib/pipelines/listProjection";
+import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, projectPipelineCompactRows, projectPipelineListRows } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction } from "@/lib/pipelines/types";
@@ -164,6 +165,16 @@ import {
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
+import {
+  accountLimitRows,
+  compactDeployment,
+  compactLiveness,
+  newestDeploymentsFirst,
+  pipelineAcknowledgement,
+  pipelineActionAcknowledgement,
+  pipelineStageRead,
+  type AccountLimitsInput,
+} from "./compactAnswers";
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
   productionSelectedContextDependencies,
@@ -669,6 +680,9 @@ export interface ViewerMcpDomainDependencies {
   /** Accounts the catalog holds, per engine, so a binding can be answered with
       labels and a caller can see what there is to bind. */
   listBindableAccounts?(engine: BindingEngine): { accountId: string; label: string }[];
+  /** #1845: what `account_limits` reads — the catalog, the active account per
+      engine and the durable quota observations. Absent means production. */
+  accountLimitsSource?(): Omit<AccountLimitsInput, "engine" | "accountId">;
   /** #1490: the ports the original-key send lookup settles through. Absent
       means production (the shared registry and the runtime host socket). */
   sendSettlementPorts?(): SendSettlementPorts;
@@ -1406,7 +1420,10 @@ async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
   if (result.pipeline.state !== "draft") requestPipelineTick();
-  return { pipelineId: result.pipeline.id, pipeline: result.pipeline };
+  /* #1845: an acknowledgement, never the record. The record echoed the spec,
+     every stage prompt and every composed role scaffold back to the caller that
+     had just sent them — a median 10 KB per create. get_pipeline reads it. */
+  return redactPayload(pipelineAcknowledgement(result.pipeline));
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -1425,13 +1442,13 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();
   /* A close reports the stage hosts it terminated and the uncommitted work it
-     left behind (#670), so an agent driving the board sees it too. */
-  return {
-    pipelineId,
-    pipeline: result.pipeline,
+     left behind (#670), so an agent driving the board sees it too. The
+     pipeline itself is acknowledged, not echoed (#1845): get_pipeline reads it. */
+  return redactPayload({
+    ...pipelineActionAcknowledgement(result.pipeline),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
-  };
+  });
 }
 
 /**
@@ -2695,6 +2712,19 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
 
   const now = Date.now();
   const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+  /* #1845: the note is the one large field here, and a seat changing its
+     cadence was reading its own note back three times on every call. It is
+     carried once on the call that writes it and on a `verbose` read; every
+     other answer carries its length, which is how a caller sees it is there. */
+  const verbose = args.verbose === true;
+  const echoPrompt = verbose || change.monitorPrompt !== undefined;
+  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  /* The same rule for the other repeats: the stored reason is carried once,
+     under `effective`, unless an expiry has already set the two apart, and the
+     defaults block and the fence sentence are a verbose read's. */
+  const compactSettings = storedReason === effective.reason ? settingsWithoutPrompt : { ...settingsWithoutPrompt, reason: storedReason };
+  const fenceAnswer = seatTickFenceAnswer(project, effective.wakeIntervalMs, now);
+  if (!verbose && fenceAnswer.fence) delete fenceAnswer.fenceDetail;
   return redactPayload({
     project,
     changed,
@@ -2702,34 +2732,32 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings,
+    settings: verbose ? settings : compactSettings,
     /* The stored note in full and its length (#1450), so a seat can check what
        persisted against what it sent without reading the file. The wake shows
        only a marked preview of a long note; this is the whole of it. */
-    monitorPrompt: settings.monitorPrompt,
-    monitorPromptLength: settings.monitorPrompt?.length ?? 0,
+    ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
+    monitorPromptLength: storedPrompt?.length ?? 0,
     effective: {
       enabled: effective.enabled,
       wakeIntervalMinutes: Math.round(effective.wakeIntervalMs / 60_000),
       reason: effective.reason,
-      /* What the next scheduler-fired wake will carry (#1280). Returned on
-         both a read and a change, because the record read back — not the echo
-         of what was sent — is what tells a caller its prompt landed, was
-         replaced, or is gone. */
-      monitorPrompt: effective.monitorPrompt,
+      /* What the next scheduler-fired wake will carry (#1280), read back from
+         the record rather than echoed from the request. */
+      ...(verbose ? { monitorPrompt: effective.monitorPrompt } : {}),
       until: effective.until,
       isDefault: effective.isDefault,
     },
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
-    defaults: defaultSeatTickSettings(project),
+    ...(verbose ? { defaults: defaultSeatTickSettings(project) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
        answer that said everything was fine: the fence lived in the accounting
        row and no surface carried it. This says which attempt holds the
        project's wakes, since when and when it lapses on its own. */
-    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
+    ...fenceAnswer,
   });
 }
 
@@ -2791,7 +2819,6 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
   const requestedProject = text(args.project) || (action === "list" ? callerProject ?? "" : "");
   const project = requestedProject ? canonicalOrchestratorProject(requestedProject) : null;
 
-  let changed = false;
   if (action !== "list") {
     if (!project) throw new Error("project is required to add or remove a binding");
     const engine = text(args.engine);
@@ -2800,11 +2827,28 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
     if (!accountId) throw new Error("accountId is required to add or remove a binding");
     const result = action === "add" ? bind(engine, accountId, project) : unbind(engine, accountId, project);
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
-    changed = result.changed;
+    /* #1845: a write answers the row it changed and that project's pool for
+       that engine, still read AFTER the write from the store. The whole table
+       is `action: "list"`. */
+    const bindings = read();
+    const bound = (allowedAccountIdsForProject(project, engine, bindings) ?? []).includes(accountId);
+    if (bound !== (action === "add")) {
+      throw new Error(`the binding store does not show the ${action} of ${engine} account ${accountId} for ${project} after the write`);
+    }
+    return redactPayload({
+      action,
+      changed: result.changed,
+      project,
+      engine,
+      accountId,
+      bound,
+      allowed: projectEngineAccounts(project, engine, accountsFor(engine), bindings, []),
+    });
   }
 
-  /* Read AFTER the mutation, from the store, for both the record and the view
-     the fence will enforce — not from the mutation's own return value. */
+  /* Read from the store, for both the record and the view the fence will
+     enforce. */
+  const changed = false;
   const bindings = read();
   const engines = ["claude", "codex"] as const;
   return redactPayload({
@@ -2830,6 +2874,42 @@ function accountProjectBindingTool(args: McpToolArgs, dependencies: ViewerMcpDom
     ])),
     note: "a project with no binding for an engine allows every account of that engine, which is the behaviour it has always had",
   });
+}
+
+/** The same records `GET /api/accounts` projects its limit rows from. */
+function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "accountId"> {
+  const snapshot = agentRegistry().readOnlySnapshot();
+  return {
+    accounts: {
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+    },
+    active: {
+      claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
+      codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+    },
+    observations: snapshot.quotaObservations,
+    now: Date.now(),
+  };
+}
+
+/**
+ * account_limits (#1845 row 11): each account's last observed usage, so a seat
+ * choosing where to launch no longer reads three HTTP routes for it. A read of
+ * the durable observations only; it never asks a provider.
+ */
+function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+  const engine = text(args.engine);
+  if (engine && engine !== "claude" && engine !== "codex") throw new Error("engine must be claude or codex");
+  const accountId = text(args.accountId);
+  const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
+  const accounts = accountLimitRows({
+    ...source,
+    ...(engine ? { engine: engine as "claude" | "codex" } : {}),
+    ...(accountId ? { accountId } : {}),
+  });
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude or codex"} account has the id ${accountId}`);
+  return redactPayload({ count: accounts.length, accounts });
 }
 
 /** create_orchestrator: atomically create, designate and deliver the ONE
@@ -2957,6 +3037,21 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = getPipelineRecord(pipelineId);
   if (!pipeline) throw new Error("pipeline not found");
+  /* #1845: the two narrow reads. A stage read answers what one stage concluded;
+     a compact read answers the list row. Without either, the whole record. */
+  const stageId = text(args.stageId);
+  if (stageId) {
+    const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
+    return redactPayload(pipelineStageRead(pipeline, stageId, attempt));
+  }
+  if (args.compact === true) {
+    return redactPayload({
+      pipelineId,
+      ...pipelineCompactRow(pipeline),
+      stageDigests: stageDigests(pipeline.stages),
+      graphDigest: graphDigest(pipeline.stages),
+    });
+  }
   /* The digests a guarded graph edit names as expectedStageDigest. */
   return { ...redactPayload({ pipelineId, pipeline }), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages) };
 }
@@ -3085,15 +3180,19 @@ async function listPipelines(
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
-  const pipelines = await projectPipelineListRows({
+  const filter = {
     project: text(args.project),
     state: text(args.state),
     includeClosed: args.includeClosed === true,
     limit: integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT),
-  }, {
+  };
+  const options = {
     checkpoint: () => throwIfCallEnded(context),
     source: dependencies.listPipelineRecords ?? (() => dependencies.getPipelines().pipelines),
-  });
+  };
+  const pipelines = args.compact === true
+    ? await projectPipelineCompactRows(filter, options)
+    : await projectPipelineListRows(filter, options);
   return redactPayload({ count: pipelines.length, pipelines });
 }
 
@@ -3253,7 +3352,7 @@ async function deploymentStatus(
     if (!isDeploymentStatus(deployment, deploymentId)) {
       throw new ViewerControlResponseError("Viewer control returned a malformed deployment");
     }
-    return redactPayload({ deploymentId, deployment });
+    return redactPayload({ deploymentId, deployment: args.compact === true ? compactDeployment(deployment) : deployment });
   }
   const operationId = text(args.operationId);
   if (operationId) {
@@ -3286,10 +3385,13 @@ async function deploymentStatus(
       const deployments = fromLedger.value;
       return { count: deployments.length, deployments };
     });
-  const { deployments, runtimeHostRequests } = deploymentList(result);
+  const { deployments: listed, runtimeHostRequests } = deploymentList(result);
+  /* #1845 defect C: newest first, whatever order the source answered in — a
+     Viewer revision that still serves the id-ordered list included. */
+  const deployments = newestDeploymentsFirst(listed);
   return redactPayload({
     count: deployments.length,
-    deployments,
+    deployments: args.compact === true ? deployments.map(compactDeployment) : deployments,
     ...(runtimeHostRequests ? { runtimeHostRequests } : {}),
   });
 }
@@ -3747,7 +3849,9 @@ async function agentActivity(
         : {}),
     }, sources);
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
-    return redactPayload({ ...snapshot, journaled: journal.appended });
+    return redactPayload(args.compact === true
+      ? { ...compactLiveness(snapshot), journaled: journal.appended }
+      : { ...snapshot, journaled: journal.appended });
   } finally {
     deadline.release();
   }
@@ -4577,6 +4681,7 @@ export function viewerMcpBindings(
     seat_tick_settings: async (args) => seatTickSettingsTool(args, domainDependencies),
     /* Same reason as above: this binding refuses by throwing. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
+    account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context)),

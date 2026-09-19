@@ -2603,17 +2603,22 @@ test("seat_tick_settings says which attempt holds this project's wakes, since wh
   });
 
   const { bindings } = tickSettingsBindings();
-  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as {
+  type FencedAnswer = {
     fence: { clientMessageId: string; slot: string; since: string; lapsesAt: string; keptPastBound: boolean } | null;
-    fenceDetail: string;
+    fenceDetail?: string;
     fenceError: string | null;
   };
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-read" }) as FencedAnswer;
   expect(read.fence).toMatchObject({ clientMessageId: key, slot: "outstanding", since: preparedAt, keptPastBound: false });
   /* Two of the project's wake intervals, and never less than an hour. */
   expect(read.fence!.lapsesAt).toBe(new Date(Date.parse(preparedAt) + 2 * 60 * 60_000).toISOString());
-  expect(read.fenceDetail).toContain(`under key ${key}`);
-  expect(read.fenceDetail).toContain("the fence lapses at");
   expect(read.fenceError).toBeNull();
+  /* #1845: the sentence restates the fence's own fields, key included, so the
+     default answer carries the fence once and a verbose read adds the prose. */
+  expect(read).not.toHaveProperty("fenceDetail");
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-fence-verbose", verbose: true }) as FencedAnswer;
+  expect(verbose.fenceDetail).toContain(`under key ${key}`);
+  expect(verbose.fenceDetail).toContain("the fence lapses at");
 
   /* And a project with nothing prepared says that, rather than nothing. */
   const other = tickSettingsBindings({ callerProject: "quiet-project" });
@@ -2685,24 +2690,27 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
        can check what persisted against what it sent. */
     monitorPrompt: "before the items, check whether last night's digest actually sent",
     monitorPromptLength: "before the items, check whether last night's digest actually sent".length,
-    effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
   });
+  /* Carried once on the write (#1845), not three times. */
+  expect(JSON.stringify(set).split("last night's digest").length - 1).toBe(1);
 
   /* Read back through a second call, which is what the tick itself does at its
      next check — the echo of the write proves nothing about the record. */
-  const readBack = await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read" });
+  const readBack = await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read", verbose: true });
   expect(readBack).toMatchObject({
     changed: false,
+    monitorPrompt: "before the items, check whether last night's digest actually sent",
+    settings: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
     effective: { monitorPrompt: "before the items, check whether last night's digest actually sent" },
   });
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-replace", monitorPrompt: "the digest is fixed; watch the review rounds instead" });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-2" }))
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-2", verbose: true }))
     .toMatchObject({ changed: false, effective: { monitorPrompt: "the digest is fixed; watch the review rounds instead" } });
 
   await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-clear", monitorPrompt: null });
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-len" }))
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-len", verbose: true }))
     .toMatchObject({ monitorPrompt: null, monitorPromptLength: 0 });
 
   /* Over the limit the write is refused out loud, with nothing stored (#1450). */
@@ -2710,8 +2718,74 @@ test("seat_tick_settings sets, replaces and clears the monitor prompt, and the r
   await expect(bindings.seat_tick_settings({ clientRequestId: "tick-prompt-long", monitorPrompt: longNote }))
     .rejects.toThrow(`monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 1} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
   expect(store.get("viewer")).toMatchObject({ monitorPrompt: null });
-  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3" }))
+  expect(await bindings.seat_tick_settings({ clientRequestId: "tick-prompt-read-3", verbose: true }))
     .toMatchObject({ changed: false, effective: { monitorPrompt: null } });
+});
+
+/* #1845: a seat changing its cadence read its whole note back three times on
+   every call — 56% of what the tool answered in a day. */
+test("seat_tick_settings carries a stored monitor prompt only when it is written or a verbose read asks for it (#1845)", async () => {
+  const { bindings } = tickSettingsBindings();
+  const note = "watch the review rounds; ".repeat(200).trim();
+  await bindings.seat_tick_settings({ clientRequestId: "tick-note-set", monitorPrompt: note });
+
+  const cadence = await bindings.seat_tick_settings({
+    clientRequestId: "tick-note-cadence",
+    wakeIntervalMinutes: 30,
+    reason: "two lanes are close to merging",
+  });
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-note-read" });
+  for (const answer of [cadence, read]) {
+    expect(JSON.stringify(answer)).not.toContain("watch the review rounds");
+    expect(answer).toMatchObject({ monitorPromptLength: note.length });
+    expect(answer).not.toHaveProperty("monitorPrompt");
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThan(2_000);
+  }
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-note-verbose", verbose: true });
+  expect(verbose).toMatchObject({ monitorPrompt: note, settings: { monitorPrompt: note }, effective: { monitorPrompt: note } });
+});
+
+test("a plain seat_tick_settings read of a fenced, paused project with a note stays under 1.7 KB, and verbose keeps the whole record (#1845)", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-tick-size-"));
+  sandboxes.push(sandbox);
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  /* The live shape the review measured: a 544-character note, a paused tick
+     with a long reason, and an unresolved wake holding the project's wakes. */
+  const key = "seat-tick:viewer:175:2026-09-19T07:23:31.118Z:child-terminal:fp-7c1e";
+  writeSeatTickState("viewer", {
+    ...emptySeatTickState(),
+    seatEpoch: 175,
+    outstandingWake: {
+      clientMessageId: key, conversationId: TICK_SEAT, seatEpoch: 175, operationId: null,
+      preparedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      commit: { proposal: false, reasons: ["child-terminal"], fingerprint: "fp-7c1e", eventsThrough: 12, children: [] },
+    },
+  });
+  const note = "Before the items, read list_pipelines with state open and compact; ".repeat(9).slice(0, 544).trim().padEnd(544, ".");
+  const reason = "The operator paused the tick while the release runs: every lane is merged, the deploy is theirs to start, and a wake now would only re-read a board with nothing on it to discharge.";
+  const { bindings } = tickSettingsBindings();
+  await bindings.seat_tick_settings({ clientRequestId: "tick-size-note", monitorPrompt: note });
+  await bindings.seat_tick_settings({ clientRequestId: "tick-size-pause", enabled: false, reason });
+
+  const read = await bindings.seat_tick_settings({ clientRequestId: "tick-size-read" }) as Record<string, unknown>;
+  expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThan(1_700);
+  expect(read).toMatchObject({ effective: { enabled: false, reason }, monitorPromptLength: 544, fence: { clientMessageId: key } });
+  /* Each fact once: the reason is the effective one, the defaults and the
+     fence sentence are the verbose read's. */
+  expect(JSON.stringify(read).split(reason).length - 1).toBe(1);
+  expect(JSON.stringify(read).split(key).length - 1).toBe(1);
+  expect(read).not.toHaveProperty("defaults");
+
+  const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-size-verbose", verbose: true });
+  expect(verbose).toMatchObject({
+    settings: { enabled: false, reason, monitorPrompt: note },
+    monitorPrompt: note,
+    effective: { reason, monitorPrompt: note },
+    defaults: { enabled: true, wakeIntervalMinutes: null, reason: null },
+    fence: { clientMessageId: key },
+  });
+  expect((verbose as { fenceDetail: string }).fenceDetail).toContain(`under key ${key}`);
 });
 
 test("a monitor prompt needs no reason and leaves the tick on its default (#1280)", async () => {
@@ -2725,7 +2799,8 @@ test("a monitor prompt needs no reason and leaves the tick on its default (#1280
   });
   expect(applied).toMatchObject({
     changed: true,
-    effective: { enabled: true, wakeIntervalMinutes: 60, isDefault: true, reason: null, monitorPrompt: "start from the oldest blocked card" },
+    monitorPrompt: "start from the oldest blocked card",
+    effective: { enabled: true, wakeIntervalMinutes: 60, isDefault: true, reason: null },
   });
   expect(store.get("viewer")).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
 });
