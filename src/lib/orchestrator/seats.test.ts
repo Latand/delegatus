@@ -8,6 +8,7 @@ import { persistProjectAliases } from "@/lib/projects/aliases";
 import {
   ORCHESTRATOR_SEAT_HISTORY_CAP,
   activeOrchestratorSeats,
+  allSeatConversations,
   activeOrchestratorSeatsForMigration,
   activeOrchestratorSeatsOrUnknown,
   beginOrchestratorSeatIntent,
@@ -634,4 +635,34 @@ test("a seat task whose notes are empty or blank answers hasNotes false (#1841)"
   ] as unknown as Parameters<typeof seatTaskOf>[0];
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: null })).toEqual({ taskId: "none", title: "Seat, no notes", hasNotes: false });
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "blank", title: "Seat, blank notes", hasNotes: false });
+});
+
+/* A board that spans projects — the Overview, the Tasks panel's «all» scope —
+   keeps every project's seats out of its rows, so it asks for them all at once. */
+test("the cross-project read names every project's seat conversations, held and retired (#1841)", () => {
+  const seat = (project: string, n: number, path: string | null, at: string) => {
+    beginOrchestratorSeatIntent({ project, mandate: "m", clientRequestId: `req_${project}_${n}`, mode: "spawn", now: at });
+    completeOrchestratorSeatIntent({ project, clientRequestId: `req_${project}_${n}`, conversationId: `conversation_${project}_${n}`, path, engine: "claude", now: at });
+  };
+  seat("proj-a", 1, "/seats/a1.jsonl", "2026-09-17T09:40:00.000Z");
+  seat("proj-a", 2, "/seats/a2.jsonl", "2026-09-18T14:02:00.000Z");
+  seat("proj-b", 1, "/seats/b1.jsonl", "2026-09-18T20:00:00.000Z");
+  /* A designation still in flight is a seat too: it is already the operator's
+     statement about that conversation. */
+  beginOrchestratorSeatIntent({ project: "proj-c", mandate: "m", clientRequestId: "req_proj-c_1", mode: "existing", now: AT });
+
+  const all = allSeatConversations();
+  expect(all).not.toBeNull();
+  expect(all!.conversationIds.sort()).toEqual(["conversation_proj-a_2", "conversation_proj-b_1"]);
+  expect(all!.paths.sort()).toEqual(["/seats/a2.jsonl", "/seats/b1.jsonl"]);
+  expect(all!.previous.conversationIds).toEqual(["conversation_proj-a_1"]);
+  expect(all!.previous.paths).toEqual(["/seats/a1.jsonl"]);
+});
+
+/* Null is «the record could not be read», which is not «no seats anywhere»:
+   every surface that hides rows on this answer hides nothing without it. */
+test("an unreadable seat record answers null rather than an empty cross-project set (#1841)", () => {
+  expect(allSeatConversations()).toEqual({ conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } });
+  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), "{ not json", "utf8");
+  expect(allSeatConversations()).toBeNull();
 });

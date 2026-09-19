@@ -43,6 +43,9 @@ const G = globalThis as Record<string, unknown>;
 const SEAT_CONVERSATION = "conversation_seat_live";
 const RETIRED_CONVERSATION = "conversation_seat_retired";
 const SEAT_PATH = "/seats/live.jsonl";
+/* Another project's seat, which the panel's «all» scope lists tasks from. */
+const NEIGHBOUR_PROJECT = "seat-tasks-neighbour";
+const NEIGHBOUR_CONVERSATION = "conversation_seat_neighbour";
 
 let projectCounter = 0;
 let PROJECT = "seat-tasks-0";
@@ -71,6 +74,12 @@ const seatBody = () => ({
   viewerMcpRegistered: true,
   previous: [{ conversationId: RETIRED_CONVERSATION, path: "/seats/retired.jsonl", title: "Manager seat, release week", engine: "claude", heldFrom: "2026-09-18T14:02:00.000Z", heldTo: "2026-09-19T03:10:00.000Z", taskId: "task-seat-retired", hasNotes: true }],
   currentTask: { taskId: "task-seat-live", title: "Manager seat, this week", hasNotes: true },
+  /* The same read carries every project's seat conversations. */
+  all: {
+    conversationIds: [SEAT_CONVERSATION, NEIGHBOUR_CONVERSATION],
+    paths: [SEAT_PATH],
+    previous: { conversationIds: [RETIRED_CONVERSATION], paths: ["/seats/retired.jsonl"] },
+  },
 });
 
 const OVERRIDES: Record<string, unknown> = {
@@ -193,6 +202,9 @@ const TASKS = (): BoardTask[] => [
   task("task-product", "Ship the wide columns", "conversation_worker", "/alpha"),
   task("task-seat-live", "Manager seat, this week", SEAT_CONVERSATION, SEAT_PATH),
   task("task-seat-retired", "Manager seat, release week", RETIRED_CONVERSATION, "/seats/retired.jsonl"),
+  /* The neighbouring project's own work, and its seat's task. */
+  { ...task("task-neighbour-product", "Ship the neighbour's columns", "conversation_neighbour_worker", "/beta"), project: NEIGHBOUR_PROJECT },
+  { ...task("task-seat-neighbour", "Neighbour seat, launch week", NEIGHBOUR_CONVERSATION, "/seats/neighbour.jsonl"), project: NEIGHBOUR_PROJECT },
 ];
 
 function mount(): HTMLElement {
@@ -265,4 +277,25 @@ test("a dashboard that opens on Conversations reads the seat itself, once (#1841
   /* One reader, so one request: on the Board face the board is handed this
      same answer instead of polling the route for the same project and cwd. */
   expect(seatReads).toBe(1);
+});
+
+/* The panel's «all» scope lists every project's tasks, and a seat of ANOTHER
+   project is no more a task than this project's is (#1841). */
+test("the Tasks panel's all scope leaves every project's seat tasks out (#1841)", async () => {
+  const host = mount();
+  expect(await waitFor(() => panelRows(host).length > 0)).toBe(true);
+  await settle();
+  expect(panelRows(host)).toEqual(["task-product"]);
+
+  const scopes = [...host.querySelectorAll("[data-task-panel] button[aria-pressed]")] as HTMLButtonElement[];
+  expect(scopes).toHaveLength(2);
+  flushSync(() => scopes[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
+  await settle();
+
+  /* Both projects' product tasks, neither project's seat task. */
+  expect(panelRows(host)?.slice().sort()).toEqual(["task-neighbour-product", "task-product"]);
+  const panel = host.querySelector("[data-task-panel]")?.textContent ?? "";
+  expect(panel).toContain("Ship the neighbour's columns");
+  expect(panel).not.toContain("Neighbour seat");
+  expect(panel).not.toContain("Manager seat");
 });

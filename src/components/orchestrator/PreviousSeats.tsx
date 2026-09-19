@@ -435,7 +435,7 @@ function MobileNotes({ taskId }: { taskId: string | null }) {
   const { t } = useLocale();
   const notes = useSeatNotes(taskId, undefined, true);
   return (
-    <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-control bg-sunken p-2.5 text-caption leading-5 text-secondary [overflow-wrap:anywhere]" data-seat-notes="">
+    <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-control border border-border bg-sunken p-2.5 text-caption leading-5 text-secondary [overflow-wrap:anywhere]" data-seat-notes="">
       {notes.state?.kind === "failed" ? (
         <span role="alert">
           {t("orchPanel.seatNotesFailed")}{" "}

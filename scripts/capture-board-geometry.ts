@@ -2460,6 +2460,17 @@ async function seedSeats(project: string): Promise<{ live: SeatSeed; retired: Se
   return { live: seeds[2]!, retired: [seeds[1]!, seeds[0]!] };
 }
 
+/** What the board says it is NOT drawing: the hidden pill's count and the
+    tasks its tray names as off the board. A seat task must appear in neither
+    (#1841) — the tray is where the Overview used to list every seat. */
+function readHiddenTray() {
+  const pill = document.querySelector("[data-hidden-pill]");
+  return {
+    count: Number(pill?.getAttribute("data-count") ?? "-1"),
+    tasks: [...document.querySelectorAll("[data-hidden-task]")].map((row) => row.querySelector(".title")?.textContent?.trim() ?? ""),
+  };
+}
+
 /** The board as the seat cases read it. */
 function readSeatBoard() {
   const box = (element: Element | null) => {
@@ -2525,6 +2536,23 @@ function readSeatPopover() {
       notes: row.querySelector("[data-seat-notes]")?.textContent ?? null,
     })),
     openNotes: pop.querySelectorAll("[data-seat-notes]").length,
+    /* How the open notes are painted (#1841 review): in dark mode the popover's
+       card, a hovered row and a well sit within a few percent of each other, so
+       the block has to carry an edge of its own to read as an inset. */
+    notesPaint: (() => {
+      const notes = pop.querySelector("[data-seat-notes]");
+      if (!notes) return null;
+      const style = getComputedStyle(notes);
+      const row = notes.closest("[data-seat-row]")?.querySelector(".line");
+      return {
+        fill: style.backgroundColor,
+        border: style.borderTopColor,
+        borderWidth: Math.round(parseFloat(style.borderTopWidth) * 100) / 100,
+        /* What the row around it paints while the pointer is on it. */
+        rowHoverFill: getComputedStyle(document.documentElement).getPropertyValue("--surface-well").trim(),
+        rowFill: row ? getComputedStyle(row).backgroundColor : null,
+      };
+    })(),
   };
 }
 
@@ -2614,6 +2642,9 @@ async function seatsMain(which: SeatCase): Promise<void> {
           must(popover.openNotes === 1 && popover.rows[1]?.notes === seats.retired[0]!.notes, `${tag}: the Notes row reads ${popover.rows[1]?.notes}`);
           must(popover.rows.every((row) => row.opensItself), `${tag}: a row does not open its conversation`);
           must(popover.rows.slice(1).every((row) => / · /.test(row.span)), `${tag}: a previous row has no span (${popover.rows.map((row) => row.span).join(" | ")})`);
+          /* The open notes read as an inset: a border of their own, in a tone
+             the block is not filled with. */
+          must(popover.notesPaint !== null && popover.notesPaint.borderWidth >= 1 && popover.notesPaint.border !== popover.notesPaint.fill, `${tag}: the notes paint ${JSON.stringify(popover.notesPaint)}`);
         }
         const controls = head.headControls;
         for (const [index, a] of controls.entries()) for (const b of controls.slice(index + 1)) {
@@ -2621,6 +2652,42 @@ async function seatsMain(which: SeatCase): Promise<void> {
           if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w) continue;
           must(!overlaps(a.rect, b.rect, 0.5), `${tag}: seat head «${a.name}» and «${b.name}» overlap`);
         }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+
+        /* A band the board draws for nobody is not an off-board task either:
+           the hidden tray names no seat, on the project's board and on the
+           Overview, which spans every project and reads every project's
+           seats. */
+        const tray = async (where: string) => {
+          const closed = await page.evaluate(readHiddenTray);
+          if (closed.count > 0) {
+            await page.click("[data-hidden-pill]");
+            await page.waitForTimeout(250);
+          }
+          const open = await page.evaluate(readHiddenTray);
+          const named = seatTitles.filter((title) => open.tasks.includes(title));
+          must(named.length === 0, `${tag} ${where}: the hidden tray names ${named.join(" | ")}`);
+          if (closed.count > 0) {
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(150);
+          }
+          return open;
+        };
+        entry.hidden = await tray("board");
+
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent("__overview__")}`, { waitUntil: "domcontentloaded" });
+        await page.waitForSelector('[data-kanban-board] header.bar[data-bar="overview"]', { timeout: 60_000 });
+        await page.waitForTimeout(2_500);
+        const overview = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-overview.png`) });
+        const overviewCards = overview.columns.flatMap((column) => column.cards);
+        must(overview.columns.every((column) => column.seatCards === 0), `${tag} overview: a seat conversation is drawn in ${overview.columns.filter((column) => column.seatCards).map((column) => column.status).join(", ")}`);
+        must(seatTitles.every((title) => !overviewCards.includes(title)), `${tag} overview: a seat card is on the board (${overviewCards.join(" | ")})`);
+        entry.overview = {
+          columns: overview.columns.map((column) => ({ status: column.status, cards: column.cards, seatCards: column.seatCards })),
+          hidden: await tray("overview"),
+        };
       }
 
       if (which === "seat-placement") {

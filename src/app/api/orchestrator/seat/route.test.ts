@@ -11,6 +11,7 @@ import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAutho
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import {
   beginOrchestratorSeatIntent,
+  completeOrchestratorSeatIntent,
   failOrchestratorSeatIntent,
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
@@ -139,4 +140,42 @@ test("the seat read reports the Viewer MCP definition resolved for the project c
   }));
   const registered = await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=proj-a&cwd=${encodeURIComponent(project)}`));
   expect(await registered.json()).toMatchObject({ viewerMcpRegistered: true });
+});
+
+/* #1841 — the Overview spans every project and names none, so it reads the
+   seat conversations alone; the per-project read carries the same set, so a
+   dashboard whose Tasks panel is in its «all» scope needs no second request. */
+test("the seat read answers the cross-project seat conversations, with a project and without one (#1841)", async () => {
+  const seat = (project: string, n: number, path: string, now: string) => {
+    const clientRequestId = `req_${project}_0000${n}`;
+    beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "spawn", now });
+    completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: `conversation_${project}_${n}`, path, engine: "claude", now });
+  };
+  seat("proj-a", 1, "/seats/a1.jsonl", "2026-09-18T14:02:00.000Z");
+  seat("proj-a", 2, "/seats/a2.jsonl", "2026-09-19T03:10:00.000Z");
+  seat("proj-b", 1, "/seats/b1.jsonl", "2026-09-19T04:00:00.000Z");
+
+  const expected = {
+    conversationIds: expect.arrayContaining(["conversation_proj-a_2", "conversation_proj-b_1"]),
+    paths: expect.arrayContaining(["/seats/a2.jsonl", "/seats/b1.jsonl"]),
+    previous: { conversationIds: ["conversation_proj-a_1"], paths: ["/seats/a1.jsonl"] },
+  };
+
+  const scoped = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"));
+  expect(scoped.status).toBe(200);
+  const scopedBody = await scoped.json() as { all: unknown; seat: { conversationId: string } | null };
+  expect(scopedBody.all).toMatchObject(expected);
+  /* The project's own answer is unchanged by carrying it. */
+  expect(scopedBody.seat?.conversationId).toBe("conversation_proj-a_2");
+
+  const everywhere = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all"));
+  expect(everywhere.status).toBe(200);
+  expect(await everywhere.json()).toEqual({ all: expected });
+});
+
+/* A project is still required of the read that answers about one. */
+test("the seat read still refuses a request that names neither a project nor the cross-project scope", async () => {
+  const answer = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat"));
+  expect(answer.status).toBe(400);
+  expect(await answer.json()).toMatchObject({ error: "project is required" });
 });

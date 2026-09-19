@@ -913,6 +913,48 @@ function ProjectDashboardView({
   );
   const hiddenSet = useMemo(() => new Set(prefs.hidden), [prefs.hidden]);
   const projectTasks = useMemo(() => tasks.filter((task) => task.project === project), [tasks, project]);
+  /* Tasks that exist only for the orchestrator seat are the seat panel's to
+     list (#1841): every task list leaves them out — the desktop Tasks panel
+     and its count, the phone's task screens and their count — while the task
+     rows themselves stay in the store, where the seat keeps its notes.
+
+     The seat is read once per face: the phone's read above is gated on its
+     board leaf, the desktop's is not gated on a face at all, because the Tasks
+     panel is open on the Conversations face too, where the board that used to
+     do this reading is not mounted. The board is handed the same answer
+     instead of polling the route a second time. */
+  const faceSeatRead = isMobile ? seatRead : desktopSeatRead;
+  const seatRefs = seatRefsOf(faceSeatRead.status, faceSeatRead.failed);
+  const seatKey = seatRefs ? JSON.stringify(seatRefs) : "";
+  const seatRefsForBoard = useMemo<SeatRefs | null>(
+    () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
+    [seatKey],
+  );
+  /* The same read also carries every OTHER project's seats. The panel's «all»
+     scope lists those projects' tasks, and a seat of another project is no
+     more a task than this one's; a failed read drops them, as it drops this
+     project's retired seats. */
+  const allSeatKey = !faceSeatRead.failed && faceSeatRead.status?.all ? JSON.stringify(faceSeatRead.status.all) : "";
+  const allSeatRefs = useMemo<SeatRefs | null>(
+    () => (allSeatKey ? (JSON.parse(allSeatKey) as SeatRefs) : null),
+    [allSeatKey],
+  );
+  const seatTaskIds = useMemo(() => {
+    if (!seatRefsForBoard && !allSeatRefs) return new Set<string>();
+    const seatOnly = (task: BoardTask) => seatOnlyTask(task, allSeatRefs, pipelines)
+      || (task.project === project && seatOnlyTask(task, seatRefsForBoard, pipelines));
+    return new Set(tasks.filter(seatOnly).map((task) => task.id));
+  }, [seatRefsForBoard, allSeatRefs, tasks, project, pipelines]);
+  /* This project's tasks as a task LIST shows them. The board, the seat panel
+     and the pipeline screens keep `projectTasks`: the seat's own task is how
+     the panel finds its notes. */
+  const faceTasks = useMemo(
+    () => (seatTaskIds.size ? projectTasks.filter((task) => !seatTaskIds.has(task.id)) : projectTasks),
+    [projectTasks, seatTaskIds],
+  );
+  /** Open tasks as every count of them says: `Tasks N` on the desktop bar, the
+      phone menu's Tasks row. */
+  const openTaskCount = faceTasks.filter((task) => task.status !== "done").length;
   /* Compact default Kanban/status stacks: quiet placed cards fold off the
      canvas (layout, edges, minimap) into the status strip; active, attention,
      focused and explicitly expanded cards stay full-size. Explicit expansion
@@ -1883,7 +1925,6 @@ function ProjectDashboardView({
   /* The board menu (README §3.1, §4.1): every former header control as a
      labelled 44 px row, create actions first, the danger-free Archive last. No
      row asks for confirmation; Archive answers with a receipt carrying Restore. */
-  const openTasks = projectTasks.filter((task) => task.status !== "done").length;
   const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
   const mobileMenuEntries = (): MobileMenuEntry[] => {
     const entries: MobileMenuEntry[] = [
@@ -1891,7 +1932,7 @@ function ProjectDashboardView({
       { kind: "row", key: "new-task", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newTask"), onSelect: () => openMobileTasks("new") },
       { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
       { kind: "divider", key: "d1" },
-      { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTasks ? t("mobile2.menu.tasksOpen", { count: openTasks }) : undefined, onSelect: () => openMobileTasks("list") },
+      { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTaskCount ? t("mobile2.menu.tasksOpen", { count: openTaskCount }) : undefined, onSelect: () => openMobileTasks("list") },
     ];
     if (viewToggle) {
       /* The board's two faces (issue #613) stay one tap away here, as radio
@@ -1973,24 +2014,7 @@ function ProjectDashboardView({
      switches (#1331). Trail: the two panel toggles and the ⋯ menu, which holds message search
      (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
      row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
-  /* Tasks that exist only for the orchestrator seat are the seat panel's to
-     list (#1841): the Tasks panel and its count leave them out, on whichever
-     desktop face is mounted. The dashboard is therefore the desktop's ONE
-     reader of the seat — the Tasks panel and its count live out here, above
-     both faces — and the board is handed this same answer instead of polling
-     the route a second time. */
-  const desktopSeatRefs = seatRefsOf(desktopSeatRead.status, desktopSeatRead.failed);
-  const desktopSeatKey = desktopSeatRefs ? JSON.stringify(desktopSeatRefs) : "";
-  const seatRefsForBoard = useMemo<SeatRefs | null>(
-    () => (desktopSeatKey ? (JSON.parse(desktopSeatKey) as SeatRefs) : null),
-    [desktopSeatKey],
-  );
-  const seatTaskIds = useMemo(() => {
-    if (!seatRefsForBoard) return new Set<string>();
-    return new Set(projectTasks.filter((task) => seatOnlyTask(task, seatRefsForBoard, pipelines)).map((task) => task.id));
-  }, [seatRefsForBoard, projectTasks, pipelines]);
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
-  const openTaskCount = projectTasks.filter((task) => task.status !== "done" && !seatTaskIds.has(task.id)).length;
   const barLead = (wide: boolean) => (
     <>
       <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
@@ -2264,7 +2288,7 @@ function ProjectDashboardView({
                   pipelines={pipelines}
                   surfacePipelines={activePipelines}
                   tasks={hasNodes ? boardTasks : EMPTY_TASKS}
-                  sheetTasks={projectTasks}
+                  sheetTasks={faceTasks}
                   drafts={layoutDrafts}
                   favorites={favoriteIdSet}
                   isolatedManualPaths={isolatedCompactHistoryPaths}
@@ -2389,7 +2413,7 @@ function ProjectDashboardView({
       {!isMobile && boardReady ? <Switchboard files={files} flows={deckFlows} project={project} loaded={loaded} catalogFailures={catalogFailures} onOpenFile={openSwitchboardFile} onOpenCatalogFile={openFullCatalogFile} /> : null}
 
       {isMobile && mobileTaskSheet ? (
-        <TaskSheet project={project} projectName={projectName} tasks={projectTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
+        <TaskSheet project={project} projectName={projectName} tasks={faceTasks} files={files} initialView={mobileTaskSheet} onClose={() => setMobileTaskSheet(null)} />
       ) : null}
 
       <TaskToastHost />

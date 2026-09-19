@@ -556,6 +556,49 @@ export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEAT
   return out;
 }
 
+/** Every conversation a seat record names, across EVERY project (#1841), split
+    into the seats held now (active or pending) and the seats retired. */
+export interface SeatConversations {
+  conversationIds: string[];
+  paths: string[];
+  previous: { conversationIds: string[]; paths: string[] };
+}
+
+/**
+ * Every conversation any project's seat record names (#1841), from one read of
+ * the record.
+ *
+ * The per-project answer above is what a board needs; a surface that spans
+ * projects — the Overview's board, the Tasks panel in its «all» scope — needs
+ * this one, because a seat of ANOTHER project is just as much a seat and has
+ * just as little to do with a task list. Read whole rather than per project:
+ * the file is one document, so asking it once per project would re-read and
+ * re-parse it once per project for the same answer.
+ *
+ * Null when the record cannot be read. A surface that hides rows on this
+ * answer hides nothing without it, which is why «unreadable» has to be
+ * distinguishable from «no seats anywhere».
+ */
+export function allSeatConversations(): SeatConversations | null {
+  const file = readOrchestratorSeatFileOrNull();
+  if (file === null) return null;
+  const held = { conversationIds: new Set<string>(), paths: new Set<string>() };
+  for (const seat of [...Object.values(file.seats), ...Object.values(file.pending)]) {
+    if (seat.conversationId) held.conversationIds.add(seat.conversationId);
+    if (seat.path) held.paths.add(seat.path);
+  }
+  const previous = { conversationIds: new Set<string>(), paths: new Set<string>() };
+  for (const revocation of file.revocations) {
+    previous.conversationIds.add(revocation.conversationId);
+    if (revocation.path) previous.paths.add(revocation.path);
+  }
+  return {
+    conversationIds: [...held.conversationIds],
+    paths: [...held.paths],
+    previous: { conversationIds: [...previous.conversationIds], paths: [...previous.paths] },
+  };
+}
+
 /** A seat's notes task as the status read reports it (#1841): every surface,
     including the ones that carry no task list, can name the seat and decide
     whether to offer its notes without reading the store itself. */

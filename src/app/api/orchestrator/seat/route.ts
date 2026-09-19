@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
-import { orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatNotesTask } from "@/lib/orchestrator/seats";
+import { allSeatConversations, orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -40,6 +40,18 @@ interface SeatStatus {
       seat screens and the collapsed strip name the live seat without holding
       the project's task list. */
   currentTask: SeatNotesTask | null;
+  /** Every conversation ANY project's seat record names (#1841), from the same
+      read. A surface that spans projects — the Tasks panel in its «all» scope —
+      keeps seat conversations out of its rows wherever they are seated, and a
+      seat of another project is no more a task than this project's is. Null
+      when the record could not be read, which hides nothing. */
+  all: SeatConversations | null;
+}
+
+/** The project-less read (`?scope=all`): the Overview names no project, so it
+    is answered with the cross-project seat conversations alone. */
+interface SeatConversationsAnswer {
+  all: SeatConversations | null;
 }
 
 interface PreviousSeatRow extends PreviousOrchestratorSeat {
@@ -58,8 +70,11 @@ interface SeatFailure {
   terminalizedAt: string;
 }
 
-export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | ApiError>> {
+export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
+  if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
+    return NextResponse.json({ all: allSeatConversations() });
+  }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   const home = process.env.HOME?.trim() || os.homedir();
@@ -93,6 +108,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
     currentTask: active ? seatTaskOf(tasks, project, active) : null,
+    all: allSeatConversations(),
   });
 }
 

@@ -729,8 +729,12 @@
 /* The chevron turns down on the open row. */
 .kb .seats-pop .notes-btn svg { width: 13px; height: 13px; transition: transform var(--motion-fast) var(--ease-standard); }
 .kb .seats-pop .notes-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* The open notes carry an edge of their own, so the block reads as an inset
+   inside the row: in dark mode the popover's card, the hovered row and a well
+   all sit within a few percent of each other. */
 .kb .seats-pop .notes {
-  margin: 0 14px 10px; padding: 10px; border-radius: var(--radius-control); background: var(--surface-well);
+  margin: 0 14px 10px; padding: 9px; border-radius: var(--radius-control);
+  background: var(--surface-board); border: 1px solid var(--border-default);
   font-size: var(--text-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; color: var(--color-secondary);
 }
 .kb .seats-pop .notes-retry { color: var(--color-accent); font-weight: 600; }

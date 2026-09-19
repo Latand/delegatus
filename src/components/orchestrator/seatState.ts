@@ -50,6 +50,10 @@ export interface OrchestratorSeatStatus {
       phone's seat screens, which carry no task list, can still name the live
       seat and know whether to offer its notes. */
   currentTask?: SeatNotesTaskRead | null;
+  /** Every conversation ANY project's seat record names (#1841), as the same
+      answer carries it. Null when the record could not be read, and absent
+      from an answer written before the route carried the field. */
+  all?: SeatRefs | null;
 }
 
 /** A seat's notes task as the answer carries it. */
@@ -94,6 +98,7 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     viewerMcpRegistered?: unknown;
     previous?: unknown;
     currentTask?: unknown;
+    all?: unknown;
   } | null;
   return {
     seat: seatOf(raw?.seat),
@@ -103,6 +108,32 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
     previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
     currentTask: seatNotesTaskOf(raw?.currentTask),
+    all: seatConversationsOf(raw?.all),
+  };
+}
+
+const strings = (value: unknown): string[] => (
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry !== "") : []
+);
+
+/**
+ * The cross-project seat conversations an answer carries (#1841), as the
+ * surfaces that span projects read them.
+ *
+ * Null unless the answer carries the whole shape — `previous` included, since
+ * that is what marks the record as read: the hiding rule turns itself off
+ * without it, so a body that cannot supply it must not read as "no seats".
+ */
+export function seatConversationsOf(value: unknown): SeatRefs | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const previous = row.previous;
+  if (!previous || typeof previous !== "object" || Array.isArray(previous)) return null;
+  const retired = previous as Record<string, unknown>;
+  return {
+    conversationIds: strings(row.conversationIds),
+    paths: strings(row.paths),
+    previous: { conversationIds: strings(retired.conversationIds), paths: strings(retired.paths) },
   };
 }
 

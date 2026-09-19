@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { parseSeatStatus, type OrchestratorSeatStatus } from "./seatState";
+import type { SeatRefs } from "@/lib/tasks/groupHide";
+
+import { parseSeatStatus, seatConversationsOf, type OrchestratorSeatStatus } from "./seatState";
 
 /** How often the panel re-reads the project's seat. The seat only moves when
     the operator (or a rotation) moves it, so this is a slow status read — the
@@ -44,8 +46,14 @@ interface ScopedRead {
 const answers = new Map<string, ScopedRead>();
 const readKey = (project: string, cwd: string | undefined): string => `${project}\0${cwd ?? ""}`;
 
+/** The last cross-project answer this tab was given (#1841), shared by every
+    mount of {@link useSeatConversations} for the same reason the per-project
+    cache exists: a surface that re-opens paints what it already knew. */
+let seatConversations: SeatRefs | null = null;
+
 export function resetOrchestratorSeatCacheForTests(): void {
   answers.clear();
+  seatConversations = null;
 }
 
 export async function fetchOrchestratorSeat(project: string, cwd?: string, signal?: AbortSignal): Promise<OrchestratorSeatStatus> {
@@ -118,4 +126,50 @@ export function useOrchestratorSeat(project: string | null, cwd?: string): Orche
   }, [cwd, project, settle]);
 
   return { status: current?.status ?? null, failed: current?.failed ?? false, refresh };
+}
+
+/**
+ * Every conversation ANY project's seat record names (#1841).
+ *
+ * A surface that spans projects and names none — the Overview's board, whose
+ * cards come from every project at once — cannot ask the per-project read for
+ * this, so it asks for the cross-project one. One slow status read on the same
+ * cadence as the panel's; the record only moves when a seat is designated or
+ * rotated.
+ *
+ * `enabled` false reads nothing at all. A failed attempt keeps the last good
+ * answer, exactly as the per-project read does; until the first answer lands
+ * the result is null, and a null answer hides nothing anywhere.
+ */
+export function useSeatConversations(enabled: boolean): SeatRefs | null {
+  const [refs, setRefs] = useState<SeatRefs | null>(() => seatConversations);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    const load = () => {
+      void fetchSeatConversations(controller.signal)
+        .then((answer) => {
+          seatConversations = answer;
+          setRefs(answer);
+        })
+        .catch(() => {
+          /* Keep the last good answer: a dropped poll is not evidence that the
+             seats moved, and blanking it would flash every seat task back into
+             the rows it was kept out of. */
+        });
+    };
+    load();
+    const timer = setInterval(load, SEAT_POLL_MS);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [enabled]);
+  return refs;
+}
+
+export async function fetchSeatConversations(signal?: AbortSignal): Promise<SeatRefs | null> {
+  const response = await fetch("/api/orchestrator/seat?scope=all", signal ? { signal } : undefined);
+  if (!response.ok) throw new Error(`orchestrator seat conversations read failed: ${response.status}`);
+  return seatConversationsOf((await response.json() as { all?: unknown }).all);
 }
