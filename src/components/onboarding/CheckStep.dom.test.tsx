@@ -26,7 +26,15 @@ Object.assign(globalThis, {
   fetch: () => Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } })),
 });
 
-const { CheckStep } = await import("./CheckStep");
+const { CheckStep, resetTime } = await import("./CheckStep");
+
+const runOf = (state: string, rows: unknown[]) => ({
+  answer: {
+    runtime: RUNTIME,
+    run: { id: "run00004", state, startedAt: "2026-09-20T10:00:00.000Z", finishedAt: "2026-09-20T10:01:30.000Z", runtime: RUNTIME, rows, cleanup: { done: true, problems: [] }, version: "0.0.0" },
+  },
+});
+const fail = (code: string, extra: Record<string, unknown> = {}) => ({ code, params: { engine: "Claude", bin: "claude" }, detail: "d", agentPath: null, accountId: null, ...extra });
 
 afterAll(() => { void dom.happyDOM.close(); });
 
@@ -78,4 +86,54 @@ test("a failed wake opens in place and the footer names the row it stopped at", 
   expect(host.querySelector<HTMLElement>('[data-health-row="filing"]')?.dataset.healthState).toBe("waiting");
   expect(host.querySelector("[data-health-summary=failed]")?.textContent).toContain("“The orchestrator is woken”");
   expect(host.querySelector("[data-health-skip]")).toBeNull();
+});
+
+test("a spawn timeout with no agent to open ends at the terminal check and the bug report, as code without backticks", async () => {
+  answer = runOf("failed", [row("spawn", "failed", fail("SPAWN_TIMEOUT")), row("delivery", "waiting"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  const failure = host.querySelector<HTMLElement>("[data-health-failure]")!;
+  expect(failure.textContent).toContain("copy the details into a bug report");
+  expect(failure.textContent).not.toContain("open the agent");
+  expect(failure.textContent).not.toContain("`");
+  expect(failure.querySelector("code")?.textContent).toBe("claude --version");
+  expect(host.querySelector<HTMLElement>("[data-health-action]")?.dataset.healthAction).toBe("agent");
+  expect(host.querySelector<HTMLElement>("[data-health-action]")?.textContent).toBe("Copy details");
+  /* The first row has no rows before it. */
+  expect(host.querySelector("[data-health-summary=failed]")?.textContent).not.toContain("rows before it");
+});
+
+test("a spawn timeout with a transcript names the agent beside the button that opens it", async () => {
+  answer = runOf("failed", [row("spawn", "failed", fail("SPAWN_TIMEOUT", { agentPath: "/scratch/agent.jsonl" })), row("delivery", "waiting"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(host.querySelector("[data-health-failure]")?.textContent).toContain("open the agent's card");
+  expect(host.querySelector<HTMLElement>("[data-health-action]")?.textContent).toBe("Open the agent");
+});
+
+test("a turned-off tick offers only the details, since the fix is a local setting", async () => {
+  answer = runOf("failed", [row("spawn", "passed"), row("delivery", "passed"), row("report", "passed"), row("wake", "failed", fail("TICK_OFF")), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(host.querySelector("[data-health-action]")).toBeNull();
+  expect(host.querySelector("[data-health-failure]")?.textContent).toContain("Show details");
+});
+
+test("after Stop the rows that never ran read as not run", async () => {
+  answer = runOf("stopped", [row("spawn", "passed"), row("delivery", "waiting"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(Array.from(host.querySelectorAll<HTMLElement>("[data-health-row]")).map((el) => el.dataset.healthState)).toEqual(["passed", "notRun", "notRun", "notRun", "notRun"]);
+  expect(host.textContent).toContain("not run");
+  expect(host.textContent).not.toContain("waiting");
+});
+
+test("after a pass, running it again is the secondary action", async () => {
+  answer = runOf("passed", ["spawn", "delivery", "report", "wake", "filing"].map((id) => row(id, "passed"))).answer;
+  const host = await render();
+  expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).not.toContain("bg-accent");
+});
+
+test("the reset time follows the interface language, date and hour:minute", () => {
+  const iso = "2100-01-02T17:00:00.000Z";
+  expect(resetTime(iso, "en")).not.toMatch(/:\d\d:\d\d/);
+  expect(resetTime(iso, "uk")).not.toBe(resetTime(iso, "en"));
+  expect(resetTime(iso, "uk")).toContain("2100");
+  expect(resetTime(undefined, "en")).toBe("—");
 });

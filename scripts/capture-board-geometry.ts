@@ -652,6 +652,7 @@ function measureOnboarding(phone: boolean) {
       failureText: dialog.querySelector("[data-health-failure] p")?.textContent ?? null,
       action: dialog.querySelector<HTMLElement>("[data-health-action]")?.dataset.healthAction ?? null,
       summary: dialog.querySelector<HTMLElement>("[data-health-summary]")?.dataset.healthSummary ?? null,
+      summaryText: dialog.querySelector("[data-health-summary]")?.textContent ?? null,
       lead: dialog.querySelector("[data-health-lead]")?.textContent ?? null,
       detailsOpen: dialog.querySelector("[data-health-details]") !== null,
       /* Anything inside the failure block wider than the block itself. */
@@ -662,6 +663,26 @@ function measureOnboarding(phone: boolean) {
         return Math.max(0, ...Array.from(block.querySelectorAll<HTMLElement>("*")).map((el) => Math.round(el.getBoundingClientRect().right - edge)));
       })(),
       rowLabelsClipped: Array.from(dialog.querySelectorAll<HTMLElement>("[data-health-row] span.flex-1")).filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent ?? ""),
+      /* Everything the failure block paints, for stray markdown marks. */
+      failureAll: dialog.querySelector("[data-health-failure]")?.textContent ?? null,
+      actionLabel: dialog.querySelector("[data-health-action]")?.textContent ?? null,
+      startFilled: (() => {
+        const start = dialog.querySelector<HTMLElement>("[data-health-start]");
+        return start ? getComputedStyle(start).backgroundColor === getComputedStyle(dialog.querySelector<HTMLElement>("[data-onboarding-primary]") ?? start).backgroundColor : null;
+      })(),
+      /* Whether an element sits inside the visible rect of the body that scrolls it, at rest. */
+      inView: (() => {
+        const visible = (selector: string) => {
+          const el = dialog.querySelector<HTMLElement>(selector);
+          if (!el) return null;
+          let box: HTMLElement | null = el.parentElement;
+          while (box && box !== dialog && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+          const outer = (box ?? dialog).getBoundingClientRect();
+          const rect = el.getBoundingClientRect();
+          return rect.top >= outer.top - 1 && rect.bottom <= outer.bottom + 1;
+        };
+        return { start: visible("[data-health-start]"), summary: visible("[data-health-summary]"), details: visible("[data-health-details]") };
+      })(),
     } : null,
   };
 }
@@ -672,11 +693,12 @@ function measureOnboarding(phone: boolean) {
    would, and no quota is spent. */
 const HEALTH_RUNTIME = { engine: "claude", model: "haiku", effort: "low" };
 const HEALTH_ROW_IDS = ["spawn", "delivery", "report", "wake", "filing"] as const;
-const HEALTH_FAILURES: readonly { code: string; row: typeof HEALTH_ROW_IDS[number]; params?: Record<string, string>; agentPath?: string; accountId?: string }[] = [
+const HEALTH_FAILURES: readonly { code: string; row: typeof HEALTH_ROW_IDS[number]; params?: Record<string, string>; agentPath?: string; accountId?: string; name?: string }[] = [
   { code: "CLI_MISSING", row: "spawn", params: { engine: "Claude", bin: "claude" } },
   { code: "ENGINE_NOT_CONNECTED", row: "spawn", params: { engine: "Claude", bin: "claude" } },
   { code: "ACCOUNT_EXHAUSTED", row: "spawn", params: { engine: "Claude", bin: "claude", time: "2100-01-02T15:00:00.000Z" }, accountId: "account-a" },
   { code: "SPAWN_TIMEOUT", row: "spawn", params: { engine: "Claude", bin: "claude" } },
+  { code: "SPAWN_TIMEOUT", row: "spawn", params: { engine: "Claude", bin: "claude" }, agentPath: "/var/tmp/health-stage.jsonl", name: "spawn-timeout-agent" },
   { code: "DELIVERY_FAILED", row: "delivery" },
   { code: "MCP_UNREACHABLE", row: "report" },
   { code: "REPORT_TIMEOUT", row: "report", agentPath: "/var/tmp/health-stage.jsonl" },
@@ -979,24 +1001,37 @@ async function captureOnboarding(): Promise<void> {
           });
           await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
             must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
+            must(r.health?.startFilled === false, `${tag}: after a pass, Run it again is a second filled accent button beside Open the board`);
           });
           await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
             must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
+            must(r.health!.rows.slice(1).every((entry) => entry.endsWith("=notRun")), `${tag}: after Stop the rows that never ran read ${r.health?.rows.join(" ")}`);
           });
           for (const failed of HEALTH_FAILURES) {
-            await checkFrame(`check-${failed.code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
-              must(r.health?.failure === failed.code, `${tag}: expected failure ${failed.code}, the step shows ${r.health?.failure}`);
-              must(Boolean(r.health?.failureText) && !r.health!.failureText!.includes("{"), `${tag} ${failed.code}: unfilled sentence "${r.health?.failureText}"`);
+            const code = failed.code;
+            await checkFrame(`check-${failed.name ?? code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
+              must(r.health?.failure === code, `${tag}: expected failure ${code}, the step shows ${r.health?.failure}`);
+              must(Boolean(r.health?.failureText) && !r.health!.failureText!.includes("{"), `${tag} ${code}: unfilled sentence "${r.health?.failureText}"`);
+              must(!r.health!.failureAll!.includes("`"), `${tag} ${code}: markdown backticks painted in "${r.health?.failureAll}"`);
               const index = HEALTH_ROW_IDS.indexOf(failed.row);
-              must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${failed.code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
-              must(r.health?.summary === "failed", `${tag} ${failed.code}: no failed footer line`);
+              must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
+              must(r.health?.summary === "failed", `${tag} ${code}: no failed footer line`);
+              /* At rest, the failure leaves the button that runs the check again in view. */
+              must(r.health?.inView.start === true && r.health?.inView.summary === true, `${tag} ${code}: Run it again ${r.health?.inView.start ? "in view" : "below the fold"}, footer line ${r.health?.inView.summary ? "in view" : "below the fold"}`);
+              /* "Open the agent" sentences only beside the button that opens it. */
+              const namesAgent = /open the agent|відкрийте (картку )?агента/i.test(r.health!.failureAll!);
+              must(!namesAgent || r.health?.actionLabel === (locale === "uk" ? "Відкрити агента" : "Open the agent"), `${tag} ${code}: the sentence names the agent beside "${r.health?.actionLabel}"`);
+              if (code === "TICK_OFF") must(r.health?.action === null, `${tag}: TICK_OFF offers ${r.health?.action}`);
+              if (index === 0) must(!/rows before it|попередні кроки/.test(r.health!.failureAll! + (r.health?.summaryText ?? "")), `${tag} ${code}: a first-row failure says the rows before it passed`);
             });
           }
           /* The machine detail, opened, on the longest sentence pair. */
           await page.click("[data-health-failure] button[aria-expanded]");
           await page.waitForSelector("[data-health-details]");
+          await page.waitForTimeout(400);
           await shot("check-details", (r) => {
             must(Boolean(r.health?.detailsOpen), `${tag}: Show details did not open`);
+            must(r.health?.inView.details === true, `${tag}: the opened details sit below the fold`);
           });
           health = healthAnswer("idle");
           await openStep("agents");

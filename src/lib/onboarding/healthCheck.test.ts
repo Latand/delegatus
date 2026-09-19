@@ -20,6 +20,7 @@ import {
   settleHealthCheckForTests,
   startHealthCheck,
   stopHealthCheck,
+  timedOutAgentPath,
   wakeVerdict,
   type HealthCheckPorts,
   type HealthRun,
@@ -265,4 +266,11 @@ test("cleanup removes the stage worktree and its branch from the scratch reposit
   expect(closed).toEqual(["health01"]);
   expect(fs.existsSync(worktree)).toBe(false);
   expect(execFileSync("git", ["branch", "--list", "pipeline/health01"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
+});
+
+test("a spawn timeout names an agent only when its transcript exists, since only that one has a card", () => {
+  const attempt = { agentPath: "/scratch/agent.jsonl" } as Parameters<typeof timedOutAgentPath>[0];
+  expect(timedOutAgentPath(attempt, () => false)).toBeNull();
+  expect(timedOutAgentPath(attempt, () => true)).toBe("/scratch/agent.jsonl");
+  expect(timedOutAgentPath(null, () => true)).toBeNull();
 });

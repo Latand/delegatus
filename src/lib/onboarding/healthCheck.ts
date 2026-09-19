@@ -161,6 +161,12 @@ export function healthAttempt(pipeline: Pipeline | null): PipelineStageAttempt |
   return pipeline?.runs[0]?.attempts.at(-1) ?? null;
 }
 
+/** The agent a SPAWN_TIMEOUT can point at: only one whose transcript exists
+    has a card to open. */
+export function timedOutAgentPath(attempt: PipelineStageAttempt | null, transcriptExists: (file: string) => boolean): string | null {
+  return attempt?.agentPath && transcriptExists(attempt.agentPath) ? attempt.agentPath : null;
+}
+
 /**
  * Row 1 for the stage: the attempt holds a conversation whose transcript exists.
  * `pending` while it may still come; a failure once the pipeline says why it
@@ -452,7 +458,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
       const verdict = stageSpawnVerdict(ports.pipeline(pipelineId!), runtime, ports.transcriptExists);
       return verdict.kind === "pending" ? null : verdict;
     });
-    if (!started) fail("spawn", failure("SPAWN_TIMEOUT", `the stage agent did not start within 60 seconds${ports.pipeline(pipelineId)?.stateDetail ? `: ${ports.pipeline(pipelineId)!.stateDetail}` : ""}`, { params: agentParams, agentPath: healthAttempt(ports.pipeline(pipelineId))?.agentPath ?? null }));
+    if (!started) fail("spawn", failure("SPAWN_TIMEOUT", `the stage agent did not start within 60 seconds${ports.pipeline(pipelineId)?.stateDetail ? `: ${ports.pipeline(pipelineId)!.stateDetail}` : ""}`, { params: agentParams, agentPath: timedOutAgentPath(healthAttempt(ports.pipeline(pipelineId)), ports.transcriptExists) }));
     if (started!.kind === "failed") fail("spawn", started!.failure);
     pass("spawn");
 

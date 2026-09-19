@@ -233,6 +233,8 @@ export function OnboardingDialog({ mode, marker, onClose }: {
     </ol>
   );
 
+  /* The Check step's rows open in place with a failure; the dialog takes the height it needs, up to the viewport. */
+  const checkTall = view === "guide" && current === "check";
   const counter = t("onboarding.stepCounter", { n: step + 1, total: STEPS.length });
   const footerButtons = view === "mapping" ? null : (
     <>
@@ -305,7 +307,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        className="flex h-[640px] max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none"
+        className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">
           <span className="min-w-0 flex-1 truncate text-title font-bold text-primary">{title}</span>
