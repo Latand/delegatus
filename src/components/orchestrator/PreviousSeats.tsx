@@ -291,3 +291,105 @@ function SeatRow({ row, tasks, notesOpen, onToggleNotes, onOpen, openByLink }: {
     </div>
   );
 }
+
+/* ── The phone (390): a row in the seat sheet, a list screen, a notes screen ── */
+
+/** The seat sheet's row: «Previous seats 2 ›». Absent at zero. */
+export function MobilePreviousSeatsRow({ status, onOpen }: { status: OrchestratorSeatStatus | null; onOpen: () => void }) {
+  const { t } = useLocale();
+  const count = status?.previous?.length ?? 0;
+  if (!count) return null;
+  return (
+    <button
+      type="button"
+      data-mobile-previous-seats={count}
+      aria-label={t("orchPanel.previousSeatsAria", { count })}
+      onClick={onOpen}
+      className="flex min-h-11 w-full shrink-0 items-center gap-3 rounded-control text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+    >
+      <History className="h-[18px] w-[18px] shrink-0 text-secondary" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{t("orchPanel.previousSeats")}</span>
+      <span className="shrink-0 text-label font-semibold tabular-nums text-muted">{count}</span>
+      <span className="shrink-0 text-muted" aria-hidden>›</span>
+    </button>
+  );
+}
+
+/**
+ * The list screen the row opens, inside the seat sheet: the same two-line
+ * rows at 56 px, and a row's notes as a sub-screen. `onBack` returns to the
+ * seat.
+ */
+export function MobilePreviousSeatsScreen({ status, onBack }: { status: OrchestratorSeatStatus | null; onBack: () => void }) {
+  const { t, locale } = useLocale();
+  const [notesFor, setNotesFor] = useState<SeatListRow | null>(null);
+  const rows = seatListRows(status).filter((row) => !row.current);
+  const back = (label: string, run: () => void) => (
+    <button
+      type="button"
+      data-mobile-previous-back=""
+      onClick={run}
+      className="flex min-h-11 items-center gap-1 self-start text-ui font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      <span aria-hidden>‹</span> {label}
+    </button>
+  );
+  if (notesFor) {
+    return (
+      <div className="flex flex-col gap-2" data-mobile-previous-notes={notesFor.conversationId}>
+        {back(t("orchPanel.previousSeats"), () => setNotesFor(null))}
+        <p className="truncate text-body font-semibold text-primary">{notesFor.title ?? t("orchPanel.seatUntitled")}</p>
+        <MobileNotes taskId={notesFor.taskId} />
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col" data-mobile-previous-list="">
+      {back(t("orchPanel.seatCurrent"), onBack)}
+      <p className="pb-1 pt-2 text-label font-semibold text-muted">{t("orchPanel.previousSeats")}</p>
+      {rows.map((row) => (
+        <div key={row.conversationId} className="flex min-h-14 items-center gap-2 border-t border-border first:border-t-0" data-seat-row={row.conversationId}>
+          <a
+            href={"#c=" + encodeURIComponent(row.conversationId)}
+            className="flex min-h-14 min-w-0 flex-1 flex-col justify-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 text-ui font-semibold text-primary">
+              {row.engine ? <EngineMark engine={row.engine} size={12} /> : null}
+              <span className="truncate">{row.title ?? t("orchPanel.seatUntitled")}</span>
+            </span>
+            <span className="truncate text-caption tabular-nums text-muted">{seatSpan(t, locale, row)}</span>
+          </a>
+          {row.taskId ? (
+            <button
+              type="button"
+              data-seat-notes-toggle=""
+              onClick={() => setNotesFor(row)}
+              className="inline-flex min-h-11 shrink-0 items-center px-1 text-label font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              {t("orchPanel.seatNotes")} ›
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MobileNotes({ taskId }: { taskId: string | null }) {
+  const { t } = useLocale();
+  const notes = useSeatNotes(taskId, undefined, true);
+  return (
+    <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-control bg-sunken p-2.5 text-caption leading-5 text-secondary [overflow-wrap:anywhere]" data-seat-notes="">
+      {notes.state?.kind === "failed" ? (
+        <span role="alert">
+          {t("orchPanel.seatNotesFailed")}{" "}
+          <button type="button" className="min-h-11 font-semibold text-accent" onClick={notes.retry}>{t("orchPanel.seatNotesRetry")}</button>
+        </span>
+      ) : notes.state?.kind === "ready" ? (
+        notes.state.text
+      ) : (
+        <span role="status">{t("orchPanel.seatNotesLoading")}</span>
+      )}
+    </div>
+  );
+}

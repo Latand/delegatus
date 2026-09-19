@@ -66,7 +66,7 @@ import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
-import { useKanbanSeat } from "./kanban/kanbanSeatStore";
+import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { SchemeSkeleton } from "./scheme/SchemeSkeleton";
 import { Switchboard } from "./Switchboard";
@@ -1778,6 +1778,7 @@ function ProjectDashboardView({
      from anywhere opens as a reader in its card. */
   const kanbanLeaf = !isMobile && desktopBoardLeaf;
   const kanbanSeat = useKanbanSeat(project);
+  const seatSignal = useSeatSignal(kanbanLeaf ? project : null);
   /* While the board is still loading, its face is taken to be the Board it almost always is, so the orchestrator
      dock does not mount a panel for one commit that the Board's seat then takes over. */
   const kanbanFaceReported = !isMobile && (kanbanLeaf || !boardReady);
@@ -1994,6 +1995,7 @@ function ProjectDashboardView({
         orchestrator={onToggleOrchestratorPanel ? {
           open: kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen,
           onToggle: kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel,
+          dot: kanbanLeaf && kanbanSeat.collapsed && seatSignal ? { tone: seatSignal.tone, label: seatSignal.label } : null,
         } : null}
         tasks={{ open: taskPanelOpen, count: openTaskCount, onToggle: toggleTaskPanel }}
       />
@@ -2339,7 +2341,7 @@ function ProjectDashboardView({
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
                 seat={(boardId, seatRead) => (
-                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} boardId={boardId} seatRead={seatRead} />
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={seatRead} />
                 )}
                 onOpenConversations={openConversationsForOneLook}
                 onNewAgent={addDraft}

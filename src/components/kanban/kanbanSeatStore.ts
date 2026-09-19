@@ -126,7 +126,7 @@ function subscribe(listener: () => void): () => void {
 
 const serverSnapshot = () => EMPTY;
 
-export function seatCollapsed(record: SeatRecord, project: string, windowHeight: number): boolean {
+export function seatCollapsed(record: Pick<SeatRecord, "collapsed">, project: string, windowHeight: number): boolean {
   const chosen = record.collapsed[project];
   return chosen ?? windowHeight < SEAT_SHORT_WINDOW;
 }
