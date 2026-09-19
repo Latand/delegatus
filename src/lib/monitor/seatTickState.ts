@@ -6,6 +6,7 @@ import { statePath } from "@/lib/configDir";
 
 import {
   emptySeatTickState,
+  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -66,6 +67,10 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
        they existed records none, so the next wake is free to offer its
        children again rather than silently holding one back. */
     shownChildren: conversationIds(raw.shownChildren),
+    /* Same direction for the announcements (#1799): a plan from before they
+       existed announces none, so nothing a landing could not have shown is
+       recorded as having been shown. */
+    announcedLanes: conversationIds(raw.announcedLanes),
   };
 }
 
@@ -228,6 +233,9 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent on every row from before #1783 round two, and absent reads as
        empty: a seat that has been shown nothing is offered everything. */
     childrenShown: conversationIds(raw.childrenShown).slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT),
+    /* Absent on every row from before #1799, and absent reads as empty: a seat
+       that has been told nothing about its lanes is told about all of them. */
+    announcedLanes: conversationIds(raw.announcedLanes).slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT),
   };
 }
 

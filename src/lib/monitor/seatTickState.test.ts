@@ -180,11 +180,12 @@ test("an outstanding wake with no operation id is a registry-held one, and survi
   const { operationId: _operationId, ...held } = row.outstandingWake;
   fs.writeFileSync(file, JSON.stringify({ version: 1, projects: { viewer: { ...row, outstandingWake: held } } }));
   /* And a plan written before #1783 round two records no showing, which is
-     what lets the next wake offer its children rather than hold one back. */
+     what lets the next wake offer its children rather than hold one back —
+     the same direction a plan from before #1799 takes on its announcements. */
   expect(readSeatTickState("viewer", file).outstandingWake).toEqual({
     ...row.outstandingWake,
     operationId: null,
-    commit: { ...row.outstandingWake.commit, shownChildren: [] },
+    commit: { ...row.outstandingWake.commit, shownChildren: [], announcedLanes: [] },
   });
 });
 

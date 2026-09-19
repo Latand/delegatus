@@ -163,8 +163,9 @@ export type PipelineVerdictRecovery = {
     settles on the SHA the reviewer was fenced to, read from the local
     worktree. Nothing is pushed, fetched or read from a remote while the
     pipeline runs. Creating or starting one without `baseRef` still fetches
-    `origin/<base>` once, time-bounded, so it starts from the current base;
-    a pinned `baseRef` never touches the network.
+    `origin/<base>` once, time-bounded, so it starts from the current base —
+    since #1799 the controller makes that fetch after the call is answered,
+    outside the registry lease; a pinned `baseRef` never touches the network.
 
     `remote-branch`: the caller asked for publication. Every accepted revision
     is pushed to `origin/<branch>`, reviewers launch only on a published head,

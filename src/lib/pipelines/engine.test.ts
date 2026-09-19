@@ -1590,26 +1590,119 @@ test("review-loop onFail edges are rejected during creation and graph editing", 
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "review")!.onFail).toBeNull();
 });
 
-test("auto-start creation persists the fetched origin/main identity before provisioning", async () => {
+test("auto-start creation admits the record with its base unresolved and the controller fetches it (#1799)", async () => {
   const h = harness();
   savePipelines([]);
   const result = await createPipelineFromRequest({ task: "Pinned base", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
 
+  /* The answer carries the branch the caller asked for and no commit: the
+     base is still being resolved, and saying so is what lets the call return
+     before the fetch it used to wait on. */
   expect(result.pipeline).toMatchObject({
     state: "provisioning",
     baseBranch: "main",
-    baseRef: ORIGIN_MAIN_SHA,
-    lastPassedCommit: ORIGIN_MAIN_SHA,
+    baseRef: "",
+    lastPassedCommit: "",
+    stateDetail: "resolving the pipeline base and provisioning the worktree",
   });
+  expect(loadPipelines()[0]).toMatchObject({ baseBranch: "main", baseRef: "", lastPassedCommit: "" });
+  expect(h.calls.some((call) => call.includes("git fetch"))).toBe(false);
+
+  await tickPipelines([], h.ports);
+
+  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
   expect(loadPipelines()[0]).toMatchObject({
+    state: "running",
     baseBranch: "main",
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
+    stateDetail: null,
   });
-  expect(h.calls).toContain("timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main");
 });
 
-test("auto-start creation rejects an unavailable remote without persisting a pipeline", async () => {
+/* The operator's report behind #1799: one `create_pipeline` answered after 27
+   seconds, almost all of it spent waiting for the registry lease that the
+   controller held across a base fetch and a worktree add. Both halves are
+   measured here against a fetch that really does block. */
+const SLOW_FETCH_MS = 750;
+const FETCHED_SHA = "b3f19a7c1d0e4b6a8f2c5d9e0a1b3c4d5e6f7a8b";
+
+/** A blocking fetch, and a remote whose head is only readable once it has run:
+    a lane that resolved its base without fetching reads the stale ref. */
+function slowRemote(h: ReturnType<typeof harness>): { fetched: () => boolean } {
+  const baseExec = h.ports.exec;
+  let fetched = false;
+  h.ports.exec = (command, args, cwd) => {
+    const gitArgs = command === "timeout" ? args.slice(args.indexOf("git") + 1) : args;
+    if (gitArgs[0] === "fetch") {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SLOW_FETCH_MS);
+      fetched = true;
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (gitArgs[0] === "rev-parse" && (gitArgs[1] === "--verify" || gitArgs[1] === "HEAD")) {
+      return { code: 0, stdout: `${fetched ? FETCHED_SHA : ORIGIN_MAIN_SHA}\n`, stderr: "" };
+    }
+    return baseExec(command, args, cwd);
+  };
+  return { fetched: () => fetched };
+}
+
+test("create answers before the base fetch finishes, and the lane starts from what the fetch produced (#1799)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const remote = slowRemote(h);
+
+  const askedAt = Date.now();
+  const created = await createPipelineFromRequest({ task: "Answer at once", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const answeredIn = Date.now() - askedAt;
+
+  /* The call returned while the fetch that resolves its base had not even
+     started, which is the whole of what the operator asked for. */
+  expect(remote.fetched()).toBe(false);
+  expect(answeredIn).toBeLessThan(SLOW_FETCH_MS);
+  expect(created.pipeline).toMatchObject({ state: "provisioning", baseBranch: "main", baseRef: "", lastPassedCommit: "" });
+
+  const tickedAt = Date.now();
+  await tickPipelines([], h.ports);
+
+  /* The controller is what pays for the fetch — and the lane starts from the
+     commit that fetch produced, never from the ref the repository already had. */
+  expect(Date.now() - tickedAt).toBeGreaterThanOrEqual(SLOW_FETCH_MS);
+  expect(remote.fetched()).toBe(true);
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "running",
+    baseBranch: "main",
+    baseRef: FETCHED_SHA,
+    lastPassedCommit: FETCHED_SHA,
+    stateDetail: null,
+  });
+});
+
+test("a create that arrives while the controller is provisioning is not held behind it (#1799)", async () => {
+  const h = harness();
+  savePipelines([]);
+  const remote = slowRemote(h);
+  const first = await createPipelineFromRequest({ task: "First lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  expect(first.pipeline).toBeDefined();
+
+  /* The controller pass that provisions the first lane, in flight: its fetch
+     and its worktree add happen before it takes the registry lease, so the
+     lease this second create waits on is held only for the writes. Held
+     across the provisioning instead — which is what it used to be — this is
+     the twenty-five seconds the operator watched. */
+  const pass = tickPipelines([], h.ports);
+  const askedAt = Date.now();
+  const second = await createPipelineFromRequest({ task: "Second lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const answeredIn = Date.now() - askedAt;
+  await pass;
+
+  expect(remote.fetched()).toBe(true);
+  expect(second.pipeline).toMatchObject({ state: "provisioning", baseRef: "" });
+  expect(answeredIn).toBeLessThan(SLOW_FETCH_MS);
+  expect(loadPipelines().map((pipeline) => pipeline.state).sort()).toEqual(["provisioning", "running"]);
+});
+
+test("an unavailable remote parks the admitted pipeline with the words the refusal used (#1799)", async () => {
   const h = harness();
   savePipelines([]);
   const baseExec = h.ports.exec;
@@ -1619,8 +1712,18 @@ test("auto-start creation rejects an unavailable remote without persisting a pip
 
   const result = await createPipelineFromRequest({ task: "No remote", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
 
-  expect(result).toEqual({ error: "fetching origin/main: origin unavailable", status: 409 });
-  expect(loadPipelines()).toEqual([]);
+  /* The create is answered — the remote is not consulted before an answer any
+     more — and the reason the creation used to refuse with is what the lane
+     parks on instead. */
+  expect(result.pipeline).toMatchObject({ state: "provisioning", baseRef: "" });
+  expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: "fetching origin/main: origin unavailable" });
+  /* Never a stale ref: nothing was provisioned and no base was recorded. */
+  expect(parked.baseRef).toBe("");
   expect(h.calls.some((call) => call.includes("worktree add"))).toBe(false);
 });
 
@@ -1834,14 +1937,23 @@ test("starting a draft enters the existing provision and stage-spawn path", asyn
   const id = created.pipeline!.id;
 
   const started = await patchPipeline(id, { action: "start" }, h.ports);
+  /* Start answers with the base still unresolved too (#1799): the fetch it
+     used to make ran inside the pipeline mutation, which is the lock every
+     other writer waits on. */
   expect(started.pipeline).toMatchObject({
     state: "provisioning",
+    baseBranch: "",
+    baseRef: "",
+    lastPassedCommit: "",
+    stateDetail: "resolving the pipeline base and provisioning the worktree",
+  });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({
+    state: "running",
     baseBranch: "main",
     baseRef: ORIGIN_MAIN_SHA,
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("running");
   await tickPipelines([], h.ports);
 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
@@ -5160,9 +5272,13 @@ test("an internal pipeline runs every stage and settles its approved review with
   const h = harness();
   const pipeline = await create(h.ports, NO_CODE_TEST_STAGES as never);
   expect(pipeline.publication).toBeUndefined();
-  const { remoteCalls } = networkDown(h);
 
+  /* The one remote read an internal lane makes is its base fetch, and since
+     #1799 the controller makes it — so the network goes down after the lane is
+     provisioned, which is where "nothing is read from a remote WHILE the
+     pipeline runs" has always begun. */
   await tickPipelines([], h.ports);
+  const { remoteCalls } = networkDown(h);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   await tickPipelines([], h.ports);
@@ -5253,8 +5369,10 @@ test("an internal pipeline an older build parked on the remote head check comple
 test("an internal terminal pass an older build left waiting on publication closes without the network (#1692)", async () => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", prompt: "build", next: null }] as never, REMOTE_BRANCH);
-  const { remoteCalls } = networkDown(h);
+  /* The base fetch is the controller's since #1799; the publication attempts
+     this test counts are everything after it. */
   await tickPipelines([], h.ports);
+  const { remoteCalls } = networkDown(h);
   await tickPipelines([], h.ports);
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   const waiting = loadPipelines()[0]!;
@@ -5286,14 +5404,21 @@ test("an internal pipeline pinned to a baseRef is created and provisioned with t
   expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: ORIGIN_MAIN_SHA, lastPassedCommit: ORIGIN_MAIN_SHA });
   expect(remoteCalls).toEqual([]);
 
-  /* Without a pin, creation asks the remote for the current base once, and a
-     remote that cannot answer refuses the creation instead of guessing. */
+  /* Without a pin the base is the CONTROLLER's to resolve (#1799), so the
+     create itself still touches no remote; the remote that cannot answer parks
+     the admitted lane rather than letting it guess a base. */
   savePipelines([]);
   const unpinned = await createPipelineFromRequest({ task: "Unpinned offline", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
-  expect(unpinned.status).toBe(409);
-  expect(unpinned.error).toStartWith("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(unpinned.pipeline).toMatchObject({ state: "provisioning", baseBranch: "main", baseRef: "" });
+  expect(remoteCalls).toEqual([]);
+
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toStartWith("fetching origin/main: ssh: connect to host example.invalid port 22: Connection timed out");
+  expect(parked.baseRef).toBe("");
   expect(remoteCalls).toEqual(["timeout --signal=KILL 60s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"]);
-  expect(loadPipelines()).toEqual([]);
 });
 
 test("pipeline creation accepts the two publication policies and refuses anything else (#1692)", async () => {
