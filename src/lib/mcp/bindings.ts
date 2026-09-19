@@ -46,7 +46,6 @@ import type { AttentionRequestV1, FocusIntent, FocusTarget, ZoomIntent } from "@
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { MAX_BOARD_MUTATIONS_PER_REQUEST, MAX_BOARD_PATH_LIST_ITEMS } from "@/lib/board/validation";
-import { applyConversationAction } from "@/lib/conversation/actions";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
@@ -600,7 +599,6 @@ export interface ViewerMcpDomainDependencies {
   loadTasks: typeof loadTasks;
   collectSnapshot: typeof collectSnapshot;
   readResources: typeof readResources;
-  applyConversationAction: typeof applyConversationAction;
   applyConversationMigration: typeof applyConversationMigration;
   /** Sources for the liveness read. The catalog seam travels in (#860) so a
       project-scoped `agent_activity` consumes the SAME completed generation
@@ -1023,7 +1021,6 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   loadTasks,
   collectSnapshot,
   readResources,
-  applyConversationAction,
   applyConversationMigration,
   livenessSources: productionLivenessSources,
   queryLifecycleEvents,
@@ -3605,6 +3602,7 @@ async function archiveConversationAction(
 
 async function conversationAction(
   args: McpToolArgs,
+  control: ViewerControlDependencies,
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
@@ -3630,25 +3628,27 @@ async function conversationAction(
   }
   throwIfCallEnded(context);
   const operationId = mcpOperationId("conversation_action", requestId(args));
-  const result = await dependencies.applyConversationAction({
+  // The agent's stdio process has no runtime-host socket. The Viewer owns the
+  // control channel and applies the same conversation ownership fences there.
+  const result = await dispatchControl(control)("/api/conversation-host", {
     operationId,
     conversationId,
-    transcriptPath,
+    path: transcriptPath,
     action,
     key: text(args.key),
     label: args.label,
     question: args.question,
-  });
-  if (!("ok" in result.body) || result.body.ok !== true) {
-    throw new Error("error" in result.body ? result.body.error : "conversation action failed");
+  }, callerCapabilityHeaders());
+  if (result.ok !== true) {
+    throw new Error(text(result.error) || "conversation action failed");
   }
-  const receipt = "receipt" in result.body && result.body.receipt
-    ? { operationId: result.body.operationId, receipt: result.body.receipt }
+  const receipt = result.receipt
+    ? { operationId: result.operationId, receipt: result.receipt }
     : mutationReceipt(operationId);
   return redactPayload({
     conversationId: conversationId || null,
     transcriptPath: transcriptPath || null,
-    ...result.body,
+    ...result,
     ...receipt,
     ...selectedContextEcho(selected.target),
   });
@@ -4542,7 +4542,7 @@ export function viewerMcpBindings(
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context)),
     resources: (args) => resources(args, domainDependencies),
-    conversation_action: (args, context) => conversationAction(args, domainDependencies, context),
+    conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     conversation_migration: (args) => conversationMigration(args, domainDependencies),
     agent_activity: (args, context) => agentActivity(args, domainDependencies, context),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),

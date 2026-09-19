@@ -100,6 +100,7 @@ function selectedRef(overrides: Partial<SelectedContextRef> = {}): SelectedConte
 
 interface Harness {
   injected: never;
+  control: { post: (pathname: string, body: Record<string, unknown>) => Promise<Record<string, unknown>> };
   actions: Array<Record<string, unknown>>;
   counts: { identityLookups: number; pathLookups: number; resolverCreations: number };
 }
@@ -122,6 +123,11 @@ function harness(options: { known?: Record<string, RegistryConversation>; pathAl
   return {
     counts,
     actions,
+    control: { post: async (pathname, body) => {
+      expect(pathname).toBe("/api/conversation-host");
+      actions.push(body);
+      return { ok: true, outcome: "delivered", target: "structured" };
+    } },
     injected: {
       selectedContext: {
         selectedConversation: () => {
@@ -129,10 +135,6 @@ function harness(options: { known?: Record<string, RegistryConversation>; pathAl
           return selectedConversationResolver(lookup);
         },
         pathAllowed: () => options.pathAllowed ?? true,
-      },
-      applyConversationAction: async (request: Record<string, unknown>) => {
-        actions.push(request);
-        return { status: 200, body: { ok: true, outcome: "delivered", target: "structured" } };
       },
       listFiles: async () => { throw new Error("the selected-card path must not start a raw corpus scan"); },
       /* Hangs forever, exactly as a degraded scan does. */
@@ -154,8 +156,8 @@ async function refusal(run: Promise<unknown>): Promise<McpToolRefusal> {
 }
 
 test("conversation_action acts on the selected card from its reference alone", async () => {
-  const { injected, actions, counts } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions, counts } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   const result = await bindings.conversation_action({
     clientRequestId: "act-1",
@@ -167,15 +169,15 @@ test("conversation_action acts on the selected card from its reference alone", a
   expect(actions).toHaveLength(1);
   expect(actions[0]!.conversationId).toBe(SELECTED_ID);
   /* Identity only: the reference's capture-time path never becomes the target. */
-  expect(actions[0]!.transcriptPath).toBe("");
+  expect(actions[0]!.path).toBe("");
   expect(result.selectedContext).toMatchObject({ conversationId: SELECTED_ID, label: "worker a", state: "selected" });
   expect(counts.identityLookups).toBe(1);
   expect(counts.pathLookups).toBe(0);
 });
 
 test("the marker token is accepted verbatim, `ctx=` prefix and all", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   await bindings.conversation_action({
     clientRequestId: "act-2",
@@ -187,8 +189,8 @@ test("the marker token is accepted verbatim, `ctx=` prefix and all", async () =>
 });
 
 test("a decoded reference object is accepted as well as its token", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   await bindings.conversation_action({
     clientRequestId: "act-3",
@@ -200,8 +202,8 @@ test("a decoded reference object is accepted as well as its token", async () => 
 });
 
 test("an explicit empty selection refuses distinctly and acts on nothing", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   const error = await refusal(bindings.conversation_action({
     clientRequestId: "act-4",
@@ -219,8 +221,8 @@ test("an explicit empty selection refuses distinctly and acts on nothing", async
 });
 
 test("a stale reference to a conversation the registry no longer owns refuses distinctly", async () => {
-  const { injected, actions } = harness({ known: {} });
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness({ known: {} });
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   const error = await refusal(bindings.conversation_action({
     clientRequestId: "act-5",
@@ -233,8 +235,8 @@ test("a stale reference to a conversation the registry no longer owns refuses di
 });
 
 test("a reference that disagrees with an explicit conversationId is never resolved either way", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   const error = await refusal(bindings.conversation_action({
     clientRequestId: "act-6",
@@ -252,8 +254,8 @@ test("a reference that disagrees with an explicit conversationId is never resolv
 });
 
 test("an unreadable reference refuses instead of being treated as no selection", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
 
   const error = await refusal(bindings.conversation_action({
     clientRequestId: "act-7",
@@ -266,8 +268,8 @@ test("an unreadable reference refuses instead of being treated as no selection",
 });
 
 test("an already-cancelled call acts on nothing", async () => {
-  const { injected, actions } = harness();
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const { injected, control, actions } = harness();
+  const bindings = viewerMcpBindings(undefined, control, injected);
   const controller = new AbortController();
   controller.abort();
 
