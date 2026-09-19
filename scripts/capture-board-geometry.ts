@@ -2632,6 +2632,9 @@ async function seatsMain(which: SeatCase): Promise<void> {
         must(topCollapsed!.headKind === "strip" && topCollapsed!.head !== null && near(topCollapsed!.head.h, 40, 1), `${tag}: the top strip is ${topCollapsed!.head?.h}px`);
         must(topCollapsed!.frame !== null && topExpanded!.frame !== null && topCollapsed!.frame.y < topExpanded!.frame.y - 100, `${tag}: collapsing on top freed ${(topExpanded!.frame?.y ?? 0) - (topCollapsed!.frame?.y ?? 0)}px`);
         must(sideExpanded!.seatPlacement === "side" && sideExpanded!.seat !== null && near(sideExpanded!.seat.w, 380, 1), `${tag}: the side seat is ${sideExpanded!.seat?.w}px`);
+        /* The side head's first row holds the title and both controls. */
+        const sideRow = (name: RegExp) => sideExpanded!.headControls.find((control) => name.test(control.name))?.rect.y ?? -1;
+        must(sideRow(/Dock|Закріпити/) === sideRow(/(Collapse|Згорнути)/), `${tag}: at the side the fold sits on another row than the placement switch`);
         must(sideCollapsed!.seat !== null && near(sideCollapsed!.seat.w, 44, 1) && sideCollapsed!.rail !== null, `${tag}: the rail is ${sideCollapsed!.seat?.w}px`);
         /* Every head control inside the 380 px panel and clear of the others, in both placements. */
         for (const [name, state] of [["top", topExpanded!], ["side", sideExpanded!], ["top strip", topCollapsed!]] as const) {

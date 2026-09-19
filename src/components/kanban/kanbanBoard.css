@@ -680,6 +680,10 @@
 .kb .seat-head .grow.side-only { display: none; }
 .kb .seat.side .seat-head { flex-wrap: wrap; row-gap: 6px; }
 .kb .seat.side .seat-head .grow.side-only { display: block; }
+/* 380 px holds the title, the state, Previous seats and the two controls on
+   one row only with Fold as its chevron; the word stays in its label. */
+.kb .seat.side .seat-head .icon-btn.seat-fold { width: 28px; padding: 0; justify-content: center; }
+.kb .seat.side .seat-head .icon-btn.seat-fold span { display: none; }
 .kb .seat.side .seat-head .seat-meta { display: flex; align-items: center; gap: 8px; order: 10; flex: 1 0 100%; min-width: 0; }
 .kb .seat.side .seat-head .seat-meta [data-orchestrator-incumbent] { flex: 1 1 auto; min-width: 0; }
 .kb .seat.side .seat-title .proj { display: none; }
