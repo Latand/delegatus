@@ -44,7 +44,9 @@ export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExha
 }
 
 /** Whether this stage has already handed findings along its spent fail edge.
-    Read from the stage's own attempts, so the handoff happens once. */
+    Read from the stage's own attempts, so the handoff happens once per stage:
+    when another stage's fail edge later loops back through this one and it
+    fails again, it parks as budget exhausted. */
 export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): boolean {
   const run = pipeline.runs.find((candidate) => candidate.stageId === stage.id);
   return Boolean(run?.attempts.some((attempt) => !attempt.historical && attempt.budgetSpent));

@@ -8262,6 +8262,19 @@ test("onExhausted is validated and edited with the fail edge, and freezes with i
   expect(parked.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "park" });
   const advance = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 3, onExhausted: "advance" }, ports);
   expect(advance.pipeline?.stages[1]?.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "advance" });
+
+  /* The handoff is a traversal of the edge, so it freezes the edge's option
+     with the rest of it. */
+  await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 1, onExhausted: "advance" }, ports);
+  await patchPipeline(id, { action: "start" }, ports);
+  await tickPipelines([], ports);
+  await failEveryCritique(h, 1);
+  const handedOff = loadPipelines()[0]!;
+  expect(handedOff.runs.find((run) => run.stageId === "critique")!.attempts[0]!.budgetSpent).toBe(true);
+  const frozen = await patchPipeline(id, { action: "set-edge", stageId: "critique", edge: "fail", to: "build", maxRounds: 1, onExhausted: "park" }, ports);
+  expect(frozen.status).toBe(409);
+  expect(frozen.error).toContain("frozen evidence");
+  expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 1, onExhausted: "advance" });
 });
 
 /* A needs_decision that carries findings routes along the fail edge (#1785);

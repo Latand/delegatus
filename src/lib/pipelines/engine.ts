@@ -2289,7 +2289,8 @@ function routeFailedAttempt(
   }
   /* The budget is spent (#1868). Under the default the last findings go to
      the fix stage one more time, and that fix's pass follows this stage's pass
-     edge; `park` keeps the stop for the operator. The handoff happens once. */
+     edge; `park` keeps the stop for the operator. The handoff happens once per
+     stage, so a later fail of the same stage parks. */
   if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
     attempt.budgetSpent = true;
     pipeline.cursor = {
