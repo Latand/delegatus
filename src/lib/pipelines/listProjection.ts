@@ -22,12 +22,14 @@
 import type { FlowEngine } from "@/lib/flows/types";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
+import { failEdgeExhaustion } from "./failEdgeBudget";
 import { loadArchivedPipelines, loadPipelinesForList } from "./store";
 import type {
   Pipeline,
   PipelineAccess,
   PipelineAttemptState,
   PipelineCursorState,
+  PipelineFailEdgeExhaustion,
   PipelineRoleId,
   PipelineStage,
   PipelineStageAttempt,
@@ -85,7 +87,7 @@ export type PipelineListStage = {
   effort: string | null;
   access: PipelineAccess | null;
   next: string | null;
-  onFail: { to: string; maxRounds: number } | null;
+  onFail: { to: string; maxRounds: number; onExhausted: PipelineFailEdgeExhaustion } | null;
   attempts: number;
   latestAttempt: PipelineListAttempt | null;
 };
@@ -199,7 +201,7 @@ function stageRow(
     effort: role?.effort ?? stage.effort ?? null,
     access: role?.access ?? stage.access ?? null,
     next: stage.next,
-    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds } : null,
+    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds, onExhausted: failEdgeExhaustion(stage.onFail) } : null,
     attempts: attempts.length,
     /* The canonical selector, not "the last element": a lineage-adopted
        historical attempt is evidence, never the stage's current work. */

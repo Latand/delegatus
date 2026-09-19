@@ -103,7 +103,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       model: role?.model ?? stage.model ?? null,
       effort: role?.effort ?? stage.effort ?? null,
       next: stage.next,
-      onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds } : null,
+      onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds, onExhausted: stage.onFail.onExhausted ?? "advance" } : null,
       attempts: attempts.length,
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
@@ -114,6 +114,9 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       findings: selected.verdict?.findings ?? [],
       summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
       decisionRequested: selected.decisionRequested === true,
+      /* Findings handed to the fix stage after the budget was spent and never
+         re-reviewed (#1868). */
+      budgetSpent: selected.budgetSpent === true,
       conversationId: selected.conversationId ?? null,
       flowId: selected.flowId ?? null,
       startedAt: selected.startedAt ?? null,
