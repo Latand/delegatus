@@ -2,21 +2,26 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
-import { fsyncPath, readJsonCache, writeJsonDurably } from "./durableJson";
+import { databaseFileIdentity, databaseSwapMarker } from "./currentDatabase";
+import { fsyncPath, writeJsonDurably } from "./durableJson";
 
 /**
  * The state databases survive a crash (#1870 slice 10,
  * docs/design/state-sqlite-migration.md §7).
  *
- * - At activation, each database is checked before anything opens it. One that
- *   fails to open or to pass its check is moved aside (never deleted) and
- *   replaced by the newest backup that passes `integrity_check`, or, when none
- *   does, left absent so its store creates a fresh empty one and serves an
- *   empty store instead of errors.
- * - While the release owns traffic, a timer takes a `VACUUM INTO` backup of
- *   each database that changed since its last one, and prunes the generations
- *   to the retention tiers and a size budget.
- * - Every fallback, and a backup refused for lack of space, is recorded in
+ * - At activation, each database is checked before this release's stores open
+ *   it. One that fails to open or to pass its check is moved aside (never
+ *   deleted) and replaced by the newest backup that passes `integrity_check`,
+ *   or, when none does, left absent so its store creates a fresh empty one and
+ *   serves an empty store instead of errors. Other processes may hold it open;
+ *   their connections are bound to the file at the name (currentDatabase.ts),
+ *   and the swap holds the damaged file's write lock, so none of them commits
+ *   into the files set aside.
+ * - While the release owns traffic, a timer finds each database due for a copy
+ *   that changed since its last one, and a worker process takes the
+ *   `VACUUM INTO` backups and prunes the generations to the retention tiers
+ *   and a size budget, off the Viewer's thread.
+ * - Every fallback, a failed one, a refused backup and a failing backup are recorded in
  *   `storage-incidents.json`. That record has to live outside the databases it
  *   describes; the files route reads it into `systemHealth.storage`, and the
  *   activation raises a board card for each fallback.
@@ -89,7 +94,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
 }
 
 export interface StorageIncident {
-  kind: "database-restored" | "database-fresh" | "backup-skipped-low-space";
+  kind: "database-restored" | "database-fresh" | "database-fallback-failed" | "backup-skipped-low-space" | "backup-failed";
   database: string;
   at: string;
   message: string;
@@ -244,8 +249,29 @@ function incidentsFile(stateDirectory: string): string {
   return path.join(stateDirectory, STORAGE_INCIDENTS_FILE);
 }
 
+/** The record cannot be rebuilt, so a file that does not parse is kept aside
+    as `.unreadable-<ts>` (the cache discard would erase the evidence). */
 function readIncidentRecord(stateDirectory: string): StorageIncident[] {
-  const raw = readJsonCache(incidentsFile(stateDirectory));
+  const file = incidentsFile(stateDirectory);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    const kept = `${file}.unreadable-${stamp(new Date())}`;
+    try {
+      fs.renameSync(file, kept);
+      console.error(`[state durability] ${STORAGE_INCIDENTS_FILE} did not parse (${errorText(error)}); kept as ${path.basename(kept)}`);
+    } catch {
+      /* Renamed by another reader meanwhile. */
+    }
+    return [];
+  }
   if (!raw || typeof raw !== "object" || !Array.isArray((raw as { incidents?: unknown }).incidents)) return [];
   return ((raw as { incidents: unknown[] }).incidents).filter((incident): incident is StorageIncident =>
     Boolean(incident) && typeof incident === "object"
@@ -273,18 +299,31 @@ export function readStorageIncidents(stateDirectory: string, options: { now?: Da
   });
 }
 
+/** Record an incident unless one of its kind for its database was recorded
+    in the last day: once a day is enough to say backups are not being taken. */
+function recordIncidentDaily(stateDirectory: string, incident: StorageIncident, now: Date): void {
+  const previous = readIncidentRecord(stateDirectory).findLast((recorded) =>
+    recorded.kind === incident.kind && recorded.database === incident.database);
+  if (!previous || now.getTime() - Date.parse(previous.at) >= DAY) recordIncident(stateDirectory, incident);
+}
+
 /* ---- activation: check and fall back -------------------------------------- */
 
 export type DatabaseCheckOutcome =
   | { state: "absent" }
   | { state: "ok" }
   | { state: "unchecked"; detail: string }
-  | { state: "restored" | "fresh"; incident: StorageIncident };
+  | { state: "restored" | "fresh" | "failed"; incident: StorageIncident };
+
+/** Test seam: runs before each step of the swap, so a test can fail one. */
+export type SwapStepHook = (step: "set-aside-main" | "set-aside-wal" | "set-aside-shm" | "restore") => void;
 
 export function checkDatabaseAtActivation(
   database: StateDatabase,
-  options: { stateDirectory: string; backupDirectory?: string; now?: Date },
+  options: { stateDirectory: string; backupDirectory?: string; now?: Date; beforeSwapStep?: SwapStepHook },
 ): DatabaseCheckOutcome {
+  /* A marker left by a swap that died would refuse every open until it aged. */
+  fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
   const verdict = inspect(database.filename, database.check, true);
   if (verdict.verdict === "ok") return { state: "ok" };
@@ -293,16 +332,36 @@ export function checkDatabaseAtActivation(
     return { state: "unchecked", detail: verdict.detail };
   }
   const now = options.now ?? new Date();
-  const directory = path.dirname(database.filename);
-  const corruptFiles = setAside(database.filename, now);
   const backups = options.backupDirectory ?? path.join(options.stateDirectory, BACKUP_DIRECTORY);
-  const restored = restoreNewestGoodBackup(database, backups);
-  fsyncPath(directory);
-  const base = { database: database.name, at: now.toISOString(), corruptFiles, detail: verdict.detail };
+  const base = { database: database.name, at: now.toISOString(), detail: verdict.detail };
+  /* The replacement is copied and checked before the damaged files are touched. */
+  const restored = prepareNewestGoodBackup(database, backups);
+  const swap = swapDamagedDatabase(database.filename, now, restored ? restoringName(database.filename) : null, options.beforeSwapStep);
+  if (swap.error !== null) {
+    removeTrio(restoringName(database.filename));
+    const left = exists(database.filename);
+    const incident: StorageIncident = {
+      ...base,
+      kind: "database-fallback-failed",
+      corruptFiles: swap.corruptFiles,
+      backup: null,
+      backupAt: null,
+      backupAgeMs: null,
+      message: `${database.name} was damaged (${verdict.detail}) and the fallback failed (${swap.error}). `
+        + (left
+          ? "The damaged database is still in place and may keep failing."
+          : "It starts empty.")
+        + (swap.corruptFiles.length ? ` The damaged files are kept as ${swap.corruptFiles.join(", ")}.` : ""),
+    };
+    recordIncident(options.stateDirectory, incident);
+    return { state: "failed", incident };
+  }
+  const corruptFiles = swap.corruptFiles;
   if (restored) {
     const backupAt = new Date(restored.at).toISOString();
     const incident: StorageIncident = {
       ...base,
+      corruptFiles,
       kind: "database-restored",
       backup: restored.name,
       backupAt,
@@ -315,6 +374,7 @@ export function checkDatabaseAtActivation(
   }
   const incident: StorageIncident = {
     ...base,
+    corruptFiles,
     kind: "database-fresh",
     backup: null,
     backupAt: null,
@@ -326,55 +386,143 @@ export function checkDatabaseAtActivation(
   return { state: "fresh", incident };
 }
 
-/** Move the damaged trio aside as `<db>.corrupt-<ts>{,-wal,-shm}`. */
-function setAside(filename: string, now: Date): string[] {
-  const kept: string[] = [];
-  const target = `${filename}.corrupt-${stamp(now)}`;
-  for (const suffix of ["", "-wal", "-shm"]) {
-    if (!exists(`${filename}${suffix}`)) continue;
-    fs.renameSync(`${filename}${suffix}`, `${target}${suffix}`);
-    kept.push(path.basename(`${target}${suffix}`));
-  }
-  return kept;
+function restoringName(filename: string): string {
+  return `${filename}.restoring`;
 }
 
-function restoreNewestGoodBackup(database: StateDatabase, backupDirectory: string): BackupFile | null {
-  const restoring = `${database.filename}.restoring`;
+/** Copy the newest backup that passes `integrity_check` to `<db>.restoring`,
+    ready to be renamed over the damaged file. */
+function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: string): BackupFile | null {
+  const restoring = restoringName(database.filename);
   for (const candidate of listBackups(backupDirectory, database.name)) {
     removeTrio(restoring);
     try {
       fs.copyFileSync(candidate.file, restoring);
+      const verdict = inspect(restoring, "integrity_check", false);
+      if (verdict.verdict !== "ok" || exists(`${restoring}-wal`)) {
+        throw new Error(verdict.verdict === "ok" ? "it left a WAL behind" : verdict.detail);
+      }
+      fs.rmSync(`${restoring}-shm`, { force: true });
+      fs.chmodSync(restoring, 0o600);
+      fsyncPath(restoring);
+      return candidate;
     } catch (error) {
-      console.error(`[state durability] could not copy ${candidate.name}: ${errorText(error)}`);
-      continue;
+      console.error(`[state durability] backup ${candidate.name} refused: ${errorText(error)}`);
     }
-    const verdict = inspect(restoring, "integrity_check", false);
-    if (verdict.verdict !== "ok" || exists(`${restoring}-wal`)) {
-      console.error(`[state durability] backup ${candidate.name} refused: ${verdict.verdict === "ok" ? "left a WAL behind" : verdict.detail}`);
-      removeTrio(restoring);
-      continue;
-    }
-    fs.rmSync(`${restoring}-shm`, { force: true });
-    fs.chmodSync(restoring, 0o600);
-    fsyncPath(restoring);
-    fs.renameSync(restoring, database.filename);
-    return candidate;
   }
   removeTrio(restoring);
   return null;
+}
+
+/**
+ * Move the damaged database aside as `<db>.corrupt-<ts>{,-wal,-shm}` and put
+ * the prepared copy (if any) under its name. Other processes may hold the
+ * damaged file open, so while the files move:
+ * - a marker makes every guarded open refuse (currentDatabase.ts), so nothing
+ *   opens the damaged main file without its WAL and leaves a foreign WAL
+ *   beside the restored one;
+ * - this process holds the damaged file's write lock, so a writer that began
+ *   before the marker commits before the move, and one blocked behind the lock
+ *   finds the file replaced and rolls back.
+ * The damaged main file is hard-linked aside and the copy renamed over its
+ * name, so the name is never absent while a restore is under way.
+ */
+function swapDamagedDatabase(
+  filename: string,
+  now: Date,
+  restoring: string | null,
+  beforeStep: SwapStepHook | undefined,
+): { corruptFiles: string[]; error: string | null } {
+  const target = `${filename}.corrupt-${stamp(now)}`;
+  const corruptFiles: string[] = [];
+  const marker = databaseSwapMarker(filename);
+  let lock: BunDatabase | null = null;
+  let error: string | null = null;
+  try {
+    fs.writeFileSync(marker, `${process.pid}\n`, { mode: 0o600 });
+    lock = holdWriteLock(filename);
+    let mainAside = false;
+    if (restoring) {
+      beforeStep?.("set-aside-main");
+      try {
+        fs.linkSync(filename, target);
+      } catch {
+        fs.renameSync(filename, target);
+      }
+      mainAside = true;
+      corruptFiles.push(path.basename(target));
+    }
+    for (const suffix of ["-wal", "-shm"] as const) {
+      if (!exists(`${filename}${suffix}`)) continue;
+      beforeStep?.(suffix === "-wal" ? "set-aside-wal" : "set-aside-shm");
+      fs.renameSync(`${filename}${suffix}`, `${target}${suffix}`);
+      corruptFiles.push(path.basename(`${target}${suffix}`));
+    }
+    if (restoring) {
+      beforeStep?.("restore");
+      fs.renameSync(restoring, filename);
+    } else if (!mainAside) {
+      beforeStep?.("set-aside-main");
+      fs.renameSync(filename, target);
+      corruptFiles.unshift(path.basename(target));
+    }
+  } catch (caught) {
+    error = errorText(caught);
+    /* Never leave the damaged main file without its WAL under the name: it
+       is set aside too, so the store starts empty rather than half-read. */
+    try {
+      if (exists(filename) && databaseFileIdentity(filename) === databaseFileIdentity(target)) {
+        fs.unlinkSync(filename);
+      } else if (exists(filename) && !exists(target) && corruptFiles.length) {
+        fs.renameSync(filename, target);
+        corruptFiles.unshift(path.basename(target));
+      }
+    } catch (cleanup) {
+      error = `${error}; setting the damaged file aside also failed: ${errorText(cleanup)}`;
+    }
+  } finally {
+    if (lock) {
+      try { lock.exec("ROLLBACK"); } catch { /* no transaction */ }
+      /* The file has moved, so SQLite neither checkpoints nor deletes a WAL. */
+      try { lock.close(); } catch { /* already closed */ }
+    }
+    fs.rmSync(marker, { force: true });
+    try {
+      fsyncPath(path.dirname(filename));
+    } catch (caught) {
+      console.error(`[state durability] the state directory could not be synced after the swap: ${errorText(caught)}`);
+    }
+  }
+  return { corruptFiles, error };
+}
+
+/** The damaged file's write lock, when its header still opens. A file whose
+    header is gone cannot be written by anyone, so there is nothing to hold. */
+function holdWriteLock(filename: string): BunDatabase | null {
+  let db: BunDatabase | null = null;
+  try {
+    db = new (sqliteDatabase())(filename, { readwrite: true });
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN IMMEDIATE");
+    return db;
+  } catch (error) {
+    try { db?.close(); } catch { /* not open */ }
+    if (!isCorruptionError(error)) console.error(`[state durability] ${path.basename(filename)} write lock not taken: ${errorText(error)}`);
+    return null;
+  }
 }
 
 /** Check every state database before any store opens one. Returns the
     fallbacks taken; each is already recorded durably. */
 export function checkStateDatabasesAtActivation(
   stateDirectory: string,
-  options: { now?: Date; backupDirectory?: string } = {},
+  options: { now?: Date; backupDirectory?: string; beforeSwapStep?: SwapStepHook } = {},
 ): StorageIncident[] {
   const incidents: StorageIncident[] = [];
   for (const database of stateDatabases(stateDirectory)) {
     try {
       const outcome = checkDatabaseAtActivation(database, { stateDirectory, ...options });
-      if (outcome.state === "restored" || outcome.state === "fresh") incidents.push(outcome.incident);
+      if ("incident" in outcome) incidents.push(outcome.incident);
     } catch (error) {
       console.error(`[state durability] ${database.name} check failed: ${errorText(error)}`);
     }
@@ -425,9 +573,6 @@ export function backupDatabase(
   }
   const free = (options.freeBytes ?? defaultFreeBytes)(options.backupDirectory);
   if (free !== null && free < 2 * size) {
-    const stateDirectory = path.dirname(database.filename);
-    const previous = readIncidentRecord(stateDirectory).findLast((incident) =>
-      incident.kind === "backup-skipped-low-space" && incident.database === database.name);
     const incident: StorageIncident = {
       kind: "backup-skipped-low-space",
       database: database.name,
@@ -440,8 +585,7 @@ export function backupDatabase(
       backupAgeMs: newest ? now.getTime() - newest.at : null,
       detail: null,
     };
-    /* Once a day is enough to say the disk is full. */
-    if (!previous || now.getTime() - Date.parse(previous.at) >= DAY) recordIncident(stateDirectory, incident);
+    recordIncidentDaily(path.dirname(database.filename), incident, now);
     return { state: "skipped-low-space", incident };
   }
 
@@ -645,7 +789,22 @@ export function runBackupPass(
       outcome = { state: "failed", detail: errorText(error) };
     }
     if (outcome.state === "taken" || outcome.state === "unchanged") lastRevisions.set(database.name, outcome.revision);
-    if (outcome.state === "failed") console.error(`[state durability] backup of ${database.name} failed: ${outcome.detail}`);
+    if (outcome.state === "failed") {
+      const now = options.now ?? new Date();
+      const newest = listBackups(backupDirectory, database.name)[0];
+      recordIncidentDaily(stateDirectory, {
+        kind: "backup-failed",
+        database: database.name,
+        at: now.toISOString(),
+        message: `The backup of ${database.name} failed: ${outcome.detail}.`
+          + (newest ? ` The newest good backup is from ${new Date(newest.at).toISOString()}.` : " There is no backup yet."),
+        corruptFiles: [],
+        backup: newest?.name ?? null,
+        backupAt: newest ? new Date(newest.at).toISOString() : null,
+        backupAgeMs: newest ? now.getTime() - newest.at : null,
+        detail: outcome.detail,
+      }, now);
+    }
     outcomes.set(database.name, outcome);
   }
   try {
@@ -656,6 +815,101 @@ export function runBackupPass(
     sweepStalePartials(backupDirectory, (options.now ?? new Date()).getTime());
   } catch (error) {
     console.error(`[state durability] backup retention failed: ${errorText(error)}`);
+  }
+  return outcomes;
+}
+
+/** The databases due for a copy that changed since this process last copied
+    them. This is the cheap part of a pass (a directory listing and one
+    revision query each), so the Viewer runs it on its own thread and starts
+    the backup worker only when something needs copying. */
+export function backupsDue(stateDirectory: string, lastRevisions: ReadonlyMap<string, string>, now = new Date()): string[] {
+  const backupDirectory = path.join(stateDirectory, BACKUP_DIRECTORY);
+  return stateDatabases(stateDirectory).filter((database) => {
+    if (!database.backup || !exists(database.filename)) return false;
+    const newest = listBackups(backupDirectory, database.name)[0];
+    if (newest && now.getTime() - newest.at < database.backup.intervalMs) return false;
+    const last = lastRevisions.get(database.name);
+    return !last || last !== readRevision(database);
+  }).map((database) => database.name);
+}
+
+export interface BackupWorkerRequest {
+  stateDirectory: string;
+  lastRevisions: [string, string][];
+}
+
+export interface BackupWorkerResponse {
+  outcomes: [string, BackupOutcome][];
+}
+
+/** The worker's side: one pass over the request, answered as one JSON line. */
+export function answerBackupWorkerRequest(request: BackupWorkerRequest): BackupWorkerResponse {
+  const outcomes = runBackupPass(request.stateDirectory, new Map(request.lastRevisions));
+  return { outcomes: [...outcomes] };
+}
+
+const BACKUP_WORKER_TIMEOUT_MS = 15 * MINUTE;
+
+export function stateBackupWorkerLaunch(cwd = process.cwd()): { executable: string; workerPath: string } {
+  const source = path.join(cwd, "src/lib/stateBackup.worker.ts");
+  const bundled = path.join(cwd, ".next/server/state-backup-worker.js");
+  const bunContainer = "/usr/local/bin/bun-container";
+  if (fs.existsSync(source) && fs.existsSync(bunContainer)) return { executable: bunContainer, workerPath: source };
+  if (fs.existsSync(bundled)) {
+    return { executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"), workerPath: bundled };
+  }
+  return { executable: process.execPath, workerPath: source };
+}
+
+/**
+ * One backup pass in a process of its own. `VACUUM INTO`, the copy's
+ * `integrity_check` and the fsync are synchronous SQLite and file calls that
+ * take most of a second on the live databases; on the Viewer's thread they
+ * would stall every request that long. Updates `lastRevisions` from what the
+ * worker copied.
+ */
+export async function runBackupPassInWorker(
+  stateDirectory: string,
+  lastRevisions: Map<string, string>,
+  options: { launch?: { executable: string; workerPath: string } } = {},
+): Promise<Map<string, BackupOutcome>> {
+  const launch = options.launch ?? stateBackupWorkerLaunch();
+  const { spawn } = await import("node:child_process");
+  const useNice = fs.existsSync("/usr/bin/nice");
+  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
+    ...(useNice ? ["-n", "10", launch.executable] : []),
+    launch.workerPath,
+  ], { cwd: process.cwd(), stdio: ["pipe", "pipe", "inherit"], env: process.env });
+  const request: BackupWorkerRequest = { stateDirectory, lastRevisions: [...lastRevisions] };
+  const response = await new Promise<BackupWorkerResponse>((resolve, reject) => {
+    let output = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`));
+    }, BACKUP_WORKER_TIMEOUT_MS);
+    timeout.unref?.();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { output += chunk; });
+    child.stdin.on("error", () => { /* the exit below reports it */ });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      try {
+        if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
+        resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.stdin.end(JSON.stringify(request));
+  });
+  const outcomes = new Map(response.outcomes);
+  for (const [name, outcome] of outcomes) {
+    if (outcome.state === "taken" || outcome.state === "unchanged") lastRevisions.set(name, outcome.revision);
   }
   return outcomes;
 }
@@ -683,7 +937,9 @@ function sweepStalePartials(backupDirectory: string, now: number): void {
 export function storageIncidentTaskText(incident: StorageIncident): string {
   const title = incident.kind === "database-restored"
     ? `State database ${incident.database} was restored from a backup`
-    : `State database ${incident.database} was damaged and started empty`;
+    : incident.kind === "database-fallback-failed"
+      ? `State database ${incident.database} was damaged and could not be restored`
+      : `State database ${incident.database} was damaged and started empty`;
   return `${title}\n\n${incident.message}`;
 }
 
@@ -708,6 +964,8 @@ export function startStateDurability(options: {
   ownsTraffic: () => boolean;
   raiseBoardCard?: (incident: StorageIncident) => Promise<void>;
   tickMs?: number;
+  /** Test seam; the Viewer runs each pass in the backup worker. */
+  runPass?: (stateDirectory: string, lastRevisions: Map<string, string>) => Promise<unknown>;
 }): { stop(): void } {
   const store = globalThis as DurabilityTimerStore;
   if (store.__llvStateDurabilityTimer) clearInterval(store.__llvStateDurabilityTimer);
@@ -722,13 +980,27 @@ export function startStateDurability(options: {
     void raise(incident).catch((error) => console.error(`[state durability] board card for ${incident.database} failed: ${errorText(error)}`));
   }
   const lastRevisions = new Map<string, string>();
+  const runPass = options.runPass ?? runBackupPassInWorker;
+  let running = false;
   const timer = setInterval(() => {
     if (!options.ownsTraffic()) {
       clearInterval(timer);
       if (store.__llvStateDurabilityTimer === timer) delete store.__llvStateDurabilityTimer;
       return;
     }
-    runBackupPass(options.stateDirectory, lastRevisions);
+    if (running) return;
+    let due: string[];
+    try {
+      due = backupsDue(options.stateDirectory, lastRevisions);
+    } catch (error) {
+      console.error(`[state durability] backup schedule failed: ${errorText(error)}`);
+      return;
+    }
+    if (!due.length) return;
+    running = true;
+    void runPass(options.stateDirectory, lastRevisions)
+      .catch((error: unknown) => console.error(`[state durability] backup pass failed: ${errorText(error)}`))
+      .finally(() => { running = false; });
   }, options.tickMs ?? BACKUP_TICK_MS);
   timer.unref?.();
   store.__llvStateDurabilityTimer = timer;

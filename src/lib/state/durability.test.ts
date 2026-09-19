@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import type { Subprocess } from "bun";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { readReaperReport } from "@/lib/reaperRuntime";
 
+import { SqliteHandoffQueueStore } from "@/lib/runtime/handoffQueueStore";
 import { loadTasks } from "@/lib/tasks/store";
 import { checkStateDatabasesBeforeStores } from "@/lib/viewerInstrumentation";
 
@@ -17,7 +19,9 @@ import {
   raiseStorageIncidentCard,
   readStorageIncidents,
   runBackupPass,
+  runBackupPassInWorker,
   removeDeadStateFiles,
+  storageIncidentTaskText,
   stateDatabases,
   sweepStaleTempFiles,
   type StateDatabase,
@@ -301,4 +305,238 @@ test("the activation hook restores before the stores open, and the incident card
   expect(cards).toHaveLength(1);
   expect(cards[0]?.text).toContain("2026-09-19T10:00:00.000Z");
   expect(cards[0]).toMatchObject({ project: "proj", status: "inbox", placement: "unplaced" });
+});
+
+/* ---- the swap under other processes' connections (review round 1) -------- */
+
+const HOLDER = path.join(import.meta.dir, "durability.holderChild.ts");
+
+/** A state database whose last pages can be damaged while a connection that
+    only touches `probe` keeps working, as a crash-torn page would leave it. */
+function probeDatabase(filename: string, labels: string[]): void {
+  const db = new Database(filename, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode = WAL; CREATE TABLE probe(label TEXT NOT NULL); CREATE TABLE filler(body BLOB);");
+    db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) INSERT INTO filler SELECT randomblob(1000) FROM n");
+    for (const label of labels) db.query("INSERT INTO probe(label) VALUES (?)").run(label);
+  } finally {
+    db.close();
+  }
+}
+
+function probeLabels(filename: string): string[] {
+  const db = new Database(filename, { readonly: true });
+  try { return db.query<{ label: string }, []>("SELECT label FROM probe ORDER BY rowid").all().map((row) => row.label); } finally { db.close(); }
+}
+
+type HolderReply = { ok: boolean; value?: unknown; error?: string; code?: string | null };
+
+function holder(filename: string): { child: Subprocess<"pipe", "pipe", "inherit">; next(): Promise<HolderReply>; send(line: string): void } {
+  const child = Bun.spawn([process.execPath, HOLDER, filename], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return {
+    child,
+    async next() {
+      for (;;) {
+        const newline = buffered.indexOf("\n");
+        if (newline >= 0) {
+          const line = buffered.slice(0, newline);
+          buffered = buffered.slice(newline + 1);
+          return JSON.parse(line) as HolderReply;
+        }
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("holder exited");
+        buffered += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    send(line: string) {
+      child.stdin.write(`${line}\n`);
+      child.stdin.flush();
+    },
+  };
+}
+
+test("a connection held across the restore never writes into the set-aside files: its open transaction is refused and its next write lands in the restored database", async () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  probeDatabase(database.filename, ["before-backup"]);
+  expect(backupDatabase(database, { backupDirectory: backupDirectory(directory), now: new Date("2026-09-19T10:00:00Z") }).state).toBe("taken");
+  const late = new Database(database.filename);
+  try { late.query("INSERT INTO probe(label) VALUES ('after-backup')").run(); late.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } finally { late.close(); }
+
+  const held = holder(database.filename);
+  try {
+    expect(await held.next()).toEqual({ ok: true, value: ["before-backup", "after-backup"] });
+    held.send("begin");
+    expect((await held.next()).ok).toBe(true);
+    /* Crash damage in pages the holder does not touch. */
+    const size = fs.statSync(database.filename).size;
+    overwrite(database.filename, size - 3 * 4096, Buffer.alloc(3 * 4096, 0xff));
+
+    const opensDuringSwap: HolderReply[] = [];
+    const namesDuringSwap: string[][] = [];
+    const outcome = checkStateDatabasesAtActivation(directory, {
+      now: new Date("2026-09-19T10:30:00Z"),
+      beforeSwapStep: (step) => {
+        if (step === "set-aside-main") {
+          /* A writer whose transaction began before the swap asks for the
+             write lock while the swap holds it. */
+          held.send("insert late-row");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+        }
+        if (step === "restore") {
+          /* A process that opens in the window between the WAL moving aside
+             and the restored file arriving. */
+          const opened = Bun.spawnSync([process.execPath, HOLDER, database.filename, "--open-once"], { stderr: "inherit" });
+          opensDuringSwap.push(JSON.parse(opened.stdout.toString()) as HolderReply);
+          namesDuringSwap.push(fs.readdirSync(directory).filter((name) => /^state\.sqlite-(wal|shm)$/.test(name)));
+        }
+      },
+    });
+
+    expect(outcome.map((incident) => incident.kind)).toEqual(["database-restored"]);
+    expect(opensDuringSwap).toHaveLength(1);
+    expect(opensDuringSwap[0]).toMatchObject({ ok: false, code: "LLV_DATABASE_REPLACED" });
+    expect(namesDuringSwap).toEqual([[]]);
+    /* The insert went through inside the transaction; its commit is refused
+       and rolled back, so it lands nowhere. */
+    expect((await held.next()).ok).toBe(true);
+    held.send("commit");
+    expect(await held.next()).toMatchObject({ ok: false, code: "LLV_DATABASE_REPLACED" });
+    /* The next write reopens and lands in the restored database. */
+    held.send("write after-restore");
+    expect(await held.next()).toEqual({ ok: true, value: null });
+    held.send("labels");
+    expect(await held.next()).toEqual({ ok: true, value: ["before-backup", "after-restore"] });
+  } finally {
+    held.send("exit");
+    await held.child.exited;
+  }
+  expect(probeLabels(database.filename)).toEqual(["before-backup", "after-restore"]);
+  const corrupt = fs.readdirSync(directory).filter((name) => name.includes(".corrupt-"));
+  expect(corrupt.length).toBeGreaterThan(0);
+  for (const name of corrupt) {
+    const bytes = fs.readFileSync(path.join(directory, name));
+    expect(bytes.includes("after-restore")).toBe(false);
+    expect(bytes.includes("late-row")).toBe(false);
+  }
+  expect(fs.existsSync(`${database.filename}.swapping`)).toBe(false);
+});
+
+test("a failure after the damaged files move aside records an incident and a card, and keeps the damaged files", () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  seedTasks(directory, ["kept"]);
+  expect(runBackupPass(directory, new Map(), { now: new Date("2026-09-19T10:00:00Z") }).get("state.sqlite")?.state).toBe("taken");
+  checkpoint(database.filename);
+  fs.writeFileSync(database.filename, Buffer.alloc(fs.statSync(database.filename).size, 0x5a));
+  const damaged = fs.readFileSync(database.filename);
+
+  const incidents = checkStateDatabasesAtActivation(directory, {
+    now: new Date("2026-09-19T10:30:00Z"),
+    beforeSwapStep: (step) => {
+      if (step === "restore") throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    },
+  });
+
+  expect(incidents).toHaveLength(1);
+  const [incident] = incidents;
+  expect(incident).toMatchObject({ kind: "database-fallback-failed", database: "state.sqlite" });
+  expect(incident?.message).toContain("ENOSPC");
+  expect(incident?.message).toContain("starts empty");
+  expect(readStorageIncidents(directory, { now: new Date("2026-09-19T10:31:00Z") })).toEqual([incident!]);
+  expect(storageIncidentTaskText(incident!)).toStartWith("State database state.sqlite was damaged and could not be restored");
+  /* The damaged bytes are kept aside; the name is free for a fresh store. */
+  expect(incident?.corruptFiles.length).toBeGreaterThan(0);
+  expect(fs.readFileSync(path.join(directory, incident!.corruptFiles[0]!))).toEqual(damaged);
+  expect(fs.existsSync(database.filename)).toBe(false);
+  expect(fs.existsSync(`${database.filename}.restoring`)).toBe(false);
+  expect(readTaskIds(directory)).toEqual([]);
+});
+
+test("an unreadable incident record is kept aside, never discarded", () => {
+  const directory = sandbox();
+  const record = path.join(directory, "storage-incidents.json");
+  fs.writeFileSync(record, "{\"version\":1,\"incidents\":[{\"kind\":\"database-res");
+  expect(readStorageIncidents(directory)).toEqual([]);
+  const kept = fs.readdirSync(directory).filter((name) => name.startsWith("storage-incidents.json.unreadable-"));
+  expect(kept).toHaveLength(1);
+  expect(fs.readFileSync(path.join(directory, kept[0]!), "utf8")).toContain("database-res");
+});
+
+test("a failing backup records an incident, once a day", () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  fs.writeFileSync(database.filename, Buffer.alloc(8192, 0));
+  const first = runBackupPass(directory, new Map(), { now: new Date("2026-09-19T10:00:00Z") });
+  expect(first.get("state.sqlite")?.state).toBe("failed");
+  runBackupPass(directory, new Map(), { now: new Date("2026-09-19T10:10:00Z") });
+  const recorded = readStorageIncidents(directory, { now: new Date("2026-09-19T10:11:00Z") }).filter((incident) => incident.kind === "backup-failed");
+  expect(recorded.map((incident) => incident.database)).toEqual(["state.sqlite"]);
+  expect(recorded[0]?.message).toContain("There is no backup yet");
+  runBackupPass(directory, new Map(), { now: new Date("2026-09-20T10:00:01Z") });
+  expect(readStorageIncidents(directory, { now: new Date("2026-09-20T10:01:00Z") }).filter((incident) => incident.kind === "backup-failed")).toHaveLength(2);
+});
+
+test("a backup pass of a realistic database runs in the worker and leaves the Viewer's event loop free", async () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  const db = new Database(database.filename, { create: true });
+  try {
+    db.exec("PRAGMA journal_mode = WAL; CREATE TABLE filler(body BLOB)");
+    db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000) INSERT INTO filler SELECT randomblob(4000) FROM n");
+  } finally {
+    db.close();
+  }
+  expect(fs.statSync(database.filename).size).toBeGreaterThan(40_000_000);
+
+  /* The same copy on this thread, for scale: what each request would wait. */
+  const inline = performance.now();
+  expect(backupDatabase(database, { backupDirectory: path.join(directory, "inline") }).state).toBe("taken");
+  const inlineMs = performance.now() - inline;
+
+  let worstDelayMs = 0;
+  let last = performance.now();
+  const probe = setInterval(() => {
+    const now = performance.now();
+    worstDelayMs = Math.max(worstDelayMs, now - last - 5);
+    last = now;
+  }, 5);
+  const lastRevisions = new Map<string, string>();
+  const started = performance.now();
+  const outcomes = await runBackupPassInWorker(directory, lastRevisions);
+  const workerMs = performance.now() - started;
+  clearInterval(probe);
+
+  console.info(`[durability] backup of ${fs.statSync(database.filename).size} bytes: inline ${inlineMs.toFixed(0)} ms, `
+    + `worker ${workerMs.toFixed(0)} ms with a worst event-loop delay of ${worstDelayMs.toFixed(1)} ms`);
+  expect(outcomes.get("state.sqlite")?.state).toBe("taken");
+  expect(lastRevisions.get("state.sqlite")).toBeString();
+  expect(worstDelayMs).toBeLessThan(50);
+}, 60_000);
+
+test("a production store held across a fresh fallback writes into the new database, not the damaged one", () => {
+  const directory = sandbox();
+  const filename = path.join(directory, "handoff-queue.sqlite");
+  const store = new SqliteHandoffQueueStore(filename);
+  store.saveDrainingGenerations(["gen-before"]);
+  checkpoint(filename);
+  fs.writeFileSync(filename, Buffer.alloc(fs.statSync(filename).size, 0));
+
+  const incidents = checkStateDatabasesAtActivation(directory, { now: new Date("2026-09-19T12:00:00Z") });
+  expect(incidents.map((incident) => [incident.kind, incident.database])).toEqual([["database-fresh", "handoff-queue.sqlite"]]);
+
+  store.saveDrainingGenerations(["gen-after"]);
+  expect(store.loadDrainingGenerations()).toEqual(["gen-after"]);
+  const fresh = new Database(filename, { readonly: true });
+  try {
+    expect(fresh.query("SELECT generation FROM handoff_draining_generations").all()).toEqual([{ generation: "gen-after" }]);
+  } finally {
+    fresh.close();
+  }
+  for (const name of incidents[0]!.corruptFiles) {
+    expect(fs.readFileSync(path.join(directory, name)).includes("gen-after")).toBe(false);
+  }
 });
