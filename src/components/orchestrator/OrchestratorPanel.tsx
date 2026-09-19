@@ -204,6 +204,18 @@ export function OrchestratorPanel({
     [files, seatConversationId, seatPath, currentPath],
   );
   const surface = useSeatSurface(file);
+  /* The folded seat's one live signal (issue #1802): a reply that landed while
+     the panel was away. Expanded, the transcript IS the reading, so every
+     reply the operator can see is marked seen; folded, a newer one than the
+     last seen turns the marker on. Nothing is polled for it — the seat's file
+     already carries the timestamp. */
+  const lastReplyAt = file?.lastAssistantMessageAt ?? null;
+  const seenReplyAt = useRef<number | null>(lastReplyAt);
+  useEffect(() => {
+    if (!collapsed) seenReplyAt.current = lastReplyAt;
+  }, [collapsed, lastReplyAt]);
+  const unreadReply = collapsed && lastReplyAt !== null && (seenReplyAt.current === null || lastReplyAt > seenReplyAt.current);
+
   /* How long this seat has gone unbound, so «opening…» can be BOUNDED. */
   const bindPending = seated && seatBindPending(file, surface);
   const unboundForMs = useUnboundFor(bindPending, seatConversationId ?? "");
@@ -404,9 +416,17 @@ export function OrchestratorPanel({
             <span className="grow" />
           )}
           {state.kind === "live" && file && !collapsed ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          {unreadReply ? (
+            <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
+              <i aria-hidden />
+              <span>{t("orchPanel.seatUnreadReply")}</span>
+            </span>
+          ) : null}
+          {/* The fold is the control the operator reaches for before a stream,
+              so it is a labelled button rather than a bare chevron (#1802). */}
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn seat-fold"
             data-seat-collapse
             onClick={onClose}
             aria-expanded={!collapsed}
@@ -414,6 +434,7 @@ export function OrchestratorPanel({
             title={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
           >
             {collapsed ? <ChevronDown aria-hidden /> : <ChevronUp aria-hidden />}
+            <span>{t(collapsed ? "orchPanel.seatUnfoldWord" : "orchPanel.seatFoldWord")}</span>
           </button>
         </header>
       ) : (
