@@ -550,7 +550,11 @@ const reachable = (page: Page, selector: string, within: string) => page.evaluat
   };
 }, [selector, within] as const);
 
-async function sheetSurface(context: BrowserContext, base: string, surface: "pane-on-board" | "conversation-view") {
+/** The switcher row that opens the board lane's review round, whose pane the
+    deck mounts on its own perspective stage. */
+const REVIEW_ROW_PREFIX = translate("en", "mobile2.chat.reviewOf", { title: "" }).trim();
+
+async function sheetSurface(context: BrowserContext, base: string, surface: "pane-on-board" | "conversation-view" | "round-deck-on-board") {
   const page = await context.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -560,16 +564,34 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   const check = (label: string, ok: boolean) => { if (!ok) failures.push(label); };
   const recorded = () => page.evaluate(() => structuredClone((window as unknown as { evidence: { runtimeRequests: unknown[]; accountSelects: unknown[] } }).evidence));
 
-  if (surface === "pane-on-board") {
+  if (surface === "pane-on-board" || surface === "round-deck-on-board") {
     /* Exactly the operator's route: the board, then the conversation opened
        from it, which the board mounts inside its own shell. */
-    await page.goto(`${base}/#p=atlas`);
+    await page.goto(`${base}/${surface === "round-deck-on-board" ? "?deck=1" : ""}#p=atlas`);
     const row = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${RUNNING_PATH}"]`;
     await page.waitForSelector(row, { timeout: 20_000 });
     await pause(page, 600);
     /* The row is below the fold under ten parked lanes: scroll to it, then tap
        where it now is. */
     await touch(cdp, [await centre(page, row)]);
+    if (surface === "round-deck-on-board") {
+      /* …and from there into the lane's review round, through the bar's own
+         switcher. THIS is the pane the operator photographed: the round deck
+         lays its front card on a perspective stage, and a perspective is a
+         containing block for every `fixed` descendant under it. */
+      await pause(page, 800);
+      await touch(cdp, [await centre(page, "[data-mobile2-chat-title]")]);
+      await pause(page, 800);
+      const at = await page.evaluate((prefix) => {
+        const row = [...document.querySelectorAll("button")].find((candidate) => (candidate.textContent ?? "").startsWith(prefix!));
+        if (!row) return null;
+        const box = row.getBoundingClientRect();
+        return [box.x + box.width / 2, box.y + box.height / 2] as [number, number];
+      }, REVIEW_ROW_PREFIX);
+      if (!at) throw new Error("no review round in the switcher");
+      await touch(cdp, [at]);
+      await pause(page, 900);
+    }
   } else {
     /* The conversation on its own, deep-linked, with no board under it. */
     await page.goto(`${base}/#c=conversation_running`);
@@ -609,6 +631,11 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   })));
   const namesAccount = await page.evaluate(() => document.querySelector("[data-runtime-sheet-account-current]")?.textContent ?? "");
 
+  if (surface === "round-deck-on-board") {
+    /* The surface only means something while the pane it opens in still has
+       the containing block that clipped the sheet. */
+    check("the round deck still lays its pane on a containing block", ancestors.some((node) => node.reasons.some((reason) => reason.startsWith("perspective"))));
+  }
   check("the sheet is portalled to the document body", geometry?.portalledToBody === true);
   check("the sheet covers the whole viewport from this surface", geometry?.coversViewport === true);
   check("the sheet scrolls inside itself", geometry?.scrollsInsideItself === true);
@@ -689,7 +716,7 @@ browserTest("#1795: the runtime sheet covers the phone from every surface, close
   const failures: { surface: string; failures: string[]; pageErrors: string[] }[] = [];
   try {
     for (const viewport of VIEWPORTS) {
-      for (const surface of ["pane-on-board", "conversation-view"] as const) {
+      for (const surface of ["pane-on-board", "round-deck-on-board", "conversation-view"] as const) {
         const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
         try {
           const result = await sheetSurface(context, fixtureBase, surface);

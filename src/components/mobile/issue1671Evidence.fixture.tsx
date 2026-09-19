@@ -77,10 +77,18 @@ const pipelines = [
    (#1795) have a real one to name rather than the legacy default. */
 const RUNNING_PATH = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
 
+/* With the deck asked for (#1795 below), the running conversation is the round
+   under review, and says so the way a reviewer transcript does. */
+const deckRequested = new URLSearchParams(location.search).has("deck");
+const reviewerLineage = deckRequested
+  ? { durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation_done-0", reviewsConversationId: "conversation_done-0", memberships: [] } }
+  : {};
+
 const files: FileEntry[] = [
   conversation(RUNNING_PATH, "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     effort: "high",
+    ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
@@ -96,6 +104,16 @@ catalog.splice(5, 0, conversation("/repo/superseded-round.jsonl", "Superseded re
   mtime: now - 95_000,
   supersededBy: { conversationId: "conversation_history-5", path: "/repo/history-5.jsonl", at: iso(94_000), reason: "stage-retry" },
 }));
+
+/* #1795 asks for the surface the operator hit: a review round opened from the
+   board, whose pane the round deck mounts on a perspective stage. It is added
+   only when the page is asked for it (`?deck=1`), so every other case on this
+   fixture keeps the board it has always had. */
+const flows = deckRequested ? [{
+  id: "flow-review", project: PROJECT, state: "reviewing",
+  implementerPath: "/repo/done-0.jsonl", implementerConversationId: "conversation_done-0",
+  rounds: [{ n: 1, reviewerPath: RUNNING_PATH, reviewerConversationId: "conversation_running", verdict: null, error: null, startedAt: iso(300) }],
+}] : [];
 
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
@@ -131,7 +149,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
     return json({
-      files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows: [], pipelines,
+      files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines,
       workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } },
     });
   }

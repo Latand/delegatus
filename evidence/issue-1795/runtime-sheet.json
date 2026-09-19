@@ -1,0 +1,573 @@
+[
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "pane-on-board",
+    "ancestors": [],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "round-deck-on-board",
+    "ancestors": [
+      {
+        "tag": "div",
+        "marks": [],
+        "reasons": [
+          "perspective: 1200px"
+        ],
+        "rect": {
+          "x": 0,
+          "y": 52,
+          "width": 390,
+          "height": 792
+        }
+      }
+    ],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "conversation-view",
+    "ancestors": [],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "surface": "pane-on-board",
+    "ancestors": [],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932
+      },
+      "card": {
+        "x": 0,
+        "y": 230.5,
+        "width": 430,
+        "height": 701.5
+      },
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 254.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 378,
+      "y": 254.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 306.5,
+      "width": 406,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 487.5,
+      "width": 406,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "surface": "round-deck-on-board",
+    "ancestors": [
+      {
+        "tag": "div",
+        "marks": [],
+        "reasons": [
+          "perspective: 1200px"
+        ],
+        "rect": {
+          "x": 0,
+          "y": 52,
+          "width": 430,
+          "height": 880
+        }
+      }
+    ],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932
+      },
+      "card": {
+        "x": 0,
+        "y": 230.5,
+        "width": 430,
+        "height": 701.5
+      },
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 254.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 378,
+      "y": 254.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 306.5,
+      "width": 406,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 487.5,
+      "width": 406,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 430,
+      "height": 932
+    },
+    "surface": "conversation-view",
+    "ancestors": [],
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932
+      },
+      "card": {
+        "x": 0,
+        "y": 230.5,
+        "width": 430,
+        "height": 701.5
+      },
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 254.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 378,
+      "y": 254.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 306.5,
+      "width": 406,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 487.5,
+      "width": 406,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 1280,
+      "height": 900
+    },
+    "surface": "desktop-popover",
+    "ancestors": [
+      {
+        "tag": "section",
+        "marks": [
+          "data-pan-ignore",
+          "data-link-path",
+          "data-kanban-reader",
+          "data-folded"
+        ],
+        "reasons": [
+          "container-type: inline-size"
+        ],
+        "rect": {
+          "x": 275,
+          "y": 2251.078125,
+          "width": 408,
+          "height": 362.984375
+        }
+      },
+      {
+        "tag": "div",
+        "marks": [],
+        "reasons": [
+          "container-type: size"
+        ],
+        "rect": {
+          "x": 248,
+          "y": 122.390625,
+          "width": 1032,
+          "height": 777.609375
+        }
+      }
+    ],
+    "popover": {
+      "x": 298,
+      "y": 312.515625,
+      "width": 240,
+      "height": 244,
+      "inside": true,
+      "hitOwn": true
+    },
+    "namesAccount": "runs on spare",
+    "pageErrors": [],
+    "failures": []
+  }
+]
