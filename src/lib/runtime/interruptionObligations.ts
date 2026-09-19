@@ -69,6 +69,9 @@ export interface InterruptionObligationStore {
 const OBLIGATION_PREFIX = "interruption-continuation-";
 /** Resolved records stay long enough to explain what happened, then go. */
 const RESOLVED_RETENTION_MS = 7 * 24 * 3_600_000;
+/** An import holds its claim for milliseconds; one untouched this long was
+    left by an import that died. */
+const ABANDONED_CLAIM_MS = 60_000;
 
 export function interruptionObligationId(input: Pick<InterruptionObligation,
   "conversationId" | "hostKey" | "owner" | "turnRef" | "boundary">): string {
@@ -139,17 +142,31 @@ function appendDurably(filename: string, line: string): void {
     A release that cannot write the record, even on a second try, appends it
     to a pending journal beside the directory instead. Every read merges that
     journal and imports its records into the directory once it accepts them,
-    so the successor sees the obligation either way. */
-export function interruptionObligationStore(directory: string): InterruptionObligationStore {
+    so the successor sees the obligation either way.
+
+    The incumbent may append while the successor imports, so an import first
+    takes the journal by renaming it to a claim of its own and deletes only
+    that claim: an append after the rename starts a fresh journal. Records the
+    directory still refuses go back to the live journal. A claim left by an
+    import that died midway is taken over once it has sat untouched long
+    enough that no import can still be working on it. */
+export function interruptionObligationStore(
+  directory: string,
+  hooks: {
+    /** Runs between reading a claimed journal and deleting it. */
+    afterPendingRead?: () => void;
+  } = {},
+): InterruptionObligationStore {
   const fileFor = (id: string) => path.join(directory, `${id}.json`);
   const pendingFile = `${directory}.pending.jsonl`;
-  const readPending = (): InterruptionObligation[] => {
+  const claimPrefix = `${path.basename(pendingFile)}.claim-`;
+  const readJournal = (filename: string): InterruptionObligation[] => {
     let text: string;
     try {
-      text = fs.readFileSync(pendingFile, "utf8");
+      text = fs.readFileSync(filename, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      console.error("[interruption recovery] unreadable pending obligations", { filename: pendingFile, error });
+      console.error("[interruption recovery] unreadable pending obligations", { filename, error });
       return [];
     }
     return text.split("\n").flatMap((line) => {
@@ -162,14 +179,49 @@ export function interruptionObligationStore(directory: string): InterruptionObli
       }
     });
   };
-  /* Moves pending records into the directory; the journal goes only once
-     every record in it has a file. Returns the records still waiting. */
+  const readPending = () => readJournal(pendingFile);
+  /* Renames `source` to a claim only this call holds; null when it is gone. */
+  const claim = (source: string): string | null => {
+    const claimed = path.join(path.dirname(pendingFile), `${claimPrefix}${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
+    try {
+      fs.renameSync(source, claimed);
+      return claimed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error("[interruption recovery] pending obligations could not be claimed", { filename: source, error });
+      }
+      return null;
+    }
+  };
+  const abandonedClaims = (): string[] => {
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.dirname(pendingFile));
+    } catch {
+      return [];
+    }
+    const now = Date.now();
+    return names.filter((name) => name.startsWith(claimPrefix)).flatMap((name) => {
+      const filename = path.join(path.dirname(pendingFile), name);
+      try {
+        /* A rename stamps ctime, so this is the age of the claim itself. */
+        return now - fs.statSync(filename).ctimeMs > ABANDONED_CLAIM_MS ? [filename] : [];
+      } catch {
+        return [];
+      }
+    });
+  };
+  /* Moves pending records into the directory. Returns the records still
+     waiting, which are back in the live journal. */
   const importPending = (): InterruptionObligation[] => {
-    const pending = readPending();
-    if (pending.length === 0) return [];
+    const claims = [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []);
+    if (claims.length === 0) return [];
+    const pending = claims.flatMap(readJournal);
+    hooks.afterPendingRead?.();
     const stranded: InterruptionObligation[] = [];
     for (const obligation of pending) {
       if (fs.existsSync(fileFor(obligation.id))) continue;
+      if (stranded.some((waiting) => waiting.id === obligation.id)) continue;
       try {
         writeJsonDurably(fileFor(obligation.id), obligation);
       } catch (error) {
@@ -177,7 +229,16 @@ export function interruptionObligationStore(directory: string): InterruptionObli
         stranded.push(obligation);
       }
     }
-    if (stranded.length === 0) fs.rmSync(pendingFile, { force: true });
+    try {
+      if (stranded.length > 0) {
+        appendDurably(pendingFile, stranded.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
+      }
+    } catch (error) {
+      /* The claims stay on disk; a later read takes them over. */
+      console.error("[interruption recovery] stranded obligations could not return to the pending journal", { claims, error });
+      return stranded;
+    }
+    for (const claimed of claims) fs.rmSync(claimed, { force: true });
     return stranded;
   };
   const read = (filename: string): InterruptionObligation | null => {

@@ -76,3 +76,33 @@ test("the continuation names the deployment and the way back to a stage verdict"
   expect(text).toContain("Run long commands in the foreground");
   expect(text).toContain("stage_report");
 });
+
+test("a record appended to the pending journal while an import runs is kept for the next read", () => {
+  const obligations = path.join(directory, "obligations");
+  const pendingJournal = `${obligations}.pending.jsonl`;
+  /* Records a release could not write to the directory, built by a scratch
+     store and appended the way the incumbent's fallback appends them. */
+  const scratch = interruptionObligationStore(path.join(directory, "scratch"));
+  const first = scratch.record(releaseCut).obligation;
+  const second = scratch.record({
+    ...releaseCut,
+    hostKey: `codex:${["18350000", "0000", "4000", "8000", "000000000101"].join("-")}`,
+    engine: "codex",
+    turnRef: "turn-8",
+  }).obligation;
+  fs.appendFileSync(pendingJournal, `${JSON.stringify(first)}\n`);
+
+  let appended = false;
+  const successor = interruptionObligationStore(obligations, {
+    afterPendingRead: () => {
+      if (appended) return;
+      appended = true;
+      /* The incumbent's demotion appends while the successor imports. */
+      fs.appendFileSync(pendingJournal, `${JSON.stringify(second)}\n`);
+    },
+  });
+  successor.list();
+  expect(appended).toBe(true);
+  expect(interruptionObligationStore(obligations).list().map((obligation) => obligation.id).sort())
+    .toEqual([first.id, second.id].sort());
+});

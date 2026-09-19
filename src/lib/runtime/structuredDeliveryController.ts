@@ -1440,9 +1440,11 @@ async function orchestratorSeatFor(conversationId: ViewerConversationId): Promis
  * Writes the continuation this release owes a host whose turn is in flight
  * (#1835), before anything releases it. The host's own active turn is the
  * evidence; the registry's turn word only backs it up, so a host that finished
- * its turn before the release is owed nothing.
+ * its turn before the release is owed nothing. Every demotion path that
+ * releases a host calls this first: the published hosts below, and the ones
+ * startup adopted but had not yet published.
  */
-async function recordDemotionInterruption(
+export async function recordDemotionInterruption(
   registry: AgentRegistry,
   key: SessionKey,
   current: HostState,

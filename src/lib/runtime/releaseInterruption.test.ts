@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
-import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity } from "@/lib/processIdentity";
@@ -16,7 +16,7 @@ import type { RuntimeHostClient } from "./client";
 import type { HostState } from "./engineHost";
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import type { StructuredHostAdoptionFilter } from "./registry";
-import { adoptStructuredHostsAtStartup } from "./startup";
+import { adoptStructuredHostsAtStartup, releaseUnpublishedStartupHostsForDemotion } from "./startup";
 import { bindStructuredDeliveryQueue, releaseStructuredDeliveryHostsForDemotion } from "./structuredDeliveryController";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 
@@ -230,19 +230,31 @@ async function successorBoot(
   options: {
     seats?: () => OrchestratorSeat[];
     adoptionFails?: boolean;
+    /** Claude adoption fails after Codex adopted, so the pass ends holding
+        Codex hosts it never published. */
+    claudeAdoptionFails?: boolean;
+    /** The engine each adopted host reports: a process that outlived the
+        previous Viewer, still running a turn. */
+    survivingEngine?: { process: ProcessIdentity; activeTurnRef: string };
+    /** The Viewer claiming the rows; this test process unless a case needs a
+        Viewer that has since exited. */
+    viewer?: ProcessIdentity;
     /** Runs inside adoption, after the rows are claimed. */
     duringAdoption?: (registry: AgentRegistry) => Promise<void>;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = new AgentRegistry(registryFile);
   const adopted: string[] = [];
-  const successor = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
+  const successor = options.viewer ?? { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
   const adopt = async (
     engine: "codex" | "claude",
     received: AgentRegistry,
     shouldAdopt: StructuredHostAdoptionFilter,
   ) => {
-    if (options.adoptionFails) throw new Error("successor exited before adopting its hosts");
+    if (options.adoptionFails || (engine === "claude" && options.claudeAdoptionFails)) {
+      throw new Error("successor exited before adopting its hosts");
+    }
+    const surviving = options.survivingEngine;
     return Object.values(received.readOnlySnapshot().entries).flatMap((entry) => {
       if (entry.key.engine !== engine || !entry.structuredHost || !shouldAdopt(entry)) return [];
       const claimed = received.claimStructuredHost(entry.key, successor, { allowUnhosted: true });
@@ -250,11 +262,21 @@ async function successorBoot(
       if (!received.setStructuredHostClaimed(entry.key, {
         ...claimed.structuredHost,
         endpoint: `fake:successor-${entry.key.sessionId}`,
-        process: successor,
-        activeTurnRef: null,
-      }, "idle", claimed.claimOwner, claimed.claimEpoch)) return [];
+        process: surviving?.process ?? successor,
+        activeTurnRef: surviving?.activeTurnRef ?? null,
+      }, surviving ? "live" : "idle", claimed.claimOwner, claimed.claimEpoch)) return [];
       adopted.push(`${engine}:${entry.key.sessionId}`);
-      return [{ key: entry.key, host: hostFor(ledger) as never }];
+      return [{
+        key: entry.key,
+        host: hostFor(ledger, surviving
+          ? {
+            status: "active",
+            pid: surviving.process.pid,
+            processStartIdentity: surviving.process.startIdentity,
+            activeTurnRef: surviving.activeTurnRef,
+          }
+          : undefined) as never,
+      }];
     });
   };
   const adoptThenRun = async (
@@ -393,6 +415,52 @@ test("failed demotion cleanup keeps the obligation, and a surviving owner keeps 
     expectDeploymentContinuation(writes[0]);
   } finally {
     if (survivorProcess.exitCode === null) survivorProcess.kill();
+    journal.close();
+  }
+});
+
+test("a turn cut on a host startup adopted but never published resumes once with the deployment continuation", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("codex", cutSessionId(13), deadEngine(2_000_001_113));
+    const ledger = createFakeDeliveryLedger();
+    /* This Viewer's startup adopts the row onto an engine still mid-turn, then
+       fails before publishing it: its retry loop holds the host unpublished. */
+    const retrying = await successorBoot(cut.registryFile, journal, ledger, {
+      claudeAdoptionFails: true,
+      viewer: { pid: 2_000_001_002, startIdentity: "retrying-viewer" },
+      survivingEngine: { process: deadEngine(2_000_001_213), activeTurnRef: "turn-on-unpublished-host" },
+    });
+    expect(retrying.error).not.toBeNull();
+    expect(retrying.adopted).toEqual([cut.hostKey]);
+
+    /* The next deploy demotes that Viewer through its real release seam. */
+    const registry = new AgentRegistry(cut.registryFile);
+    setAgentRegistryForTests(registry);
+    const exitCodes: number[] = [];
+    try {
+      await completeViewerReleaseDemotion(
+        async () => {},
+        (code) => { exitCodes.push(code); },
+        () => {},
+        async () => {
+          await releaseUnpublishedStartupHostsForDemotion({ boundary: "viewer-release:test-deploy" });
+          await releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:test-deploy" });
+        },
+      );
+    } finally {
+      setAgentRegistryForTests(null);
+    }
+    expect(exitCodes).toEqual([0]);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+
+    const successor = await successorBoot(cut.registryFile, journal, ledger);
+    expect(successor.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expectDeploymentContinuation(writes[0]);
+  } finally {
     journal.close();
   }
 });

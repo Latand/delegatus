@@ -29,6 +29,8 @@ import {
   completeStructuredDeliveryQueueStartup,
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
+  recordDemotionInterruption,
+  type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
@@ -1555,11 +1557,19 @@ export function structuredStartupHosts(): readonly AdoptedStructuredHost[] {
 /** Quiesced startup may have created hosts before reaching controller
  * registration. They belong to this boot and must also cross the release
  * boundary before its mirror acknowledgement. External workers never enter
- * these retained handle sets. */
-export async function releaseUnpublishedStartupHostsForDemotion(): Promise<void> {
+ * these retained handle sets.
+ *
+ * Such a host can be running a turn — its engine outlived the previous Viewer
+ * — so the release records the continuation it owes first, exactly as the
+ * published path does (#1835). A host whose record fails is left running and
+ * the failure is reported. */
+export async function releaseUnpublishedStartupHostsForDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
   const registry = agentRegistry();
   const unpublished = retainAdoptedHosts(adoptedHosts, retryAdoptedHosts)
     .filter((item) => !hasStructuredDeliveryHost(item.key));
+  const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
     const state = await host.health();
     if ((state.status !== "active" && state.status !== "attention")
@@ -1568,8 +1578,22 @@ export async function releaseUnpublishedStartupHostsForDemotion(): Promise<void>
     if (!registry.markStructuredHostHandoff(key, identity)) {
       throw new Error("unpublished startup host changed before release handover");
     }
+    try {
+      await recordDemotionInterruption(registry, key, state, options);
+    } catch (error) {
+      console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
+        hostKey: sessionKeyId(key), error,
+      });
+      throw error;
+    }
     await host.release();
+    released.add(sessionKeyId(key));
   }));
+  /* A released handle is gone for good: no later pass in this process may
+     retain or publish it. */
+  const kept = (item: AdoptedStructuredHost) => !released.has(sessionKeyId(item.key));
+  adoptedHosts = adoptedHosts.filter(kept);
+  retryAdoptedHosts = retryAdoptedHosts.filter(kept);
   const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
   if (failures.length) throw new AggregateError(failures, "unpublished startup hosts did not quiesce");
 }
