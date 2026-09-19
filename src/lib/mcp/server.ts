@@ -2818,7 +2818,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
     "Provenance is collected by the server, never taken from you: the worktree HEAD, the branch's pull request and the stage's declared outputs are read at the moment of the call.",
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
-    "A fenced JSON verdict in the final turn remains the second input of the same form; when both exist, this call wins.",
+    "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
   ].join(" "),
   link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
