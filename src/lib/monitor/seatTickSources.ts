@@ -18,7 +18,8 @@ import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/a
 import { statePath } from "@/lib/configDir";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
-import { canonicalOrchestratorProject, activeOrchestratorSeats, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -500,8 +501,10 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
-    seatFor: orchestratorSeatFor,
-    activeSeats: () => activeOrchestratorSeats().map((seat) => seat.project),
+    /* Seats under the project they serve now (#1874): a seat keyed by its
+       folder's old identity is the seat of the key its lanes are written to. */
+    seatFor: (project) => orchestratorSeatForCurrentProject(project),
+    activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),

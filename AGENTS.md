@@ -53,6 +53,16 @@ When adding a new agent/worktree layout: prefer a pure path recognizer beside
 when the path genuinely cannot name the repo. Add a "deleted worktree still
 groups under its parent repo" case to `describe.test.ts`. Don't rely on the
 checkout being present, and don't invent a second naming scheme.
+
+**The same folder can change key over time.** A plain folder is `dir-<path>`, a
+repository with no `origin` is `repo-<local path>`, and the same repository
+once an origin is added is `repo-<remote>`. Anything recorded before the move
+(an orchestrator seat, its tasks and conversations) keeps the old key while
+new pipelines get the new one. `src/lib/projects/succession.ts` records that
+move once as an alias in the same map `canonicalProject` reads, and only for a
+path-derived source verified against the folder. It runs on scan, at seat tick
+boot and sweep, and at designation. A remote that changes (renamed or
+re-pointed origin) is never aliased, because every clone shares a remote id.
 <!-- END:worktree-grouping -->
 
 <!-- BEGIN:live-state-and-publication -->

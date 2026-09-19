@@ -12,6 +12,7 @@ import {
   type ProjectAliasRegistration,
 } from "@/lib/projects/aliases";
 import { displayNameFromProjectIdentity } from "@/lib/projects/identity";
+import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 
 import type { Engine, Fmt, ProjectCatalogEntry } from "../types";
 import { replaceConversationCatalog, type ConversationCatalogEntry } from "./conversationCatalog";
@@ -501,6 +502,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     if (project) files[index]!.project = project;
   });
   const changes = new Map<string, Set<string>>();
+  const projectsByCwd = new Map<string, Set<string>>();
   await forEachCooperatively(files, (file) => {
     nextFiles[file.path] = {
       summaryVersion: file.summaryVersion,
@@ -526,6 +528,11 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       engine: file.engine,
       fmt: file.fmt,
     };
+    if (file.cwd && file.project) {
+      const held = projectsByCwd.get(file.cwd) ?? new Set<string>();
+      held.add(file.project);
+      projectsByCwd.set(file.cwd, held);
+    }
     const previousProject = previousProjects.get(file.path);
     if (previousProject && previousProject !== file.project) {
       const targets = changes.get(previousProject) ?? new Set<string>();
@@ -642,6 +649,20 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
         }
       } catch {
         boardHealed = false;
+      }
+    }
+    if (boardHealed && options.persist !== false) {
+      /* #1874: one working directory under two project keys in the same scan
+         is the signature of a folder whose identity moved (it gained a
+         repository or an origin after first use). Only those cwds are judged,
+         so a scan costs nothing while no folder has moved; the next scan
+         re-projects the old key's conversations through the recorded alias. */
+      try {
+        recordProjectSuccessions([...projectsByCwd]
+          .filter(([, projects]) => projects.size > 1)
+          .flatMap(([cwd, projects]) => [...projects].map((project) => projectSuccessionFor(project, cwd))));
+      } catch {
+        console.error("[project catalog] project identity succession deferred; a later scan will retry");
       }
     }
     if (boardHealed) {
