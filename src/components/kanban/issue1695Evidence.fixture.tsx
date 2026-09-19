@@ -37,7 +37,11 @@ const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
-const TIER_LIMITS = SCENARIO === "tier-limits";
+/* #1839: the same tier scenario, with the windows arriving the way the provider
+   actually files them — under codenamed buckets, one of them carrying the
+   provider's own human label and one carrying none. */
+const CODENAME_TIERS = SCENARIO === "tier-codename";
+const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
@@ -335,7 +339,13 @@ const resetIn = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 6
 const tierLimits = {
   session: { usedPercent: 12, resetsAt: resetIn(120), windowMinutes: 300 },
   weekly: { usedPercent: 30, resetsAt: resetIn(6000), windowMinutes: 10080 },
-  tiers: [
+  tiers: CODENAME_TIERS ? [
+    // The bucket key is a codename; the label is the provider's own, and the
+    // label is what the operator must read (#1839).
+    { tier: "nimbus_quill", label: "Fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
+    // No label came with this one, so its bucket key is spelled out as words.
+    { tier: "cedar_ember", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
+  ] : [
     { tier: "fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
     { tier: "opus", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
   ],

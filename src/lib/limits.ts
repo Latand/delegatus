@@ -1,4 +1,5 @@
 import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -48,8 +49,19 @@ type EngineCacheEntry = {
   retryAt?: number | null;
   consecutive429s?: number;
   consecutiveInitializeTimeouts?: number;
+  /** The parser generation that produced `data`; absent on older entries. */
+  parser?: number;
 };
 type LimitsCache = { version: 2; engines: Record<EngineName, Record<string, EngineCacheEntry>> };
+
+/** Bumped whenever the Claude usage parser can read a window out of a payload
+    that an earlier parser read nothing out of (issue #1839). A cached entry
+    carries the version that produced it; an entry from an older parser keeps
+    its numbers — they are still true — but loses the provider backoff that
+    would otherwise let it rest, so the very next read goes to the provider
+    instead of resting on a snapshot whose tier list an old parser emptied.
+    The cache must never be the thing that hides a tier. */
+const CLAUDE_PARSER_VERSION = 2;
 export type LimitRead = {
   data: EngineLimits | null;
   /** The reading `data` would have been without a rejection projected onto it,
@@ -98,9 +110,21 @@ function safeCacheEntry(value: unknown): EngineCacheEntry | null {
       (entry.baseData !== undefined && entry.baseData !== null && typeof entry.baseData !== "object") ||
       (entry.retryAt !== undefined && entry.retryAt !== null && typeof entry.retryAt !== "number") ||
       (entry.consecutive429s !== undefined && (!Number.isInteger(entry.consecutive429s) || entry.consecutive429s < 0)) ||
-      (entry.consecutiveInitializeTimeouts !== undefined && (!Number.isInteger(entry.consecutiveInitializeTimeouts) || entry.consecutiveInitializeTimeouts < 0))) return null;
+      (entry.consecutiveInitializeTimeouts !== undefined && (!Number.isInteger(entry.consecutiveInitializeTimeouts) || entry.consecutiveInitializeTimeouts < 0)) ||
+      (entry.parser !== undefined && !Number.isInteger(entry.parser))) return null;
   const normalize = (data: EngineLimits | null | undefined) => data ? { ...data, tiers: modelTierWindows(data) } : data;
   return { ...entry, data: normalize(entry.data), ...(entry.baseData === undefined ? {} : { baseData: normalize(entry.baseData) }) } as EngineCacheEntry;
+}
+
+/** A Claude entry an earlier parser generation wrote keeps its numbers — a
+    session and a weekly percentage are true whoever parsed them — but loses the
+    provider backoff and the cache age that would let it rest (issue #1839).
+    That entry's tier list was produced by a parser that could not see the
+    account's codenamed bucket, so resting on it is how a tier stays hidden for
+    as long as the provider keeps answering 429. The next read goes live. */
+function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
+  if (entry.parser === CLAUDE_PARSER_VERSION) return entry;
+  return { ...entry, at: 0, retryAt: null, consecutive429s: 0, parser: CLAUDE_PARSER_VERSION };
 }
 
 function readDiskCache(): LimitsCache {
@@ -118,7 +142,7 @@ function readDiskCache(): LimitsCache {
           // its number under the horizon that number actually has.
           if (valid) cache.engines[engine][id] = engine === "codex"
             ? { ...valid, data: relabelCachedWindows(valid.data), ...(valid.baseData === undefined ? {} : { baseData: relabelCachedWindows(valid.baseData) }) }
-            : valid;
+            : withCurrentParser(valid);
         }
       }
       return cache;
@@ -211,6 +235,7 @@ function remember(engine: EngineName, accountId: string, resolved: ResolvedRead,
     retryAt: resolved.retryAt,
     consecutive429s: resolved.consecutive429s,
     consecutiveInitializeTimeouts: resolved.consecutiveInitializeTimeouts,
+    ...(engine === "claude" ? { parser: CLAUDE_PARSER_VERSION } : {}),
   };
   writeDiskCache(cache());
   if (!resolved.data || (resolved.meta.source !== "live" && resolved.meta.source !== "transcript")) return;
@@ -427,35 +452,134 @@ function oauthWindow(w: OauthWindow | undefined, windowMinutes: number): LimitWi
 }
 
 const OAUTH_TIER_PREFIX = "seven_day_";
+const OAUTH_GENERAL_WINDOWS: ReadonlySet<string> = new Set(["five_hour", "seven_day"]);
 
-/** `seven_day_*` buckets the provider meters that are NOT model tiers, as the
-    Claude CLI itself enumerates them: overage accounting, the OAuth-app pool,
-    and the product pools that ride the same key shape. Everything else under
-    the prefix is a model tier and earns its own window (issue #1796) — a tier
-    the provider adds tomorrow renders the day it is reported, which is the
-    whole point of reading the payload instead of one hard-coded key. */
-const OAUTH_NON_TIER_BUCKETS: ReadonlySet<string> = new Set([
-  "overage_included",
-  "oauth_apps",
-  "cowork",
-  "omelette",
-]);
+/** Metered buckets that are NOT model tiers: overage and spend accounting, the
+    OAuth-app pool, the product pools that ride the same window shape, and the
+    per-model breakdown inside the week. Matched on the bucket key's words, so
+    `seven_day_omelette` and `omelette_promotional` are both the omelette pool
+    however the provider spells the key. */
+const OAUTH_NON_TIER_POOLS: readonly string[] = ["overage", "oauth_apps", "cowork", "omelette", "extra_usage", "spend", "breakdown"];
 
-/** Every model-tier weekly bucket beside `seven_day` (issues #1358, #1796),
-    ordered by tier name so the rows never reshuffle between reads. A bucket
-    whose suffix carries an underscore is an accounting key rather than a tier
-    name, so it is excluded by shape as well as by the list above. */
+function isAccountingPool(key: string): boolean {
+  return OAUTH_NON_TIER_POOLS.some((pool) => key.includes(pool));
+}
+
+/** The tier name a top-level bucket key spells: `seven_day_opus` meters the
+    `opus` tier, and a bucket the provider files under a codename (`nimbus_quill`)
+    is its own tier key until something names it. */
+function tierOfBucketKey(key: string): string {
+  return key.startsWith(OAUTH_TIER_PREFIX) ? key.slice(OAUTH_TIER_PREFIX.length) : key;
+}
+
+/** One entry of the payload's `limits` array, read defensively.
+ *
+ * The live payload carries `limits` as an array of three entries (issue #1839),
+ * but its element shape was never captured: the read that would have captured
+ * it was rate limited, and so were both reads this issue was allowed to make.
+ * So this reads by content rather than by field name — an entry contributes
+ * only through strings it carries that the rest of the payload already
+ * corroborates: a bucket key the payload actually sent, or a Claude model
+ * family the Viewer launches. Anything else in the entry is ignored, so the
+ * array can name and attribute a window the bucket scan already found, and can
+ * never invent one.
+ */
+interface OauthLimitsEntry {
+  /** Bucket keys this entry names, matched against the payload's own keys. */
+  buckets: string[];
+  /** The model family this entry attributes the window to, when it names one. */
+  family: string | null;
+  /** The provider's human label for the window, when the entry carries one. */
+  label: string | null;
+  /** The entry's own window, when it carries the window shape inline. */
+  window: LimitWindow | null;
+}
+
+/** Field names a human label plausibly arrives under. An entry that carries
+    none of them contributes no label and the bucket key stands. */
+const OAUTH_LABEL_FIELDS: readonly string[] = ["label", "name", "title", "display_name", "displayName", "description"];
+
+function stringValues(value: unknown, depth = 0): string[] {
+  if (typeof value === "string") return [value];
+  if (depth >= 3 || !value || typeof value !== "object") return [];
+  const entries = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  return entries.flatMap((item) => stringValues(item, depth + 1));
+}
+
+function readLimitsEntry(entry: unknown, bucketKeys: ReadonlySet<string>): OauthLimitsEntry | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const record = entry as Record<string, unknown>;
+  const strings = stringValues(record);
+  /* An entry for one of the two general windows is not a tier however it is
+     labelled: adopting it would file the 5-hour window under whatever model its
+     label happens to name and gate that model's spawns on the wrong horizon. */
+  if (strings.some((value) => OAUTH_GENERAL_WINDOWS.has(value))) return null;
+  const buckets = [...new Set(strings.filter((value) => bucketKeys.has(value)))];
+  /* A family is named either as a bare model id or as one word of a human
+     label ("Fable", "Fable weekly limit"), so each string is tried whole and
+     word by word. Nothing else in the entry can name a family. */
+  const family = strings
+    .flatMap((value) => [value, ...value.split(/[\s,/|()\[\]]+/)])
+    .map((value) => normalizeClaudeLaunchModel(value))
+    .find((value) => value !== null) ?? null;
+  const labelField = OAUTH_LABEL_FIELDS.map((field) => record[field]).find((value) => typeof value === "string" && value.trim());
+  const label = typeof labelField === "string" ? labelField.trim() : null;
+  const window = oauthWindow(record as OauthWindow, WEEKLY_WINDOW_MINUTES);
+  if (!buckets.length && !family) return null;
+  return { buckets, family, label, window };
+}
+
+/** Every model-tier window the provider meters beside `five_hour`/`seven_day`
+ * (issues #1358, #1796, #1839).
+ *
+ * The provider does NOT send a `seven_day_<tier>` key for every tier it meters:
+ * the account whose third meter this issue is about has no `seven_day_fable`
+ * key at all, `seven_day_opus` and `seven_day_sonnet` arrive null, and the
+ * window that is actually metered arrives under a codenamed top-level bucket of
+ * the same shape. So the source is the payload's own shape, not a key prefix:
+ * every non-null top-level bucket carrying a window that is not one of the two
+ * general windows and not an accounting pool is a metered tier and earns a row.
+ *
+ * `limits[]` is then read over the top: it is the provider's own labelled list,
+ * so a label it carries is the name the operator reads, and a model family it
+ * names re-keys the window to that family, which is what lets a Fable spawn
+ * consult the window the provider attributes to Fable even when the bucket the
+ * window arrived in is codenamed.
+ *
+ * Rows are ordered by the name they display, so they never reshuffle between
+ * reads.
+ */
 function oauthTierWindows(json: Record<string, unknown>): TierLimitWindow[] {
-  return Object.keys(json)
-    .flatMap((key) => {
-      if (!key.startsWith(OAUTH_TIER_PREFIX)) return [];
-      const tier = key.slice(OAUTH_TIER_PREFIX.length);
-      if (!tier || tier.includes("_") || OAUTH_NON_TIER_BUCKETS.has(tier)) return [];
-      const value = json[key];
-      const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
-      return window ? [{ ...window, tier }] : [];
-    })
-    .sort((left, right) => left.tier.localeCompare(right.tier));
+  const byTier = new Map<string, TierLimitWindow>();
+  const tierOfBucket = new Map<string, string>();
+  for (const key of Object.keys(json)) {
+    if (OAUTH_GENERAL_WINDOWS.has(key) || isAccountingPool(key)) continue;
+    const value = json[key];
+    const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
+    if (!window) continue;
+    const tier = tierOfBucketKey(key);
+    if (!tier) continue;
+    byTier.set(tier, { ...window, tier });
+    tierOfBucket.set(key, tier);
+  }
+  const bucketKeys = new Set([...tierOfBucket.keys(), ...tierOfBucket.values()]);
+  const entries = Array.isArray(json.limits) ? json.limits : [];
+  for (const raw of entries) {
+    const entry = readLimitsEntry(raw, bucketKeys);
+    if (!entry) continue;
+    const named = entry.buckets.map((key) => tierOfBucket.get(key) ?? key).find((tier) => byTier.has(tier)) ?? null;
+    const existing = named ? byTier.get(named)! : null;
+    const window = existing ?? (entry.window ? { ...entry.window, tier: entry.family ?? "" } : null);
+    if (!window) continue;
+    // The family the provider attributes the window to is the tier key the
+    // spawn gate matches on, so a codenamed bucket answers for its model.
+    const tier = entry.family ?? window.tier;
+    if (!tier) continue;
+    if (named && tier !== named) byTier.delete(named);
+    byTier.set(tier, { ...window, tier, ...(entry.label ? { label: entry.label } : {}) });
+  }
+  return [...byTier.values()]
+    .sort((left, right) => claudeTierDisplayName(left.tier, left.label).localeCompare(claudeTierDisplayName(right.tier, right.label)));
 }
 
 /* -------------------------------- Codex -------------------------------- */

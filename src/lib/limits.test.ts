@@ -1523,7 +1523,7 @@ test("every model tier the provider meters becomes its own window, and a spawn i
 });
 
 
-test("pre-tier-list cached limits load without a provider read and keep recording history", async () => {
+test("pre-tier-list cached limits keep their bucket, and an older parser's entry never rests on the backoff (#1839)", async () => {
   resetLimitsCache();
   const now = Date.now();
   const legacy = {
@@ -1535,21 +1535,201 @@ test("pre-tier-list cached limits load without a provider read and keep recordin
   const file = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ version: 2, engines: {
-    claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null } } }, codex: {},
+    claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null }, retryAt: now + 15 * 60_000 } }, codex: {},
   } }));
-  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("cached usage must not fetch"); }) as unknown as typeof fetch);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("offline"); }) as unknown as typeof fetch);
   try {
-    const payload = await readLimits({ codexLiveReader });
-    expect(payload.claude?.tiers).toEqual([legacy.flagship]);
-    expect(payload.claude?.weekly).toEqual(legacy.weekly);
-    expect(request).not.toHaveBeenCalled();
+    /* An entry no current parser wrote is re-read at once (#1839): neither its
+       age nor the provider backoff it carried can make it rest, because what it
+       says about tiers is an older parser's reading of the payload. While the
+       provider is unreachable its own numbers still serve, and its `flagship`
+       bucket still reads as the tier list. */
+    const cached = await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(cached.claude?.tiers).toEqual([legacy.flagship]);
+    expect(cached.claude?.weekly).toEqual(legacy.weekly);
     request.mockImplementation((async () => Response.json({
       five_hour: { utilization: 11 }, seven_day: { utilization: 30 }, seven_day_fable: { utilization: 88 },
     })) as unknown as typeof fetch);
-    const fresh = await readLimits({ codexLiveReader, now: () => now + 60_000 });
+    const fresh = await readLimits({ codexLiveReader, now: () => now + 16 * 60_000 });
     expect(fresh.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
     const { historySamples } = await import("./limitsHistoryStore");
     expect(historySamples("claude", "default", "weekly").at(-1)?.remaining).toBe(70);
+  } finally { request.mockRestore(); resetLimitsCache(); }
+});
+
+
+/* Issue #1839. The key set below is the live provider payload's, read once by
+   the seat at 08:42Z with key names and shapes only; every value here is
+   invented. What matters is what the provider does NOT send: there is no
+   `seven_day_fable` key, `seven_day_opus` and `seven_day_sonnet` arrive null,
+   and the third window the operator sees at the provider arrives under a
+   codenamed top-level bucket of the same shape as `seven_day`. A parser that
+   reads tiers out of `seven_day_<tier>` keys finds nothing here, which is why
+   production answered `claude.tiers: []` for every account.
+
+   The element shapes of `limits[]` and `seven_day_breakdown.rows[]` were not
+   captured: the read that would have captured them was rate limited, and so
+   were both reads this issue was allowed to make. The entries below stand in
+   for them, and the second half of this test covers the case where the real
+   shape is nothing like them. */
+function usagePayloadWithCodenamedTier(limits?: unknown[]): Record<string, unknown> {
+  const resets = "2026-09-26T08:00:00.000Z";
+  const window = (utilization: number) => ({
+    utilization,
+    resets_at: resets,
+    // Invented figures; the provider's own are never read into a transcript.
+    limit_dollars: 100,
+    used_dollars: utilization,
+    remaining_dollars: 100 - utilization,
+    locked_reason: null,
+  });
+  return {
+    five_hour: { ...window(12), resets_at: "2026-09-19T14:00:00.000Z" },
+    seven_day: window(30),
+    // Every tier-shaped key the provider sends for this account, all null.
+    seven_day_opus: null,
+    seven_day_sonnet: null,
+    seven_day_oauth_apps: null,
+    seven_day_cowork: null,
+    seven_day_omelette: null,
+    // The codenamed top-level buckets. Only one carries a window.
+    tangelo: null,
+    iguana_necktie: null,
+    omelette_promotional: null,
+    nimbus_quill: window(88),
+    cinder_cove: null,
+    copper_kite: null,
+    harbor_lantern: null,
+    wattle_ember: null,
+    amber_ladder: null,
+    juniper_tide: null,
+    cedar_ember: null,
+    amber_gauge: null,
+    ...(limits ? { limits } : {}),
+    seven_day_breakdown: {
+      as_of: resets,
+      // A window-shaped object nested here must never become a row: the scan
+      // is over top-level buckets, and per-model usage inside the week is not
+      // a window of its own.
+      rows: [{ model: "claude-fable", utilization: 44, resets_at: resets }],
+      window_started_at: "2026-09-19T08:00:00.000Z",
+    },
+    extra_usage: null,
+    spend: null,
+    member_dashboard_available: false,
+  };
+}
+
+test("a tier the provider meters under a codename becomes its own window, labelled and gated by the model it names (#1839)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
+  const read = async (payload: Record<string, unknown>) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+    try { return await fetchClaudeLimits(credentials); } finally { globalThis.fetch = realFetch; }
+  };
+  const { limitRows } = await import("@/components/AccountsPanel");
+  const { reconcileQuotaReadings } = await import("./rateLimit");
+  const { translate } = await import("./i18n");
+  const rowLabels = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"]) => {
+    const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+    return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
+  };
+  const gate = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"], model: string) => {
+    const now = Date.now();
+    return effectiveRemaining({
+      engine: "claude" as const,
+      accountId: "default",
+      authenticated: true,
+      limits: data,
+      provenance: { source: "live" as const, reason: null, staleSince: null },
+      observedAt: now,
+      authCheckedAt: now,
+    }, now, { model });
+  };
+
+  /* The provider's own labelled list names the window and the model it meters,
+     so the row reads as the operator's model and the gate finds Fable's own
+     window under a bucket key that never says "fable". */
+  const labelled = await read(usagePayloadWithCodenamedTier([
+    { limit_type: "five_hour", name: "Session" },
+    { limit_type: "seven_day", name: "Weekly" },
+    { limit_type: "nimbus_quill", name: "Fable", model: "claude-fable-5-1" },
+  ]));
+  expect(labelled.source).toBe("live");
+  expect(labelled.data?.weekly).toMatchObject({ usedPercent: 30 });
+  expect(labelled.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(rowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(gate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
+  expect(gate(labelled.data, "sonnet")).toEqual({ percent: 70, window: "weekly" });
+
+  /* The same payload whose `limits[]` says nothing this parser can use — the
+     shape was never captured, so it has to be allowed to be anything. The
+     window is still read from the bucket and still rendered; with nothing
+     attributing it to a model, it is named for its bucket rather than shown
+     raw as `nimbus_quill`, and no spawn is refused on another tier's number. */
+  const unattributed = await read(usagePayloadWithCodenamedTier([{ foo: 1 }, "opaque", null]));
+  expect(unattributed.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "nimbus_quill" },
+  ]);
+  expect(rowLabels(unattributed.data)).toEqual(["5h", "Week", "Nimbus Quill · Week"]);
+  expect(gate(unattributed.data, "fable")).toEqual({ percent: 70, window: "weekly" });
+
+  /* An entry for one of the two general windows is never adopted as a tier,
+     however it is labelled: filing the 5-hour window under the model its label
+     names would show a session number as a week and gate that model on it. */
+  const generalNamed = await read(usagePayloadWithCodenamedTier([
+    { limit_type: "five_hour", name: "Opus session", model: "claude-opus-5" },
+    { limit_type: "nimbus_quill", name: "Fable" },
+  ]));
+  expect(generalNamed.data?.tiers).toEqual([
+    { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(generalNamed.data?.session).toMatchObject({ usedPercent: 12, windowMinutes: 300 });
+
+  // No `limits` key at all is the same story: the bucket scan stands alone.
+  const bucketsOnly = await read(usagePayloadWithCodenamedTier());
+  expect(bucketsOnly.data?.tiers?.map((tier) => tier.tier)).toEqual(["nimbus_quill"]);
+});
+
+test("a cached snapshot an older parser wrote never holds back a tier the live payload carries (#1839)", async () => {
+  resetLimitsCache();
+  const now = Date.now();
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  /* What production was serving: a snapshot the pre-#1839 parser wrote, with an
+     empty tier list, held alive by the provider's 429 backoff. The backoff is
+     what made a correct parser show nothing — the read never happened. */
+  fs.writeFileSync(cacheFile, JSON.stringify({
+    version: 2,
+    engines: {
+      claude: {
+        default: {
+          at: now,
+          data: { session: { usedPercent: 11, resetsAt: Math.floor(now / 1000) + 3_600 }, weekly: { usedPercent: 30, resetsAt: Math.floor(now / 1000) + 86_400 }, tiers: [], plan: "max", capturedAt: Math.floor(now / 1000) },
+          provenance: { source: "cache", reason: "oauth-rate-limited", staleSince: null, retryAt: new Date(now + 15 * 60_000).toISOString() },
+          retryAt: now + 15 * 60_000,
+          consecutive429s: 4,
+        },
+      },
+      codex: {},
+    },
+  }));
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier([
+    { limit_type: "nimbus_quill", name: "Fable" },
+  ]))) as unknown as typeof fetch);
+  try {
+    const payload = await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(payload.claude?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+    expect(payload.provenance.claude.source).toBe("live");
+    // The entry the new parser wrote carries its generation, so the next read
+    // rests on the backoff again rather than going live every poll.
+    const disk = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { engines: { claude: Record<string, { parser?: number }> } };
+    expect(disk.engines.claude.default.parser).toBe(2);
   } finally { request.mockRestore(); resetLimitsCache(); }
 });

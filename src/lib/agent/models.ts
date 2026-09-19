@@ -102,12 +102,19 @@ export function claudeSpawnTier(model: string | null | undefined): string | null
 
 const CLAUDE_TIER_DISPLAY: Record<string, string> = { fable: "Fable", mythos: "Mythos", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
 
-/** Display name of a provider tier bucket (`opus` → "Opus"); unknown tiers
-    are capitalised as spelled so a new bucket still reads as a name. */
-export function claudeTierDisplayName(tier: string): string {
+/** Display name of a provider tier bucket. The provider's own label wins when
+    it sends one (issue #1839): several of its buckets are filed under codenames
+    like `nimbus_quill`, and a codename is never what the operator reads while a
+    human label exists. Without a label, a known tier key renders as its name
+    (`opus` → "Opus") and any other key is spelled out word by word, so a bucket
+    nobody has seen yet still reads as a name. */
+export function claudeTierDisplayName(tier: string, label?: string | null): string {
+  const named = label?.trim();
+  if (named) return named;
   const key = tier.trim().toLowerCase();
   if (CLAUDE_TIER_DISPLAY[key]) return CLAUDE_TIER_DISPLAY[key];
-  return key ? key.charAt(0).toUpperCase() + key.slice(1) : tier;
+  if (!key) return tier;
+  return key.split(/[-_\s]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }
 
 /** True when a model id is a valid codex launch model: a `gpt-*` id, printable

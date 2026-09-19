@@ -1,0 +1,88 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-codename",
+  "values": "invented",
+  "footer": {
+    "text": "System\nClaude\nmax\n12%\nAccount A\n5h\nleft 88%\nreset in 2h · 14:02\nWeek\nleft 70%\nreset in 5d · Sep 23 16:02\nCedar Ember · Week\nleft 37%\nreset in 5d · Sep 23 16:02\nFable · Week\nleft 12%\nreset in 5d · Sep 23 16:02\nCodex\n65%\nAccount B\n5h\nleft 65%\nreset in 4h · 15:22\nTelegram\nNot connected"
+  },
+  "desktop": {
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "rows": [
+      {
+        "key": "session",
+        "text": "5h88%left· reset in 2h · 14:02",
+        "width": 354
+      },
+      {
+        "key": "weekly",
+        "text": "Week70%left· reset in 5d · Sep 23 16:02",
+        "width": 354
+      },
+      {
+        "key": "tier:cedar_ember",
+        "text": "Cedar Ember · Week37%left· reset in 5d · Sep 23 16:02",
+        "width": 354
+      },
+      {
+        "key": "tier:nimbus_quill",
+        "text": "Fable · Week12%left· reset in 5d · Sep 23 16:02",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h82%left· reset in 3h · 14:52",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h59%left· reset in 3h · 14:07",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h0%left· reset in 80m · 13:22",
+        "width": 354
+      }
+    ],
+    "overflow": 0,
+    "pageErrors": []
+  },
+  "phone": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "rows": [
+      {
+        "key": "session",
+        "text": "5h88% leftreset in 2h · 14:02",
+        "width": 342
+      },
+      {
+        "key": "weekly",
+        "text": "Week70% leftreset in 5d · Sep 23 16:02",
+        "width": 342
+      },
+      {
+        "key": "tier:cedar_ember",
+        "text": "Cedar Ember · Week37% leftreset in 5d · Sep 23 16:02",
+        "width": 342
+      },
+      {
+        "key": "tier:nimbus_quill",
+        "text": "Fable · Week12% leftreset in 5d · Sep 23 16:02",
+        "width": 342
+      },
+      {
+        "key": "session",
+        "text": "5h65% leftreset in 4h · 15:22",
+        "width": 342
+      }
+    ],
+    "overflow": 0,
+    "pageErrors": []
+  }
+}
