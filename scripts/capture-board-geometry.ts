@@ -1177,7 +1177,8 @@ async function headerMain(): Promise<void> {
             return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows };
           });
           await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-more.png`), clip: { x: Math.max(0, menu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, menu.rect.x - 40), menu.rect.w + 80), height: menu.rect.y + menu.rect.h + 16 } });
-          must(menu.rows.length >= 6, `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
+          /* Message search, mute, levels, undo, redo; archive and delete join them only while nothing runs. */
+          must(menu.rows.length >= 5, `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
           must(menu.rect.x + menu.rect.w <= width, `${tag}: the ⋯ menu runs off the right edge`);
           await page.keyboard.press("Escape");
           if (width === 1280) {
