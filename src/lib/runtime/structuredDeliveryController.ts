@@ -8,6 +8,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -1426,13 +1427,21 @@ export interface DemotionInterruptionOptions {
       obligation's identity. */
   boundary?: string;
   store?: InterruptionObligationStore;
-  /** The orchestrator seat a conversation holds, if any. */
-  seatFor?: (conversationId: ViewerConversationId) => Promise<{ project: string; seatEpoch: number } | null>;
+  /** The active orchestrator seats. Defaults to the durable seat file. */
+  seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
 }
 
-async function orchestratorSeatFor(conversationId: ViewerConversationId): Promise<{ project: string; seatEpoch: number } | null> {
-  const { activeOrchestratorSeats } = await import("@/lib/orchestrator/seats");
-  const seat = activeOrchestratorSeats().find((candidate) => candidate.conversationId === conversationId);
+/** The seat holding `conversationId`. A seat may still name an alias of the
+    conversation after a migration or rebind, so both sides are compared
+    canonically, as the successor's discharge check compares them. */
+async function orchestratorSeatFor(
+  registry: AgentRegistry,
+  conversationId: ViewerConversationId,
+  seats: DemotionInterruptionOptions["seats"],
+): Promise<{ project: string; seatEpoch: number } | null> {
+  const active = seats ? seats() : (await import("@/lib/orchestrator/seats")).activeOrchestratorSeats();
+  const seat = active.find((candidate) => candidate.conversationId?.startsWith("conversation_")
+    && registry.canonicalConversationId(candidate.conversationId as ViewerConversationId) === conversationId);
   return seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null;
 }
 
@@ -1463,7 +1472,7 @@ export async function recordDemotionInterruption(
   const transcript = await readTranscriptEvidence(conversation.engine, generation.path).catch(() => null);
   let seat: { project: string; seatEpoch: number } | null = null;
   try {
-    seat = await (options.seatFor ?? orchestratorSeatFor)(conversationId);
+    seat = await orchestratorSeatFor(registry, conversationId, options.seats);
   } catch (error) {
     console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
   }
@@ -1511,20 +1520,22 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   const registry = state.activeRegistry;
   const recordFailures: unknown[] = [];
   const unrecorded = new Set<string>();
-  await Promise.all(registrations.map(async ({ key, host }) => {
-    const current = await host.health();
-    if ((current.status !== "active" && current.status !== "attention")
-      || current.pid === null
-      || current.processStartIdentity === null) return;
-    if (!registry?.markStructuredHostHandoff(
-      key,
-      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+  /* Settled, not raced: one host whose health, handoff or record fails must
+     not end the demotion while the others' records are still being written. */
+  await Promise.allSettled(registrations.map(async ({ key, host }) => {
     try {
+      const current = await host.health();
+      if ((current.status !== "active" && current.status !== "attention")
+        || current.pid === null
+        || current.processStartIdentity === null) return;
+      if (!registry?.markStructuredHostHandoff(
+        key,
+        captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+      )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
       await recordDemotionInterruption(registry, key, current, options);
     } catch (error) {
       unrecorded.add(sessionKeyId(key));
-      console.error("[viewer release] interrupted turn could not be recorded; leaving its host running", {
+      console.error("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
         hostKey: sessionKeyId(key), error,
       });
       recordFailures.push(error);

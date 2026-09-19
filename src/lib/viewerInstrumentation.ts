@@ -754,11 +754,8 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
-    const { releaseUnpublishedStartupHostsForDemotion } = await import("@/lib/runtime/startup");
-    const boundary = viewerReleaseBoundary();
-    await releaseUnpublishedStartupHostsForDemotion({ boundary });
-    const { releaseStructuredDeliveryHostsForDemotion } = await import("@/lib/runtime/structuredDeliveryController");
-    await releaseStructuredDeliveryHostsForDemotion({ boundary });
+    const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
+    await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
   await activateViewerRuntimeWhenCurrent(async () => {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);

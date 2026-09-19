@@ -16,8 +16,17 @@ import type { RuntimeHostClient } from "./client";
 import type { HostState } from "./engineHost";
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import type { StructuredHostAdoptionFilter } from "./registry";
-import { adoptStructuredHostsAtStartup, releaseUnpublishedStartupHostsForDemotion } from "./startup";
-import { bindStructuredDeliveryQueue, releaseStructuredDeliveryHostsForDemotion } from "./structuredDeliveryController";
+import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import {
+  adoptStructuredHostsAtStartup,
+  releaseStructuredHostsForViewerDemotion,
+  releaseUnpublishedStartupHostsForDemotion,
+} from "./startup";
+import {
+  bindStructuredDeliveryQueue,
+  recordDemotionInterruption,
+  releaseStructuredDeliveryHostsForDemotion,
+} from "./structuredDeliveryController";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 
 /*
@@ -241,6 +250,8 @@ async function successorBoot(
     viewer?: ProcessIdentity;
     /** Runs inside adoption, after the rows are claimed. */
     duringAdoption?: (registry: AgentRegistry) => Promise<void>;
+    /** Read on every health probe of an adopted host: true makes it reject. */
+    healthFails?: () => boolean;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = new AgentRegistry(registryFile);
@@ -266,17 +277,23 @@ async function successorBoot(
         activeTurnRef: surviving?.activeTurnRef ?? null,
       }, surviving ? "live" : "idle", claimed.claimOwner, claimed.claimEpoch)) return [];
       adopted.push(`${engine}:${entry.key.sessionId}`);
-      return [{
-        key: entry.key,
-        host: hostFor(ledger, surviving
-          ? {
-            status: "active",
-            pid: surviving.process.pid,
-            processStartIdentity: surviving.process.startIdentity,
-            activeTurnRef: surviving.activeTurnRef,
-          }
-          : undefined) as never,
-      }];
+      const host = hostFor(ledger, surviving
+        ? {
+          status: "active",
+          pid: surviving.process.pid,
+          processStartIdentity: surviving.process.startIdentity,
+          activeTurnRef: surviving.activeTurnRef,
+        }
+        : undefined);
+      const healthFails = options.healthFails;
+      if (healthFails) {
+        const health = host.health.bind(host);
+        host.health = async () => {
+          if (healthFails()) throw new Error("engine host stopped answering health probes");
+          return await health();
+        };
+      }
+      return [{ key: entry.key, host: host as never }];
     });
   };
   const adoptThenRun = async (
@@ -755,7 +772,7 @@ test("a seat cut by the deploy it requested resumes once with the deployment con
     }], { registry, client: journalClient(journal) });
     let exitCode = null as number | null;
     await completeViewerReleaseDemotion(async () => {}, (code) => { exitCode = code; }, () => {}, () =>
-      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:seat-deploy", seatFor: async () => ({ project: seat.project, seatEpoch: seat.seatEpoch }) }));
+      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:seat-deploy", seats: () => [seat] }));
     expect(exitCode).toBe(0);
     await bindStructuredDeliveryQueue([], { registry, client: null });
 
@@ -791,7 +808,7 @@ test("a seat rotated before the successor adopts it is owed nothing", async () =
       }) as never,
     }], { registry, client: journalClient(journal) });
     await completeViewerReleaseDemotion(async () => {}, () => {}, () => {}, () =>
-      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:rotation", seatFor: async () => ({ project: seat.project, seatEpoch: seat.seatEpoch }) }));
+      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:rotation", seats: () => [seat] }));
     await bindStructuredDeliveryQueue([], { registry, client: null });
 
     const rotated: OrchestratorSeat = { ...seat, seatEpoch: 4, conversationId: "conversation_00000000-0000-4000-8000-00000000rota" };
@@ -802,4 +819,186 @@ test("a seat rotated before the successor adopts it is owed nothing", async () =
   } finally {
     journal.close();
   }
+});
+
+function obligationsFor(registryFile: string) {
+  return interruptionObligationStore(interruptionObligationDirectory(registryFile)).list();
+}
+
+test("an unpublished host the release cannot hand over still lets the published hosts record their cuts and resume once", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const unpublished = incumbentConversation("codex", cutSessionId(14), deadEngine(2_000_001_114));
+    const published = incumbentConversation("claude", cutSessionId(15), deadEngine(2_000_001_115));
+    /* Startup adopts the Codex row onto an engine still mid-turn and fails
+       before publishing it; that host then stops answering health probes. */
+    let unhealthy = false;
+    const retrying = await successorBoot(unpublished.registryFile, journal, createFakeDeliveryLedger(), {
+      claudeAdoptionFails: true,
+      viewer: { pid: 2_000_001_002, startIdentity: "retrying-viewer" },
+      survivingEngine: { process: deadEngine(2_000_001_214), activeTurnRef: "turn-on-unpublished-host" },
+      healthFails: () => unhealthy,
+    });
+    expect(retrying.adopted).toEqual([unpublished.hostKey]);
+    unhealthy = true;
+
+    const registry = new AgentRegistry(published.registryFile);
+    const released: string[] = [];
+    await bindStructuredDeliveryQueue([{
+      key: { engine: "claude", sessionId: published.sessionId },
+      host: hostFor(createFakeDeliveryLedger(), {
+        status: "active", pid: 2_000_001_115, processStartIdentity: "engine-2000001115", activeTurnRef: CUT_TURN,
+      }, async () => { released.push(published.hostKey); }) as never,
+    }], { registry, client: journalClient(journal) });
+    setAgentRegistryForTests(registry);
+    const exitCodes: number[] = [];
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await completeViewerReleaseDemotion(async () => {}, (code) => { exitCodes.push(code); }, () => {}, () =>
+        releaseStructuredHostsForViewerDemotion({ boundary: "viewer-release:partial-cleanup" }));
+    } finally {
+      logged.mockRestore();
+      setAgentRegistryForTests(null);
+    }
+    expect(exitCodes).toEqual([1]);
+    expect(released).toEqual([published.hostKey]);
+    expect(obligationsFor(published.registryFile).map((obligation) => obligation.conversationId))
+      .toEqual([published.conversationId]);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    /* The successor boots in this same test process, where the unpublished
+       handle is still retained; the probe answers again so it only sees it as
+       a host that outlived its Viewer. */
+    unhealthy = false;
+
+    const ledger = createFakeDeliveryLedger();
+    const successor = await successorBoot(published.registryFile, journal, ledger);
+    expect(successor.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    const continuations = continuationsIn(ledger).filter((text) => text.includes("deployment interrupted"));
+    expect(continuations).toHaveLength(1);
+    expectDeploymentContinuation(continuations[0]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("one published host failing its health probe does not cut short the other hosts' records", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const failing = incumbentConversation("codex", cutSessionId(16), deadEngine(2_000_001_116));
+    const recorded = incumbentConversation("claude", cutSessionId(17), deadEngine(2_000_001_117));
+    const registry = new AgentRegistry(recorded.registryFile);
+    const released: string[] = [];
+    const brokenHost = hostFor(createFakeDeliveryLedger(), {}, async () => { released.push(failing.hostKey); });
+    let unhealthy = false;
+    const brokenHealth = brokenHost.health.bind(brokenHost);
+    brokenHost.health = async () => {
+      if (unhealthy) throw new Error("engine host stopped answering health probes");
+      return await brokenHealth();
+    };
+    const slowHost = hostFor(createFakeDeliveryLedger(), {
+      status: "active", pid: 2_000_001_117, processStartIdentity: "engine-2000001117", activeTurnRef: CUT_TURN,
+    }, async () => { released.push(recorded.hostKey); });
+    const slowHealth = slowHost.health.bind(slowHost);
+    slowHost.health = async () => {
+      await Bun.sleep(40);
+      return await slowHealth();
+    };
+    await bindStructuredDeliveryQueue([
+      { key: { engine: "codex", sessionId: failing.sessionId }, host: brokenHost as never },
+      { key: { engine: "claude", sessionId: recorded.sessionId }, host: slowHost as never },
+    ], { registry, client: journalClient(journal) });
+    unhealthy = true;
+
+    let failure: unknown = null;
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:one-unhealthy" });
+    } catch (error) {
+      failure = error;
+    } finally {
+      logged.mockRestore();
+    }
+    /* Read the moment the release reports: the process exits right after. */
+    const onDisk = obligationsFor(recorded.registryFile).map((obligation) => obligation.conversationId);
+    expect(failure).not.toBeNull();
+    expect(onDisk).toEqual([recorded.conversationId]);
+    expect(released).toEqual([recorded.hostKey]);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+
+    const ledger = createFakeDeliveryLedger();
+    const successor = await successorBoot(recorded.registryFile, journal, ledger);
+    expect(successor.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    const continuations = continuationsIn(ledger).filter((text) => text.includes("deployment interrupted"));
+    expect(continuations).toHaveLength(1);
+    expectDeploymentContinuation(continuations[0]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a submitted continuation whose reservation was compacted away is resolved, and no later boot sends it again", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(18), deadEngine(2_000_001_118));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_118));
+    const ledger = createFakeDeliveryLedger();
+    const first = await successorBoot(cut.registryFile, journal, ledger);
+    expect(first.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    const [submitted] = obligationsFor(cut.registryFile);
+    expect(submitted?.state).toBe("submitted");
+    await bindStructuredDeliveryQueue([], { registry: new AgentRegistry(cut.registryFile), client: null });
+
+    /* Later sends push the settled reservation out of the per-conversation
+       window, and compaction drops it. */
+    const registry = new AgentRegistry(cut.registryFile) as unknown as {
+      mutate<T>(fn: (file: { heldDeliveries: Record<string, { clientMessageId: string | null }> }) => T): T;
+    };
+    registry.mutate((file) => {
+      for (const [id, delivery] of Object.entries(file.heldDeliveries)) {
+        if (delivery.clientMessageId === submitted!.id) delete file.heldDeliveries[id];
+      }
+    });
+
+    const again = createFakeDeliveryLedger();
+    const next = await successorBoot(cut.registryFile, journal, again);
+    expect(next.error).toBeNull();
+    await settle(() => again.writes.length > 0, 150);
+    expect(again.writes).toEqual([]);
+    expect(obligationsFor(cut.registryFile)[0]).toMatchObject({ id: submitted!.id, state: "delivered" });
+  } finally {
+    journal.close();
+  }
+});
+
+test("a seat that names an alias of the cut conversation is recorded on the obligation", async () => {
+  const cut = incumbentConversation("claude", cutSessionId(19), deadEngine(2_000_001_119));
+  const alias = ["conversation_18350000", "0000", "4000", "8000", "0000000alias"].join("-") as `conversation_${string}`;
+  const registry = new AgentRegistry(cut.registryFile);
+  (registry as unknown as {
+    mutate<T>(fn: (file: { conversationAliases: Record<string, string> }) => T): T;
+  }).mutate((file) => { file.conversationAliases[alias] = cut.conversationId; });
+  expect(registry.canonicalConversationId(alias)).toBe(cut.conversationId);
+
+  await recordDemotionInterruption(registry, { engine: "claude", sessionId: cut.sessionId }, {
+    status: "active",
+    sessionKey: "fake",
+    endpoint: "fake:host",
+    pid: 2_000_001_119,
+    processStartIdentity: "engine-2000001119",
+    eventCursor: 0,
+    protocolVersion: "test",
+    activeTurnRef: CUT_TURN,
+    pendingAttention: [],
+    activeFlags: [],
+    account: null,
+  }, {
+    boundary: "viewer-release:aliased-seat",
+    seats: () => [{ project: "seat-aliased", seatEpoch: 5, conversationId: alias }],
+  });
+  expect(obligationsFor(cut.registryFile).map((obligation) => obligation.seat))
+    .toEqual([{ project: "seat-aliased", seatEpoch: 5 }]);
 });

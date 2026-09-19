@@ -30,6 +30,7 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   recordDemotionInterruption,
+  releaseStructuredDeliveryHostsForDemotion,
   type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -397,6 +398,49 @@ function interruptionObligationDischarge(
   const newerAdmitted = (admittedMessages.get(conversationId) ?? []).some((message) =>
     message.idempotencyKey !== obligation.id && message.at > recordedAt);
   return newerHeld || newerAdmitted ? "a newer message already resumed the conversation" : null;
+}
+
+/**
+ * Settles each `submitted` obligation from the delivery its continuation was
+ * admitted as: arrival or refusal of that reservation is the obligation's own.
+ *
+ * The queue reports a first admission as queued; nothing in that send comes
+ * back to say it arrived, so a later boot is where it is read. A reservation
+ * whose row is gone was compacted after it settled — compaction drops only
+ * settled rows — so the continuation went out and is never sent again: a
+ * replay under its key would find no reservation to answer it and mint a
+ * second one. Returns what stays unresolved.
+ */
+function settleSubmittedInterruptionObligations(
+  registry: AgentRegistry,
+  store: InterruptionObligationStore,
+  obligations: readonly InterruptionObligation[],
+): InterruptionObligation[] {
+  const snapshot = registry.readOnlySnapshot();
+  const unresolved: InterruptionObligation[] = [];
+  for (const obligation of obligations) {
+    if (obligation.state !== "submitted") {
+      unresolved.push(obligation);
+      continue;
+    }
+    const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
+      delivery.clientMessageId === obligation.id
+        && registry.canonicalConversationId(delivery.conversationId)
+          === registry.canonicalConversationId(obligation.conversationId));
+    const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;
+    const settled = reservation
+      ? reservation.state === "delivered" || reservation.state === "failed" ? reservation.state : null
+      : owner?.terminalState ?? "delivered";
+    if (settled === null) {
+      unresolved.push(obligation);
+      continue;
+    }
+    const resolution = settled === "failed"
+      ? reservation?.error || owner?.terminalReason || "the continuation delivery failed"
+      : reservation || owner ? "delivered" : "delivered; its settled reservation was compacted";
+    store.update(obligation.id, { state: settled, resolvedAt: new Date().toISOString(), resolution });
+  }
+  return unresolved;
 }
 
 function dischargeInterruptionObligations(
@@ -1139,7 +1183,11 @@ export async function adoptStructuredHostsAtStartup(
     /* Every unresolved obligation keeps its row out of the generic Codex nudge
        and out of dead-wrapper cleanup, including one this pass discharges: a
        turn somebody else already resumed is owed nothing more by anyone. */
-    const unresolvedInterruptions = interruptions.list().filter(interruptionObligationUnresolved);
+    const unresolvedInterruptions = settleSubmittedInterruptionObligations(
+      registry,
+      interruptions,
+      interruptions.list().filter(interruptionObligationUnresolved),
+    );
     const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
     let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
@@ -1158,6 +1206,9 @@ export async function adoptStructuredHostsAtStartup(
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || deferredHostKeys.has(sessionKeyId(entry.key)));
     const signals = await structuredStartupSignals(registry, client);
+    /* Only a continuation not yet admitted forces its row's adoption. One the
+       queue holds is pending work of its own, which makes the row eligible for
+       as long as it stays unsettled. */
     interruptedHostKeys = new Set(dischargeInterruptionObligations(
       registry,
       interruptions,
@@ -1165,7 +1216,7 @@ export async function adoptStructuredHostsAtStartup(
       orchestratorSeats(),
       signals.admittedMessages,
       pipelineEvidence.settled,
-    ).map((obligation) => obligation.hostKey));
+    ).filter((obligation) => obligation.state === "owed").map((obligation) => obligation.hostKey));
     const eligible = await structuredStartupAdoptionFilter(
       registry,
       signals,
@@ -1596,4 +1647,24 @@ export async function releaseUnpublishedStartupHostsForDemotion(
   retryAdoptedHosts = retryAdoptedHosts.filter(kept);
   const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
   if (failures.length) throw new AggregateError(failures, "unpublished startup hosts did not quiesce");
+}
+
+/** Every structured host this Viewer holds crosses the release boundary:
+ * the ones startup adopted but had not published, then the published ones.
+ * Both steps always run. A host the first step could not hand over must not
+ * keep the published hosts from recording what they are owed and being
+ * released — left running, the successor's adoption would end their engines
+ * as orphans with no obligation on record (#1835). */
+export async function releaseStructuredHostsForViewerDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of [releaseUnpublishedStartupHostsForDemotion, releaseStructuredDeliveryHostsForDemotion]) {
+    try {
+      await step(options);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "structured hosts did not all cross the release boundary");
 }
