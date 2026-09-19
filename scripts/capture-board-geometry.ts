@@ -2115,11 +2115,16 @@ async function accountRemovalMain(): Promise<void> {
       let next: Answer | null = null;
       let hold: Promise<void> | null = null;
       const deletes: unknown[] = [];
+      /* A poll still in flight when the context closes is dropped, not raised. */
       await context.route("**/api/accounts", async (route) => {
-        const response = await route.fetch();
-        const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
-        if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
-        await route.fulfill({ response, json: body });
+        try {
+          const response = await route.fetch();
+          const body = await response.json() as { claude?: { accounts?: { id: string }[] } };
+          if (body.claude?.accounts) body.claude.accounts = body.claude.accounts.filter((account) => !gone.has(account.id));
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
       });
       await context.route("**/api/accounts/claude", async (route) => {
         if (route.request().method() !== "DELETE") return route.continue();
