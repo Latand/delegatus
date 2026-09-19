@@ -12,7 +12,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 type ViewerConversationId = import("@/lib/accounts/migration/contracts").ViewerConversationId;
 const { procBackend } = await import("@/lib/proc");
-const { AccountHistoryInventoryBlockedError, accountRemovalBlockers, cleanupAccountProviderSidecars, removeHistoryFreeAccountHome } = await import("./removal");
+const { AccountHistoryInventoryBlockedError, accountRemovalBlockers, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, removeHistoryFreeAccountHome, withAccountRemovalJournal } = await import("./removal");
 const { terminalizeStaleUndeliverableHeldDeliveries } = await import("@/lib/reaperRuntime");
 
 type Registry = InstanceType<typeof AgentRegistry>;
@@ -583,4 +583,17 @@ test("a committed migration leaves its conversation removable", () => {
   });
 
   expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
+});
+
+test("a retiring journal record keeps the path moves recovery redoes, and rejects malformed ones (issue #1857)", () => {
+  const moves = [{ from: "/accounts/work", to: "/shared/codex/retired/work" }];
+  const entries = withAccountRemovalJournal([], "work", "retiring", moves);
+  const valid = (id: string) => id === "work";
+
+  expect(normalizeAccountRemovalJournal(JSON.parse(JSON.stringify(entries)), valid)).toEqual([
+    { id: "work", phase: "retiring", startedAt: entries[0]!.startedAt, rewrites: moves },
+  ]);
+  expect(withAccountRemovalJournal(entries, "work", "scrubbing")).toEqual([{ id: "work", phase: "scrubbing", startedAt: entries[0]!.startedAt }]);
+  expect(normalizeAccountRemovalJournal([{ ...entries[0], rewrites: [{ from: "relative", to: "/shared" }] }], valid)).toBeNull();
+  expect(normalizeAccountRemovalJournal([{ ...entries[0], rewrites: "nope" }], valid)).toBeNull();
 });

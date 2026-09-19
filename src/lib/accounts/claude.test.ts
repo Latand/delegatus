@@ -570,7 +570,7 @@ async function crashRemovalAt(accountId: string, checkpoint: string): Promise<vo
   expect(child.signalCode).toBe("SIGKILL");
 }
 
-for (const checkpoint of ["journaled", "renamed", "registry-retired"] as const) {
+for (const checkpoint of ["journaled", "renamed"] as const) {
   test(`a Viewer killed after the removal step "${checkpoint}" gets its home back on recovery`, async () => {
     const fixture = usedClaudeHome(`Invented Crash ${checkpoint}`);
     await crashRemovalAt(fixture.account.id, checkpoint);
@@ -584,6 +584,75 @@ for (const checkpoint of ["journaled", "renamed", "registry-retired"] as const) 
     expect(fs.existsSync(fixture.account.home)).toBe(false);
   });
 }
+
+/** Everything retireAccount settles: a pin, an owed delivery, a parked
+    migration, and the engine default naming the account. */
+function strandOnAccount(fixture: ReturnType<typeof usedClaudeHome>) {
+  const store = agentRegistry();
+  store.setConversationMigration(fixture.conversation.id, {
+    intentId: "intent-parked",
+    phase: "failed-recoverable",
+    targetId: "default",
+    revision: 1,
+    error: "successor never verified",
+    updatedAt: new Date().toISOString(),
+  });
+  const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
+  store.setEngineRouting("claude", fixture.account.id);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.conversations[fixture.conversation.id].pinnedAccountId = fixture.account.id;
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  return delivery;
+}
+
+test("a Viewer killed after the agent registry retired the account completes the removal on recovery", async () => {
+  const fixture = usedClaudeHome("Invented Crash retired");
+  const delivery = strandOnAccount(fixture);
+  await crashRemovalAt(fixture.account.id, "registry-retired");
+  expect(readRegistryJson().removals).toHaveLength(1);
+
+  expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  // The retirement the crash interrupted is finished, never half undone.
+  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+  expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const conversation = snapshot.conversations[fixture.conversation.id]!;
+  expect(conversation.pinnedAccountId ?? null).toBeNull();
+  expect(conversation.migration).toBeNull();
+  expect(snapshot.heldDeliveries[delivery.id]?.state).toBe("failed");
+  expect(snapshot.engineRouting.claude.activeAccountId).toBe("default");
+  expect(readRegistryJson().retired).toEqual([expect.objectContaining({ id: fixture.account.id, archived: true })]);
+  expect(readRegistryJson().removals ?? []).toEqual([]);
+});
+
+test("recovery that is itself killed after re-retiring still completes the removal", async () => {
+  const fixture = usedClaudeHome("Invented Crash twice");
+  const delivery = strandOnAccount(fixture);
+  await crashRemovalAt(fixture.account.id, "registry-retired");
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e", `
+      const removal = await import(${JSON.stringify(path.join(import.meta.dir, "removal.ts"))});
+      removal.setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") process.kill(process.pid, "SIGKILL"); });
+      (await import(${JSON.stringify(path.join(import.meta.dir, "claude.ts"))})).recoverInterruptedClaudeAccountRemovals();
+      process.exit(3);
+    `],
+    env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME! },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  await child.exited;
+  expect(child.signalCode).toBe("SIGKILL");
+
+  expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+  expect(agentRegistry().readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("failed");
+  expect(readRegistryJson().removals ?? []).toEqual([]);
+});
 
 test("a Viewer killed after the accounts registry committed finishes the removal on recovery", async () => {
   const fixture = usedClaudeHome("Invented Crash committed");

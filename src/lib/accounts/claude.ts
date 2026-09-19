@@ -6,7 +6,8 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 import { withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry } from "./removal";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import type { AccountPathRewrite } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
@@ -372,8 +373,21 @@ function claudeArchiveRewrites(home: string, archive: string): Array<{ from: str
   ]);
 }
 
-function writeJournal(id: string, phase: "archiving" | "scrubbing" | null): void {
-  cached = null; const current = mutable(); write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase) });
+function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
+  cached = null; const current = mutable(); write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+}
+
+/** The registry once `id` is removed: it leaves, a retired record points at
+    its archive, and its journal record moves to `scrubbing`. */
+function withAccountRetired(registry: Registry, id: string): Registry {
+  const label = registry.accounts.find((item) => item.id === id)?.label ?? id;
+  return {
+    ...registry,
+    active: registry.active === id ? DEFAULT_ID : registry.active,
+    accounts: registry.accounts.filter((item) => item.id !== id),
+    retired: [...registry.retired.filter((item) => item.id !== id), { id, label, retiredAt: Date.now(), archived: true }],
+    removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
+  };
 }
 
 function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
@@ -381,18 +395,19 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
   const recovered: string[] = []; const unresolved: string[] = [];
   for (const entry of registry.removals) {
     if (accountRemovalInFlight("claude", entry.id)) continue;
-    let settled = false;
+    let settled: "retired" | "restored" | null = null;
     try {
       settled = recoverManagedAccountRemoval({
         engine: "claude",
         accountId: entry.id,
         home: managedHome(entry.id),
-        phase: entry.phase,
+        entry,
         listed: registry.accounts.some((item) => item.id === entry.id),
+        commitRetired: () => { cached = null; write(withAccountRetired(mutable(), entry.id)); },
         clearJournal: () => writeJournal(entry.id, null),
       });
     } catch { /* stays journaled; one stuck record never blocks another account */ }
-    if (settled && entry.phase === "scrubbing") cleanupClaudeSidecars(entry.id);
+    if (settled === "retired") cleanupClaudeSidecars(entry.id);
     (settled ? recovered : unresolved).push(entry.id);
   }
   return { recovered, unresolved };
@@ -437,14 +452,8 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
       unsafeHome: () => new UnsafeClaudeHomeError(),
       rewrites: claudeArchiveRewrites,
       registry: {
-        journal: (phase) => writeJournal(id, phase),
-        commitRetired: () => write({
-          ...before,
-          active: before.active === id ? DEFAULT_ID : before.active,
-          accounts: before.accounts.filter((item) => item.id !== id),
-          retired: [...before.retired.filter((item) => item.id !== id), { id, label: existing.label, retiredAt: Date.now(), archived: true }],
-          removals: withAccountRemovalJournal(before.removals, id, "scrubbing"),
-        }),
+        journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
+        commitRetired: () => write(withAccountRetired(before, id)),
         restore: () => write(before),
       },
     });

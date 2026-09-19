@@ -304,7 +304,7 @@ async function crashCodexRemovalAt(accountId: string, checkpoint: string): Promi
   expect(child.signalCode).toBe("SIGKILL");
 }
 
-for (const checkpoint of ["journaled", "renamed", "registry-retired"] as const) {
+for (const checkpoint of ["journaled", "renamed"] as const) {
   test(`a Codex removal killed after "${checkpoint}" puts the home and its registry paths back`, async () => {
     const fixture = usedCodexHome(`Invented Crash ${checkpoint}`);
     await crashCodexRemovalAt(fixture.account.id, checkpoint);
@@ -320,6 +320,44 @@ for (const checkpoint of ["journaled", "renamed", "registry-retired"] as const) 
     expect(codexRegistryJson().removals ?? []).toEqual([]);
   });
 }
+
+test("a Codex removal killed after the agent registry retired the account completes on recovery", async () => {
+  const fixture = usedCodexHome("Invented Crash retired");
+  const store = agentRegistry();
+  store.setConversationMigration(fixture.conversation.id, {
+    intentId: "intent-parked",
+    phase: "failed-recoverable",
+    targetId: "default",
+    revision: 1,
+    error: "successor never verified",
+    updatedAt: new Date().toISOString(),
+  });
+  const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
+  store.setEngineRouting("codex", fixture.account.id);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.conversations[fixture.conversation.id].pinnedAccountId = fixture.account.id;
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  await crashCodexRemovalAt(fixture.account.id, "registry-retired");
+  expect(codexRegistryJson().removals).toHaveLength(1);
+
+  expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  // The retirement the crash interrupted is finished, never half undone.
+  expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(false);
+  const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+  expect(fs.readFileSync(moved, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const conversation = snapshot.conversations[fixture.conversation.id]!;
+  expect(conversation.generations[0]!.path).toBe(moved);
+  expect(conversation.pinnedAccountId ?? null).toBeNull();
+  expect(conversation.migration).toBeNull();
+  expect(snapshot.heldDeliveries[delivery.id]?.state).toBe("failed");
+  expect(snapshot.engineRouting.codex.activeAccountId).toBe("default");
+  expect(codexRegistryJson().retired).toEqual([expect.objectContaining({ id: fixture.account.id, archived: true })]);
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
+});
 
 test("a Codex removal killed after the accounts registry committed finishes on recovery", async () => {
   const fixture = usedCodexHome("Invented Crash committed");
@@ -338,7 +376,7 @@ test("a Codex removal killed after the accounts registry committed finishes on r
 
 test("the first account listing in a restarted Viewer recovers an interrupted removal", async () => {
   const fixture = usedCodexHome("Invented Restart");
-  await crashCodexRemovalAt(fixture.account.id, "registry-retired");
+  await crashCodexRemovalAt(fixture.account.id, "renamed");
   expect(fs.existsSync(fixture.account.home)).toBe(false);
 
   const restarted = Bun.spawn({

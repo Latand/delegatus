@@ -502,8 +502,20 @@ export function accountRemovalBlockers(
  */
 
 export type AccountRemovalCheckpoint = "journaled" | "renamed" | "registry-retired" | "accounts-committed";
-export type AccountRemovalJournalPhase = "archiving" | "scrubbing";
-export interface AccountRemovalJournalEntry { id: string; phase: AccountRemovalJournalPhase; startedAt: number }
+/** `archiving`: the home may have moved, nothing else did; recovery undoes it.
+    `retiring`: the agent registry may have retired the account; recovery
+    finishes the removal with the journaled path moves, since undoing the
+    paths alone would leave the pins, deliveries and default it settled gone.
+    `scrubbing`: the account left the accounts registry; recovery finishes. */
+export type AccountRemovalJournalPhase = "archiving" | "retiring" | "scrubbing";
+export interface AccountRemovalJournalEntry {
+  id: string;
+  phase: AccountRemovalJournalPhase;
+  startedAt: number;
+  /** The registry path moves, recorded with `retiring` so recovery can
+      redo the retirement after the home is gone. */
+  rewrites?: AccountPathRewrite[];
+}
 
 export interface AccountArchiveRemovalReport extends AccountRetirementReport {
   /** Where the leftovers now live; null when the account had no home on disk. */
@@ -518,7 +530,7 @@ export interface AccountArchiveRemovalReport extends AccountRetirementReport {
 /** The accounts-registry half of a removal, supplied by each engine. */
 export interface AccountRemovalRegistryPort {
   /** Writes or clears (null) this account's journal record. */
-  journal(phase: AccountRemovalJournalPhase | null): void;
+  journal(phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void;
   /** One write: the account leaves, a retired record points at its archive,
       and the journal moves to `scrubbing`. */
   commitRetired(): void;
@@ -728,7 +740,16 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
       reach("renamed");
     }
 
-    /* 4. One agent-registry mutation; it re-checks liveness inside. */
+    /* 4. One agent-registry mutation; it re-checks liveness inside. From
+       here a crash is finished, never undone, so the journal first records
+       the path moves recovery needs to redo it. */
+    try {
+      spec.registry.journal("retiring", rewrites);
+    } catch (error) {
+      putHomeBack();
+      try { spec.registry.journal(null); } catch { /* `archiving` with the home in place: recovery clears it */ }
+      throw error;
+    }
     const registry = agentRegistry();
     const beforeRetirement = registry.readOnlySnapshot();
     let retirement: AccountRetirementReport;
@@ -774,35 +795,57 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
 /**
  * Settles one journaled removal after a crash or a failed step. `archiving`
  * is undone: the home is renamed back and any registry path already moved
- * follows it. `scrubbing` (the account already left the registry) is finished.
- * Returns false while the record needs a person: both the home and the
- * archive exist, or the journal disagrees with the accounts registry.
+ * follows it. `retiring` is finished: the agent-registry retirement is redone
+ * (it is idempotent) and the account leaves the accounts registry, so pins,
+ * deliveries and the engine default it settled never outlive a restored home.
+ * `scrubbing` (the account already left the registry) is finished.
+ * Returns "retired" or "restored" once settled, and null while the record
+ * needs a person: both the home and the archive exist, the journal disagrees
+ * with the accounts registry, or the retirement is refused.
  */
 export function recoverManagedAccountRemoval(input: {
   engine: ManagedAccountEngine;
   accountId: string;
   home: string;
-  phase: AccountRemovalJournalPhase;
+  entry: AccountRemovalJournalEntry;
   listed: boolean;
+  /** The accounts-registry commit of a finished removal: the account leaves,
+      a retired record points at its archive, the journal moves to `scrubbing`. */
+  commitRetired(): void;
   clearJournal(): void;
-}): boolean {
+}): "retired" | "restored" | null {
   const home = path.resolve(input.home);
   const archive = retiredAccountArchive(input.engine, input.accountId);
-  if (input.phase === "scrubbing") {
-    if (!finishArchive(input.engine, archive).complete) return false;
+  const scrub = (): "retired" | null => {
+    if (!finishArchive(input.engine, archive).complete) return null;
     input.clearJournal();
-    return true;
-  }
+    return "retired";
+  };
+  if (input.entry.phase === "scrubbing") return scrub();
   const homeExists = lstatOrNull(home) !== null;
   const archiveExists = lstatOrNull(archive) !== null;
-  if (homeExists && archiveExists) return false;
+  if (homeExists && archiveExists) return null;
+  if (input.entry.phase === "retiring") {
+    /* A home in place means the failed step already undid the retirement. */
+    if (homeExists) { input.clearJournal(); return "restored"; }
+    if (!input.listed) return scrub();
+    try {
+      agentRegistry().retireAccount(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
+    } catch {
+      return null;
+    }
+    reach("registry-retired");
+    input.commitRetired();
+    reach("accounts-committed");
+    return scrub();
+  }
   if (!homeExists && archiveExists) {
-    if (!input.listed) return false;
+    if (!input.listed) return null;
     fs.renameSync(archive, home);
     agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
   }
   input.clearJournal();
-  return true;
+  return "restored";
 }
 
 export function normalizeAccountRemovalJournal(value: unknown, validId: (id: string) => boolean): AccountRemovalJournalEntry[] | null {
@@ -811,9 +854,19 @@ export function normalizeAccountRemovalJournal(value: unknown, validId: (id: str
   const entries: AccountRemovalJournalEntry[] = [];
   for (const item of value) {
     const entry = item as Partial<AccountRemovalJournalEntry> | null;
-    if (!entry || typeof entry.id !== "string" || !validId(entry.id) || (entry.phase !== "archiving" && entry.phase !== "scrubbing") || typeof entry.startedAt !== "number") return null;
+    if (!entry || typeof entry.id !== "string" || !validId(entry.id) || (entry.phase !== "archiving" && entry.phase !== "retiring" && entry.phase !== "scrubbing") || typeof entry.startedAt !== "number") return null;
     if (entries.some((existing) => existing.id === entry.id)) return null;
-    entries.push({ id: entry.id, phase: entry.phase, startedAt: entry.startedAt });
+    let rewrites: AccountPathRewrite[] | undefined;
+    if (entry.rewrites !== undefined) {
+      if (!Array.isArray(entry.rewrites)) return null;
+      rewrites = [];
+      for (const move of entry.rewrites as unknown[]) {
+        const { from, to } = (move ?? {}) as Partial<AccountPathRewrite>;
+        if (typeof from !== "string" || typeof to !== "string" || !path.isAbsolute(from) || !path.isAbsolute(to)) return null;
+        rewrites.push({ from, to });
+      }
+    }
+    entries.push({ id: entry.id, phase: entry.phase, startedAt: entry.startedAt, ...(rewrites ? { rewrites } : {}) });
   }
   return entries;
 }
@@ -822,11 +875,12 @@ export function withAccountRemovalJournal(
   entries: readonly AccountRemovalJournalEntry[],
   accountId: string,
   phase: AccountRemovalJournalPhase | null,
+  rewrites?: readonly AccountPathRewrite[],
 ): AccountRemovalJournalEntry[] {
   const others = entries.filter((entry) => entry.id !== accountId);
   if (!phase) return others;
   const startedAt = entries.find((entry) => entry.id === accountId)?.startedAt ?? Date.now();
-  return [...others, { id: accountId, phase, startedAt }];
+  return [...others, { id: accountId, phase, startedAt, ...(rewrites ? { rewrites: rewrites.map(({ from, to }) => ({ from, to })) } : {}) }];
 }
 
 /** The DELETE answer: what moved, so the dialog can say it (issue #1857). */

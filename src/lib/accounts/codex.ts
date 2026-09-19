@@ -5,7 +5,8 @@ import path from "node:path";
 import { stateDir, statePath } from "@/lib/configDir";
 import { isShellCommand } from "@/lib/status";
 import { withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry } from "./removal";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retiredAccountArchive, scrubAccountHomeToRetainedHistory, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import type { AccountPathRewrite } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
@@ -468,10 +469,23 @@ function historyFitsRetainedSessions(report: AccountHistoryInventoryReport): boo
   return report.artifacts.filter((artifact) => artifact.history).every((artifact) => artifact.path.startsWith(`sessions${path.sep}`));
 }
 
-function writeJournal(id: string, phase: "archiving" | "scrubbing" | null): void {
+function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
   cached = null;
   const current = mutableRegistry();
-  writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase) });
+  writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+}
+
+/** The registry once `id` is removed: it leaves, a retired record points at
+    its archive, and its journal record moves to `scrubbing`. */
+function withAccountRetired(registry: Registry, id: string): Registry {
+  const label = registry.accounts.find((account) => account.id === id)?.label ?? id;
+  return {
+    ...registry,
+    active: registry.active === id ? DEFAULT_ID : registry.active,
+    accounts: registry.accounts.filter((account) => account.id !== id),
+    retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: Date.now(), archived: true }],
+    removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
+  };
 }
 
 function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
@@ -481,14 +495,18 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
   const unresolved: string[] = [];
   for (const entry of registry.removals) {
     if (accountRemovalInFlight("codex", entry.id)) continue;
-    let settled = false;
+    let settled: "retired" | "restored" | null = null;
     try {
       settled = recoverManagedAccountRemoval({
         engine: "codex",
         accountId: entry.id,
         home: managedHome(entry.id),
-        phase: entry.phase,
+        entry,
         listed: registry.accounts.some((account) => account.id === entry.id),
+        commitRetired: () => {
+          cached = null;
+          writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
+        },
         clearJournal: () => writeJournal(entry.id, null),
       });
     } catch {
@@ -551,14 +569,8 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
         return spellings.map((spelling) => ({ from: spelling, to: archive }));
       },
       registry: {
-        journal: (phase) => writeJournal(id, phase),
-        commitRetired: () => writeRegistry({
-          ...before,
-          active: before.active === id ? DEFAULT_ID : before.active,
-          accounts: before.accounts.filter((account) => account.id !== id),
-          retired: [...before.retired.filter((account) => account.id !== id), { id, label: existing.label, retiredAt: Date.now(), archived: true }],
-          removals: withAccountRemovalJournal(before.removals, id, "scrubbing"),
-        }),
+        journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
+        commitRetired: () => writeRegistry(withAccountRetired(before, id)),
         restore: () => writeRegistry(before),
       },
     });
