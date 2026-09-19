@@ -84,6 +84,11 @@ export interface OrchestratorSeat {
   runtimeIdentityFrozen?: boolean;
   /** The mandate text delivered (active) or to be delivered (pending). */
   mandate: string;
+  /** The role table (#1880) rendered from the live registry when this intent
+      began. A pending replay delivers it instead of rendering again, so a role
+      edited in between cannot change the text its first attempt sent. Absent
+      on intents recorded before tables existed. */
+  roleTable?: string | null;
   /** Version of the approved default prompt the mandate was based on; null
       when the designation predates versioning or the mandate is bespoke. */
   promptVersion: number | null;
@@ -228,6 +233,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     model,
     runtimeIdentityFrozen,
     mandate: seat.mandate,
+    ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
     promptVersion: typeof seat.promptVersion === "number" && Number.isInteger(seat.promptVersion) ? seat.promptVersion : null,
     predecessorConversationId: typeof seat.predecessorConversationId === "string" ? seat.predecessorConversationId : null,
     triggeredBy: normalizeSeatTrigger(seat.triggeredBy),
@@ -509,6 +515,8 @@ export type BeginSeatIntentResult =
 export function beginOrchestratorSeatIntent(input: {
   project: string;
   mandate: string;
+  /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
+  roleTable?: string | null;
   clientRequestId: string;
   mode: "spawn" | "existing";
   conversationId?: string | null;
@@ -561,6 +569,7 @@ export function beginOrchestratorSeatIntent(input: {
       model: input.model?.trim() || null,
       runtimeIdentityFrozen: Boolean(input.engine?.trim() && input.model?.trim()),
       mandate: input.mandate,
+      ...(typeof input.roleTable === "string" ? { roleTable: input.roleTable } : {}),
       promptVersion: input.promptVersion ?? null,
       predecessorConversationId: null,
       triggeredBy: input.triggeredBy ?? null,
