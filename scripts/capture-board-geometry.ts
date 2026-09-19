@@ -2559,7 +2559,9 @@ async function seatsMain(which: SeatCase): Promise<void> {
     report.seeded = { productTasks: tasks.length, seats: seatTitles };
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
-    const combos = [1440, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    /* At 1440 and 1280 the rail leaves the board under 1200 px, where it scrolls; 1920 is the grid. */
+    const widths = which === "columns-wide" ? [1920, 1440, 1280] : [1440, 1280];
+    const combos = widths.flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
     for (const { width, lang, colorScheme } of combos) {
       const tag = `${which}-${width}-${lang}-${colorScheme}`;
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
@@ -2679,7 +2681,13 @@ async function seatsMain(which: SeatCase): Promise<void> {
         const pinned = await page.evaluate(readSeatBoard);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-blocked-pinned.png`) });
         must(wideOnes(pinned).join() === "blocked", `${tag}: pinned Blocked, wide is ${wideOnes(pinned).join()}`);
-        must(share(pinned, "assigned") <= 265, `${tag}: Assigned kept ${share(pinned, "assigned")}px beside a pinned shelf`);
+        /* The shelf share: at most 264 px in the grid, the 280 px basis when the board scrolls. */
+        must(share(pinned, "assigned") <= (pinned.board === "scroll" ? 280.5 : 264.5), `${tag}: Assigned kept ${share(pinned, "assigned")}px beside a pinned shelf (${pinned.board})`);
+        /* The capture's init script empties storage on every load; the stored pin is put back ahead of
+           the page, exactly as the browser would have kept it, so the reload reads it from storage. */
+        const stored = await page.evaluate(() => localStorage.getItem("llv:kanban-wide:v1"));
+        must(stored === "blocked", `${tag}: the pin stored ${stored}`);
+        await context.addInitScript((value: string | null) => { if (value) localStorage.setItem("llv:kanban-wide:v1", value); }, stored);
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.waitForSelector(".kb .column", { timeout: 60_000 });
         await page.waitForTimeout(2_000);
@@ -2742,7 +2750,7 @@ async function seatsMain(which: SeatCase): Promise<void> {
     process.exitCode = 1;
     console.error(`${which} acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log(`${which} acceptance passed at 1440 and 1280 (en, uk; light, dark)${which === "seats" ? " and 390 × 844" : ""}.`);
+    console.log(`${which} acceptance passed at ${which === "columns-wide" ? "1920, " : ""}1440 and 1280 (en, uk; light, dark)${which === "seats" ? " and 390 × 844" : ""}.`);
   }
 }
 
