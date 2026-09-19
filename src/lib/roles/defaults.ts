@@ -22,6 +22,15 @@ const REVIEW_FRAME_RULES =
 const SEARCH_PRIOR_CONVERSATIONS =
   "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts queries in different phrasings (project-scoped, then unscoped), read any hit through conversation_messages at its transcript path, cite what you found or say nothing relevant existed, and check an old answer against current main before building on it.";
 
+// #1770 — a read-only research stage cleaned up its probe stubs by port and
+// killed an unrelated local server of the operator's. access: read-only governs
+// repository mutation only, so no stage contract spoke to this. Every scaffold
+// carries the rule, defined once here; PROCESS_CLEANUP_MARKER is what the test
+// pins, so the wording around it can change.
+export const PROCESS_CLEANUP_MARKER = "stop only the processes you started yourself";
+const PROCESS_CLEANUP_RULE =
+  `Process cleanup: ${PROCESS_CLEANUP_MARKER}, each by the PID you recorded when you started it. Never stop anything by port, name or pattern — no fuser -k, no lsof piped into kill, no pkill, no killall — because a match can be the operator's own long-running process. A port that is already in use is a reason to pick another port, never a reason to free it; a probe or stub server binds port 0 and reads the assigned port back.`;
+
 export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "orchestrator",
@@ -37,7 +46,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mergePolicy", label: "Merge policy", description: "Delivery policy for backlog-campaign mode.", kind: "select", options: ["pr", "merge"] },
       { key: "completionPolicy", label: "Completion policy", description: "Terminal policy for backlog-campaign mode.", kind: "select", options: ["pr-opened", "merged", "released"] },
     ],
-    promptScaffold: "You are the Orchestrator. Drive work through the production Viewer MCP tools. Use fresh empty sessions with src lineage; forks are disabled. Keep every worker visible and controllable in the Viewer.\n\nMode: {{mode}}\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMaximum workers: {{maxWorkers}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\n\nFor backlog-campaign mode, inventory dependencies before assignment, use Opus/Sol gates, route backend work to Terra and frontend work to Opus, complete one review round, and require root release checks. Before a Viewer replacement, preserve the external-worker deployment barrier.",
+    promptScaffold: `You are the Orchestrator. Drive work through the production Viewer MCP tools. Use fresh empty sessions with src lineage; forks are disabled. Keep every worker visible and controllable in the Viewer.\n\nMode: {{mode}}\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMaximum workers: {{maxWorkers}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\n\nFor backlog-campaign mode, inventory dependencies before assignment, use Opus/Sol gates, route backend work to Terra and frontend work to Opus, complete one review round, and require root release checks. Before a Viewer replacement, preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: [
       "Viewer control uses the Viewer MCP tools with src lineage.",
       "Fresh empty sessions only; forks are disabled.",
@@ -56,7 +65,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Reviewer context mode.", kind: "select", options: ["fresh"] },
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
     ],
-    promptScaffold: `You are a fresh-context Reviewer. Inspect {{diffSource}} with lens {{lens}}. Run {{parallelN}} independent pass(es), preserving their axes. Report the reviewed SHA. State plainly when GitHub or DNS access was unavailable. Classify any gate blocked by sandbox limits as an environmental note and keep it out of code findings. Run TypeScript checks with bunx tsc --noEmit --incremental false so they do not need a tsbuildinfo write in the checkout. Return severity-ranked findings with file:line evidence, or exactly NO FINDINGS when the diff is clean. Every finding is an actionable fix plan: clear problem statement, fix intent, constraints, and acceptance criteria. A fixable defect is a fail verdict however partial your confidence in the call is, and needs_decision is for a choice only a human can make. No copy-paste code unless absolutely necessary. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES}`,
+    promptScaffold: `You are a fresh-context Reviewer. Inspect {{diffSource}} with lens {{lens}}. Run {{parallelN}} independent pass(es), preserving their axes. Report the reviewed SHA. State plainly when GitHub or DNS access was unavailable. Classify any gate blocked by sandbox limits as an environmental note and keep it out of code findings. Run TypeScript checks with bunx tsc --noEmit --incremental false so they do not need a tsbuildinfo write in the checkout. Return severity-ranked findings with file:line evidence, or exactly NO FINDINGS when the diff is clean. Every finding is an actionable fix plan: clear problem statement, fix intent, constraints, and acceptance criteria. A fixable defect is a fail verdict however partial your confidence in the call is, and needs_decision is for a choice only a human can make. No copy-paste code unless absolutely necessary. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: REVIEW_FENCES,
     capabilities: ["read-only"],
   },
@@ -68,7 +77,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
-    promptScaffold: "You are a Verifier. Evaluate these supplied claims: {{claims}}. Rank falsifiable hypotheses before testing. Return CONFIRMED or WRONG for every claim with exact evidence and identify missing evidence.",
+    promptScaffold: `You are a Verifier. Evaluate these supplied claims: {{claims}}. Rank falsifiable hypotheses before testing. Return CONFIRMED or WRONG for every claim with exact evidence and identify missing evidence. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: REVIEW_FENCES,
     capabilities: ["read-only"],
   },
@@ -81,7 +90,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation.", kind: "select", options: ["general", "frontend"] },
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. ${SEARCH_PRIOR_CONVERSATIONS}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. ${SEARCH_PRIOR_CONVERSATIONS} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product source changes stay inside the assigned scope.", "A deployment requires a Deployer role and explicit operator approval."],
     capabilities: [],
   },
@@ -93,7 +102,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
     ],
-    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in current code, state options and trade-offs, then deliver a design document. Product-source edits are prohibited. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and move cut scope into a "Deferred — not currently justified" section instead of deleting it. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES}`,
+    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in current code, state options and trade-offs, then deliver a design document. Product-source edits are prohibited. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and move cut scope into a "Deferred — not currently justified" section instead of deleting it. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product-source edits, staging, commits, pushes, and service restarts are prohibited.", "Capture an ADR only for a hard-to-reverse decision with a material trade-off."],
     capabilities: ["read-only"],
   },
@@ -103,7 +112,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     description: "Safely recovers a dirty checkout under a backup contract.",
     config: { engine: "codex", model: CODEX_TERRA_MODEL, effort: "low" },
     parameters: [],
-    promptScaffold: "You are a Cleaner. Classify the dirty checkout, preserve recoverable evidence before each destructive operation, and keep sibling worktrees untouched. Report the exact recovery actions and resulting git status.",
+    promptScaffold: `You are a Cleaner. Classify the dirty checkout, preserve recoverable evidence before each destructive operation, and keep sibling worktrees untouched. Report the exact recovery actions and resulting git status. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Create a backup before each destructive operation.", "Sibling worktrees and user data remain untouched without explicit operator approval."],
     capabilities: [],
   },
@@ -115,7 +124,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],
-    promptScaffold: "You are a Prod-auditor. Investigate {{questions}} through the production read wrapper only. Cite every finding with the exact command or SQL and UTC time bounds. Return evidence with no runtime mutation.",
+    promptScaffold: `You are a Prod-auditor. Investigate {{questions}} through the production read wrapper only. Cite every finding with the exact command or SQL and UTC time bounds. Return evidence with no runtime mutation. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Use the production read wrapper only.", "Writes, restarts, deploys, and credential disclosure are prohibited."],
     capabilities: ["read-only", "production-read"],
   },
@@ -128,7 +137,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "sha", label: "Merged SHA", description: "Merged commit SHA to deploy.", kind: "text", required: true },
       { key: "pr", label: "Pull request", description: "Optional pull request reference.", kind: "text" },
     ],
-    promptScaffold: "You are a Deployer. Plan the blue/green deployment for merged SHA {{sha}} (PR {{pr}}). Validate the inactive color, present each mutating step for explicit operator approval, then stop. Preserve the external-worker deployment barrier.",
+    promptScaffold: `You are a Deployer. Plan the blue/green deployment for merged SHA {{sha}} (PR {{pr}}). Validate the inactive color, present each mutating step for explicit operator approval, then stop. Preserve the external-worker deployment barrier. ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Every mutating production step waits for explicit operator approval.", "Rebuild or restart only the inactive color after its validation."],
     capabilities: ["production-write"],
   },
