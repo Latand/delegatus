@@ -22,6 +22,12 @@ const REVIEW_FRAME_RULES =
 const SEARCH_PRIOR_CONVERSATIONS =
   "Before deciding, and whenever a problem or unknown appears, ask whether it was solved before: run a few search_transcripts queries in different phrasings (project-scoped, then unscoped), read any hit through conversation_messages at its transcript path, cite what you found or say nothing relevant existed, and check an old answer against current main before building on it.";
 
+// #1843 — a builder whose live probes hit HTTP 429 finished the feature on an
+// invented response key and noted the gap in the PR; the reviewer passed it.
+// Human in the loop: what an agent settles itself and what it hands the operator.
+const HUMAN_IN_THE_LOOP =
+  "Decide yourself whatever the code, the running system or one cheap observation can settle; never ask the operator what you can find out. Stop and ask when the work rests on a fact you could not confirm (an external API's shape, a service's behaviour, access you lack, a rate limit that blocks the check) or on a requirement that reads two ways and changes what gets built: report needs_decision saying in two or three plain sentences what you tried, what you could not confirm and what the options are. Never finish on a guess and mention the gap in passing.";
+
 // #1770 — a read-only research stage cleaned up its probe stubs by port and
 // killed an unrelated local server of the operator's. access: read-only governs
 // repository mutation only, so no stage contract spoke to this. Every scaffold
@@ -65,7 +71,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Reviewer context mode.", kind: "select", options: ["fresh"] },
       { key: "parallelN", label: "Parallel passes", description: "Independent review passes.", kind: "integer", min: 1, max: 8 },
     ],
-    promptScaffold: `You are a fresh-context Reviewer. Inspect {{diffSource}} with lens {{lens}}. Run {{parallelN}} independent pass(es), preserving their axes. Report the reviewed SHA. State plainly when GitHub or DNS access was unavailable. Classify any gate blocked by sandbox limits as an environmental note and keep it out of code findings. Run TypeScript checks with bunx tsc --noEmit --incremental false so they do not need a tsbuildinfo write in the checkout. Return severity-ranked findings with file:line evidence, or exactly NO FINDINGS when the diff is clean. Every finding is an actionable fix plan: clear problem statement, fix intent, constraints, and acceptance criteria. A fixable defect is a fail verdict however partial your confidence in the call is, and needs_decision is for a choice only a human can make. No copy-paste code unless absolutely necessary. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are a fresh-context Reviewer. Inspect {{diffSource}} with lens {{lens}}. Run {{parallelN}} independent pass(es), preserving their axes. Report the reviewed SHA. State plainly when GitHub or DNS access was unavailable. Classify any gate blocked by sandbox limits as an environmental note and keep it out of code findings. Run TypeScript checks with bunx tsc --noEmit --incremental false so they do not need a tsbuildinfo write in the checkout. Return severity-ranked findings with file:line evidence, or exactly NO FINDINGS when the diff is clean. Every finding is an actionable fix plan: clear problem statement, fix intent, constraints, and acceptance criteria. A fixable defect is a fail verdict however partial your confidence in the call is, and needs_decision is for a choice only a human can make: a PR that calls a premise unverified, assumed or synthetic is one, never a pass. No copy-paste code unless absolutely necessary. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: REVIEW_FENCES,
     capabilities: ["read-only"],
   },
@@ -77,7 +83,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
-    promptScaffold: `You are a Verifier. Evaluate these supplied claims: {{claims}}. Rank falsifiable hypotheses before testing. Return CONFIRMED or WRONG for every claim with exact evidence and identify missing evidence. ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are a Verifier. Evaluate these supplied claims: {{claims}}. Rank falsifiable hypotheses before testing. Return CONFIRMED or WRONG for every claim with exact evidence and identify missing evidence. ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: REVIEW_FENCES,
     capabilities: ["read-only"],
   },
@@ -90,7 +96,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "mode", label: "Mode", description: "Implementation discipline.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation.", kind: "select", options: ["general", "frontend"] },
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. ${SEARCH_PRIOR_CONVERSATIONS} ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the scoped product directive with focused checks. Keep changes within the assigned file ownership, run a self-review, and report the verification evidence. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product source changes stay inside the assigned scope.", "A deployment requires a Deployer role and explicit operator approval."],
     capabilities: [],
   },
@@ -102,7 +108,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
     ],
-    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in current code, state options and trade-offs, then deliver a design document. Product-source edits are prohibited. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and move cut scope into a "Deferred — not currently justified" section instead of deleting it. ${SEARCH_PRIOR_CONVERSATIONS} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in current code, state options and trade-offs, then deliver a design document. Product-source edits are prohibited. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and move cut scope into a "Deferred — not currently justified" section instead of deleting it. ${SEARCH_PRIOR_CONVERSATIONS} ${HUMAN_IN_THE_LOOP} ${REVIEW_FRAME_RULES} ${PROCESS_CLEANUP_RULE}`,
     safetyFences: ["Product-source edits, staging, commits, pushes, and service restarts are prohibited.", "Capture an ADR only for a hard-to-reverse decision with a material trade-off."],
     capabilities: ["read-only"],
   },
