@@ -23,6 +23,29 @@ function terminalApiError(record: RecordLike): boolean {
     && TERMINAL_API_ERRORS.has(record.error);
 }
 
+/** The model id Claude stamps on an assistant record it wrote itself. */
+const SYNTHETIC_MODEL = "<synthetic>";
+
+/** The stop reasons on an assistant record that END the provider turn, as
+    opposed to `tool_use`, which continues it, and a partial record, which
+    carries none at all (issue #1792). */
+function assistantStopReasonEndsTurn(record: RecordLike): boolean {
+  const stop = stringValue((recordValue(record.message) ?? {}).stop_reason);
+  return stop === "end_turn" || stop === "stop_sequence";
+}
+
+/** Whether an assistant record's stop reason is the PROVIDER's verdict.
+ *
+ * Two shapes carry a stop reason the CLI made up. An API-error record is
+ * stamped `stop_sequence` and the CLI may still retry inside the same turn, so
+ * only a {@link TERMINAL_API_ERRORS} code closes a turn there. A `<synthetic>`
+ * record was never sent to the provider at all — the queued-prompt no-op and
+ * the prose a recovery host replays both wear that model id (issue #516). */
+function providerAuthoredAssistant(record: RecordLike): boolean {
+  if (record.isApiErrorMessage === true) return false;
+  return stringValue((recordValue(record.message) ?? {}).model) !== SYNTHETIC_MODEL;
+}
+
 function messageText(record: RecordLike): string {
   const content = recordValue(record.message)?.content;
   if (typeof content === "string") return content;
@@ -37,7 +60,7 @@ const SYNTHETIC_NO_OP_TEXT = /^no response requested\.?$/i;
 
 function syntheticNoOpAssistant(record: RecordLike): boolean {
   if (record.isApiErrorMessage === true) return false;
-  if (stringValue((recordValue(record.message) ?? {}).model) !== "<synthetic>") return false;
+  if (stringValue((recordValue(record.message) ?? {}).model) !== SYNTHETIC_MODEL) return false;
   return SYNTHETIC_NO_OP_TEXT.test(messageText(record).trim());
 }
 
@@ -121,7 +144,9 @@ function openclawTurnState(records: RecordLike[]): TurnState {
 }
 
 /** The newest authoritative lifecycle or tool event wins. Assistant prose
-    cannot close an active turn because it commonly precedes tool work. */
+    cannot close an active turn on its own account — it commonly precedes tool
+    work — so what closes one is the record's own stop reason, and only on a
+    record the provider authored. */
 export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEngine, authoritative = false): TurnState {
   if (engine === "openclaw") return openclawTurnState(records);
   if (engine === "codex") {
@@ -229,7 +254,13 @@ export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEn
       } else if (record.type === "user") {
         state = { state: "busy", source: "lifecycle", terminalAt: null };
       } else if (record.type === "assistant") {
-        state = terminalApiError(record)
+        /* The stop reason on a provider-authored record is the only terminal
+           evidence a SESSION transcript carries: Claude writes the top-level
+           `result` record into `--print` stream output and never into the
+           session file, so a branch that waits for one leaves every finished
+           Claude turn busy for ever — and a send held for the turn to end is
+           then held for a turn that ended long ago (issue #1792). */
+        state = terminalApiError(record) || (providerAuthoredAssistant(record) && assistantStopReasonEndsTurn(record))
           ? { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) }
           : { state: "busy", source: "assistant", terminalAt: null };
       }
@@ -242,8 +273,7 @@ export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEn
   for (const record of [...records].reverse()) {
     if (record.type === "assistant") {
       if (terminalApiError(record)) return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
-      const stop = stringValue((recordValue(record.message) ?? {}).stop_reason);
-      if (stop === "end_turn" || stop === "stop_sequence") return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
+      if (assistantStopReasonEndsTurn(record)) return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
       return { state: "busy", source: "assistant", terminalAt: null };
     }
     if (record.type === "user") return { state: "busy", source: "lifecycle", terminalAt: null };

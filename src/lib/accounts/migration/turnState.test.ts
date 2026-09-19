@@ -155,24 +155,72 @@ test("late and duplicate Codex tool output cannot reopen a terminal turn", () =>
   });
 });
 
-test("Claude migration waits for a top-level result event", () => {
-  const assistant = {
+describe("issue 1792 — a Claude turn closes on the evidence a session transcript actually carries", () => {
+  const assistant = (stop: string | null, extra: Record<string, unknown> = {}) => ({
     type: "assistant",
     timestamp: "2026-07-10T00:00:01Z",
-    message: { stop_reason: "end_turn" },
-  };
-  expect(turnStateFromRecords([assistant], "claude", true)).toEqual({
-    state: "busy",
-    source: "assistant",
-    terminalAt: null,
+    message: { role: "assistant", model: "claude-opus-5", stop_reason: stop, content: [{ type: "text", text: "done" }], ...extra },
   });
-  expect(turnStateFromRecords([
-    assistant,
-    { type: "result", timestamp: "2026-07-10T00:00:02Z", subtype: "success" },
-  ], "claude", true)).toEqual({
-    state: "terminal",
-    source: "lifecycle",
-    terminalAt: "2026-07-10T00:00:02Z",
+
+  /* The CLI writes a top-level `result` record into `--print` stream output and
+     never into a session transcript, so a branch that waits for one leaves
+     every settled turn busy for ever. The assistant record's own stop reason is
+     the terminal evidence there is. */
+  test("an end_turn assistant record closes the turn with no result record behind it", () => {
+    expect(turnStateFromRecords([assistant("end_turn")], "claude", true)).toEqual({
+      state: "terminal",
+      source: "lifecycle",
+      terminalAt: "2026-07-10T00:00:01Z",
+    });
+  });
+
+  test("a tool_use assistant record keeps the turn busy", () => {
+    expect(turnStateFromRecords([assistant("tool_use")], "claude", true)).toEqual({
+      state: "busy",
+      source: "assistant",
+      terminalAt: null,
+    });
+  });
+
+  test("a result record still closes the turn at its own timestamp", () => {
+    expect(turnStateFromRecords([
+      assistant("end_turn"),
+      { type: "result", timestamp: "2026-07-10T00:00:02Z", subtype: "success" },
+    ], "claude", true)).toEqual({
+      state: "terminal",
+      source: "lifecycle",
+      terminalAt: "2026-07-10T00:00:02Z",
+    });
+  });
+
+  test("a later prompt reopens the turn the assistant record closed", () => {
+    expect(turnStateFromRecords([
+      assistant("end_turn"),
+      { type: "user", timestamp: "2026-07-10T00:00:03Z", message: { role: "user", content: "and again" } },
+    ], "claude", true)).toEqual({ state: "busy", source: "lifecycle", terminalAt: null });
+  });
+
+  /* The two stop reasons the CLI writes itself. Neither is the provider's
+     verdict, and reading them would release a turn nobody finished. */
+  test("a synthetic record's stop reason does not close the turn", () => {
+    expect(turnStateFromRecords([assistant("stop_sequence", { model: "<synthetic>" })], "claude", true)).toEqual({
+      state: "busy",
+      source: "assistant",
+      terminalAt: null,
+    });
+  });
+
+  test("a non-terminal API error's stop reason does not close the turn", () => {
+    expect(turnStateFromRecords(
+      [{ ...assistant("stop_sequence"), isApiErrorMessage: true, error: "model_not_found" }],
+      "claude",
+      true,
+    )).toEqual({ state: "busy", source: "assistant", terminalAt: null });
+  });
+
+  test("both projections read the same stop reason the same way", () => {
+    const records = [assistant("end_turn")];
+    expect(turnStateFromRecords(records, "claude", true)).toEqual(turnStateFromRecords(records, "claude"));
   });
 });
 
