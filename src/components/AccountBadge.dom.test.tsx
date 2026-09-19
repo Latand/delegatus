@@ -44,6 +44,7 @@ mock.module("./tasks/taskToast", () => ({
 }));
 
 const { AccountBadge } = await import("./AccountBadge");
+const { resetPickedAccountsForTests } = await import("@/lib/accounts/intendedAccount");
 
 const file: FileEntry = {
   path: "/sessions/source.jsonl",
@@ -80,6 +81,7 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 afterEach(() => {
+  resetPickedAccountsForTests();
   document.body.replaceChildren();
   localStorage.clear();
   requests.length = 0;
@@ -91,7 +93,7 @@ afterEach(() => {
   };
 });
 
-test("the card account chip queues a conversation-scoped switch and disables signed-out targets", async () => {
+test("the card account chip records the pick at once, with no spinner, and disables signed-out targets", async () => {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -116,11 +118,16 @@ test("the card account chip queues a conversation-scoped switch and disables sig
     effort: "high",
     fast: false,
   })]);
-  expect(host.textContent).toContain("Account switch pending");
+  /* #1846: the chip names where the next message goes and waits for nothing. */
+  const pickedChip = host.querySelector("[data-conversation-account-chip]")!;
+  expect(pickedChip.getAttribute("data-conversation-account-next")).toBe("target");
+  expect(pickedChip.textContent).toContain("→ target");
+  expect(pickedChip.getAttribute("aria-busy")).toBeNull();
+  expect(pickedChip.querySelector(".animate-spin")).toBeNull();
   await act(async () => root.unmount());
 });
 
-test("a legacy account switch settles when scanner ownership reaches the target account", async () => {
+test("a pick retires once the conversation runs on the picked account", async () => {
   responseBody = { ok: true, outcome: "pending" };
   const host = document.createElement("div");
   document.body.append(host);
@@ -136,14 +143,15 @@ test("a legacy account switch settles when scanner ownership reaches the target 
     rows[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(host.textContent).toContain("Account switch pending");
+  expect(host.textContent).toContain("→ target");
 
   await act(async () => { root.render(<AccountBadge engine="codex" accountId="target" file={file} />); });
-  expect(host.textContent).not.toContain("Account switch pending");
+  expect(host.textContent).not.toContain("→");
+  expect(toasts).toEqual([]);
   await act(async () => root.unmount());
 });
 
-test("a failed legacy account switch clears its pending badge and re-enables choices", async () => {
+test("a failed legacy account switch takes the pick back and says why", async () => {
   responseBody = { ok: true, outcome: "pending" };
   const host = document.createElement("div");
   document.body.append(host);
@@ -159,7 +167,7 @@ test("a failed legacy account switch clears its pending badge and re-enables cho
     rows[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(host.textContent).toContain("Account switch pending");
+  expect(host.textContent).toContain("→ target");
 
   const failedFile: FileEntry = {
     ...file,
@@ -177,7 +185,8 @@ test("a failed legacy account switch clears its pending badge and re-enables cho
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-  expect(host.textContent).not.toContain("Account switch pending");
+  expect(host.textContent).not.toContain("→");
+  expect(toasts).toEqual([{ kind: "err", message: "successor authentication expired" }]);
   await act(async () => {
     host.querySelector<HTMLElement>("[data-conversation-account-chip]")!
       .dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
@@ -268,8 +277,8 @@ test("an out-of-pool switch the journal could not record is not answered \"recor
   expect(toasts[0]!.kind).toBe("err");
   expect(toasts[0]!.message).toContain("the record could not be written");
   expect(toasts[0]!.message).not.toContain("recorded as your choice");
-  /* The switch itself still happened, so the badge is waiting on it. */
-  expect(host.textContent).toContain("Account switch pending");
+  /* The switch itself still happened, so the badge names it. */
+  expect(host.textContent).toContain("→ target");
   await act(async () => root.unmount());
 });
 
@@ -282,6 +291,30 @@ test("a switch inside the project's pool says nothing at all", async () => {
 
   await switchToTarget(host);
 
+  expect(toasts).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+test("the account it runs on takes a waiting pick back, and nothing waits a minute to call it an error", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => { root.render(<AccountBadge engine="codex" accountId="source" file={file} />); });
+  await switchToTarget(host);
+  await act(async () => {
+    host.querySelector<HTMLElement>("[data-conversation-account-chip]")!
+      .dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+  });
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+  expect(rows.map((row) => row.disabled)).toEqual([false, false, true]);
+  expect(rows[0]!.querySelector("[data-conversation-account-cancel]")!.textContent).toBe("cancel switch");
+  expect(rows[1]!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => {
+    rows[0]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(requests.map((request) => request.accountId)).toEqual(["target", "source"]);
+  expect(host.textContent).not.toContain("→");
   expect(toasts).toEqual([]);
   await act(async () => root.unmount());
 });

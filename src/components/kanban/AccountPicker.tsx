@@ -307,7 +307,8 @@ export function conversationWorking(file: FileEntry, session: RuntimeSession | n
 
 function whenWord(t: TFunction, view: SwitchView, working: boolean): string {
   switch (view.kind) {
-    case "sending": return t("kanban.account.whenSending");
+    /* Optimistic from the first frame (#1846): a refusal corrects it, nothing else is waited for. */
+    case "sending": return t("kanban.account.whenNextMessage");
     /* A pick nothing has engaged yet moves with the next message (#1846). Once a message engaged it, the
        migration's record waits behind a running turn, or is only queued with none running. */
     case "waiting": return t(view.source !== "record" ? "kanban.account.whenNextMessage" : working ? "kanban.account.whenTurn" : "kanban.account.whenQueued");

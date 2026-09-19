@@ -6,9 +6,11 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { resetEngineAccountsStoresForTests } from "@/hooks/useEngineAccounts";
 import { setLocale } from "@/lib/i18n";
+import { TaskToastHost } from "./tasks/taskToast";
 import type { FileEntry } from "@/lib/types";
 
-import { RuntimePill } from "./RuntimePill";
+import { RuntimePill, RuntimeSwitchHold } from "./RuntimePill";
+import { resetPickedAccountsForTests } from "@/lib/accounts/intendedAccount";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 
 /*
@@ -55,6 +57,7 @@ beforeEach(() => {
   mobile = true;
   calls.length = 0;
   resetEngineAccountsStoresForTests();
+  resetPickedAccountsForTests();
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : (input as URL).toString());
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
@@ -229,8 +232,12 @@ test("a move that failed at engagement holds the message with its reason and the
     ...file,
     switchHold: { targetAccountId: "acct-b", reason: "claude account requires authentication", since: "2026-09-19T10:00:00.000Z" },
   };
-  const { host, root } = await mount(<RuntimePill file={held} surface="structured" runtimeSession={session(null)} />);
+  const { host, root } = await mount(<><RuntimeSwitchHold file={held} /><RuntimePill file={held} surface="structured" runtimeSession={session(null)} /></>);
   const notice = host.querySelector("[data-runtime-switch-hold]")!;
+  /* Its own line, apart from the pill's row, with full-size targets. */
+  expect(notice.closest("[data-runtime-pill]")).toBeNull();
+  expect(host.querySelector("[data-runtime-switch-hold-keep]")!.className).toContain("min-h-11");
+  expect(host.querySelector("[data-runtime-switch-hold-pick]")!.className).toContain("min-h-11");
   expect(notice.getAttribute("role")).toBe("alert");
   expect(notice.textContent).toContain("Not sent: moving to acct-b failed — claude account requires authentication");
   expect(notice.textContent).toContain("Send on acct-a");
@@ -249,11 +256,50 @@ test("«Pick another account» opens the account choice", async () => {
     ...file,
     switchHold: { targetAccountId: "acct-b", reason: "the migration was refused", since: "2026-09-19T10:00:00.000Z" },
   };
-  const { host, root } = await mount(<RuntimePill file={held} surface="structured" runtimeSession={session(null)} />);
+  const { host, root } = await mount(<><RuntimeSwitchHold file={held} /><RuntimePill file={held} surface="structured" runtimeSession={session(null)} /></>);
   await act(async () => {
     (host.querySelector("[data-runtime-switch-hold-pick]") as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 5));
   });
   expect(document.querySelector('[data-runtime-row="back"]')!.textContent).toContain("Account");
   await act(async () => root.unmount());
+});
+
+test("taking a pick back ends quiet: no error face, no toast, and the running row says it cancels", async () => {
+  const { host, root } = await openSheet(<><TaskToastHost /><RuntimePill file={file} surface="structured" runtimeSession={session("acct-b")} /></>);
+  /* While the pick waits, the account it runs on is the way back and says so. */
+  expect(row("acct-a").querySelector("[data-runtime-account-cancel]")!.textContent).toBe("cancel switch");
+  act(() => { row("acct-a").click(); });
+  expect(header()).toBe("runs on acct-a");
+  expect(row("acct-a").querySelector("[data-runtime-account-cancel]")).toBeNull();
+  /* The queue settles the withdrawn pick as a failed receipt with reason «cancelled». */
+  const withdrawn: RuntimeSession = {
+    ...session(null),
+    revision: 5,
+    recentReceipts: [{
+      operationId: "pick-op", idempotencyKey: "pick-op", conversationId: "conversation_intent",
+      kind: "reconfigure", status: "failed", reason: "cancelled", at: "2026-09-19T10:00:00.000Z", revision: 5,
+    }],
+  };
+  await act(async () => {
+    root.render(<><TaskToastHost /><RuntimePill file={file} surface="structured" runtimeSession={withdrawn} /></>);
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  expect(host.textContent).not.toContain("cancelled");
+  expect(host.querySelector("[data-runtime-pill]")!.innerHTML).not.toContain("danger");
+  expect(host.querySelector("[data-runtime-switch-pending]")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("an account pick the session projects writes no pending phase for a later page to restore as a spinner", async () => {
+  const { host, root } = await mount(<RuntimePill file={file} surface="structured" runtimeSession={session("acct-b")} />);
+  expect([...Array(localStorage.length).keys()].map((i) => localStorage.getItem(localStorage.key(i)!))).not.toContain("pending");
+  await act(async () => root.unmount());
+  /* A fresh page after the pick ended elsewhere: the chip keeps its model and tier. */
+  const again = await mount(<RuntimePill file={file} surface="structured" runtimeSession={session(null)} />);
+  const pill = again.host.querySelector("[data-runtime-pill]")!;
+  expect(pill.getAttribute("aria-busy")).toBeNull();
+  expect(again.host.querySelector("[data-runtime-switch-pending]")).toBeNull();
+  expect(host.isConnected).toBe(true);
+  await act(async () => again.root.unmount());
 });

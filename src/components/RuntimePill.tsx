@@ -8,6 +8,9 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
+import {
+  isQuietReconfigureFailure, onAccountChoiceRequest, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
+} from "@/lib/accounts/intendedAccount";
 import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -176,17 +179,11 @@ export function RuntimePill({
      account a message was about to go to (#1795). */
   const runsOnAccount = accountIdFromPath(file.path);
   /* #1846: the account the operator picked for this conversation, shown the moment it is tapped. It stands
-     until the runtime session projects the same choice, which every other page then reads too. */
-  const [pickedAccount, setPickedAccount] = useState<string | null>(null);
+     until the runtime session projects the same choice, which every other page then reads too.
+     The pick is shared with the page's other account surfaces, so the header and the card badge say it too. */
   const projectedIntent = pillSurface === "structured" ? runtimeSession?.pendingReconfigure?.accountId ?? null : null;
-  const projectedNext = projectedIntent && projectedIntent !== runsOnAccount ? projectedIntent : runsOnAccount;
   /** Where the next message goes: the intended account while one waits, else the one it runs on. */
-  const nextAccount = pickedAccount ?? projectedNext;
-  /* eslint-disable react-hooks/set-state-in-effect -- the optimistic pick retires once the projection agrees. */
-  useEffect(() => {
-    if (pickedAccount !== null && pickedAccount === projectedNext) setPickedAccount(null);
-  }, [pickedAccount, projectedNext]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  const { next: nextAccount } = useIntendedAccount(cardId, runsOnAccount, projectedIntent);
 
   /* eslint-disable react-hooks/set-state-in-effect -- reloading the persisted
      draft/phase from localStorage when the conversation identity changes is a
@@ -299,6 +296,10 @@ export function RuntimePill({
   useEffect(() => {
     if (pillSurface !== "structured") return;
     const pending = runtimeSession?.pendingReconfigure;
+    /* #1846: an account pick is the conversation's choice, shown as «next on» until a message engages it.
+       The pill never adopts it as an apply in flight: no pending phase is written for a later page to restore
+       as a spinner, and its withdrawal or replacement is nothing to report. */
+    if (pending?.accountId) return;
     if (pending) {
       const rollback = rollbackRef.current;
       const pendingRevision = runtimeSession.revision;
@@ -335,7 +336,12 @@ export function RuntimePill({
     if (!receipt) return;
     localStorage.removeItem(phaseKey(file));
     localStorage.removeItem(phaseOperationKey(file));
-    if (receipt.status === "applied") {
+    if (receipt.status === "failed" && isQuietReconfigureFailure(receipt.reason)) {
+      /* Taken back or replaced by the operator's own later choice: settled, never a failure (#1846). */
+      clearBrowserProfileRollback(receipt.operationId);
+      operationRef.current = null;
+      setApplyState("idle");
+    } else if (receipt.status === "applied") {
       clearBrowserProfileRollback(receipt.operationId);
       operationRef.current = null;
       setApplyState("applied");
@@ -466,8 +472,13 @@ export function RuntimePill({
    */
   const pickAccount = useCallback(async (accountId: string) => {
     if (!engine || accountId === nextAccount) return;
-    const previous = pickedAccount;
-    setPickedAccount(accountId);
+    const previous = readPickedAccount(cardId);
+    setPickedAccount(cardId, accountId);
+    /* The pick carries the draft, so a model change still waiting is folded into it and ends quietly. */
+    operationRef.current = null;
+    localStorage.removeItem(phaseKey(file));
+    localStorage.removeItem(phaseOperationKey(file));
+    setApplyState((state) => (state === "pending" || state === "confirming" || state === "error" ? "idle" : state));
     setAnnounce(accountId === runsOnAccount
       ? t("mobile2.composer.accountRunsOn", { account: accountId })
       : t("mobile2.composer.accountRunsOnNext", { account: runsOnAccount, next: accountId }));
@@ -489,30 +500,10 @@ export function RuntimePill({
       const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!response.ok || !body.ok) throw new Error(body.error ?? t("runtimeConfig.failed"));
     } catch (cause) {
-      setPickedAccount(previous);
+      if (readPickedAccount(cardId) === accountId) setPickedAccount(cardId, previous);
       pushTaskToast("err", cause instanceof Error ? cause.message : t("runtimeConfig.failed"));
     }
-  }, [engine, file.path, nextAccount, pickedAccount, runsOnAccount, runtimeConversationId, t]);
-
-  /* #1846: a move that failed when a message engaged it holds that message, with the reason and the two
-     obvious ways on. Released here in the same frame; the next read confirms it. */
-  const [releasedHold, setReleasedHold] = useState<string | null>(null);
-  const hold = file.switchHold && file.switchHold.since !== releasedHold ? file.switchHold : null;
-  const keepCurrentAccount = useCallback(async () => {
-    if (!hold || !file.conversationId) return;
-    setReleasedHold(hold.since);
-    try {
-      const response = await fetch(`/api/conversations/${encodeURIComponent(file.conversationId)}/migration`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "keep-current" }),
-      });
-      if (!response.ok) throw new Error(t("runtimeConfig.failed"));
-    } catch (cause) {
-      setReleasedHold(null);
-      pushTaskToast("err", cause instanceof Error ? cause.message : t("runtimeConfig.failed"));
-    }
-  }, [file.conversationId, hold, t]);
+  }, [cardId, engine, file, nextAccount, runsOnAccount, runtimeConversationId, t]);
 
   const closePopover = useCallback(() => {
     setOpen(false);
@@ -541,6 +532,15 @@ export function RuntimePill({
     }
     setOpen(true);
   }, []);
+
+  /* «Pick another account» on a held message opens this conversation's account choice (#1846). */
+  useEffect(() => {
+    if (pillSurface !== "structured") return;
+    return onAccountChoiceRequest(cardId, () => {
+      setPanel(isMobile ? "root" : "account");
+      openPopover();
+    });
+  }, [cardId, isMobile, openPopover, pillSurface]);
 
   /* Choosing what the face already reads is not a change, so it applies
      nothing, sends nothing and just closes (#1795): `commit` would otherwise
@@ -638,29 +638,6 @@ export function RuntimePill({
           {t("runtimeConfig.pending")}
         </span>
       ) : null}
-      {hold ? (
-        <span className="ml-1 inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 self-center text-label" role="alert" data-runtime-switch-hold>
-          <span className="min-w-0 text-danger">
-            {t("runtimeConfig.switchHeld", { account: hold.targetAccountId, reason: hold.reason })}
-          </span>
-          <button
-            type="button"
-            data-runtime-switch-hold-keep
-            onClick={() => void keepCurrentAccount()}
-            className="shrink-0 rounded-control px-1 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("runtimeConfig.sendOnCurrent", { account: runsOnAccount })}
-          </button>
-          <button
-            type="button"
-            data-runtime-switch-hold-pick
-            onClick={() => { setPanel(isMobile ? "root" : "account"); openPopover(); }}
-            className="shrink-0 rounded-control px-1 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("runtimeConfig.pickAnotherAccount")}
-          </button>
-        </span>
-      ) : null}
 
       {open && !isMobile && popoverAt ? (
         <RuntimePopover
@@ -716,6 +693,51 @@ export function RuntimePill({
         <span className="sr-only" role="status" aria-live="assertive">{error}</span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * #1846: a move that failed when a message engaged it holds that message — unsent, nothing sent twice —
+ * and says why, with the two obvious ways on: send it on the account the conversation runs on, or pick
+ * another account. It takes its own full-width line above the composer's row, so the reason reads in one
+ * or two lines and each way on is a full-size target on a phone.
+ */
+export function RuntimeSwitchHold({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const [released, setReleased] = useState<string | null>(null);
+  const hold = file.switchHold && file.switchHold.since !== released ? file.switchHold : null;
+  if (!hold) return null;
+  const runsOn = accountIdFromPath(file.path);
+  const keepCurrent = async () => {
+    if (!file.conversationId) return;
+    setReleased(hold.since);
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(file.conversationId)}/migration`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "keep-current" }),
+      });
+      if (!response.ok) throw new Error(t("runtimeConfig.failed"));
+    } catch (cause) {
+      setReleased(null);
+      pushTaskToast("err", cause instanceof Error ? cause.message : t("runtimeConfig.failed"));
+    }
+  };
+  const action = "inline-flex min-h-11 items-center rounded-control border border-border px-3 text-label font-semibold text-accent hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:min-h-8";
+  return (
+    <div className="flex w-full basis-full flex-col gap-1.5 rounded-control bg-danger-soft px-2.5 py-2 text-label" role="alert" data-runtime-switch-hold>
+      <p className="leading-snug text-danger">
+        {t("runtimeConfig.switchHeld", { account: hold.targetAccountId, reason: hold.reason })}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" data-runtime-switch-hold-keep onClick={() => void keepCurrent()} className={action}>
+          {t("runtimeConfig.sendOnCurrent", { account: runsOn })}
+        </button>
+        <button type="button" data-runtime-switch-hold-pick onClick={() => requestAccountChoice(conversationIdentity(file))} className={action}>
+          {t("runtimeConfig.pickAnotherAccount")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -979,7 +1001,11 @@ function buildRows({
         key: `account-${option.id}`,
         kind: "account",
         label: option.label,
-        detail: option.id === accountChoice.runsOn ? t("mobile2.composer.accountCurrent") : undefined,
+        detail: option.id !== accountChoice.runsOn
+          ? undefined
+          : accountChoice.next !== accountChoice.runsOn
+            ? `${t("mobile2.composer.accountCurrent")} · ${t("mobile2.composer.accountCancelSwitch")}`
+            : t("mobile2.composer.accountCurrent"),
         checked: option.id === accountChoice.next,
         enabled: true,
         role: "menuitemradio",
@@ -1295,6 +1321,8 @@ function AccountSection({ t, engine, account, limit, choice }: {
         const next = !blocked && authenticated && option.id === (choice ? choice.next : state.active);
         /* Already the target, or walled, or unreachable: nothing to send. */
         const inert = blocked || next || (!authenticated && !signInReachable);
+        /* While a pick waits, the account it runs on is the way back, and says so (#1846). */
+        const cancels = Boolean(choice) && current && !next && choice!.next !== account;
         return (
           <button
             key={option.id}
@@ -1310,7 +1338,9 @@ function AccountSection({ t, engine, account, limit, choice }: {
                 ? t("mobile2.composer.accountSignInAria", { account: option.label })
                 : next
                   ? t("mobile2.composer.accountNextAria", { account: option.label })
-                  : t("mobile2.composer.accountReadyAria", { account: option.label })}
+                  : cancels
+                    ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
+                    : t("mobile2.composer.accountReadyAria", { account: option.label })}
             onClick={() => {
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
@@ -1346,6 +1376,8 @@ function AccountSection({ t, engine, account, limit, choice }: {
                 <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
                 <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
               </>
+            ) : cancels ? (
+              <span className="shrink-0 text-label font-semibold text-accent" data-runtime-account-cancel>{t("mobile2.composer.accountCancelSwitch")}</span>
             ) : (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountReady")}</span>
             )}

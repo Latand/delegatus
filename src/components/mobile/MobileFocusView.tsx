@@ -6,10 +6,11 @@ import { Loader2 } from "@/components/icons";
 import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
 import { accountIdFromPath } from "@/lib/accounts/badge";
+import { useIntendedAccount } from "@/lib/accounts/intendedAccount";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
-import { useRuntimeBusState } from "@/hooks/useRuntime";
+import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { Flow } from "@/lib/flows/types";
@@ -781,14 +782,22 @@ function ChatIdentity({ file }: { file: FileEntry }) {
  * the runtime sheet answers it with the same word.
  */
 function ChatAccountTag({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
   const account = accountIdFromPath(file.path);
+  /* #1846: a pick waiting for the next message is named here too, in the frame the sheet names it, so
+     the conversation says where the next message goes with the sheet closed. */
+  const runtime = useRuntimeSessionForConversation(file.conversationId, file.path);
+  const { next } = useIntendedAccount(conversationIdentity(file), account, runtime?.session.pendingReconfigure?.accountId);
+  const moving = next !== account;
   return (
     <span
       data-mobile2-chat-account
-      className="max-w-[45%] shrink-0 truncate text-label font-medium leading-tight text-muted"
-      title={account}
+      data-mobile2-chat-account-next={moving ? next : undefined}
+      className={`${moving ? "max-w-[60%]" : "max-w-[45%]"} flex min-w-0 shrink-0 items-baseline gap-1 truncate text-label font-medium leading-tight text-muted`}
+      title={moving ? t("mobile2.composer.accountRunsOnNext", { account, next }) : account}
     >
-      @ {account}
+      <span className="min-w-0 truncate">@ {account}</span>
+      {moving ? <span className="min-w-0 shrink-0 truncate text-accent">→ {next}</span> : null}
     </span>
   );
 }

@@ -296,6 +296,34 @@ test("the meta line names the account the conversation runs on, managed or the l
   expect(dom.document.querySelector("[data-mobile2-chat-account]")?.textContent).toBe("@ default");
 });
 
+/* #1846: a pick on the runtime sheet (or any account surface) names the account the next message goes to
+   on the header too, in the same frame, so the conversation says it with the sheet closed. */
+test("the title line says where the next message goes the moment an account is picked", async () => {
+  const { setPickedAccount, resetPickedAccountsForTests } = await import("@/lib/accounts/intendedAccount");
+  const managed = entry({
+    path: "/state/agent-log-viewer/shared/accounts/claude/spare/projects/demo/managed.jsonl",
+    title: "Rebuild the board status projection",
+    conversationId: "conv-picked",
+    activity: "live",
+    mtime: 9_000,
+  });
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [managed], managed.path);
+  await settle();
+  const account = () => dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
+  expect(account().textContent).toBe("@ spare");
+  flushSync(() => { setPickedAccount("conv-picked", "relief"); });
+  expect(account().textContent).toBe("@ spare→ relief");
+  expect(account().getAttribute("data-mobile2-chat-account-next")).toBe("relief");
+  expect(account().getAttribute("title")).toBe("runs on spare · next on relief");
+  /* Taken back: the header returns to the one account. */
+  flushSync(() => { setPickedAccount("conv-picked", null); });
+  expect(account().textContent).toBe("@ spare");
+  resetPickedAccountsForTests();
+});
+
 test("offline is screen-level: the meta line says so instead of the last state, and drops the identity", async () => {
   mock.module("@/hooks/useRuntime", () => ({
     ...actualRuntimeHooks,
