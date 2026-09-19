@@ -121,6 +121,41 @@ export function runningClaudeTurnRecords(): TranscriptRecord[] {
   ];
 }
 
+/** One record of a SPLIT parallel-tool message.
+ *
+ * When the provider asks for several tools at once, the CLI writes one record
+ * per content block — same `message.id`, rising `apiBlockIndex` — and every one
+ * of them carries the whole message's `end_turn` stop reason while its own tool
+ * call is still outstanding. The stop reason is therefore not on its own a
+ * statement that no tool work is pending; the block the record carries is. */
+export function parallelToolBlockRecord(timestamp: string): TranscriptRecord {
+  return {
+    ...envelope(timestamp, "rec-parallel-block", "rec-prompt"),
+    type: "assistant",
+    apiBlockIndex: 2,
+    requestId: "req-parallel",
+    message: {
+      id: "msg-parallel",
+      model: "claude-opus-5",
+      role: "assistant",
+      type: "message",
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      content: [{ type: "tool_use", id: "toolu-parallel", name: "Grep", input: { pattern: "demo" } }],
+    },
+  };
+}
+
+/** A transcript whose last record is one block of such a message: the stop
+    reason says the message ended, the outstanding tool call says the turn did
+    not, and the turn is the thing a queued send waits on. */
+export function outstandingToolClaudeTurnRecords(): TranscriptRecord[] {
+  return [
+    promptRecord("2026-09-19T02:40:00.000Z"),
+    parallelToolBlockRecord("2026-09-19T02:41:00.000Z"),
+  ];
+}
+
 /** One JSONL transcript body from a record list. */
 export function transcriptBody(records: TranscriptRecord[]): string {
   return records.map((record) => JSON.stringify(record)).join("\n") + "\n";

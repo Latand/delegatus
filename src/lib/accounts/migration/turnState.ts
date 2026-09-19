@@ -26,10 +26,26 @@ function terminalApiError(record: RecordLike): boolean {
 /** The model id Claude stamps on an assistant record it wrote itself. */
 const SYNTHETIC_MODEL = "<synthetic>";
 
+/** Whether an assistant record asked for a tool.
+ *
+ * A stop reason is a statement about the MESSAGE, not about outstanding tool
+ * work, and the two come apart: when the provider asks for several tools at
+ * once the CLI writes one record per content block — same `message.id`, rising
+ * `apiBlockIndex` — and every one of those records carries the whole message's
+ * `end_turn` stop reason while its own tool call is still pending. So the block
+ * the record actually carries outranks its stop reason; reading the stop reason
+ * there would release the turn with tool calls outstanding and hand a queued
+ * message to an agent in the middle of one. */
+function assistantRequestsTool(record: RecordLike): boolean {
+  const content = (recordValue(record.message) ?? {}).content;
+  return recordsValue(content).some((part) => stringValue(part.type) === "tool_use");
+}
+
 /** The stop reasons on an assistant record that END the provider turn, as
     opposed to `tool_use`, which continues it, and a partial record, which
     carries none at all (issue #1792). */
 function assistantStopReasonEndsTurn(record: RecordLike): boolean {
+  if (assistantRequestsTool(record)) return false;
   const stop = stringValue((recordValue(record.message) ?? {}).stop_reason);
   return stop === "end_turn" || stop === "stop_sequence";
 }

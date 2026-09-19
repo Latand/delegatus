@@ -218,9 +218,36 @@ describe("issue 1792 — a Claude turn closes on the evidence a session transcri
     )).toEqual({ state: "busy", source: "assistant", terminalAt: null });
   });
 
-  test("both projections read the same stop reason the same way", () => {
-    const records = [assistant("end_turn")];
-    expect(turnStateFromRecords(records, "claude", true)).toEqual(turnStateFromRecords(records, "claude"));
+  /* A stop reason is a statement about the MESSAGE, not about outstanding tool
+     work. The CLI splits one API message that asked for several parallel tools
+     into one record per content block — same message id, rising
+     `apiBlockIndex` — and every one of those records carries the message's
+     `end_turn` stop reason while its own tool call is still pending. The block
+     the record carries outranks the stop reason. */
+  test("an end_turn record that still carries a tool_use block keeps the turn busy", () => {
+    const records = [assistant("end_turn", {
+      content: [{ type: "tool_use", id: "toolu-parallel", name: "Grep", input: { pattern: "demo" } }],
+    })];
+    expect(turnStateFromRecords(records, "claude", true)).toEqual({
+      state: "busy",
+      source: "assistant",
+      terminalAt: null,
+    });
+    expect(turnStateFromRecords(records, "claude")).toEqual(turnStateFromRecords(records, "claude", true));
+  });
+
+  test("a tool_use block anywhere in a mixed end_turn record keeps the turn busy", () => {
+    const records = [assistant("end_turn", {
+      content: [
+        { type: "text", text: "Reading both files." },
+        { type: "tool_use", id: "toolu-parallel", name: "Read", input: {} },
+      ],
+    })];
+    expect(turnStateFromRecords(records, "claude", true)).toEqual({
+      state: "busy",
+      source: "assistant",
+      terminalAt: null,
+    });
   });
 });
 
