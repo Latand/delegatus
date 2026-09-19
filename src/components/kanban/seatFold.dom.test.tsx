@@ -334,14 +334,18 @@ test("the v1 seat record carries its height and collapsed flags into v2 once", a
   expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}")).toEqual({ height: 300, collapsed: { [PROJECT]: true }, placement: "top", width: null });
 });
 
-const withPrevious = (previous: unknown[], currentTaskId: string | null = "task-current") => ({
+/* `currentTask` is the answer's own account of the live seat's notes task: its
+   id, its title and whether it holds notes. Null stands for a seat whose launch
+   minted no task at all. */
+const CURRENT_TASK = { taskId: "task-current", title: "Current seat", hasNotes: true };
+const withPrevious = (previous: unknown[], currentTask: unknown = CURRENT_TASK) => ({
   ...(seatRead as unknown as { status: object }),
-  status: { ...(seatRead as unknown as { status: object }).status, previous, currentTaskId },
+  status: { ...(seatRead as unknown as { status: object }).status, previous, currentTask },
 }) as never;
 
 const PREVIOUS = [
-  { conversationId: "conversation_prev_new", path: null, title: "Manager seat, release week", engine: "claude", heldFrom: "2026-09-18T14:02:00.000Z", heldTo: "2026-09-19T03:10:00.000Z", taskId: "task-new" },
-  { conversationId: "conversation_prev_old", path: null, title: null, engine: "codex", heldFrom: null, heldTo: "2026-09-18T14:02:00.000Z", taskId: "task-old" },
+  { conversationId: "conversation_prev_new", path: null, title: "Manager seat, release week", engine: "claude", heldFrom: "2026-09-18T14:02:00.000Z", heldTo: "2026-09-19T03:10:00.000Z", taskId: "task-new", hasNotes: true },
+  { conversationId: "conversation_prev_old", path: null, title: null, engine: "codex", heldFrom: null, heldTo: "2026-09-18T14:02:00.000Z", taskId: "task-old", hasNotes: true },
 ];
 const TASKS = [
   { id: "task-current", project: PROJECT, text: "Current seat", details: "current notes", status: "assigned", assignments: [] },
@@ -408,6 +412,31 @@ test("Previous seats is hidden at zero, and reads Seat notes when only the live 
   expect(control.textContent).toContain(translate("en", "orchPanel.seatNotesOnly"));
 });
 
+/* «A seat with no notes draws no Notes button» — and a page that does not
+   carry the seat's task cannot answer that by guessing, so the status read
+   answers it: `hasNotes`. */
+test("a seat whose task holds no notes draws no Notes control (#1841)", async () => {
+  const quiet = { taskId: "task-quiet", title: "Quiet seat", hasNotes: false };
+  /* The live seat alone, with a task that has no notes: nothing to open. */
+  const alone = mountWith(withPrevious([], quiet));
+  await settle();
+  expect(alone.querySelector("[data-previous-seats]")).toBeNull();
+
+  /* With previous seats the control is theirs, and the Current row offers no
+     notes it does not have. */
+  const host = mountWith(withPrevious(PREVIOUS, quiet));
+  await settle();
+  const control = host.querySelector("[data-previous-seats]") as HTMLButtonElement;
+  click(control);
+  const popover = dom.document.querySelector("[data-previous-seats-popover]") as unknown as HTMLElement;
+  const currentRow = popover.querySelector('[data-seat-row="' + CONVERSATION + '"]') as HTMLElement;
+  expect(currentRow.textContent).toContain("Quiet seat");
+  expect(currentRow.querySelector("[data-seat-notes-toggle]")).toBeNull();
+  /* The retired seats keep theirs. */
+  expect(popover.querySelector('[data-seat-row="conversation_prev_new"] [data-seat-notes-toggle]')).not.toBeNull();
+  flushSync(() => (document as Document).dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+});
+
 test("the popover sits under its control when right-aligning it would cross the panel's left edge", () => {
   /* Side placement at 1440: the panel starts at 248, the control ends at 394. */
   expect(popoverLeft({ left: 300, right: 394 }, 340, 1440, 248)).toBe(300);
@@ -438,9 +467,24 @@ test("phone: the sheet row reads Seat notes with the live seat alone, and the li
   /* Neither a task for the live seat nor a previous one: no row. */
   expect(mountNode(<MobilePreviousSeatsRow status={status(withPrevious([], null))} onOpen={() => {}} />).querySelector("[data-mobile-previous-seats]")).toBeNull();
 
+  /* A live seat whose task holds no notes: no row on the sheet either, since
+     the list would have nothing for it to open. */
+  expect(mountNode(<MobilePreviousSeatsRow status={status(withPrevious([], { taskId: "task-quiet", title: "Quiet seat", hasNotes: false }))} onOpen={() => {}} />)
+    .querySelector("[data-mobile-previous-seats]")).toBeNull();
+
   const list = mountNode(<MobilePreviousSeatsScreen status={status(withPrevious(PREVIOUS))} onBack={() => {}} />);
   const rows = [...list.querySelectorAll("[data-seat-row]")].map((node) => [node.getAttribute("data-seat-row"), node.getAttribute("data-seat-current")]);
   expect(rows).toEqual([[CONVERSATION, "1"], ["conversation_prev_new", "0"], ["conversation_prev_old", "0"]]);
+  /* The phone carries no task list, so the live seat is named by the answer
+     rather than falling back to «Untitled» beside named previous seats. */
+  const currentRow = list.querySelector('[data-seat-row="' + CONVERSATION + '"]') as HTMLElement;
+  expect(currentRow.textContent).toContain("Current seat");
+  expect(currentRow.textContent).not.toContain(translate("en", "orchPanel.seatUntitled"));
+  expect(currentRow.querySelector("[data-seat-notes-toggle]")).not.toBeNull();
   /* Back names the sheet it returns to. */
   expect(list.querySelector("[data-mobile-previous-back]")?.textContent?.trim()).toBe(translate("en", "orchPanel.title"));
+
+  /* And a retired seat with no notes draws no button on the phone either. */
+  const quietPrevious = mountNode(<MobilePreviousSeatsScreen status={status(withPrevious([{ ...PREVIOUS[0], hasNotes: false }]))} onBack={() => {}} />);
+  expect(quietPrevious.querySelector('[data-seat-row="conversation_prev_new"] [data-seat-notes-toggle]')).toBeNull();
 });

@@ -556,6 +556,18 @@ export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEAT
   return out;
 }
 
+/** A seat's notes task as the status read reports it (#1841): every surface,
+    including the ones that carry no task list, can name the seat and decide
+    whether to offer its notes without reading the store itself. */
+export interface SeatNotesTask {
+  taskId: string;
+  title: string | null;
+  /** Whether the task carries notes at all. A seat with none draws no Notes
+      control, so this has to be answered here rather than guessed by a surface
+      that cannot see the task. */
+  hasNotes: boolean;
+}
+
 /**
  * The task a seat conversation is assigned to, by conversation id or path: the
  * one seat launch minted, where the seat keeps its notes (`details`). The
@@ -563,10 +575,10 @@ export function previousOrchestratorSeats(project: string, limit = PREVIOUS_SEAT
  * the project's tasks.
  */
 export function seatTaskOf(
-  tasks: readonly Pick<BoardTask, "id" | "project" | "text" | "updatedAt" | "assignments" | "origin">[],
+  tasks: readonly Pick<BoardTask, "id" | "project" | "text" | "details" | "updatedAt" | "assignments" | "origin">[],
   project: string,
   seat: { conversationId: string | null; path: string | null },
-): { taskId: string; title: string | null } | null {
+): SeatNotesTask | null {
   const canonical = canonicalOrchestratorProject(project);
   let best: (typeof tasks)[number] | null = null;
   for (const task of tasks) {
@@ -578,7 +590,7 @@ export function seatTaskOf(
   }
   if (!best) return null;
   const title = best.origin?.refinement === "pending" ? "" : best.text.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return { taskId: best.id, title: title || null };
+  return { taskId: best.id, title: title || null, hasNotes: Boolean(best.details?.trim()) };
 }
 
 export type BeginSeatIntentResult =

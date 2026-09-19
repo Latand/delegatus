@@ -2058,6 +2058,9 @@ export const en = {
   "orchPanel.seatHeldUntil": "until {to}",
   "orchPanel.seatHeldSince": "since {from}",
   "orchPanel.seatNotes": "Notes",
+  /* A seat whose task turns out to hold nothing: the row says so rather than
+     opening an empty box (the control is gone before this in the common case). */
+  "orchPanel.seatNotesEmpty": "No notes yet.",
   "orchPanel.seatNotesLoading": "Loading notes…",
   "orchPanel.seatNotesFailed": "Could not load the notes.",
   "orchPanel.seatNotesRetry": "Retry",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { parseSeatStatus, type OrchestratorSeatStatus } from "./seatState";
 
@@ -44,29 +44,8 @@ interface ScopedRead {
 const answers = new Map<string, ScopedRead>();
 const readKey = (project: string, cwd: string | undefined): string => `${project}\0${cwd ?? ""}`;
 
-/* Readers of the cache that poll nothing themselves (#1841): the dashboard's
-   Tasks panel reads the answer the board's own poll keeps. */
-const answerListeners = new Set<() => void>();
-const subscribeAnswers = (listener: () => void) => {
-  answerListeners.add(listener);
-  return () => { answerListeners.delete(listener); };
-};
-
 export function resetOrchestratorSeatCacheForTests(): void {
   answers.clear();
-}
-
-/**
- * The last answer this tab holds for a project's seat, without a poll of its
- * own. Null until something that does poll (the board) has read it.
- */
-export function useOrchestratorSeatAnswer(project: string | null, cwd?: string): { status: OrchestratorSeatStatus | null; failed: boolean } | null {
-  const read = useSyncExternalStore(
-    subscribeAnswers,
-    () => (project ? answers.get(readKey(project, cwd)) ?? null : null),
-    () => null,
-  );
-  return read;
 }
 
 export async function fetchOrchestratorSeat(project: string, cwd?: string, signal?: AbortSignal): Promise<OrchestratorSeatStatus> {
@@ -109,7 +88,6 @@ export function useOrchestratorSeat(project: string | null, cwd?: string): Orche
     };
     answers.set(key, next);
     setRead(next);
-    for (const listener of answerListeners) listener();
   }, []);
 
   const refresh = useCallback(async () => {

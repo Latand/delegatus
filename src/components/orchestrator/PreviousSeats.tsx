@@ -28,11 +28,19 @@ export interface SeatListRow {
   /** Null for the live seat. */
   heldTo: string | null;
   taskId: string | null;
+  /** Whether the seat's task carries notes, as the status read answered it: a
+      seat with none draws no `Notes` control, on every surface. */
+  hasNotes: boolean;
   current: boolean;
 }
 
 /** The rows the popover lists, the live seat first. Empty while the read is
-    loading or failed, and then the control is not drawn. */
+    loading or failed, and then the control is not drawn.
+
+    Every row names itself from the answer, which carries the seat task's title
+    for the live seat as well as the retired ones: the phone's seat screens hold
+    no task list and would otherwise leave the live seat unnamed. A task list
+    the surface does carry wins, because an edit lands there first. */
 export function seatListRows(status: OrchestratorSeatStatus | null, tasks: readonly Pick<BoardTask, "id" | "text" | "origin">[] = [], currentEngine: string | null = null): SeatListRow[] {
   if (!status) return [];
   const titleOf = (taskId: string | null) => {
@@ -43,11 +51,20 @@ export function seatListRows(status: OrchestratorSeatStatus | null, tasks: reado
   const rows: SeatListRow[] = [];
   const seat = status.seat;
   if (seat?.conversationId && status.exists) {
-    const taskId = status.currentTaskId ?? null;
-    rows.push({ conversationId: seat.conversationId, title: titleOf(taskId), engine: currentEngine ?? seat.engine ?? null, heldFrom: seat.activatedAt, heldTo: null, taskId, current: true });
+    const task = status.currentTask ?? null;
+    rows.push({
+      conversationId: seat.conversationId,
+      title: titleOf(task?.taskId ?? null) ?? task?.title ?? null,
+      engine: currentEngine ?? seat.engine ?? null,
+      heldFrom: seat.activatedAt,
+      heldTo: null,
+      taskId: task?.taskId ?? null,
+      hasNotes: task?.hasNotes ?? false,
+      current: true,
+    });
   }
   for (const previous of status.previous ?? []) {
-    rows.push({ ...previous, title: previous.title ?? titleOf(previous.taskId), current: false });
+    rows.push({ ...previous, title: titleOf(previous.taskId) ?? previous.title, current: false });
   }
   return rows;
 }
@@ -121,13 +138,18 @@ function useSeatNotes(taskId: string | null, tasks: readonly Pick<BoardTask, "id
   return { state: fetched, retry };
 }
 
-/** Whether a row offers its notes: a task names it, and that task has notes
-    or is not in the list this page carries (it is read on demand). */
-function rowHasNotes(row: SeatListRow, tasks: readonly Pick<BoardTask, "id" | "details">[] | undefined): boolean {
+/**
+ * Whether a row offers its notes. A task names it AND that task has notes —
+ * never a guess: a surface that does not carry the task list reads the answer's
+ * own `hasNotes`, so a seat with no notes draws no `Notes` button there either.
+ * The freshest source wins: notes already fetched, then the page's task list,
+ * then the status read.
+ */
+export function rowHasNotes(row: SeatListRow, tasks: readonly Pick<BoardTask, "id" | "details">[] | undefined): boolean {
   if (!row.taskId) return false;
   if (fetchedNotes.has(row.taskId)) return Boolean(fetchedNotes.get(row.taskId));
   const local = tasks?.find((task) => task.id === row.taskId);
-  return local ? Boolean(local.details?.trim()) : true;
+  return local ? Boolean(local.details?.trim()) : row.hasNotes;
 }
 
 /**
@@ -251,7 +273,11 @@ function SeatRow({ row, tasks, notesOpen, onToggleNotes, onOpen, openByLink }: {
 }) {
   const { t, locale } = useLocale();
   const notes = useSeatNotes(row.taskId, tasks, notesOpen);
-  const hasNotes = rowHasNotes(row, tasks);
+  /* An on-demand read can land empty after the answer said the task had notes
+     (it was edited in between). The control then stays for as long as its row
+     is open and the row says there are none, instead of disappearing from
+     under the panel it just opened. */
+  const hasNotes = rowHasNotes(row, tasks) || notesOpen;
   const notesId = useRef(`seat-notes-${row.conversationId.replace(/[^a-zA-Z0-9_-]/g, "")}`).current;
   return (
     <div className="seat-row" data-seat-row={row.conversationId} data-seat-current={row.current ? "1" : "0"}>
@@ -285,7 +311,7 @@ function SeatRow({ row, tasks, notesOpen, onToggleNotes, onOpen, openByLink }: {
               <button type="button" className="notes-retry" onClick={notes.retry}>{t("orchPanel.seatNotesRetry")}</button>
             </span>
           ) : notes.state?.kind === "ready" ? (
-            notes.state.text
+            notes.state.text.trim() ? notes.state.text : <span className="empty" data-seat-notes-empty="">{t("orchPanel.seatNotesEmpty")}</span>
           ) : (
             <span role="status">{t("orchPanel.seatNotesLoading")}</span>
           )}
@@ -304,7 +330,7 @@ export function MobilePreviousSeatsRow({ status, onOpen }: { status: Orchestrato
   const { t } = useLocale();
   const rows = seatListRows(status);
   const count = rows.filter((row) => !row.current).length;
-  const notesOnly = count === 0 && rows.some((row) => row.current && row.taskId);
+  const notesOnly = count === 0 && rows.some((row) => row.current && rowHasNotes(row, undefined));
   if (!count && !notesOnly) return null;
   const label = notesOnly ? t("orchPanel.seatNotesOnly") : t("orchPanel.previousSeats");
   return (
@@ -371,7 +397,7 @@ export function MobilePreviousSeatsScreen({ status, currentEngine = null, onBack
         </span>
         <span className="truncate text-caption tabular-nums text-muted">{seatSpan(t, locale, row)}</span>
       </a>
-      {row.taskId ? (
+      {rowHasNotes(row, undefined) ? (
         <button
           type="button"
           data-seat-notes-toggle=""
@@ -416,7 +442,7 @@ function MobileNotes({ taskId }: { taskId: string | null }) {
           <button type="button" className="min-h-11 font-semibold text-accent" onClick={notes.retry}>{t("orchPanel.seatNotesRetry")}</button>
         </span>
       ) : notes.state?.kind === "ready" ? (
-        notes.state.text
+        notes.state.text.trim() ? notes.state.text : <span className="text-muted" data-seat-notes-empty="">{t("orchPanel.seatNotesEmpty")}</span>
       ) : (
         <span role="status">{t("orchPanel.seatNotesLoading")}</span>
       )}

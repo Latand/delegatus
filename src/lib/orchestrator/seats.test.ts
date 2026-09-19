@@ -614,12 +614,24 @@ test("a revocation written before spans were recorded reads back unchanged and l
 test("a seat's notes live in the task whose assignment names it, the newest when several do (#1841)", () => {
   const base = { project: "proj-a", status: "assigned", placement: "unplaced", createdAt: AT } as const;
   const tasks = [
-    { ...base, id: "old", text: "Old seat task", updatedAt: "2026-09-01T00:00:00.000Z", assignments: [{ conversationId: "conversation_1", path: null }] },
-    { ...base, id: "new", text: "Manager seat, release week\nmore", updatedAt: "2026-09-02T00:00:00.000Z", assignments: [{ conversationId: null, path: "/seats/one.jsonl" }] },
+    { ...base, id: "old", text: "Old seat task", details: "old notes", updatedAt: "2026-09-01T00:00:00.000Z", assignments: [{ conversationId: "conversation_1", path: null }] },
+    { ...base, id: "new", text: "Manager seat, release week\nmore", details: "release notes", updatedAt: "2026-09-02T00:00:00.000Z", assignments: [{ conversationId: null, path: "/seats/one.jsonl" }] },
     { ...base, id: "pending", text: "Placeholder", updatedAt: "2026-09-03T00:00:00.000Z", origin: { refinement: "pending" }, assignments: [{ conversationId: "conversation_2", path: null }] },
     { ...base, id: "elsewhere", project: "proj-b", text: "Other", updatedAt: "2026-09-04T00:00:00.000Z", assignments: [{ conversationId: "conversation_1", path: null }] },
   ] as unknown as Parameters<typeof seatTaskOf>[0];
-  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: "/seats/one.jsonl" })).toEqual({ taskId: "new", title: "Manager seat, release week" });
-  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "pending", title: null });
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: "/seats/one.jsonl" })).toEqual({ taskId: "new", title: "Manager seat, release week", hasNotes: true });
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "pending", title: null, hasNotes: false });
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_9", path: null })).toBeNull();
+});
+
+/* A seat with no notes draws no Notes control, and the surfaces that carry no
+   task list can only know that from the answer: the reader says so. */
+test("a seat task whose notes are empty or blank answers hasNotes false (#1841)", () => {
+  const base = { project: "proj-a", status: "assigned", placement: "unplaced", createdAt: AT, updatedAt: AT } as const;
+  const tasks = [
+    { ...base, id: "none", text: "Seat, no notes", assignments: [{ conversationId: "conversation_1", path: null }] },
+    { ...base, id: "blank", text: "Seat, blank notes", details: "   \n ", assignments: [{ conversationId: "conversation_2", path: null }] },
+  ] as unknown as Parameters<typeof seatTaskOf>[0];
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: null })).toEqual({ taskId: "none", title: "Seat, no notes", hasNotes: false });
+  expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "blank", title: "Seat, blank notes", hasNotes: false });
 });

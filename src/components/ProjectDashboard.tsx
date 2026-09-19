@@ -23,11 +23,11 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
-import { deriveOrchestratorPanelState, resolveSeatFile, seatRefsOf } from "./orchestrator/seatState";
+import { deriveOrchestratorPanelState, resolveSeatFile, retiredSeatPaths, seatRefsOf } from "./orchestrator/seatState";
 import { ConversationList } from "./ConversationList";
 import { DesktopConversations } from "./DesktopConversations";
 import { clearDraftStorage, draftBand, draftCwd, draftParentConversationId, draftSrc, resolveSystemDraftCwd, setDraftBand, setDraftCwd, setDraftSrc, setDraftText } from "./DraftAgentPane";
-import { useOrchestratorSeat, useOrchestratorSeatAnswer } from "./orchestrator/useOrchestratorSeat";
+import { useOrchestratorSeat } from "./orchestrator/useOrchestratorSeat";
 import { seatOnlyTask, type SeatRefs } from "@/lib/tasks/groupHide";
 import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
@@ -436,6 +436,14 @@ function ProjectDashboardView({
   const seatPath = seatFile?.path ?? seatRead.status?.seat?.path ?? null;
   const seatState = deriveOrchestratorPanelState({ status: seatRead.status, statusFailed: seatRead.failed,
     submitting: false, submitFailure: null, file: seatFile, surface: null });
+  /* The DESKTOP's one read of the seat (#1841). The phone's read above is
+     gated on its board leaf; this one is not gated on a face, because the
+     Tasks panel and its `Tasks N` count leave the seat's own tasks out
+     wherever the panel is open — and on the Conversations face the board,
+     which used to do this reading, is not mounted at all. The board below is
+     handed this answer (`seatRefs` and `seatRead`) and polls nothing itself,
+     so the desktop still makes exactly one request per interval. */
+  const desktopSeatRead = useOrchestratorSeat(isMobile ? null : project, projectCwd);
   const inlineCatalog = useMobileInlineCatalog(project, isMobile && loaded);
   const projectName = projectDisplayName(
     project,
@@ -1686,16 +1694,11 @@ function ProjectDashboardView({
   const closingPipelines = useClosingPipelines();
   /* Seats the project retired are the seat sheet's to list (#1841), never
      rows beside product work. A failed read hides nothing extra. */
-  const retiredSeatPaths = useMemo(() => {
-    const previous = seatRead.failed ? [] : seatRead.status?.previous ?? [];
-    if (!previous.length) return null;
-    const byConversation = new Map(files.flatMap((file) => (file.conversationId ? [[file.conversationId, file.path] as const] : [])));
-    return previous.flatMap((seat) => {
-      const path = seat.path ?? byConversation.get(seat.conversationId);
-      return path ? [path] : [];
-    });
-  }, [files, seatRead.failed, seatRead.status?.previous]);
-  const mobileHidden = useMemo(() => (retiredSeatPaths?.length ? new Set([...hiddenSet, ...retiredSeatPaths]) : hiddenSet), [hiddenSet, retiredSeatPaths]);
+  const retiredPaths = useMemo(
+    () => retiredSeatPaths(seatRead.failed ? [] : seatRead.status?.previous ?? [], files),
+    [files, seatRead.failed, seatRead.status?.previous],
+  );
+  const mobileHidden = useMemo(() => (retiredPaths.length ? new Set([...hiddenSet, ...retiredPaths]) : hiddenSet), [hiddenSet, retiredPaths]);
   const mobileBoardProps = {
     files,
     pipelines: activePipelines,
@@ -1971,15 +1974,21 @@ function ProjectDashboardView({
      (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
      row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
-     list (#1841): the Tasks panel and its count leave them out, reading the
-     seat answer the board's own poll keeps. */
-  const boardSeatAnswer = useOrchestratorSeatAnswer(kanbanLeaf ? project : null, projectCwd);
-  const boardSeatRefs = boardSeatAnswer ? seatRefsOf(boardSeatAnswer.status, boardSeatAnswer.failed) : null;
-  const boardSeatKey = boardSeatRefs ? JSON.stringify(boardSeatRefs) : "";
+     list (#1841): the Tasks panel and its count leave them out, on whichever
+     desktop face is mounted. The dashboard is therefore the desktop's ONE
+     reader of the seat — the Tasks panel and its count live out here, above
+     both faces — and the board is handed this same answer instead of polling
+     the route a second time. */
+  const desktopSeatRefs = seatRefsOf(desktopSeatRead.status, desktopSeatRead.failed);
+  const desktopSeatKey = desktopSeatRefs ? JSON.stringify(desktopSeatRefs) : "";
+  const seatRefsForBoard = useMemo<SeatRefs | null>(
+    () => (desktopSeatKey ? (JSON.parse(desktopSeatKey) as SeatRefs) : null),
+    [desktopSeatKey],
+  );
   const seatTaskIds = useMemo(() => {
-    const refs = boardSeatKey ? (JSON.parse(boardSeatKey) as SeatRefs) : null;
-    return new Set(projectTasks.filter((task) => seatOnlyTask(task, refs, pipelines)).map((task) => task.id));
-  }, [boardSeatKey, projectTasks, pipelines]);
+    if (!seatRefsForBoard) return new Set<string>();
+    return new Set(projectTasks.filter((task) => seatOnlyTask(task, seatRefsForBoard, pipelines)).map((task) => task.id));
+  }, [seatRefsForBoard, projectTasks, pipelines]);
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
   const openTaskCount = projectTasks.filter((task) => task.status !== "done" && !seatTaskIds.has(task.id)).length;
   const barLead = (wide: boolean) => (
@@ -2338,10 +2347,11 @@ function ProjectDashboardView({
                 focus={highlight}
                 onConversationOpened={markPathSeen}
                 projectCwd={projectCwd}
+                seatRefs={seatRefsForBoard}
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
-                seat={(boardId, seatRead) => (
-                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={seatRead} />
+                seat={(boardId) => (
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}
                 onOpenConversations={openConversationsForOneLook}
                 onNewAgent={addDraft}

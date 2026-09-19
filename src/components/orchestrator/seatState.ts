@@ -45,8 +45,18 @@ export interface OrchestratorSeatStatus {
   /** Seats that held the project before this one, newest first (#1841). Absent
       from an answer written before the route carried them. */
   previous?: PreviousSeat[];
-  /** The task that keeps the current seat's notes, when one names it. */
-  currentTaskId?: string | null;
+  /** The task that keeps the CURRENT seat's notes, when one names it: its id,
+      its title and whether it holds notes at all. Read from the answer so the
+      phone's seat screens, which carry no task list, can still name the live
+      seat and know whether to offer its notes. */
+  currentTask?: SeatNotesTaskRead | null;
+}
+
+/** A seat's notes task as the answer carries it. */
+export interface SeatNotesTaskRead {
+  taskId: string;
+  title: string | null;
+  hasNotes: boolean;
 }
 
 /** A seat that held the project and was revoked, as the route reports it. */
@@ -60,6 +70,8 @@ export interface PreviousSeat {
   heldTo: string;
   /** The task that keeps its notes. */
   taskId: string | null;
+  /** Whether that task carries notes at all. */
+  hasNotes: boolean;
 }
 
 /** One terminalized designation attempt, as the panel reads it. */
@@ -81,7 +93,7 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     exists?: unknown;
     viewerMcpRegistered?: unknown;
     previous?: unknown;
-    currentTaskId?: unknown;
+    currentTask?: unknown;
   } | null;
   return {
     seat: seatOf(raw?.seat),
@@ -90,11 +102,19 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     exists: raw?.exists !== false,
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
     previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
-    currentTaskId: typeof raw?.currentTaskId === "string" && raw.currentTaskId ? raw.currentTaskId : null,
+    currentTask: seatNotesTaskOf(raw?.currentTask),
   };
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+
+function seatNotesTaskOf(value: unknown): SeatNotesTaskRead | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const taskId = text(row.taskId);
+  if (!taskId) return null;
+  return { taskId, title: text(row.title), hasNotes: row.hasNotes === true };
+}
 
 function previousSeatOf(value: unknown): PreviousSeat | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -110,6 +130,7 @@ function previousSeatOf(value: unknown): PreviousSeat | null {
     heldFrom: text(row.heldFrom),
     heldTo,
     taskId: text(row.taskId),
+    hasNotes: row.hasNotes === true,
   };
 }
 
@@ -137,6 +158,31 @@ export function seatRefsOf(status: OrchestratorSeatStatus | null, failed = false
       paths: previous.flatMap((seat) => (seat.path ? [seat.path] : [])),
     },
   };
+}
+
+/**
+ * Every transcript path a seat the project RETIRED can be drawn under (#1841),
+ * for the surfaces that keep it out of their rows by path (the phone's board).
+ *
+ * Both sources are taken, never one in preference to the other: a stored
+ * revocation path goes stale on its own — the identity wave rekeys `seats[*]`
+ * and not the revocations, and a conversation that moves accounts keeps its id
+ * while its transcript path changes — so preferring it would put the retired
+ * seat back on the board as a row beside product work.
+ */
+export function retiredSeatPaths(
+  previous: readonly Pick<PreviousSeat, "conversationId" | "path">[],
+  files: readonly Pick<FileEntry, "path" | "conversationId">[],
+): string[] {
+  if (!previous.length) return [];
+  const byConversation = new Map(files.flatMap((file) => (file.conversationId ? [[file.conversationId, file.path] as const] : [])));
+  const paths = new Set<string>();
+  for (const seat of previous) {
+    for (const path of [seat.path, byConversation.get(seat.conversationId) ?? null]) {
+      if (path) paths.add(path);
+    }
+  }
+  return [...paths];
 }
 
 function failureOf(value: unknown): SeatFailureRecord | null {

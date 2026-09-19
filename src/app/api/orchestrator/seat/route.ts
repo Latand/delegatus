@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
-import { orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat } from "@/lib/orchestrator/seats";
+import { orchestratorSeatFor, previousOrchestratorSeats, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { loadTasks } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -35,13 +35,18 @@ interface SeatStatus {
   /** The seats that held the project before this one, newest first (#1841),
       each with the task that keeps its notes. */
   previous: PreviousSeatRow[];
-  /** The task that keeps the current seat's notes, when one names it. */
-  currentTaskId: string | null;
+  /** The task that keeps the CURRENT seat's notes, with its title and whether
+      it has notes at all (#1841). Carried on the answer because the phone's
+      seat screens and the collapsed strip name the live seat without holding
+      the project's task list. */
+  currentTask: SeatNotesTask | null;
 }
 
 interface PreviousSeatRow extends PreviousOrchestratorSeat {
   title: string | null;
   taskId: string | null;
+  /** Whether that task carries notes; a seat with none draws no Notes control. */
+  hasNotes: boolean;
 }
 
 interface SeatFailure {
@@ -69,7 +74,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
   }
   const previous: PreviousSeatRow[] = retired.map((seat) => {
     const task = seatTaskOf(tasks, project, seat);
-    return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null };
+    return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
   return NextResponse.json({
     seat: active,
@@ -87,7 +92,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | A
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
-    currentTaskId: active ? seatTaskOf(tasks, project, active)?.taskId ?? null : null,
+    currentTask: active ? seatTaskOf(tasks, project, active) : null,
   });
 }
 

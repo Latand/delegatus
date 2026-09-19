@@ -21,8 +21,6 @@ import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { updateTask } from "@/components/tasks/taskApi";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
-import { useOrchestratorSeat, type OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
-import { seatRefsOf } from "@/components/orchestrator/seatState";
 import { useKanbanSeat } from "./kanbanSeatStore";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { cleanTitle } from "@/components/utils";
@@ -148,7 +146,7 @@ export interface KanbanBoardProps {
   aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
-  seat?: (boardId: string, seatRead: OrchestratorSeatRead | null) => ReactNode;
+  seat?: (boardId: string) => ReactNode;
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
@@ -176,11 +174,13 @@ export interface KanbanBoardProps {
   closedPaths?: readonly string[];
   /** Restore a closed conversation to the board. */
   onRestoreConversation?: (file: FileEntry) => void;
-  /** The project's checkout, for the orchestrator seat read. */
+  /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
-  /** The project's seat as a caller already knows it; read from the seat
-      route when absent. */
-  seatRefs?: SeatRefs | null;
+  /** The project's seat as its owner read it: every conversation the seat
+      record names, or null while that is unknown. Required, because the board
+      does not read the seat itself — the page that owns the Tasks panel does
+      (#1841), and a second reader here would poll the same route twice. */
+  seatRefs: SeatRefs | null;
   mutationPorts?: TaskMutationPorts;
   assignmentPorts?: AssignmentPorts;
   /** Where open readers are remembered; this browser's storage by default. */
@@ -401,23 +401,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [allTasks, edits]);
   const { bands, projection } = useBands({ ...props, allTasks: effectiveTasks });
-  /* The seat as its route reports it, active and pending. While it is unknown
-     the board guesses nothing: the × stays, and the server decides. This is
-     the page's one read of the seat: the orchestrator panel above the columns
-     is handed the same read and polls nothing of its own. */
-  const seatRead = useOrchestratorSeat(props.seatRefs === undefined ? project : null, props.projectCwd);
-  /* Every conversation the seat record names leaves the bands (#1841). A
-     failed read draws them as before, current seat included: hiding work on
-     a record the board could not read would be worse than a seat card. */
-  const ownSeatRefs = props.seatRefs === undefined ? seatRefsOf(seatRead.status, seatRead.failed) : null;
-  const seatKey = props.seatRefs !== undefined
-    ? (props.seatRefs ? JSON.stringify(props.seatRefs) : "")
-    : (ownSeatRefs ? JSON.stringify(ownSeatRefs) : "");
-  const seatRefs = useMemo<SeatRefs | null>(() => {
-    if (props.seatRefs !== undefined) return props.seatRefs;
-    return ownSeatRefs;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by what the seat names
-  }, [seatKey]);
+  /* Every conversation the project's seat record names leaves the bands
+     (#1841), as the page that read it reports them. Null is «not known yet»:
+     the board hides nothing on a guess, and a failed read arrives here as the
+     current seat alone, so work never disappears behind a record nobody could
+     read. Re-keyed by what the seat names, so a fresh answer with the same
+     content does not rebuild the model. */
+  const seatKey = props.seatRefs ? JSON.stringify(props.seatRefs) : "";
+  const seatRefs = useMemo<SeatRefs | null>(
+    () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
+    [seatKey],
+  );
   /* The orchestrator seat sits above the columns or, docked at the side,
      between the rail and them (#1841): one choice per browser. */
   const seatFrame = useKanbanSeat(project);
@@ -441,7 +435,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusin", onWork);
     };
   }, []);
-  const seatView = props.seat ? props.seat(boardId, props.seatRefs === undefined ? seatRead : null) : null;
+  const seatView = props.seat ? props.seat(boardId) : null;
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */

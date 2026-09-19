@@ -734,6 +734,7 @@
   font-size: var(--text-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; color: var(--color-secondary);
 }
 .kb .seats-pop .notes-retry { color: var(--color-accent); font-weight: 600; }
+.kb .seats-pop .notes .empty { color: var(--color-muted); }
 
 @media (max-width: 1199px) { .kb .seat:not(.side) { width: calc(100% - 32px); margin-top: 10px; } }
 @media (max-width: 767px) {

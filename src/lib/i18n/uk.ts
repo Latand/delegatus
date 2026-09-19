@@ -2000,6 +2000,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.seatHeldUntil": "до {to}",
   "orchPanel.seatHeldSince": "з {from}",
   "orchPanel.seatNotes": "Нотатки",
+  "orchPanel.seatNotesEmpty": "Нотаток ще немає.",
   "orchPanel.seatNotesLoading": "Завантаження нотаток…",
   "orchPanel.seatNotesFailed": "Не вдалося завантажити нотатки.",
   "orchPanel.seatNotesRetry": "Повторити",
