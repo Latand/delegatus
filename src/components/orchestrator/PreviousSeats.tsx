@@ -329,10 +329,15 @@ export function MobilePreviousSeatsRow({ status, onOpen }: { status: Orchestrato
  * «Current», then the previous ones, as the same two-line rows at 56 px, and
  * a row's notes as a sub-screen. `onBack` returns to the seat.
  */
-export function MobilePreviousSeatsScreen({ status, onBack }: { status: OrchestratorSeatStatus | null; onBack: () => void }) {
+export function MobilePreviousSeatsScreen({ status, currentEngine = null, onBack }: {
+  status: OrchestratorSeatStatus | null;
+  /** The live seat's engine, as its conversation reports it. */
+  currentEngine?: string | null;
+  onBack: () => void;
+}) {
   const { t, locale } = useLocale();
   const [notesFor, setNotesFor] = useState<SeatListRow | null>(null);
-  const rows = seatListRows(status);
+  const rows = seatListRows(status, [], currentEngine);
   const current = rows.filter((row) => row.current);
   const previous = rows.filter((row) => !row.current);
   const back = (label: string, run: () => void) => (

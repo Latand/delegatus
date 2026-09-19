@@ -381,7 +381,7 @@ function SeatStatusSheet({
             ) : null}
           </Centered>
         ) : state.kind === "live" && previousOpen ? (
-          <MobilePreviousSeatsScreen status={status} onBack={() => setPreviousOpen(false)} />
+          <MobilePreviousSeatsScreen status={status} currentEngine={file?.engine ?? null} onBack={() => setPreviousOpen(false)} />
         ) : state.kind === "live" ? (
           <LiveView state={state} project={project} file={file} incumbent={incumbent} now={now} onEditMandate={rotate.onOpen} onOpenTick={tick.onOpen} previousRow={<MobilePreviousSeatsRow status={status} onOpen={() => setPreviousOpen(true)} />} />
         ) : (

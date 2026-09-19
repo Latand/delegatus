@@ -33,9 +33,12 @@
  * popover with one Notes row open, inside the viewport and clear of the head
  * controls; the top strip, the side panel and the side rail with the board
  * growing by what they free and the header toggle's dot in the seat's colour;
- * and a shelf taking the wide share, pinned through work in Assigned and a
- * reload — at 1440 and 1280 in en and uk, light and dark, and the phone's
- * Previous seats row, list and notes at 390 × 844.
+ * the popover under its control in the strip and at the side, the side seat
+ * leaving the columns scrolling at 1280; and a shelf taking the wide share with
+ * the workspace's tile grid, pinned through work in Assigned and a reload,
+ * while the Overview keeps its own shares — at 1440 and 1280 in en and uk,
+ * light and dark, and the phone's Previous seats row (drawn as the tick row),
+ * list with the live seat first, and notes at 390 × 844.
  *
  * With BOARD_CAPTURE_CASE=account-removal it drives the accounts dialog's
  * removal answers (#1857) on the same seeded accounts, with every DELETE
@@ -2659,6 +2662,7 @@ async function seatsMain(which: SeatCase): Promise<void> {
           must(reading.popoverX >= reading.seatX && (reading.popoverX === reading.controlX || Math.abs(reading.popoverX + 340 - reading.controlRight) <= 1), `${tag} ${name}: the popover starts at ${reading.popoverX}, the seat at ${reading.seatX}, the control at ${reading.controlX}–${reading.controlRight}`);
           return reading;
         };
+        entry.sideFoldIcon = await page.evaluate(() => /lucide-(chevron-[a-z]+)/.exec(document.querySelector("[data-seat-collapse] svg")?.getAttribute("class") ?? "")?.[1] ?? null);
         entry.popoverSide = await popoverIn("side");
         await page.click("[data-seat-collapse]");
         await page.waitForTimeout(600);
@@ -2672,7 +2676,7 @@ async function seatsMain(which: SeatCase): Promise<void> {
         /* Docked at the side the board keeps its columns: scrolling at 1280, never tabs. */
         must(sideExpanded!.board !== "tabs" && sideExpanded!.columns.every((column) => column.rect.w >= 200), `${tag}: beside the side seat the board is ${sideExpanded!.board} (${sideExpanded!.columns.map((column) => `${column.status} ${column.rect.w}`).join(", ")})`);
         /* The fold points left, into the rail. */
-        must(await page.evaluate(() => document.querySelector("[data-seat-collapse] svg")?.getAttribute("class")?.includes("lucide-chevron-left") ?? false), `${tag}: the side fold does not point left`);
+        must(entry.sideFoldIcon === "chevron-left", `${tag}: the side fold's arrow is ${entry.sideFoldIcon}`);
         /* The side head's first row holds the title and both controls. */
         const sideRow = (name: RegExp) => sideExpanded!.headControls.find((control) => name.test(control.name))?.rect.y ?? -1;
         must(sideRow(/Dock|Закріпити/) === sideRow(/(Collapse|Згорнути)/), `${tag}: at the side the fold sits on another row than the placement switch`);
