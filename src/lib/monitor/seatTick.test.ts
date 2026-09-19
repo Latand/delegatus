@@ -1511,3 +1511,37 @@ test("a provisioning announcement does not displace the lane's later settlements
   expect(verdict.items[0]!.kind).toBe("pipeline");
   expect(verdict.items[0]!.label).toContain("completed, and nobody has closed it out");
 });
+
+test("a child whose host died over an open turn is named once and then keeps the project's hour, however much the board moves (#1881)", () => {
+  const orphan = child({ status: "running", outcome: null, terminalAt: null, activity: { lifecycle: "gone", reason: "host_gone_turn_open" } });
+  let state = emptySeatTickState();
+  const wakes: { minute: number; reasons: string[] }[] = [];
+  for (let minute = 0; minute <= 180; minute += 5) {
+    const now = NOW + minute * MINUTE;
+    /* A working board: something else moved at every check, so the retry
+       guard never holds and only the bound spaces the wakes. */
+    const fingerprint = `board${minute}.prs`;
+    const decision = seatTickDecision(input({ now, children: [orphan], changeFingerprint: fingerprint, state }));
+    state = decision.state;
+    if (decision.verdict.kind !== "wake") continue;
+    wakes.push({ minute, reasons: reasonsOf(decision.verdict) });
+    state = seatTickWakeCommit(state, seatTickWakeCommitPlan(decision.verdict, { fingerprint, eventsThrough: 0 })!, now);
+  }
+  const stall = wakes.findIndex((wake) => wake.reasons.includes("stalled"));
+  expect(stall).toBeGreaterThanOrEqual(0);
+  /* After the stall wake landed, the child raises nothing faster than the hour. */
+  for (let index = stall + 1; index < wakes.length; index++) {
+    expect(wakes[index]!.minute - wakes[index - 1]!.minute).toBeGreaterThanOrEqual(SEAT_TICK_WAKE_INTERVAL_MS / MINUTE);
+  }
+  expect(wakes.length).toBeLessThanOrEqual(5);
+});
+
+test("a child seen stalled once does not shorten the bound until the stall is confirmed on a second check (#1881)", () => {
+  const orphan = child({ status: "running", outcome: null, terminalAt: null, activity: { lifecycle: "gone", reason: "host_gone_turn_open" } });
+  const lastWakeAt = new Date(NOW - 10 * MINUTE).toISOString();
+  /* First sighting: nothing to name yet, so the bound is the project's own. */
+  expect(seatTickDecision(input({ children: [orphan], state: stateWith({ lastWakeAt }) })).verdict.kind).toBe("quiet");
+  /* Seen at the previous check as well: confirmed, and due at once. */
+  expect(seatTickDecision(input({ children: [orphan], state: stateWith({ lastWakeAt, stalledSeen: [`child:${orphan.conversationId}`] }) })).verdict)
+    .toMatchObject({ kind: "wake", reasons: [{ kind: "stalled" }] });
+});

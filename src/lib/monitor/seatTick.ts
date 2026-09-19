@@ -364,11 +364,16 @@ function stalledChildren(input: SeatTickCheckInput): { child: SeatTickChildInput
   for (const child of input.children) {
     if (!isRunningChild(child)) continue;
     const activity = child.activity;
-    if (activity && (activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && isStalledActivity(activity)) {
       found.push({ child, reason: `child ${child.conversationId} runs a turn the registry reports ${activity.lifecycle} (${activity.reason})` });
     }
   }
   return found;
+}
+
+/** The registry's verdict that no live host is behind this turn. */
+function isStalledActivity(activity: SeatTickChildInput["activity"]): boolean {
+  return activity !== null && (activity.lifecycle === "stalled" || activity.lifecycle === "gone");
 }
 
 /**
@@ -1082,11 +1087,20 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next
      check, and running children bring the interval wake to a quarter of an
-     hour. With neither, the project's own interval stands. */
-  const childrenSettled = harvest.length > 0 || offeredChildStalls.length > 0;
+     hour. With neither, the project's own interval stands.
+
+     A stall counts once it is confirmed, the same second sighting the stall
+     reason waits for. And only a child with a live host behind it shortens the
+     bound to the quarter hour: a worker whose host died over an open turn is
+     named once by the stall path and then stays open for ever, so on a board
+     that moves every check it would wake the seat four times an hour about a
+     condition nothing but the seat's own cleanup ends. It keeps the project's
+     own interval, as it did before. */
+  const childrenSettled = harvest.length > 0 || persistedChildStalls.length > 0;
+  const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
-    : runningChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
+    : liveChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
   const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
