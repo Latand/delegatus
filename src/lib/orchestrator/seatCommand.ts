@@ -10,6 +10,7 @@ import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/a
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
+import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
@@ -726,6 +727,10 @@ async function runOrchestratorSeatRequest(
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
+  /* #1874: a key the named checkout has since moved on from (the folder gained
+     a repository or an origin) is recorded as succeeded first, so the seat is
+     designated under the key its lanes will be written to. */
+  recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
   const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
   if (!mandate.trim()) return { status: 400, body: { error: "mandate is required" } };
