@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 
-import { AgentRegistry, type ViewerConversationId } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { AgentRegistry } from "@/lib/agent/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { HostState } from "./engineHost";
