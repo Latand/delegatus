@@ -20,7 +20,8 @@
  * both views, hover that never takes the accent, no undo or redo anywhere, and
  * ⋯ rules only between groups that drew a row, the last control 16 px clear of
  * the island, and the same bar spanning the Tasks panel when it is open, with
- * the panel's header clear of the island — at 2540, 1850 and 1280 px in en and
+ * the panel's header clear of the island, and a real Tab from ⋯ landing on the
+ * island — at 2540, 1850 and 1280 px in en and
  * uk, light and dark, under a 21-character project name — and the phone's 52 px
  * bar in the same four.
  *
@@ -1367,6 +1368,15 @@ async function headerMain(): Promise<void> {
       must(offRhythm.length === 1 && offRhythm[0]! > 16, `${tag}: gaps ${gaps.join(", ")} are not 8 / 16 around one spacer`);
       must(reading.island !== null && reading.bar !== null && reading.island.y >= reading.bar.y && reading.island.y + reading.island.h <= reading.bar.y + reading.bar.h, `${tag}: the island is not inside the bar`);
       must(/[1-9]/.test(reading.islandText), `${tag}: the island reads «${reading.islandText}», nothing waiting`);
+      /* The island is drawn after ⋯, so a real Tab from ⋯ lands on it before anything in the board. */
+      await page.focus("[data-kanban-board] header.bar [data-bar-more]");
+      await page.keyboard.press("Tab");
+      const tabAfterMore = await page.evaluate(() => {
+        const active = document.activeElement;
+        return { inIsland: Boolean(active?.closest("[data-attention-island]")), label: active?.getAttribute("aria-label") ?? active?.textContent?.replace(/\s+/g, " ").trim() ?? "" };
+      });
+      must(tabAfterMore.inIsland, `${tag}: Tab from ⋯ lands on «${tabAfterMore.label}», not the island`);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       must(reading.toast === null || (reading.bar !== null && reading.toast.y >= reading.bar.y + reading.bar.h + 4), `${tag}: the toast starts at y ${reading.toast?.y}, on the bar`);
       must(reading.hidden !== null && /[1-9]/.test(reading.hidden), `${tag}: Hidden reads «${reading.hidden}»`);
       must(wide || (reading.hidden !== null && /^\d+$/.test(reading.hidden)), `${tag}: narrow, Hidden reads «${reading.hidden}», not its icon and count`);
@@ -1489,7 +1499,7 @@ async function headerMain(): Promise<void> {
       must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
       for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
       await page.click("[data-task-panel-toggle]");
-      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
+      report[tag] = { ...reading, gaps, islandClearance, tabAfterMore, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
       await context.close();
 
       /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */
