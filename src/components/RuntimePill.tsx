@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { useAccountName, useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import {
@@ -184,6 +184,9 @@ export function RuntimePill({
   const projectedIntent = pillSurface === "structured" ? runtimeSession?.pendingReconfigure?.accountId ?? null : null;
   /** Where the next message goes: the intended account while one waits, else the one it runs on. */
   const { next: nextAccount } = useIntendedAccount(cardId, runsOnAccount, projectedIntent);
+  /* Accounts are named by label on every surface, the id only for one the list does not enumerate. */
+  const nameOf = useAccountName(engine ?? "claude");
+  const moving = nextAccount !== runsOnAccount;
 
   /* eslint-disable react-hooks/set-state-in-effect -- reloading the persisted
      draft/phase from localStorage when the conversation identity changes is a
@@ -480,8 +483,8 @@ export function RuntimePill({
     localStorage.removeItem(phaseOperationKey(file));
     setApplyState((state) => (state === "pending" || state === "confirming" || state === "error" ? "idle" : state));
     setAnnounce(accountId === runsOnAccount
-      ? t("mobile2.composer.accountRunsOn", { account: accountId })
-      : t("mobile2.composer.accountRunsOnNext", { account: runsOnAccount, next: accountId }));
+      ? t("mobile2.composer.accountRunsOn", { account: nameOf(accountId) })
+      : t("mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(accountId) }));
     const draft = liveDraftRef.current;
     try {
       const response = await fetch("/api/tmux", {
@@ -503,7 +506,7 @@ export function RuntimePill({
       if (readPickedAccount(cardId) === accountId) setPickedAccount(cardId, previous);
       pushTaskToast("err", cause instanceof Error ? cause.message : t("runtimeConfig.failed"));
     }
-  }, [cardId, engine, file, nextAccount, runsOnAccount, runtimeConversationId, t]);
+  }, [cardId, engine, file, nameOf, nextAccount, runsOnAccount, runtimeConversationId, t]);
 
   const closePopover = useCallback(() => {
     setOpen(false);
@@ -585,7 +588,11 @@ export function RuntimePill({
         aria-haspopup={isMobile ? "dialog" : "menu"}
         aria-expanded={open}
         aria-busy={applying || undefined}
-        aria-label={limitedAccount ? `${t("composer.runtimePill")} — ${chipText}` : faceLabel}
+        aria-label={limitedAccount
+          ? `${t("composer.runtimePill")} — ${chipText}`
+          : accountChoice && moving
+            ? `${faceLabel} · ${t("mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(nextAccount) })}`
+            : faceLabel}
         data-runtime-pill
         /* The composer box's chip is what opens the «Next message» sheet
             (mobile v2 §4.4) — the one model/reasoning surface on the phone. */
@@ -625,6 +632,13 @@ export function RuntimePill({
             <span className="max-w-[52vw] truncate md:max-w-[16rem]">
               {faceModelShort} · {faceTier}
             </span>
+            {/* A pick waiting for the next message marks the pill it was made on, so the answer to «did it
+                take» stays where the tap was once the popover closes (#1846 critique). */}
+            {accountChoice && moving ? (
+              <span className="max-w-[10rem] truncate text-accent" data-runtime-pill-next-account>
+                → {nameOf(nextAccount)}
+              </span>
+            ) : null}
             {applying ? (
               <Loader2 className="h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
             ) : (
@@ -646,6 +660,7 @@ export function RuntimePill({
           t={t}
           engine={engine}
           account={runsOnAccount}
+          nameOf={nameOf}
           accountChoice={accountChoice}
           face={face}
           efforts={efforts}
@@ -668,6 +683,7 @@ export function RuntimePill({
           t={t}
           engine={engine}
           account={runsOnAccount}
+          nameOf={nameOf}
           accountChoice={accountChoice}
           owner={pillRef.current?.ownerDocument ?? document}
           face={face}
@@ -705,6 +721,7 @@ export function RuntimePill({
 export function RuntimeSwitchHold({ file }: { file: FileEntry }) {
   const { t } = useLocale();
   const [released, setReleased] = useState<string | null>(null);
+  const nameOf = useAccountName(file.engine === "codex" ? "codex" : "claude");
   const hold = file.switchHold && file.switchHold.since !== released ? file.switchHold : null;
   if (!hold) return null;
   const runsOn = accountIdFromPath(file.path);
@@ -727,11 +744,11 @@ export function RuntimeSwitchHold({ file }: { file: FileEntry }) {
   return (
     <div className="flex w-full basis-full flex-col gap-1.5 rounded-control bg-danger-soft px-2.5 py-2 text-label" role="alert" data-runtime-switch-hold>
       <p className="leading-snug text-danger">
-        {t("runtimeConfig.switchHeld", { account: hold.targetAccountId, reason: switchHoldReason(t, hold.reason) })}
+        {t("runtimeConfig.switchHeld", { account: nameOf(hold.targetAccountId), reason: switchHoldReason(t, hold.reason) })}
       </p>
       <div className="flex flex-wrap gap-2">
         <button type="button" data-runtime-switch-hold-keep onClick={() => void keepCurrent()} className={action}>
-          {t("runtimeConfig.sendOnCurrent", { account: runsOn })}
+          {t("runtimeConfig.sendOnCurrent", { account: nameOf(runsOn) })}
         </button>
         <button type="button" data-runtime-switch-hold-pick onClick={() => requestAccountChoice(conversationIdentity(file))} className={action}>
           {t("runtimeConfig.pickAnotherAccount")}
@@ -767,11 +784,11 @@ interface AccountChoice {
   pick: (accountId: string) => void;
 }
 
-/** «runs on A», or «runs on A · next on B» while a pick waits for the next message (#1846). */
-function accountLine(t: TFunction, account: string, choice: AccountChoice | null | undefined): string {
+/** «runs on A», or «runs on A · next on B» while a pick waits for the next message (#1846), by the names the rows use. */
+function accountLine(t: TFunction, account: string, choice: AccountChoice | null | undefined, nameOf: (id: string) => string): string {
   return choice && choice.next !== account
-    ? t("mobile2.composer.accountRunsOnNext", { account, next: choice.next })
-    : t("mobile2.composer.accountRunsOn", { account });
+    ? t("mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(choice.next) })
+    : t("mobile2.composer.accountRunsOn", { account: nameOf(account) });
 }
 
 interface PanelProps {
@@ -779,6 +796,8 @@ interface PanelProps {
   engine: "claude" | "codex";
   /** The account this conversation runs on, which both surfaces name (#1795). */
   account: string;
+  /** The name an account goes by: its label, else its id (#1846). */
+  nameOf: (id: string) => string;
   /** Present on a structured conversation, whose account is chosen per conversation (#1846). */
   accountChoice?: AccountChoice | null;
   face: RuntimeDraft;
@@ -795,7 +814,7 @@ interface PanelProps {
 }
 
 function RuntimePopover({
-  t, engine, account, accountChoice, face, efforts, speedShown, panel, setPanel,
+  t, engine, account, nameOf, accountChoice, face, efforts, speedShown, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -814,9 +833,9 @@ function RuntimePopover({
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
     t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions,
+    onSelectEffort, onSelectModel, onSelectFast, onOpenPanel: setPanel, accountChoice, accountOptions, nameOf,
   }), [t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
-    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions]);
+    onSelectEffort, onSelectModel, onSelectFast, setPanel, accountChoice, accountOptions, nameOf]);
 
   const focusableIndexes = useMemo(
     () => rows.map((row, index) => (row.enabled ? index : -1)).filter((index) => index >= 0),
@@ -899,7 +918,7 @@ function RuntimePopover({
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
           <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
-            {accountLine(t, account, accountChoice)}
+            {accountLine(t, account, accountChoice, nameOf)}
           </div>
           <RowGroup label={t("composer.reasoningGroup")}>
             {rows.filter((row) => row.kind === "tier").map((row) => (
@@ -973,7 +992,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 
 function buildRows({
   t, engine, face, efforts, speedShown, panel, effortLocked, modelLocked, speedLocked, lockReason,
-  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions,
+  onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf,
 }: Omit<PanelProps, "onClose" | "account"> & {
   panel: Panel;
   onOpenPanel: (panel: Panel) => void;
@@ -1007,7 +1026,7 @@ function buildRows({
     const options = accountOptions ?? [];
     const listed = options.some((option) => option.id === accountChoice.runsOn)
       ? options
-      : [{ id: accountChoice.runsOn, label: accountChoice.runsOn }, ...options];
+      : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
     return [
       back(t("mobile2.composer.accountGroup")),
       ...listed.map((option): Row => ({
@@ -1063,7 +1082,7 @@ function buildRows({
   if (accountChoice) {
     submenus.push({
       key: "account", kind: "submenu", label: t("mobile2.composer.accountGroup"),
-      detail: accountChoice.next,
+      detail: nameOf(accountChoice.next),
       checked: false, enabled: true, submenu: "account", role: "menuitem", activate: () => onOpenPanel("account"),
     });
   }
@@ -1135,7 +1154,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 function RuntimeSheet({
-  t, engine, account, accountChoice, owner, face, efforts, speedShown,
+  t, engine, account, nameOf, accountChoice, owner, face, efforts, speedShown,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
@@ -1206,7 +1225,7 @@ function RuntimeSheet({
           </div>
         </div>
 
-        <AccountSection t={t} engine={engine} account={account} limit={limit} choice={accountChoice ?? null} />
+        <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} />
 
         <SheetSection label={t("composer.modelGroup")}>
           {ENGINE_MODELS[engine].map((model) => (
@@ -1294,11 +1313,12 @@ function limitResetClock(limit: RateLimitState): string | null {
  * Mounted with the sheet and nothing else, so the ordinary chip still
  * subscribes to the accounts store only while the sheet is open.
  */
-function AccountSection({ t, engine, account, limit, choice }: {
+function AccountSection({ t, engine, account, nameOf, limit, choice }: {
   t: TFunction;
   engine: "claude" | "codex";
   /** The account this conversation runs on. */
   account: string;
+  nameOf: (id: string) => string;
   limit: RateLimitState | null;
   /** A structured conversation chooses its own account (#1846): a tap records its intended account at once,
       and the conversation moves there with its next message. Absent, a tap moves the engine's launch account. */
@@ -1317,7 +1337,7 @@ function AccountSection({ t, engine, account, limit, choice }: {
         {/* Named even when no row carries it: the legacy home is an account
             the accounts list does not enumerate. */}
         <span className="min-w-0 truncate text-label text-muted" data-runtime-sheet-account-current>
-          {accountLine(t, account, choice)}
+          {accountLine(t, account, choice, nameOf)}
         </span>
       </div>
       {ordered.map((option) => {

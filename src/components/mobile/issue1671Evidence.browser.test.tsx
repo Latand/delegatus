@@ -852,3 +852,106 @@ browserTest("#1795: the runtime sheet covers the phone from every surface, close
   fs.writeFileSync(path.join(SHEET_EVIDENCE, "runtime-sheet.json"), `${JSON.stringify(results, null, 2)}\n`);
   if (failures.length) throw new Error(JSON.stringify(failures, null, 2));
 }, 300_000);
+
+/*
+ * #1846 — a pick on the phone, on the same real Viewer with the running conversation on a structured host
+ * (`&runtime=structured`), in English and Ukrainian, with short ids and with two long ones:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1846"
+ *
+ * The sheet's row for another account is tapped and the sheet closed; the title line must then name the
+ * account the next message goes to whole, the running account yielding first, and the model with its tier
+ * stays whole on the line under it. The pick sends the conversation's reconfigure and never an engine select.
+ *
+ * Readings go to `evidence/issue-1846/phone-header.json`; frames to `.artifacts/issue-1846/`.
+ */
+const PICK_OUT = path.resolve(".artifacts/issue-1846");
+const PICK_EVIDENCE = path.resolve("evidence/issue-1846");
+const PICK_CASES = [
+  { account: "spare", next: "relief" },
+  { account: "review-relief-2", next: "production-backup-7" },
+] as const;
+
+browserTest("#1846: a pick on the phone names the next account whole on the title line", async () => {
+  fs.mkdirSync(PICK_OUT, { recursive: true });
+  fs.mkdirSync(PICK_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const { account, next } of PICK_CASES) {
+        const viewport = { width: 390, height: 844 };
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const key = `${lang}-${account}-${next}`;
+        const fail = (label: string) => failures.push(`${key}: ${label}`);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${fixtureBase}/?account=${account}&next=${next}&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
+          await pause(page, 800);
+          const before = await headerReading(page);
+          await tap(page, cdp, "[data-runtime-pill]");
+          await page.waitForSelector(`[data-runtime-sheet-account="${next}"]`, { timeout: 10_000 });
+          await pause(page, 300);
+          await tap(page, cdp, `[data-runtime-sheet-account="${next}"]`);
+          await pause(page, 100);
+          const sheetLine = await page.evaluate(() => document.querySelector("[data-runtime-sheet-account-current]")?.textContent ?? "");
+          await page.screenshot({ path: path.join(PICK_OUT, `phone-${key}-sheet.png`) });
+          await tap(page, cdp, "[data-runtime-sheet-close]");
+          await pause(page, 400);
+          const after = await headerReading(page);
+          const parts = await page.evaluate(() => {
+            const cell = (selector: string) => {
+              const element = document.querySelector(selector);
+              if (!element) return null;
+              const box = element.getBoundingClientRect();
+              /* The text's own width, unrounded: scrollWidth rounds, and hid a cut of under a pixel that still drew an ellipsis. */
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const need = range.getBoundingClientRect().width;
+              const tag = document.querySelector("[data-mobile2-chat-account]")!.getBoundingClientRect();
+              return {
+                text: element.textContent ?? "",
+                width: Math.round(box.width * 10) / 10,
+                need: Math.round(need * 10) / 10,
+                cut: need > box.width + 0.1,
+                /* On the tag's one line, or wrapped below it where the tag clips it. */
+                shown: box.top >= tag.top - 0.5 && box.bottom <= tag.bottom + 0.5 && box.width > 0,
+              };
+            };
+            return { runs: cell("[data-mobile2-chat-account-runs]"), to: cell("[data-mobile2-chat-account-to]") };
+          });
+          await page.screenshot({ path: path.join(PICK_OUT, `phone-${key}-header.png`) });
+          const sent = await page.evaluate(() => {
+            const evidence = (window as unknown as { evidence: { runtimeRequests: Array<Record<string, unknown>>; accountSelects: unknown[] } }).evidence;
+            return { reconfigures: evidence.runtimeRequests.map((body) => body.accountId ?? null), selects: evidence.accountSelects.length };
+          });
+          results.push({ key, lang, viewport, account, next, before, sheetLine, after, parts, sent, pageErrors });
+          if (!sheetLine.includes(account) || !sheetLine.includes(next)) fail(`the sheet names both accounts: ${sheetLine}`);
+          if (parts.to?.text !== `→ ${next}`) fail(`the title line names the next account: ${JSON.stringify(parts.to)}`);
+          if (parts.to?.cut !== false || parts.to?.shown !== true) fail(`the next account is whole: ${JSON.stringify(parts.to)}`);
+          /* The running account is either whole beside it or not drawn at all — never a sliver. */
+          if (parts.runs?.shown && parts.runs.cut) fail(`the running account shows cut: ${JSON.stringify(parts.runs)}`);
+          if (account.length <= 8 && !parts.runs?.shown) fail(`short ids both fit: ${JSON.stringify(parts.runs)}`);
+          if (after.model?.cut !== false) fail(`the model and its tier are whole: ${JSON.stringify(after.model)}`);
+          if (JSON.stringify(sent.reconfigures) !== JSON.stringify([next]) || sent.selects !== 0) fail(`requests ${JSON.stringify(sent)}`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(PICK_EVIDENCE, "phone-header.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);

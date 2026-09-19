@@ -104,8 +104,11 @@ export function AccountBadge({
   const moving = Boolean(file) && next !== accountId;
   const tint = accountTint(accountId);
   const health = healthOf(accounts.accounts.find((account) => account.id === accountId));
+  /* The pick is named by the labels the menu rows use, as every other account surface names it (#1846). */
+  const nameOf = (id: string) => accounts.accounts.find((account) => account.id === id)?.label || id;
+  const runsOnNext = t("mobile2.composer.accountRunsOnNext", { account: nameOf(accountId), next: nameOf(next) });
   const label = moving
-    ? `${hintLabel(t, accountId, engine, health)} · ${t("mobile2.composer.accountRunsOnNext", { account: accountId, next })}`
+    ? `${hintLabel(t, accountId, engine, health)} · ${runsOnNext}`
     : hintLabel(t, accountId, engine, health);
   const aria = t("branch.accountAria", { id: accountId });
 
@@ -215,8 +218,8 @@ export function AccountBadge({
       ) : (
         <>
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: tint.dot }} aria-hidden />
-          <span>@ {truncateId(accountId)}</span>
-          {moving ? <span className="text-accent">→ {truncateId(next)}</span> : null}
+          <span>@ {truncateId(nameOf(accountId))}</span>
+          {moving ? <span className="text-accent">→ {truncateId(nameOf(next))}</span> : null}
           {file ? <ChevronDown className="h-2.5 w-2.5" aria-hidden /> : null}
         </>
       )}
@@ -276,7 +279,7 @@ export function AccountBadge({
       <Hint label={label}>{button}</Hint>
       {menu}
       {moving ? (
-        <span className="sr-only" role="status">{t("mobile2.composer.accountRunsOnNext", { account: accountId, next })}</span>
+        <span className="sr-only" role="status">{runsOnNext}</span>
       ) : null}
     </span>
   );

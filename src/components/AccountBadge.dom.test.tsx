@@ -121,7 +121,9 @@ test("the card account chip records the pick at once, with no spinner, and disab
   /* #1846: the chip names where the next message goes and waits for nothing. */
   const pickedChip = host.querySelector("[data-conversation-account-chip]")!;
   expect(pickedChip.getAttribute("data-conversation-account-next")).toBe("target");
-  expect(pickedChip.textContent).toContain("→ target");
+  /* Named by the label its menu row carries (#1846 critique P2). */
+  expect(pickedChip.textContent).toContain("@ Source");
+  expect(pickedChip.textContent).toContain("→ Target");
   expect(pickedChip.getAttribute("aria-busy")).toBeNull();
   expect(pickedChip.querySelector(".animate-spin")).toBeNull();
   await act(async () => root.unmount());
@@ -143,7 +145,7 @@ test("a pick retires once the conversation runs on the picked account", async ()
     rows[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(host.textContent).toContain("→ target");
+  expect(host.textContent).toContain("→ Target");
 
   await act(async () => { root.render(<AccountBadge engine="codex" accountId="target" file={file} />); });
   expect(host.textContent).not.toContain("→");
@@ -167,7 +169,7 @@ test("a failed legacy account switch takes the pick back and says why", async ()
     rows[1]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  expect(host.textContent).toContain("→ target");
+  expect(host.textContent).toContain("→ Target");
 
   const failedFile: FileEntry = {
     ...file,
@@ -278,7 +280,7 @@ test("an out-of-pool switch the journal could not record is not answered \"recor
   expect(toasts[0]!.message).toContain("the record could not be written");
   expect(toasts[0]!.message).not.toContain("recorded as your choice");
   /* The switch itself still happened, so the badge names it. */
-  expect(host.textContent).toContain("→ target");
+  expect(host.textContent).toContain("→ Target");
   await act(async () => root.unmount());
 });
 

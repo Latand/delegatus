@@ -7,6 +7,7 @@ import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { useIntendedAccount } from "@/lib/accounts/intendedAccount";
+import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
@@ -788,18 +789,29 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
      the conversation says where the next message goes with the sheet closed. */
   const runtime = useRuntimeSessionForConversation(file.conversationId, file.path);
   const { next } = useIntendedAccount(conversationIdentity(file), account, runtime?.session.pendingReconfigure?.accountId);
+  /* Named by label, as the sheet's rows and the board name the same account. */
+  const nameOf = useAccountName(file.engine === "codex" ? "codex" : "claude");
   const moving = next !== account;
+  if (!moving) {
+    return (
+      <span data-mobile2-chat-account className="max-w-[45%] shrink-0 truncate text-label font-medium leading-tight text-muted" title={nameOf(account)}>
+        <span data-mobile2-chat-account-runs>@ {nameOf(account)}</span>
+      </span>
+    );
+  }
+  /* While a pick waits, the account the next message goes to is the new information, so it is laid first and
+     keeps the line; the running account sits before it only when both fit whole, and otherwise wraps onto a
+     second line the tag clips, rather than showing a sliver. The sheet, one tap away, names both in full
+     (#1846 critique). */
   return (
     <span
       data-mobile2-chat-account
-      data-mobile2-chat-account-next={moving ? next : undefined}
-      className={`${moving ? "max-w-[55%]" : "max-w-[45%]"} flex min-w-0 shrink-0 items-baseline gap-1 text-label font-medium leading-tight text-muted`}
-      title={moving ? t("mobile2.composer.accountRunsOnNext", { account, next }) : account}
+      data-mobile2-chat-account-next={next}
+      className="flex h-[1lh] max-w-[64%] shrink-0 flex-row-reverse flex-wrap justify-end gap-x-1 overflow-hidden text-label font-medium leading-tight text-muted"
+      title={t("mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(next) })}
     >
-      {/* The running account keeps its whole id up to 60% of the tag and the next one takes the rest, so two
-          long ids both stay legible and the header never reads «@ → B». */}
-      <span data-mobile2-chat-account-runs className={`${moving ? "max-w-[60%] shrink-0" : "min-w-0"} truncate`}>@ {account}</span>
-      {moving ? <span data-mobile2-chat-account-to className="min-w-0 truncate text-accent">→ {next}</span> : null}
+      <span data-mobile2-chat-account-to className="min-w-0 max-w-full truncate text-accent">→ {nameOf(next)}</span>
+      <span data-mobile2-chat-account-runs className="whitespace-nowrap">@ {nameOf(account)}</span>
     </span>
   );
 }

@@ -10,7 +10,7 @@ import { TaskToastHost } from "./tasks/taskToast";
 import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill, RuntimeSwitchHold } from "./RuntimePill";
-import { resetPickedAccountsForTests } from "@/lib/accounts/intendedAccount";
+import { resetPickedAccountsForTests, setPickedAccount } from "@/lib/accounts/intendedAccount";
 import type { RuntimeSession } from "./runtime/runtimeModel";
 
 /*
@@ -124,6 +124,10 @@ async function mount(node: React.ReactElement): Promise<{ host: HTMLElement; roo
     root.render(node);
     await new Promise((r) => setTimeout(r, 0));
   });
+  /* The accounts store answers on its first read; its labels are what every surface names accounts by. */
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
   return { host, root };
 }
 
@@ -144,12 +148,12 @@ const header = () => document.querySelector("[data-runtime-sheet-account-current
 
 test("a pick mid-turn shows on the sheet in the same frame, sends no migration, and moves no engine account", async () => {
   const { host, root } = await openSheet(<RuntimePill file={file} surface="structured" runtimeSession={session(null)} />);
-  expect(header()).toBe("runs on acct-a");
+  expect(header()).toBe("runs on Account A");
   expect(row("acct-a").getAttribute("data-runtime-account-next")).toBe("true");
 
   /* One synchronous flush after the tap, with the request still unanswered. */
   act(() => { row("acct-b").click(); });
-  expect(header()).toBe("runs on acct-a · next on acct-b");
+  expect(header()).toBe("runs on Account A · next on Account B");
   expect(row("acct-b").getAttribute("data-runtime-account-next")).toBe("true");
   expect(row("acct-a").getAttribute("data-runtime-account-next")).toBeNull();
   /* The account it runs on can be picked again, which takes the pick back. */
@@ -173,7 +177,7 @@ test("a pick mid-turn shows on the sheet in the same frame, sends no migration, 
     root.render(<RuntimePill file={file} surface="structured" runtimeSession={session("acct-b")} />);
     await new Promise((r) => setTimeout(r, 5));
   });
-  expect(header()).toBe("runs on acct-a · next on acct-b");
+  expect(header()).toBe("runs on Account A · next on Account B");
   expect(host.querySelector("[data-runtime-switch-pending]")).toBeNull();
   expect(host.querySelector("[data-runtime-pill]")!.getAttribute("aria-busy")).toBeNull();
   await act(async () => root.unmount());
@@ -181,9 +185,9 @@ test("a pick mid-turn shows on the sheet in the same frame, sends no migration, 
 
 test("picking the running account again takes the pick back at once", async () => {
   const { root } = await openSheet(<RuntimePill file={file} surface="structured" runtimeSession={session("acct-b")} />);
-  expect(header()).toBe("runs on acct-a · next on acct-b");
+  expect(header()).toBe("runs on Account A · next on Account B");
   act(() => { row("acct-a").click(); });
-  expect(header()).toBe("runs on acct-a");
+  expect(header()).toBe("runs on Account A");
   expect(row("acct-a").getAttribute("data-runtime-account-next")).toBe("true");
   expect(calls.filter((call) => call.url === "/api/tmux").map((call) => call.body)).toMatchObject([{ action: "reconfigure", accountId: "acct-a" }]);
   await act(async () => root.unmount());
@@ -192,12 +196,12 @@ test("picking the running account again takes the pick back at once", async () =
 test("a pick the server refuses goes back to what it was, and says why", async () => {
   const { root } = await openSheet(<RuntimePill file={file} surface="structured" runtimeSession={session(null)} />);
   act(() => { row("acct-b").click(); });
-  expect(header()).toBe("runs on acct-a · next on acct-b");
+  expect(header()).toBe("runs on Account A · next on Account B");
   await act(async () => {
     answerReconfigure(new Response(JSON.stringify({ error: "account is not available for claude" }), { status: 400 }));
     await new Promise((r) => setTimeout(r, 5));
   });
-  expect(header()).toBe("runs on acct-a");
+  expect(header()).toBe("runs on Account A");
   await act(async () => root.unmount());
 });
 
@@ -208,9 +212,9 @@ test("the desktop popover says where the next message goes, and its Account pane
     (host.querySelector("[data-runtime-pill]") as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 0));
   });
-  expect(document.querySelector("[data-runtime-popover-account]")!.textContent).toBe("runs on acct-a · next on acct-b");
+  expect(document.querySelector("[data-runtime-popover-account]")!.textContent).toBe("runs on Account A · next on Account B");
   const accountRow = document.querySelector('[data-runtime-row="submenu"][data-runtime-value="account"]') as HTMLButtonElement;
-  expect(accountRow.textContent).toContain("acct-b");
+  expect(accountRow.textContent).toContain("Account B");
   await act(async () => {
     accountRow.click();
     await new Promise((r) => setTimeout(r, 5));
@@ -243,8 +247,8 @@ test("a move that failed at engagement holds the message with its reason and the
   expect(host.querySelector("[data-runtime-switch-hold-keep]")!.className).toContain("min-h-11");
   expect(host.querySelector("[data-runtime-switch-hold-pick]")!.className).toContain("min-h-11");
   expect(notice.getAttribute("role")).toBe("alert");
-  expect(notice.textContent).toContain("Not sent: moving to acct-b failed — the account is signed out");
-  expect(notice.textContent).toContain("Send on acct-a");
+  expect(notice.textContent).toContain("Not sent: moving to Account B failed — the account is signed out");
+  expect(notice.textContent).toContain("Send on Account A");
   expect(notice.textContent).toContain("Pick another account");
 
   act(() => { (host.querySelector("[data-runtime-switch-hold-keep]") as HTMLButtonElement).click(); });
@@ -274,7 +278,7 @@ test("taking a pick back ends quiet: no error face, no toast, and the running ro
   /* While the pick waits, the account it runs on is the way back and says so. */
   expect(row("acct-a").querySelector("[data-runtime-account-cancel]")!.textContent).toBe("cancel switch");
   act(() => { row("acct-a").click(); });
-  expect(header()).toBe("runs on acct-a");
+  expect(header()).toBe("runs on Account A");
   expect(row("acct-a").querySelector("[data-runtime-account-cancel]")).toBeNull();
   /* The queue settles the withdrawn pick as a failed receipt with reason «cancelled». */
   const withdrawn: RuntimeSession = {
@@ -317,4 +321,35 @@ test("a held message names the known causes of a failed move in the operator's l
   expect(switchHoldReason(uk as never, "the migration was refused")).toBe("акаунт відмовив");
   /* Anything else is the server's own words, as they came. */
   expect(switchHoldReason(uk as never, "structured host delivery failed")).toBe("structured host delivery failed");
+});
+
+/* #1846 critique P2: the same account had two names on one page — ids in the «runs on · next on» line, labels
+   in the rows beside it. Every surface names it by its label now, and by its id only when the list does not
+   enumerate it. */
+test("the «runs on · next on» line names accounts by the labels the rows use, the id only for an unlisted one", async () => {
+  mobile = false;
+  const unlisted: FileEntry = { ...file, path: "/state/accounts/claude/legacy-home/projects/viewer/session.jsonl" };
+  const { host, root } = await mount(<RuntimePill file={unlisted} surface="structured" runtimeSession={{ ...session("acct-b"), accountId: "legacy-home" }} />);
+  await act(async () => {
+    (host.querySelector("[data-runtime-pill]") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(document.querySelector("[data-runtime-popover-account]")!.textContent).toBe("runs on legacy-home · next on Account B");
+  await act(async () => root.unmount());
+});
+
+/* #1846 critique P3: on desktop the popover closes on a pick, so the pill it was made on carries the mark. */
+test("the desktop pill's face carries the waiting pick, and drops it once the pick is taken back", async () => {
+  mobile = false;
+  const { host, root } = await mount(<RuntimePill file={file} surface="structured" runtimeSession={session(null)} />);
+  const pill = () => host.querySelector("[data-runtime-pill]")!;
+  expect(host.querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  act(() => { setPickedAccount("conversation_intent", "acct-b"); });
+  expect(host.querySelector("[data-runtime-pill-next-account]")!.textContent).toBe("→ Account B");
+  expect(host.querySelector("[data-runtime-pill-next-account]")!.className).toContain("text-accent");
+  expect(pill().getAttribute("aria-label")).toContain("runs on Account A · next on Account B");
+  act(() => { setPickedAccount("conversation_intent", null); });
+  expect(host.querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  expect(pill().getAttribute("aria-label")).not.toContain("next on");
+  await act(async () => root.unmount());
 });

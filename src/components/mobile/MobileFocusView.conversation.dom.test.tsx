@@ -251,7 +251,7 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   /* Beside the title, which is the elastic cell there. */
   expect(accountCell.previousElementSibling?.hasAttribute("data-mobile2-title-text")).toBe(true);
   expect(accountCell.className).toContain("shrink-0");
-  expect(accountCell.querySelector("[data-mobile2-chat-account-runs]")!.className).toContain("truncate");
+  expect(accountCell.className).toContain("truncate");
   expect(dom.document.querySelector("[data-mobile2-chat-stage]")?.textContent).toBe("stage 2/2");
   /* The engine rides the line as a MARK, never as a word (§3.2): spelling it
      out is what made the strip read "Claude · Claude · Claude", and the model
@@ -315,18 +315,21 @@ test("the title line says where the next message goes the moment an account is p
   const account = () => dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
   expect(account().textContent).toBe("@ spare");
   flushSync(() => { setPickedAccount("conv-picked", "relief"); });
-  expect(account().textContent).toBe("@ spare→ relief");
+  /* The next account is laid first and the running one is drawn before it (row-reverse). */
+  expect(account().textContent).toBe("→ relief@ spare");
   expect(account().getAttribute("data-mobile2-chat-account-next")).toBe("relief");
   expect(account().getAttribute("title")).toBe("runs on spare · next on relief");
-  /* #1846 critique P2: with two long ids the running account keeps a floor — up to 60% of the tag, never
-     squeezed to nothing by the next one, which takes the rest and truncates first. */
-  expect(account().className).toContain("max-w-[55%]");
+  /* #1846 critique P2: while a pick waits, the account the next message goes to is the new information. It
+     keeps the tag's one line and truncates only past the whole tag; the running account sits before it when
+     both fit, and otherwise wraps onto a second line the one-line tag clips, so no sliver of it shows. */
+  const tag = account().className;
+  for (const rule of ["max-w-[64%]", "h-[1lh]", "overflow-hidden", "flex-wrap", "flex-row-reverse"]) expect(tag).toContain(rule);
   const runs = account().querySelector("[data-mobile2-chat-account-runs]") as unknown as HTMLElement;
   const to = account().querySelector("[data-mobile2-chat-account-to]") as unknown as HTMLElement;
-  expect(runs.className).toContain("max-w-[60%]");
-  expect(runs.className).toContain("shrink-0");
-  expect(to.className).toContain("min-w-0");
-  expect(to.className).not.toContain("shrink-0");
+  expect(to.nextElementSibling).toBe(runs);
+  expect(runs.className).toContain("whitespace-nowrap");
+  expect(to.className).toContain("max-w-full");
+  expect(to.className).toContain("truncate");
   /* Taken back: the header returns to the one account. */
   flushSync(() => { setPickedAccount("conv-picked", null); });
   expect(account().textContent).toBe("@ spare");
