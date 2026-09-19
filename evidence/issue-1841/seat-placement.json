@@ -1,5 +1,5 @@
 {
-  "commit": "09bb2a17556a5c49b8e58bed1f8025a4356aadfe",
+  "commit": "71c88566a1f10c1f88edab0fb2e3ab8864ed2c13",
   "case": "seat-placement",
   "seeded": {
     "productTasks": 5,
@@ -130,6 +130,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -146,6 +155,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -161,6 +180,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -176,6 +201,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -184,6 +219,17 @@
         "w": 1440,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 515,
+      "seatX": 324
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 438,
+      "seatX": 248,
+      "controlX": 438,
+      "controlRight": 486
     },
     "states": {
       "topExpanded": {
@@ -306,6 +352,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -322,6 +377,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -337,6 +402,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -352,6 +423,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -454,6 +535,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -470,6 +560,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -485,6 +585,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -500,6 +606,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -620,6 +736,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -636,6 +761,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -651,6 +786,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -666,6 +807,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -731,6 +882,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -747,6 +907,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -762,6 +932,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -777,6 +953,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -909,6 +1095,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -925,6 +1120,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -940,6 +1145,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -955,6 +1166,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -963,6 +1184,17 @@
         "w": 1440,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 515,
+      "seatX": 324
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 438,
+      "seatX": 248,
+      "controlX": 438,
+      "controlRight": 486
     },
     "states": {
       "topExpanded": {
@@ -1085,6 +1317,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1101,6 +1342,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -1116,6 +1367,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1131,6 +1388,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -1233,6 +1500,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1249,6 +1525,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -1264,6 +1550,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1279,6 +1571,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -1399,6 +1701,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1415,6 +1726,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -1430,6 +1751,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1445,6 +1772,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -1510,6 +1847,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1526,6 +1872,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -1541,6 +1897,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1556,6 +1918,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -1679,6 +2051,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1695,6 +2076,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -1710,6 +2101,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1725,6 +2122,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -1733,6 +2140,17 @@
         "w": 1440,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 530,
+      "seatX": 324
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 453,
+      "seatX": 248,
+      "controlX": 453,
+      "controlRight": 501
     },
     "states": {
       "topExpanded": {
@@ -1846,6 +2264,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1862,6 +2289,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -1877,6 +2314,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -1892,6 +2335,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -1994,6 +2447,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2010,6 +2472,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2025,6 +2497,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2040,6 +2518,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -2160,6 +2648,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2176,6 +2673,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2191,6 +2698,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2206,6 +2719,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -2271,6 +2794,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2287,6 +2819,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2302,6 +2844,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2317,6 +2865,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -2440,6 +2998,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -2456,6 +3023,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -2471,6 +3048,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -2486,6 +3069,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -2494,6 +3087,17 @@
         "w": 1440,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 530,
+      "seatX": 324
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 453,
+      "seatX": 248,
+      "controlX": 453,
+      "controlRight": 501
     },
     "states": {
       "topExpanded": {
@@ -2607,6 +3211,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2623,6 +3236,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2638,6 +3261,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2653,6 +3282,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -2755,6 +3394,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2771,6 +3419,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2786,6 +3444,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2801,6 +3465,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -2921,6 +3595,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2937,6 +3620,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -2952,6 +3645,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -2967,6 +3666,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -3032,6 +3741,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3048,6 +3766,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -3063,6 +3791,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3078,6 +3812,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -3201,6 +3945,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -3217,6 +3970,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -3232,6 +3995,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -3247,6 +4016,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -3255,6 +4034,17 @@
         "w": 1280,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 459,
+      "seatX": 268
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 438,
+      "seatX": 248,
+      "controlX": 438,
+      "controlRight": 486
     },
     "states": {
       "topExpanded": {
@@ -3368,6 +4158,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3384,6 +4183,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -3399,6 +4208,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3414,6 +4229,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -3516,6 +4341,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3532,6 +4366,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -3547,6 +4391,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3562,6 +4412,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -3671,67 +4531,102 @@
         "columns": [
           {
             "status": "inbox",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "assigned",
-            "wide": null,
+            "wide": "1",
             "rect": {
-              "x": 640,
-              "y": 104,
-              "w": 628,
-              "h": 784
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
             },
             "cards": [
               "Docs for the runtime host succession",
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
             "status": "blocked",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "done",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
-        "board": "tabs",
+        "board": "scroll",
         "viewport": {
           "w": 1280,
           "h": 900
@@ -3793,6 +4688,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3809,6 +4713,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -3824,6 +4738,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -3839,6 +4759,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -3962,6 +4892,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -3978,6 +4917,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -3993,6 +4942,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -4008,6 +4963,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -4016,6 +4981,17 @@
         "w": 1280,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 459,
+      "seatX": 268
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 438,
+      "seatX": 248,
+      "controlX": 438,
+      "controlRight": 486
     },
     "states": {
       "topExpanded": {
@@ -4129,6 +5105,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4145,6 +5130,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -4160,6 +5155,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4175,6 +5176,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -4277,6 +5288,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4293,6 +5313,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -4308,6 +5338,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4323,6 +5359,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -4432,67 +5478,102 @@
         "columns": [
           {
             "status": "inbox",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "assigned",
-            "wide": null,
+            "wide": "1",
             "rect": {
-              "x": 640,
-              "y": 104,
-              "w": 628,
-              "h": 784
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
             },
             "cards": [
               "Docs for the runtime host succession",
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
             "status": "blocked",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "done",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
-        "board": "tabs",
+        "board": "scroll",
         "viewport": {
           "w": 1280,
           "h": 900
@@ -4554,6 +5635,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4570,6 +5660,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -4585,6 +5685,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4600,6 +5706,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -4723,6 +5839,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -4739,6 +5864,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -4754,6 +5889,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -4769,6 +5910,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -4777,6 +5928,17 @@
         "w": 1280,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 474,
+      "seatX": 268
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 453,
+      "seatX": 248,
+      "controlX": 453,
+      "controlRight": 501
     },
     "states": {
       "topExpanded": {
@@ -4890,6 +6052,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4906,6 +6077,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -4921,6 +6102,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -4936,6 +6123,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -5038,6 +6235,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5054,6 +6260,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -5069,6 +6285,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5084,6 +6306,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -5193,67 +6425,102 @@
         "columns": [
           {
             "status": "inbox",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "assigned",
-            "wide": null,
+            "wide": "1",
             "rect": {
-              "x": 640,
-              "y": 104,
-              "w": 628,
-              "h": 784
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
             },
             "cards": [
               "Docs for the runtime host succession",
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
             "status": "blocked",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "done",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
-        "board": "tabs",
+        "board": "scroll",
         "viewport": {
           "w": 1280,
           "h": 900
@@ -5315,6 +6582,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5331,6 +6607,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -5346,6 +6632,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5361,6 +6653,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -5484,6 +6786,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -5500,6 +6811,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -5515,6 +6836,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -5530,6 +6857,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -5538,6 +6875,17 @@
         "w": 1280,
         "h": 900
       }
+    },
+    "popoverStrip": {
+      "popoverX": 474,
+      "seatX": 268
+    },
+    "sideFoldIcon": "chevron-left",
+    "popoverSide": {
+      "popoverX": 453,
+      "seatX": 248,
+      "controlX": 453,
+      "controlRight": 501
     },
     "states": {
       "topExpanded": {
@@ -5651,6 +6999,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5667,6 +7024,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -5682,6 +7049,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5697,6 +7070,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -5799,6 +7182,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5815,6 +7207,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -5830,6 +7232,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -5845,6 +7253,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
@@ -5954,67 +7372,102 @@
         "columns": [
           {
             "status": "inbox",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "assigned",
-            "wide": null,
+            "wide": "1",
             "rect": {
-              "x": 640,
-              "y": 104,
-              "w": 628,
-              "h": 784
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
             },
             "cards": [
               "Docs for the runtime host succession",
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
             "status": "blocked",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
             "status": "done",
-            "wide": null,
+            "wide": "0",
             "rect": {
-              "x": 0,
-              "y": 0,
-              "w": 0,
-              "h": 0
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
             },
             "cards": [
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],
-        "board": "tabs",
+        "board": "scroll",
         "viewport": {
           "w": 1280,
           "h": 900
@@ -6076,6 +7529,15 @@
               "Repair board zoom and connector geometry"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -6092,6 +7554,16 @@
               "Fix delivery recovery after a lost acknowledgement"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              196,
+              196,
+              196,
+              196,
+              196,
+              196
+            ],
+            "headHeight": 48,
+            "widthControls": 0,
             "seatCards": 0
           },
           {
@@ -6107,6 +7579,12 @@
               "Release notes for the September train"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           },
           {
@@ -6122,6 +7600,16 @@
               "Voice boundary refuses to guess"
             ],
             "clippedTitles": 0,
+            "tileWidths": [
+              228,
+              228,
+              228,
+              228,
+              228,
+              228
+            ],
+            "headHeight": 48,
+            "widthControls": 1,
             "seatCards": 0
           }
         ],

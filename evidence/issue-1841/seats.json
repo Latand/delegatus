@@ -1,5 +1,5 @@
 {
-  "commit": "8151cc2f85048ad9bcc60a05033a6cce8ab897f6",
+  "commit": "71c88566a1f10c1f88edab0fb2e3ab8864ed2c13",
   "case": "seats",
   "seeded": {
     "productTasks": 5,
@@ -130,6 +130,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -146,6 +155,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -161,6 +180,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -176,6 +201,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -200,7 +235,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 18:27",
+          "span": "since 19 Sep 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -208,7 +243,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 05:19 – 19 Sep 18:27 · 13 h",
+          "span": "19 Sep 05:52 – 19 Sep 19:00 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -216,7 +251,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 01:19 – 19 Sep 05:19 · 28 h",
+          "span": "18 Sep 01:52 – 19 Sep 05:52 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -411,6 +446,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -427,6 +471,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -442,6 +496,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -457,6 +517,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -481,7 +551,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 18:27",
+          "span": "since 19 Sep 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -489,7 +559,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 05:19 – 19 Sep 18:27 · 13 h",
+          "span": "19 Sep 05:52 – 19 Sep 19:00 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -497,7 +567,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 01:19 – 19 Sep 05:19 · 28 h",
+          "span": "18 Sep 01:52 – 19 Sep 05:52 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -683,6 +753,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -699,6 +778,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -714,6 +803,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -729,6 +824,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -753,7 +858,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 18:27",
+          "span": "з 19 вер. 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -761,7 +866,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 05:19 – 19 вер. 18:27 · 13 год",
+          "span": "19 вер. 05:52 – 19 вер. 19:00 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -769,7 +874,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 01:19 – 19 вер. 05:19 · 28 год",
+          "span": "18 вер. 01:52 – 19 вер. 05:52 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -946,6 +1051,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -962,6 +1076,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -977,6 +1101,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -992,6 +1122,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -1016,7 +1156,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 18:27",
+          "span": "з 19 вер. 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1024,7 +1164,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 05:19 – 19 вер. 18:27 · 13 год",
+          "span": "19 вер. 05:52 – 19 вер. 19:00 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1032,7 +1172,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 01:19 – 19 вер. 05:19 · 28 год",
+          "span": "18 вер. 01:52 – 19 вер. 05:52 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1209,6 +1349,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1225,6 +1374,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -1240,6 +1399,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1255,6 +1420,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -1279,7 +1454,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 18:27",
+          "span": "since 19 Sep 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1287,7 +1462,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 05:19 – 19 Sep 18:27 · 13 h",
+          "span": "19 Sep 05:52 – 19 Sep 19:00 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1295,7 +1470,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 01:19 – 19 Sep 05:19 · 28 h",
+          "span": "18 Sep 01:52 – 19 Sep 05:52 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1472,6 +1647,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1488,6 +1672,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -1503,6 +1697,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1518,6 +1718,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -1542,7 +1752,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "since 19 Sep 18:27",
+          "span": "since 19 Sep 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1550,7 +1760,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 Sep 05:19 – 19 Sep 18:27 · 13 h",
+          "span": "19 Sep 05:52 – 19 Sep 19:00 · 13 h",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1558,7 +1768,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 Sep 01:19 – 19 Sep 05:19 · 28 h",
+          "span": "18 Sep 01:52 – 19 Sep 05:52 · 28 h",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1735,6 +1945,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1751,6 +1970,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -1766,6 +1995,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -1781,6 +2016,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -1805,7 +2050,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 18:27",
+          "span": "з 19 вер. 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1813,7 +2058,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 05:19 – 19 вер. 18:27 · 13 год",
+          "span": "19 вер. 05:52 – 19 вер. 19:00 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -1821,7 +2066,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 01:19 – 19 вер. 05:19 · 28 год",
+          "span": "18 вер. 01:52 – 19 вер. 05:52 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -1998,6 +2243,15 @@
             "Repair board zoom and connector geometry"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -2014,6 +2268,16 @@
             "Fix delivery recovery after a lost acknowledgement"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            196,
+            196,
+            196,
+            196,
+            196,
+            196
+          ],
+          "headHeight": 48,
+          "widthControls": 0,
           "seatCards": 0
         },
         {
@@ -2029,6 +2293,12 @@
             "Release notes for the September train"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         },
         {
@@ -2044,6 +2314,16 @@
             "Voice boundary refuses to guess"
           ],
           "clippedTitles": 0,
+          "tileWidths": [
+            228,
+            228,
+            228,
+            228,
+            228,
+            228
+          ],
+          "headHeight": 48,
+          "widthControls": 1,
           "seatCards": 0
         }
       ],
@@ -2068,7 +2348,7 @@
         {
           "current": true,
           "title": "Orchestrator seat, board batch",
-          "span": "з 19 вер. 18:27",
+          "span": "з 19 вер. 19:00",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2076,7 +2356,7 @@
         {
           "current": false,
           "title": "Manager seat, release week",
-          "span": "19 вер. 05:19 – 19 вер. 18:27 · 13 год",
+          "span": "19 вер. 05:52 – 19 вер. 19:00 · 13 год",
           "opensItself": true,
           "height": 52,
           "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
@@ -2084,7 +2364,7 @@
         {
           "current": false,
           "title": "Orchestrator seat, launch week",
-          "span": "18 вер. 01:19 – 19 вер. 05:19 · 28 год",
+          "span": "18 вер. 01:52 – 19 вер. 05:52 · 28 год",
           "opensItself": true,
           "height": 52,
           "notes": null
@@ -2153,81 +2433,137 @@
     "row": {
       "count": "2",
       "h": 44,
-      "text": "Previous seats2›"
+      "text": "Previous seats2",
+      "iconX": 32,
+      "tickIconX": 32,
+      "right": 374,
+      "tickRight": 374,
+      "chevron": true
     },
     "list": [
       {
-        "h": 57,
-        "text": "Manager seat, release week19 Sep 05:19 – 19 Sep 18:27 · 13 hNotes ›",
+        "current": true,
+        "h": 56,
+        "text": "Orchestrator seatsince 19 Sep 19:00Notes",
         "notes": 44
       },
       {
+        "current": false,
+        "h": 56,
+        "text": "Manager seat, release week19 Sep 05:52 – 19 Sep 19:00 · 13 hNotes",
+        "notes": 44
+      },
+      {
+        "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 01:19 – 19 Sep 05:19 · 28 hNotes ›",
+        "text": "Orchestrator seat, launch week18 Sep 01:52 – 19 Sep 05:52 · 28 hNotes",
         "notes": 44
       }
     ],
-    "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
+    "backText": "Orchestrator",
+    "notes": "Watching the seats lane and the undo lane."
   },
   "seats-390-en-dark": {
     "row": {
       "count": "2",
       "h": 44,
-      "text": "Previous seats2›"
+      "text": "Previous seats2",
+      "iconX": 32,
+      "tickIconX": 32,
+      "right": 374,
+      "tickRight": 374,
+      "chevron": true
     },
     "list": [
       {
-        "h": 57,
-        "text": "Manager seat, release week19 Sep 05:19 – 19 Sep 18:27 · 13 hNotes ›",
+        "current": true,
+        "h": 56,
+        "text": "Orchestrator seatsince 19 Sep 19:00Notes",
         "notes": 44
       },
       {
+        "current": false,
+        "h": 56,
+        "text": "Manager seat, release week19 Sep 05:52 – 19 Sep 19:00 · 13 hNotes",
+        "notes": 44
+      },
+      {
+        "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 Sep 01:19 – 19 Sep 05:19 · 28 hNotes ›",
+        "text": "Orchestrator seat, launch week18 Sep 01:52 – 19 Sep 05:52 · 28 hNotes",
         "notes": 44
       }
     ],
-    "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
+    "backText": "Orchestrator",
+    "notes": "Watching the seats lane and the undo lane."
   },
   "seats-390-uk-light": {
     "row": {
       "count": "2",
       "h": 44,
-      "text": "Попередні оркестратори2›"
+      "text": "Попередні оркестратори2",
+      "iconX": 32,
+      "tickIconX": 32,
+      "right": 374,
+      "tickRight": 374,
+      "chevron": true
     },
     "list": [
       {
-        "h": 57,
-        "text": "Manager seat, release week19 вер. 05:19 – 19 вер. 18:27 · 13 годНотатки ›",
+        "current": true,
+        "h": 56,
+        "text": "Оркестраторз 19 вер. 19:00Нотатки",
         "notes": 44
       },
       {
+        "current": false,
+        "h": 56,
+        "text": "Manager seat, release week19 вер. 05:52 – 19 вер. 19:00 · 13 годНотатки",
+        "notes": 44
+      },
+      {
+        "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 01:19 – 19 вер. 05:19 · 28 годНотатки ›",
+        "text": "Orchestrator seat, launch week18 вер. 01:52 – 19 вер. 05:52 · 28 годНотатки",
         "notes": 44
       }
     ],
-    "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
+    "backText": "Оркестратор",
+    "notes": "Watching the seats lane and the undo lane."
   },
   "seats-390-uk-dark": {
     "row": {
       "count": "2",
       "h": 44,
-      "text": "Попередні оркестратори2›"
+      "text": "Попередні оркестратори2",
+      "iconX": 32,
+      "tickIconX": 32,
+      "right": 374,
+      "tickRight": 374,
+      "chevron": true
     },
     "list": [
       {
-        "h": 57,
-        "text": "Manager seat, release week19 вер. 05:19 – 19 вер. 18:27 · 13 годНотатки ›",
+        "current": true,
+        "h": 56,
+        "text": "Оркестраторз 19 вер. 19:00Нотатки",
         "notes": 44
       },
       {
+        "current": false,
+        "h": 56,
+        "text": "Manager seat, release week19 вер. 05:52 – 19 вер. 19:00 · 13 годНотатки",
+        "notes": 44
+      },
+      {
+        "current": false,
         "h": 57,
-        "text": "Orchestrator seat, launch week18 вер. 01:19 – 19 вер. 05:19 · 28 годНотатки ›",
+        "text": "Orchestrator seat, launch week18 вер. 01:52 – 19 вер. 05:52 · 28 годНотатки",
         "notes": 44
       }
     ],
-    "notes": "Open: the September train.\nMerged: the header.\nNext: seats out of the columns."
+    "backText": "Оркестратор",
+    "notes": "Watching the seats lane and the undo lane."
   },
   "failures": []
 }
