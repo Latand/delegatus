@@ -552,6 +552,13 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       const owed = owedDeliveries.get(conversation.id);
       if (owed) file.stuckDelivery = owed;
     }
+    if (conversation.switchHold && latest?.path === file.path) {
+      file.switchHold = {
+        targetAccountId: conversation.switchHold.accountId,
+        reason: conversation.switchHold.reason,
+        since: conversation.switchHold.at,
+      };
+    }
     if (conversation.migration && conversation.migration.phase !== "committed") {
       const intent = registrySnapshot.migrationIntents[conversation.migration.intentId];
       const source = conversation.generations.at(-1);

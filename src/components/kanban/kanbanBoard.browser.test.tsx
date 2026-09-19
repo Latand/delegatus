@@ -2589,7 +2589,7 @@ describe("#1695 K6a account chips and pickers", () => {
    *   - a running stage conversation's chip and picker: its current account and
    *     stage setting, an account outside the project's accounts offered and
    *     recorded, the switch sent as the conversation header's `reconfigure`,
-   *     then "after this turn" with the target known to this page only (the
+   *     then "with the next message" with the target known to this page only (the
    *     fixture runs without a runtime plane, so no session reports it), every
    *     nothing resent while it waits, and "now runs on" only once the
    *     conversation runs on the target;
@@ -2806,8 +2806,8 @@ describe("#1695 K6a account chips and pickers", () => {
           await page.waitForTimeout(1_500);
           const committed = await page.evaluate((selector) => document.querySelector(selector)?.textContent?.trim() ?? "", VERIFY_CHIP);
           flows.conversationSwitch = { pending, requests, waiting, migrationRequests, changedRequests, changedChip, committed, receipts: await receipts(page) };
-          if (!pending || !pending.chip.pending || pending.chip.when !== "after this turn") failures.push(`pending switch: chip ${JSON.stringify(pending?.chip)}`);
-          if (JSON.stringify(pending?.now.at(-1)) !== JSON.stringify(["Pending", "Account G · waits for the current turn to end"])) failures.push(`pending switch: summary ${JSON.stringify(pending?.now)}`);
+          if (!pending || !pending.chip.pending || pending.chip.when !== "with the next message") failures.push(`pending switch: chip ${JSON.stringify(pending?.chip)}`);
+          if (JSON.stringify(pending?.now.at(-1)) !== JSON.stringify(["Pending", "Account G · moves with the next message"])) failures.push(`pending switch: summary ${JSON.stringify(pending?.now)}`);
           if (!pending?.cancel || pending.label !== "Change the pending account" || pending.rows.filter((row) => !row.disabled).length < 3) failures.push(`pending switch: Cancel and Change ${JSON.stringify({ cancel: pending?.cancel, label: pending?.label, rows: pending?.rows })}`);
           if (!pending?.notes.some((note) => note.startsWith("Known to this page only."))) failures.push(`pending switch: notes ${JSON.stringify(pending?.notes)}`);
           if (requests.length !== 1 || requests[0]?.action !== "reconfigure" || requests[0]?.accountId !== "account-g" || requests[0]?.conversationId !== "conversation_search-ver-2") failures.push(`pending switch: requests ${JSON.stringify(requests)}`);

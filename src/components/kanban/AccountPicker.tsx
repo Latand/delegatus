@@ -308,8 +308,9 @@ export function conversationWorking(file: FileEntry, session: RuntimeSession | n
 function whenWord(t: TFunction, view: SwitchView, working: boolean): string {
   switch (view.kind) {
     case "sending": return t("kanban.account.whenSending");
-    /* Behind a running turn it waits for the turn; with none running it is only queued. */
-    case "waiting": return t(working ? "kanban.account.whenTurn" : "kanban.account.whenQueued");
+    /* A pick nothing has engaged yet moves with the next message (#1846). Once a message engaged it, the
+       migration's record waits behind a running turn, or is only queued with none running. */
+    case "waiting": return t(view.source !== "record" ? "kanban.account.whenNextMessage" : working ? "kanban.account.whenTurn" : "kanban.account.whenQueued");
     case "settings": return t("kanban.account.whenSettings");
     case "switching": return t("kanban.account.whenSwitching");
     case "failed": return t("kanban.account.whenFailed");
@@ -654,7 +655,7 @@ export function ConversationAccountPopover({ anchor, onClose, file, name, stageC
   const pendingText = (() => {
     switch (view.kind) {
       case "sending": return t("kanban.account.pendingSending", { target: targetName });
-      case "waiting": return t(working ? "kanban.account.pendingWaiting" : "kanban.account.pendingQueued", { target: targetName });
+      case "waiting": return t(view.source !== "record" ? "kanban.account.pendingNextMessage" : working ? "kanban.account.pendingWaiting" : "kanban.account.pendingQueued", { target: targetName });
       case "settings": return t("kanban.account.pendingSettings", { model: view.model, effort: view.effort });
       case "switching": return t("kanban.account.pendingSwitching", { target: targetName });
       case "failed": return view.reason ? t("kanban.account.pendingFailedReason", { target: targetName, reason: view.reason }) : t("kanban.account.pendingFailed", { target: targetName });

@@ -300,9 +300,9 @@ test("a switch another page queued, with no receipt on this page, is shown here 
   const { host } = mount(searchPipeline());
   await tick();
   await openVerify(host);
-  expect(chipText(conversationChip(host))).toBe("Account A → Account G after this turn");
+  expect(chipText(conversationChip(host))).toBe("Account A → Account G with the next message");
   await openPicker(host);
-  expect(kv(host).at(-1)).toEqual(["Pending", "Account G · waits for the current turn to end"]);
+  expect(kv(host).at(-1)).toEqual(["Pending", "Account G · moves with the next message"]);
   expect(picker(host)!.querySelector("[data-account-pending]")?.getAttribute("data-account-source")).toBe("runtime");
   /* Not this page's alone: the runtime session reports it for every page. */
   expect(notes(host)).not.toContain("Known to this page only. A reload or another page won't show this switch until the server records it.");
@@ -341,7 +341,7 @@ test("a superseded switch does not clear the newer target, and the migration rec
   const { host, update } = mount(searchPipeline());
   await tick();
   await openVerify(host);
-  expect(chipText(conversationChip(host))).toBe("Account A → Account C after this turn");
+  expect(chipText(conversationChip(host))).toBe("Account A → Account C with the next message");
   await openPicker(host);
   /* The newer switch is the one a cancel names. */
   expect(picker(host)!.querySelector("[data-account-cancel]")?.getAttribute("data-account-cancel")).toBe("withdraw");
@@ -388,10 +388,10 @@ test("a queued switch on an idle conversation says queued, never that it waits f
   const { host } = mount(searchPipeline(), [build, { ...verify, activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: null } } as unknown as FileEntry]);
   await tick();
   await openVerify(host);
-  expect(chipText(conversationChip(host))).toBe("Account A → Account G queued");
+  expect(chipText(conversationChip(host))).toBe("Account A → Account G with the next message");
   await openPicker(host);
-  expect(kv(host).at(-1)).toEqual(["Pending", "Account G · queued"]);
-  expect(notes(host)).toContain("No turn is running: the switch starts now, and the next message goes to the chosen account.");
+  expect(kv(host).at(-1)).toEqual(["Pending", "Account G · moves with the next message"]);
+  expect(notes(host)).toContain("No turn is running. The choice shows at once, and the conversation moves to the chosen account with its next message.");
   expect(notes(host).some((note) => /current turn/.test(note))).toBe(false);
   await closePicker();
 

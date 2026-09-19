@@ -21,6 +21,9 @@ import { recoverDeadStructuredConversation, structuredHostProcessAlive } from ".
 export type StructuredControlResult =
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "delivered" } }
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed"; spawned: boolean } }
+  /** Picking the account the conversation runs on while another pick waits (#1846): the waiting pick is
+      withdrawn, nothing was ever moved, and no new operation was needed. */
+  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "withdrawn"; withdrawn: string | null } }
   | {
       status: 200 | 202;
       body: {
@@ -59,6 +62,58 @@ export interface StructuredControlRequest {
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
   actor?: AccountChoiceActor;
+}
+
+/** An account pick still waiting for its conversation's next engagement (#1846). */
+interface WaitingSwitch {
+  operationId: string;
+  accountId: string;
+}
+
+/**
+ * The latest account pick for this conversation that has not started moving
+ * it: admitted, not applying, not withdrawn. An unreadable journal answers
+ * null, which leaves every reconfigure exactly as it was before this read.
+ */
+async function waitingSwitch(
+  client: RuntimeHostClient,
+  registry: AgentRegistry,
+  conversationId: `conversation_${string}`,
+): Promise<WaitingSwitch | null> {
+  if (typeof client.effectBatch !== "function" || typeof client.operationStatus !== "function") return null;
+  try {
+    let latest: { operationId: string; accountId: string; eventSeq: number } | null = null;
+    let afterEventSeq = 0;
+    while (true) {
+      const page = await client.effectBatch(["runtime.reconfigure"], afterEventSeq);
+      for (const effect of page) {
+        const payload = effect.payload;
+        if (typeof payload.operationId !== "string" || typeof payload.accountId !== "string") continue;
+        if (typeof payload.conversationId !== "string"
+          || !payload.conversationId.startsWith("conversation_")
+          || registry.canonicalConversationId(payload.conversationId as `conversation_${string}`) !== conversationId) continue;
+        if (!latest || effect.eventSeq > latest.eventSeq) {
+          latest = { operationId: payload.operationId, accountId: payload.accountId, eventSeq: effect.eventSeq };
+        }
+      }
+      if (page.length < 100) break;
+      const next = Math.max(...page.map((effect) => effect.eventSeq));
+      if (!Number.isSafeInteger(next) || next <= afterEventSeq) break;
+      afterEventSeq = next;
+    }
+    if (!latest || registry.reconfigureCancelled(conversationId, latest.operationId)) return null;
+    const status = (await client.operationStatus(latest.operationId))?.receipt.status;
+    return status === "queued" || status === "pending" ? { operationId: latest.operationId, accountId: latest.accountId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameProfile(
+  left: Pick<AgentReconfiguration, "model" | "effort" | "fast">,
+  right: { model: string | null; effort: string | null; fast: boolean | null },
+): boolean {
+  return left.model === right.model && left.effort === right.effort && (left.fast ?? null) === (right.fast ?? null);
 }
 
 export async function dispatchStructuredControl(
@@ -202,6 +257,37 @@ export async function dispatchStructuredControl(
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };
+    }
+    /* #1846: an account pick is the conversation's intended account, and the queue moves the conversation at
+       its next engagement. Three consequences are settled here, where every caller's pick arrives. */
+    if (reconfiguration?.value) {
+      const named = reconfiguration.value.accountId;
+      const waiting = await waitingSwitch(client, registry, conversation.id);
+      if (named !== undefined && named === generation.accountId) {
+        /* Naming the account it runs on moves nothing (#1279), so it is no switch at all: it withdraws the
+           pick still waiting, and it is how a message held by a failed switch goes out on this account. */
+        const { accountId: _restated, ...profileOnly } = reconfiguration.value;
+        reconfiguration.value = profileOnly;
+        if (conversation.switchHold) registry.releaseSwitchHold(conversation.id);
+        if (waiting) {
+          const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
+          if ((withdrawal.kind === "withdrawn" || withdrawal.kind === "replayed")
+            && sameProfile(profileOnly, generation.launchProfile)) {
+            (dependencies.kick ?? kickStructuredDeliveryQueue)();
+            return {
+              status: 200,
+              body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: waiting.operationId },
+            };
+          }
+        } else if (sameProfile(profileOnly, generation.launchProfile)) {
+          (dependencies.kick ?? kickStructuredDeliveryQueue)();
+          return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: null } };
+        }
+      } else if (named === undefined && waiting) {
+        /* A settings change made while a pick waits keeps the pick: the newer reconfigure supersedes the older
+           one, so it carries the intended account forward instead of dropping it. */
+        reconfiguration.value = { ...reconfiguration.value, accountId: waiting.accountId };
+      }
     }
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>

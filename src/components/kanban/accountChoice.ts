@@ -15,8 +15,9 @@ import { pipelineEnded, stageNotStarted } from "./stagesModel";
  *   project's binding does not allow; `null` clears the pin, and the project's
  *   own selection picks the account at launch.
  * - A conversation switches with the same `reconfigure` the conversation
- *   header's account chip sends. The switch waits for the running turn to end;
- *   an account outside the project's accounts is allowed and recorded as the
+ *   header's account chip sends. It records the conversation's intended
+ *   account, and the conversation moves with its next message (#1846); an
+ *   account outside the project's accounts is allowed and recorded as the
  *   operator's choice (#1279).
  *
  * What the board may say about a pending switch comes from what reports it,
