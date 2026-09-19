@@ -811,6 +811,20 @@ const evidence = {
     window.dispatchEvent(new Event("llv:files-changed"));
     window.dispatchEvent(new Event("llv:pipelines-changed"));
   },
+  /* #1836: a lane the server has admitted that the corpus scan does not carry
+     yet. `/api/attention` hands it out as the pushed rows; `/api/files` never
+     does, so a board that draws it drew it from the push. */
+  admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
+  /* Every `/api/attention` call, as the page made it. */
+  attentionCalls: [] as Array<{ url: string; method: string }>,
+  admitLane(title: string) {
+    evidence.admitted = {
+      pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+      task: task("t-admitted", "assigned", title, "", 0),
+    };
+  },
 };
 Object.assign(window, { evidence });
 
@@ -884,6 +898,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.pathname === "/api/attention") {
+    evidence.attentionCalls.push({ url: url.pathname + url.search, method });
+    if (method !== "GET") return json({ error: "unsupported in the evidence fixture" }, 400);
+    const echoed = (url.searchParams.get("echoes") ?? "").split(",").filter(Boolean);
+    const admitted = evidence.admitted;
+    const withdrawn = echoed.filter((id) => id !== admitted?.pipeline.id).map((id) => ({ id, reason: "never-materialized" }));
+    const records = admitted || withdrawn.length
+      ? { pipelines: admitted ? [admitted.pipeline] : [], tasks: admitted ? [admitted.task] : [], withdrawn }
+      : null;
+    if (!url.searchParams.get("deviceId")) return json({ ok: true, records });
+    return json({ ok: true, rootId: "root-fixture", offer: null, live: [], expired: [], records });
   }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (url.pathname === "/api/board") {

@@ -450,3 +450,54 @@ test("a lane the server admitted is drawn with nothing asking for it, and is tak
   ]);
   resetFilesClientCacheForTests();
 });
+
+test("a tab that has seen more than sixteen lanes still hears the newest one withdrawn, and never echoes more than the server reads (#1836)", async () => {
+  resetFilesClientCacheForTests();
+  /* A server that admits one lane per poll, carries each for three polls (its
+     admission window), and — like the route — reads only the first sixteen
+     echoed ids. */
+  const SERVER_READS = 16;
+  const lane = (index: number) => ({ ...pushedPipeline, id: `pl-${index}`, task: `Lane ${index}`, taskIds: [] }) as unknown as Pipeline;
+  let admitted = 0;
+  let dropped: string | null = null;
+  const echoed: string[][] = [];
+  const fetchFn = (async (url: string) => {
+    if (String(url).startsWith("/api/files")) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ files: [] }), headers: new Headers() } as unknown as Response;
+    }
+    const ids = (new URL(String(url), "http://localhost/").searchParams.get("echoes") ?? "").split(",").filter(Boolean);
+    echoed.push(ids);
+    const held = Array.from({ length: admitted }, (_, index) => `pl-${index}`).filter((id) => id !== dropped);
+    const fresh = held.filter((id) => Number(id.slice(3)) >= admitted - 3).map((id) => lane(Number(id.slice(3))));
+    const withdrawn = ids.slice(0, SERVER_READS)
+      .filter((id) => !held.includes(id))
+      .map((id) => ({ id, reason: "never-materialized" as const }));
+    return { ok: true, status: 200, json: async () => quietView({ pipelines: fresh, tasks: [], withdrawn }) };
+  }) as unknown as typeof fetch;
+
+  const handle: { current: AttentionOffersHandle | null } = { current: null };
+  function Harness() {
+    handle.current = useAttentionOffers({ deviceId: DEVICE, captureViewport: () => viewport, fetchFn, pollMs: 100_000 });
+    return null;
+  }
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Harness />));
+  roots.push(root);
+  await settle();
+
+  for (let poll = 0; poll < 24; poll += 1) {
+    admitted += 1;
+    await handle.current!.refresh();
+    await settle();
+  }
+  /* The newest lane is refused. */
+  dropped = `pl-${admitted - 1}`;
+  await handle.current!.refresh();
+  await settle();
+
+  expect(Math.max(...echoed.map((ids) => ids.length))).toBeLessThanOrEqual(SERVER_READS);
+  expect(handle.current!.withdrawals.map((entry) => entry.pipelineId)).toEqual([dropped]);
+  resetFilesClientCacheForTests();
+});

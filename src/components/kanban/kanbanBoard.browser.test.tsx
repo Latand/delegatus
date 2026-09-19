@@ -5604,6 +5604,91 @@ describe("#1836 where the view was just taken", () => {
   }, 600_000);
 });
 
+describe("#1836 the phone draws a lane the moment the server admits it", () => {
+  /*
+   * The phone board at 390x844, in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`. The fixture's `/api/files` scan never
+   * carries the admitted lane; only `/api/attention` hands it out, as the rows
+   * the server holds. So a lane on this board came from the push.
+   *
+   * Gated: the pipelines row counts the lane, the pipelines list names it,
+   * the phone never names a device or posts anything (it stays chat-only for
+   * a handoff), and a lane the server then drops leaves the list again.
+   *
+   * Geometry and counts go to `evidence/issue-1836/phone-admitted-lane.json`;
+   * frames to `.artifacts/issue-1836/`, which is not committed.
+   */
+  type LaneEvidence = {
+    admitLane(title: string): void;
+    admitted: unknown;
+    attentionCalls: Array<{ url: string; method: string }>;
+  };
+  const TITLE = "A lane just created";
+
+  browserTest("the admitted lane is on the phone board before any scan carries it, and leaves when dropped", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+    };
+    const failures: string[] = [];
+    const viewport = { width: 390, height: 844 };
+    const pipelinesRow = "[data-mobile2-row='pipelines']";
+    const poll = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const label = `phone-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, scheme, "en");
+        try {
+          await page.waitForSelector("[data-mobile2-board]", { timeout: 20_000 });
+          const rowText = () => page.$eval(pipelinesRow, (node) => node.textContent ?? "").catch(() => null);
+          const before = await rowText();
+          await page.screenshot({ path: path.join(out, `${label}-before.png`) });
+
+          await page.evaluate((title) => (window as unknown as { evidence: LaneEvidence }).evidence.admitLane(title), TITLE);
+          const admittedAt = Date.now();
+          await poll(page);
+          let during = before;
+          while (Date.now() - admittedAt < 5_000 && during === before) {
+            await page.waitForTimeout(100);
+            during = await rowText();
+          }
+          const drawnAfterMs = Date.now() - admittedAt;
+          await page.screenshot({ path: path.join(out, `${label}-admitted.png`) });
+          if (during === before) failures.push(`${label}: the pipelines row did not count the admitted lane (${before})`);
+
+          await page.click(pipelinesRow);
+          const listed = await page.waitForFunction((title) => document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-list.png`) });
+          if (!listed) failures.push(`${label}: the pipelines list does not name the admitted lane`);
+
+          /* The server drops it: refused, or never materialized. */
+          await page.evaluate(() => { (window as unknown as { evidence: LaneEvidence }).evidence.admitted = null; });
+          await poll(page);
+          const gone = await page.waitForFunction((title) => !document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-withdrawn.png`) });
+          if (!gone) failures.push(`${label}: the dropped lane stayed on the list`);
+
+          const calls = await page.evaluate(() => (window as unknown as { evidence: LaneEvidence }).evidence.attentionCalls);
+          if (calls.length === 0) failures.push(`${label}: the phone never read the admitted rows`);
+          if (calls.some((call) => call.method !== "GET")) failures.push(`${label}: the phone posted to the attention record`);
+          if (calls.some((call) => call.url.includes("deviceId="))) failures.push(`${label}: the phone named a device`);
+
+          evidence[label] = { viewport, pipelinesRow: { before, during }, drawnAfterMs, listed, withdrawn: gone, attentionCalls: calls };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/phone-admitted-lane.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
 describe("#1834 the card's collapsed Details row", () => {
   /*
    * Rendered evidence for the agent-context split (#1834), in the real Viewer

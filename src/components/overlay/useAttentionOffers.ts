@@ -6,6 +6,7 @@ import { playCue } from "@/lib/audio/app";
 import type { AttentionEvent } from "@/lib/attention/machine";
 import type { DeviceAttentionView } from "@/lib/attention/service";
 import type { AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
+import { MAX_ECHOED_IDS } from "@/lib/attention/targetRecords";
 import { applyPipelineSnapshot, applyTaskSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
 
 /**
@@ -135,7 +136,12 @@ const JSON_HEADERS = { "content-type": "application/json" };
  * applied again.
  */
 function applyPushedRecords(records: DeviceAttentionView["records"], held: EchoedRecords): LaneWithdrawal[] {
-  if (!records) return [];
+  if (!records) {
+    /* The server looked at every id this device echoed and holds them all,
+       and none is inside the admission window any more: each is settled. */
+    held.titles.clear();
+    return [];
+  }
   /* One stamp per row version, and a handful of rows per handoff: a tab open
      for a day would otherwise hold every version it ever saw. */
   if (held.stamps.size > 64) held.stamps.clear();
@@ -145,6 +151,7 @@ function applyPushedRecords(records: DeviceAttentionView["records"], held: Echoe
     /* Named on every poll while it is fresh, so the id is (re)registered even
        when the row itself has not moved: this is the list the next read sends
        back, and dropping it would make an unchanged lane unanswerable. */
+    held.titles.delete(pipeline.id);
     held.titles.set(pipeline.id, laneTitle(pipeline.task) || pipeline.id);
     if (held.stamps.has(stamp)) continue;
     held.stamps.add(stamp);
@@ -172,6 +179,20 @@ function applyPushedRecords(records: DeviceAttentionView["records"], held: Echoe
     revertPipelineSnapshot(entry.id);
     withdrawals.push({ pipelineId: entry.id, title, reason: entry.reason });
   }
+  /* A lane the read no longer carries and did not withdraw has left the
+     admission window: the complete scans since have drawn it the ordinary way,
+     so there is nothing left to answer for it. Echoing it on would only grow
+     the query string for the life of the tab and, past the server's bound,
+     crowd out the lane that is actually new. */
+  const carried = new Set(records.pipelines.map((pipeline) => pipeline.id));
+  for (const id of [...held.titles.keys()]) {
+    if (!carried.has(id)) held.titles.delete(id);
+  }
+  /* And never more than the server reads, newest kept, so the two agree on
+     which lanes are answered for. */
+  for (const id of [...held.titles.keys()].slice(0, Math.max(0, held.titles.size - MAX_ECHOED_IDS))) {
+    held.titles.delete(id);
+  }
   return withdrawals;
 }
 
@@ -191,6 +212,14 @@ interface EchoedRecords {
   titles: Map<string, string>;
 }
 
+/** The lanes this device is holding out of earlier pushes, for the next read,
+    so the server can answer which of them it does not hold (#1836). Empty on
+    the ordinary poll, which is the ordinary case. */
+function echoQuery(held: EchoedRecords): string {
+  const holding = [...held.titles.keys()];
+  return holding.length ? `&echoes=${encodeURIComponent(holding.join(","))}` : "";
+}
+
 /** Whether a POST decided anything: `null` means the server never answered. */
 export type PostOutcome = { ok: true } | { ok: false; refusal: AttentionRefusal | null };
 
@@ -200,6 +229,7 @@ function documentIsVisible(): boolean {
 
 export function useAttentionOffers({
   deviceId,
+  recordsOnly = false,
   captureViewport,
   pollMs = 4_000,
   refusalTtlMs = REFUSAL_TTL_MS,
@@ -207,6 +237,10 @@ export function useAttentionOffers({
   surfaceVisible,
 }: {
   deviceId: string | null;
+  /** A surface that draws the board and answers no request — the phone. With
+      no device id it still reads the freshly admitted rows (#1836) on the same
+      interval, and nothing else: no offer, no answer, no handoff. */
+  recordsOnly?: boolean;
   captureViewport: ViewportCapture;
   pollMs?: number;
   /** Test seam. Production leaves this at {@link REFUSAL_TTL_MS}. */
@@ -244,12 +278,7 @@ export function useAttentionOffers({
   const read = useCallback(async (): Promise<DeviceAttentionView | null> => {
     if (!deviceId || !call) return null;
     try {
-      /* The lanes this device is holding out of earlier pushes travel with the
-         read, so the server can answer which of them it does not hold (#1836).
-         Empty on the ordinary poll, which is the ordinary case. */
-      const holding = [...appliedRecords.current.titles.keys()];
-      const echoes = holding.length ? `&echoes=${encodeURIComponent(holding.join(","))}` : "";
-      const response = await call(`/api/attention?deviceId=${encodeURIComponent(deviceId)}${echoes}`);
+      const response = await call(`/api/attention?deviceId=${encodeURIComponent(deviceId)}${echoQuery(appliedRecords.current)}`);
       if (!response.ok) return null;
       return await response.json() as DeviceAttentionView;
     } catch {
@@ -304,6 +333,20 @@ export function useAttentionOffers({
    * on every re-render.
    */
   const refresh = useCallback(async () => {
+    if (!deviceId) {
+      /* The phone: the rows alone, layered in exactly as the desktop's are. A
+         failed read decides nothing and changes nothing. */
+      if (!recordsOnly || !call) return;
+      try {
+        const response = await call(`/api/attention?records=only${echoQuery(appliedRecords.current)}`);
+        if (!response.ok) return;
+        const body = await response.json() as Pick<DeviceAttentionView, "records">;
+        noteWithdrawals(applyPushedRecords(body.records ?? null, appliedRecords.current));
+      } catch {
+        /* Unreachable: the next tick asks again. */
+      }
+      return;
+    }
     const first = await read();
     if (!first) return;
     /* Before anything is rendered or answered: a request whose target the
@@ -328,7 +371,7 @@ export function useAttentionOffers({
     const second = await read();
     if (second) noteWithdrawals(applyPushedRecords(second.records, appliedRecords.current));
     setView(second ?? first);
-  }, [read, post, deviceId, noteWithdrawals]);
+  }, [read, post, deviceId, recordsOnly, call, noteWithdrawals]);
 
   const answer = useCallback(async (id: string, event: AttentionEvent): Promise<PostOutcome> => {
     const outcome = await post(id, event);
@@ -341,12 +384,14 @@ export function useAttentionOffers({
   }, [post, refresh]);
 
   useEffect(() => {
-    if (!deviceId) return;
+    if (!deviceId && !recordsOnly) return;
     let stopped = false;
     const poll = async () => {
       if (stopped) return;
       await refresh();
-      if (!stopped) setPollGeneration((generation) => generation + 1);
+      /* A rows-only surface has no unfinished business with the record to
+         reconcile, so it does not tick the generation that drives it. */
+      if (!stopped && deviceId) setPollGeneration((generation) => generation + 1);
     };
     const timer = setInterval(() => { void poll(); }, pollMs);
     /* The first read is a poll like any other, just an immediate one. */
@@ -361,7 +406,7 @@ export function useAttentionOffers({
       clearInterval(timer);
       watched?.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [deviceId, pollMs, refresh]);
+  }, [deviceId, recordsOnly, pollMs, refresh]);
 
   const accept = useCallback(async (request: AttentionRequestV1, via: "operator" | "auto-follow" = "operator"): Promise<PostOutcome> => {
     if (!deviceId) return { ok: false, refusal: null };

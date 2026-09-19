@@ -215,6 +215,9 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
 
   const offers = useAttentionOffers({
     deviceId,
+    /* The phone still draws the board, so it still gets a lane the moment the
+       server admits it (#1836) — the rows alone, never an offer. */
+    recordsOnly: mobile,
     captureViewport,
     ...(fetchFn ? { fetchFn } : {}),
     ...(pollMs ? { pollMs } : {}),

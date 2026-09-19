@@ -137,6 +137,28 @@ export function attentionForDevice(
 }
 
 /**
+ * The board rows alone, for a surface that draws the board and answers no
+ * request: the phone (#1836). It withholds its device id so it is never
+ * offered a handoff, and that same withholding kept it from the read that
+ * carries a freshly admitted lane — so a phone board waited for the corpus
+ * scan, which is the failure item 1 is about.
+ *
+ * Nothing here reads, sweeps or answers the attention record: no offer, no
+ * presence, no expiry. Only the lanes admitted inside the window, and which of
+ * the echoed ids the registry does not hold.
+ */
+export function attentionRecordsForSurface(
+  options: { now?: Date; records?: AttentionRecordSources; echoedPipelineIds?: readonly string[] } = {},
+): { records: AttentionTargetRecords | null } {
+  return {
+    records: attentionTargetRecords([], options.records ?? productionRecordSources, {
+      now: options.now ?? new Date(),
+      ...(options.echoedPipelineIds ? { echoedPipelineIds: options.echoedPipelineIds } : {}),
+    }),
+  };
+}
+
+/**
  * Raise a request. `rootId` is never taken from the caller — see above.
  *
  * An operator command (a chip tapped in the overlay, "show me the reviewer")

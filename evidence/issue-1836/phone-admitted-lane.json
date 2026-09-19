@@ -1,0 +1,60 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx",
+  "values": "invented",
+  "phone-light": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "pipelinesRow": {
+      "before": "6 pipelines3 active · 2 needs you · 1 done",
+      "during": "7 pipelines4 active · 2 needs you · 1 done"
+    },
+    "drawnAfterMs": 128,
+    "listed": true,
+    "withdrawn": true,
+    "attentionCalls": [
+      {
+        "url": "/api/attention?records=only",
+        "method": "GET"
+      },
+      {
+        "url": "/api/attention?records=only",
+        "method": "GET"
+      },
+      {
+        "url": "/api/attention?records=only&echoes=p-admitted",
+        "method": "GET"
+      }
+    ]
+  },
+  "phone-dark": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "pipelinesRow": {
+      "before": "6 pipelines3 active · 2 needs you · 1 done",
+      "during": "7 pipelines4 active · 2 needs you · 1 done"
+    },
+    "drawnAfterMs": 108,
+    "listed": true,
+    "withdrawn": true,
+    "attentionCalls": [
+      {
+        "url": "/api/attention?records=only",
+        "method": "GET"
+      },
+      {
+        "url": "/api/attention?records=only",
+        "method": "GET"
+      },
+      {
+        "url": "/api/attention?records=only&echoes=p-admitted",
+        "method": "GET"
+      }
+    ]
+  },
+  "failures": []
+}

@@ -49,7 +49,7 @@ const { savePipelines } = await import("@/lib/pipelines/store");
 const { createTask } = await import("@/lib/tasks/commands");
 const { mutateTasksFile, saveTasks } = await import("@/lib/tasks/store");
 const { resetPresenceForTest } = await import("@/lib/view/presenceStore");
-const { attentionForDevice, raiseAttentionRequest } = await import("./service");
+const { attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } = await import("./service");
 const { attentionFile } = await import("./store");
 
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
@@ -303,4 +303,25 @@ test("a lane admitted long ago is not re-pushed on every poll", async () => {
   const request = requestFor({ kind: "pipeline", pipelineId: pipeline.id }, new Date());
   expect(attentionForDevice(DEVICE).records?.pipelines.map((row) => row.id)).toEqual([pipeline.id]);
   expect(request.target).toEqual({ kind: "pipeline", pipelineId: pipeline.id });
+});
+
+test("the phone's rows-only read carries a freshly admitted lane and touches no request", async () => {
+  clearState();
+  const { pipeline, task } = await admitLane("A lane just created\nWhat the lane is for");
+  requestFor({ kind: "pipeline", pipelineId: pipeline.id }, new Date());
+  const recordBefore = fs.readFileSync(attentionFile(), "utf8");
+
+  /* The phone names no device, so it gets the rows and nothing else. */
+  const surface = attentionRecordsForSurface();
+  expect(Object.keys(surface)).toEqual(["records"]);
+  expect(surface.records?.pipelines.map((row) => row.id)).toEqual([pipeline.id]);
+  expect(surface.records?.tasks.map((row) => row.id)).toEqual([task.id]);
+
+  /* Reading it offered, swept and answered nothing: the attention record is
+     byte for byte what it was, and the request still waits for a desktop. */
+  expect(fs.readFileSync(attentionFile(), "utf8")).toBe(recordBefore);
+
+  savePipelines([]);
+  expect(attentionRecordsForSurface({ echoedPipelineIds: [pipeline.id] }).records?.withdrawn)
+    .toEqual([{ id: pipeline.id, reason: "never-materialized" }]);
 });
