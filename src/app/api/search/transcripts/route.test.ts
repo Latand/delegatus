@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { indexTranscriptSources } from "@/lib/search/transcriptSearch";
+import { viewerMcpBindings } from "@/lib/mcp/bindings";
 
 import { GET, type TranscriptSearchRow } from "./route";
 
@@ -38,6 +39,49 @@ afterAll(() => {
     else process.env[key] = value;
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+test("dialog scopes and the MCP search binding preserve newest-first pages during indexing", async () => {
+  const claude = path.join(sandbox, "ordered-claude.jsonl");
+  const codex = path.join(sandbox, "ordered-codex.jsonl");
+  const record = (type: string, seconds: number | null, content: string) => ({
+    type, ...(seconds === null ? {} : { timestamp: new Date(seconds * 1000).toISOString() }), message: { content },
+  });
+  fs.writeFileSync(claude, [record("user", 20, "quartz repeated"), record("assistant", 40, "quartz answer"), record("user", null, "quartz undated")].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  fs.writeFileSync(codex, JSON.stringify({ type: "event_msg", timestamp: new Date(30_000).toISOString(), payload: { type: "user_message", message: "quartz repeated" } }) + "\n");
+  const indexedSource = (pathname: string, engine: "claude" | "codex", mtimeMs: number) => ({
+    path: pathname, engine, mtimeMs, size: fs.statSync(pathname).size, project: "ordering",
+  });
+  await indexTranscriptSources([indexedSource(claude, "claude", 10_000), indexedSource(codex, "codex", 5000)]);
+  const http = async (pathname: string) => {
+    const response = await GET(new Request(`http://127.0.0.1${pathname}`));
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+  const bindings = viewerMcpBindings(undefined, { get: http, post: async () => ({}) });
+  const read = async (mode: "user" | "everything" | "tool", cursor?: string | null): Promise<Page> => {
+    if (mode === "tool") return await bindings.search_transcripts({ query: "quartz", limit: 1, cursor }) as unknown as Page;
+    const params = new URLSearchParams({ q: "quartz", limit: "1" });
+    if (mode === "user") params.set("speaker", "user");
+    if (cursor) params.set("cursor", cursor);
+    return http(`/api/search/transcripts?${params}`);
+  };
+  const modes = ["user", "everything", "tool"] as const;
+  const first = await Promise.all(modes.map((mode) => read(mode)));
+  fs.appendFileSync(claude, JSON.stringify(record("user", 50, "quartz arrival")) + "\n");
+  await indexTranscriptSources([indexedSource(claude, "claude", 60_000)]);
+  for (const [index, mode] of modes.entries()) {
+    const items = [...first[index].items];
+    let cursor = first[index].nextCursor;
+    while (cursor) {
+      const page = await read(mode, cursor);
+      items.push(...page.items);
+      cursor = page.nextCursor;
+      expect(items.length).toBeLessThanOrEqual(3);
+    }
+    expect(items.map((item) => item.timestamp)).toEqual(mode === "user" ? [30, 10] : [40, 30, 10]);
+    expect(items.find((item) => item.duplicateCount === 2)).toMatchObject({ timestamp: 30, transcriptPath: codex });
+  }
 });
 
 test("returns indexed snippets without reopening the transcript", async () => {

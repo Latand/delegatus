@@ -151,6 +151,138 @@ test("returns bounded non-overlapping result pages", async () => {
   expect(new Set([...first.items, ...second.items].map((item) => item.byteOffset)).size).toBe(3);
 });
 
+test("mixed ages follow message time across engines and scopes, including duplicate representatives and undated records", async () => {
+  const now = Date.UTC(2026, 7, 20) / 1_000;
+  const ages = [42, 65, 38, 49, 12, 12, 51, 2];
+  const sources: TranscriptIndexSource[] = [];
+  for (const [index, age] of ages.entries()) {
+    const engine = index % 2 ? "codex" : "claude";
+    const pathname = path.join(sandbox, `age-${index}.jsonl`);
+    const timestamp = new Date((now - age * 86400) * 1000).toISOString();
+    // Increasing body length makes relevance produce the unsorted age sequence.
+    const body = `zircon ${index} ${"filler ".repeat(index)}`;
+    fs.writeFileSync(pathname, ["user", "assistant"].map((speaker) => JSON.stringify(engine === "claude"
+      ? { type: speaker, timestamp, message: { content: body } }
+      : { type: "event_msg", timestamp, payload: { type: speaker === "user" ? "user_message" : "agent_message", message: body } }
+    )).join("\n") + "\n");
+    sources.push({ ...source(pathname, engine, "ages"), mtimeMs: (now - index) * 1000 });
+  }
+  await indexTranscriptSources(sources);
+  const db = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+  try {
+    expect(legacySearch(db, "zircon", "user").items.map((item) => (now - item.timestamp!) / 86400)).toEqual(ages);
+  } finally { db.close(); }
+  for (const speaker of ["user", undefined] as const) {
+    const items = everyPage("zircon", speaker, undefined, 3).items;
+    expect(items.map((item) => (now - item.timestamp!) / 86400)).toEqual(
+      (speaker ? ages : ages.flatMap((age) => [age, age])).sort((a, b) => a - b),
+    );
+  }
+
+  const replay = path.join(sandbox, "age-replay.jsonl");
+  fs.writeFileSync(replay, JSON.stringify({ type: "user", timestamp: new Date((now - 86400) * 1000).toISOString(), message: { content: "zircon 0" } }) + "\n");
+  const undated = path.join(sandbox, "age-undated.jsonl");
+  fs.writeFileSync(undated, JSON.stringify({ type: "user", message: { content: "zircon undated" } }) + "\n");
+  await indexTranscriptSources([
+    { ...source(replay, "claude", "ages"), mtimeMs: (now - 70 * 86400) * 1000 },
+    { ...source(undated, "claude", "ages"), mtimeMs: (now - 20 * 86400) * 1000 },
+  ]);
+  const items = everyPage("zircon", "user", undefined, 2).items;
+  expect(items[0]).toMatchObject({ transcriptPath: replay, timestamp: now - 86400, duplicateCount: 2 });
+  expect(items.map((item) => (now - item.timestamp!) / 86400)).toEqual([1, 2, 12, 12, 20, 38, 49, 51, 65]);
+});
+
+test("a cursor continues its original match set when files grow and new duplicate groups arrive", async () => {
+  const pathname = path.join(sandbox, "growing.jsonl");
+  const line = (index: number) => JSON.stringify({ type: "user", timestamp: new Date(Date.UTC(2026, 7, 20, 0, index)).toISOString(), message: { content: `topaz entry ${index}` } }) + "\n";
+  fs.writeFileSync(pathname, Array.from({ length: 6 }, (_, i) => line(i)).join(""));
+  await indexTranscriptSources([{ ...source(pathname, "claude", "paging"), mtimeMs: 1000 }]);
+  const original = searchTranscripts({ query: "topaz" });
+  const first = searchTranscripts({ query: "topaz", limit: 2 });
+  fs.appendFileSync(pathname, line(6));
+  const replay = path.join(sandbox, "growing-replay.jsonl");
+  fs.writeFileSync(replay, line(7).replace("entry 7", "entry 2") + line(8).replace("entry 8", "entry 5") + line(0).replace("entry 0", "late backfill"));
+  await indexTranscriptSources([
+    { ...source(pathname, "claude", "paging"), mtimeMs: 2000 },
+    { ...source(replay, "claude", "paging"), mtimeMs: 3000 },
+  ]);
+  const items = [...first.items];
+  let cursor = first.nextCursor;
+  while (cursor) {
+    const page = searchTranscripts({ query: "topaz", limit: 2, cursor });
+    expect(page.total).toBe(original.total);
+    items.push(...page.items);
+    cursor = page.nextCursor;
+    expect(items.length).toBeLessThanOrEqual(original.total);
+  }
+  expect(items).toEqual(original.items);
+  expect(searchTranscripts({ query: "topaz" }).total).toBe(8);
+});
+
+test("undated fallback times and tied IDs survive append, and deleted IDs are never reused", async () => {
+  const pathname = path.join(sandbox, "undated-growth.jsonl");
+  const line = (body: string) => JSON.stringify({ type: "user", message: { content: body } }) + "\n";
+  fs.writeFileSync(pathname, line("opal first") + line("opal second") + line("opal third"));
+  await indexTranscriptSources([{ ...source(pathname, "claude", "ties"), mtimeMs: 10_000 }]);
+  const original = searchTranscripts({ query: "opal" });
+  const first = searchTranscripts({ query: "opal", limit: 1 });
+  fs.appendFileSync(pathname, line("opal fourth"));
+  await indexTranscriptSources([{ ...source(pathname, "claude", "ties"), mtimeMs: 20_000 }]);
+  const rest = searchTranscripts({ query: "opal", cursor: first.nextCursor });
+  expect([...first.items, ...rest.items]).toEqual(original.items);
+  expect(rest.items.map((item) => item.timestamp)).toEqual([10, 10]);
+  expect(searchTranscripts({ query: "opal" }).items[0].timestamp).toBe(20);
+
+  await indexTranscriptSources([], { complete: true });
+  fs.writeFileSync(pathname, line("opal replacement"));
+  await indexTranscriptSources([{ ...source(pathname, "claude", "ties"), mtimeMs: 1000 }]);
+  expect(searchTranscripts({ query: "opal", cursor: first.nextCursor }).items).toEqual([]);
+  expect(searchTranscripts({ query: "opal" }).total).toBe(1);
+});
+
+test("common queries sort only a bounded page of groups", async () => {
+  const count = 4000;
+  await indexTranscriptSources([{
+    path: path.join(sandbox, "many-matches.jsonl"), project: "many", engine: "codex", size: count, mtimeMs: 1000,
+  }], { readMessages: async function* () {
+    for (let index = 0; index < count; index += 1) {
+      yield { body: `garnet entry ${index}`, speaker: "user", timestamp: index % 97, byteOffset: index, lineNumber: index + 1 };
+    }
+  } });
+  const originalSort = Array.prototype.sort;
+  const sizes: number[] = [];
+  Array.prototype.sort = function(compare) {
+    sizes.push(this.length);
+    return originalSort.call(this, compare);
+  };
+  try {
+    const first = searchTranscripts({ query: "garnet", limit: 100 });
+    const second = searchTranscripts({ query: "garnet", limit: 100, cursor: first.nextCursor });
+    expect(first.total).toBe(count);
+    expect(second.items).toHaveLength(100);
+    expect(new Set([...first.items, ...second.items].map((item) => item.byteOffset)).size).toBe(200);
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(101);
+  } finally {
+    Array.prototype.sort = originalSort;
+  }
+});
+
+test("rejects legacy, malformed and cross-query cursors", async () => {
+  const pathname = path.join(sandbox, "cursor-validation.jsonl");
+  fs.writeFileSync(pathname, ["one", "two"].map((body) => JSON.stringify({ type: "user", message: { content: `jade ${body}` } })).join("\n") + "\n");
+  await indexTranscriptSources([source(pathname, "claude", "cursors")]);
+  const cursor = searchTranscripts({ query: "jade", limit: 1 }).nextCursor!;
+  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString());
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  for (const invalid of ["broken", encode(null), encode({ version: 1, offset: 1, scope: payload.scope }),
+    encode({ ...payload, timestamp: null }), encode({ ...payload, id: payload.throughId + 1 })]) {
+    expect(() => searchTranscripts({ query: "jade", cursor: invalid })).toThrow(InvalidTranscriptSearchCursorError);
+  }
+  expect(() => searchTranscripts({ query: "other", cursor })).toThrow(InvalidTranscriptSearchCursorError);
+  expect(() => searchTranscripts({ query: "jade", project: "cursors", cursor })).toThrow(InvalidTranscriptSearchCursorError);
+});
+
 test("collapses resume-replayed bodies after whitespace normalization and keeps the newest rollout", async () => {
   const oldest = path.join(sandbox, "rollout-oldest.jsonl");
   const middle = path.join(sandbox, "rollout-middle.jsonl");
@@ -291,7 +423,7 @@ test("migrates a version-one index in bounded batches without reopening unchange
   }
 
   const migrated = new Database(filename, { readonly: true, strict: true });
-  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
   expect(migrated.query<{ count: number }, []>(
     "SELECT COUNT(*) AS count FROM transcript_messages WHERE body_hash IS NULL OR length(body_hash) != 64",
   ).get()?.count).toBe(0);
@@ -307,6 +439,43 @@ test("migrates a version-one index in bounded batches without reopening unchange
   expect(migrationReadSizes).toEqual([256, 256, 1]);
   expect(indexed).toMatchObject({ filesRead: 0, filesSkipped: 1, failures: [] });
   expect(opens).toBe(0);
+});
+
+test("upgrades version two with file-time fallbacks and a persistent ID watermark", async () => {
+  const pathname = path.join(sandbox, "version-two.jsonl");
+  fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: "beryl undated" } }) + "\n");
+  await indexTranscriptSources([{ ...source(pathname, "claude", "migration"), mtimeMs: 12_345 }]);
+  const filename = statePath("transcript-search.sqlite");
+  const old = new Database(filename);
+  old.exec("ALTER TABLE transcript_messages DROP COLUMN sort_timestamp; DROP TABLE transcript_search_sequence; PRAGMA user_version = 2;");
+  old.close();
+  expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
+  const upgraded = new Database(filename, { readonly: true });
+  try {
+    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    expect(upgraded.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
+  } finally { upgraded.close(); }
+});
+
+test("failed reindex rolls back retained rows, FTS changes and the ID watermark together", async () => {
+  const pathname = path.join(sandbox, "failed-reindex.jsonl");
+  fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: "beryl original" } }) + "\n");
+  const originalSource = { ...source(pathname, "claude", "rollback"), mtimeMs: 1000 };
+  await indexTranscriptSources([originalSource]);
+  const original = searchTranscripts({ query: "beryl" });
+  const result = await indexTranscriptSources([{ ...originalSource, mtimeMs: 2000 }], {
+    readMessages: async function* () {
+      yield { body: "beryl replacement", speaker: "user", timestamp: null, byteOffset: 0, lineNumber: 1 };
+      throw new Error("fixture read interrupted");
+    },
+  });
+  expect(result.failures).toHaveLength(1);
+  expect(searchTranscripts({ query: "beryl" })).toEqual(original);
+  expect(searchTranscripts({ query: "replacement" }).total).toBe(0);
+  const db = new Database(statePath("transcript-search.sqlite"), { readonly: true });
+  try {
+    expect(db.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
+  } finally { db.close(); }
 });
 
 test("searches all projects by default and explains a scoped empty result", async () => {
@@ -536,15 +705,14 @@ test("snippets mark matched terms with sentinels a message body cannot contain",
     .toEqual([{ text: "cobalt", match: true }]);
 });
 
-/* The SQL `searchTranscripts` ran before #1429 — two queries over the joined
-   match set, window functions for the duplicate collapse — kept here verbatim
-   as the oracle for the in-memory ranking that replaced it: same rows, same
-   order, same snippets, same duplicate counts, same totals. */
+/* The old SQL remains a relevance-order reproduction oracle. The newest
+   variant independently checks the production heap and duplicate selection. */
 function legacySearch(
   db: Database,
   rawQuery: string,
   speaker?: "user" | "assistant",
   project?: string,
+  newest = false,
 ): { total: number; items: Omit<TranscriptSearchItem, never>[] } {
   const query = rawQuery.trim().split(/\s+/).filter(Boolean)
     .map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
@@ -567,11 +735,12 @@ function legacySearch(
   const rows = db.query(`
     WITH ranked AS (
       SELECT
-        m.id, m.speaker, m.timestamp, m.transcript_path, m.byte_offset, m.line_number, f.project, f.engine, f.mtime_ms,
+        m.id, m.speaker, ${newest ? "m.sort_timestamp" : "m.timestamp"} AS timestamp,
+        m.transcript_path, m.byte_offset, m.line_number, f.project, f.engine, f.mtime_ms,
         COUNT(*) OVER (PARTITION BY m.speaker, m.body_hash) AS duplicate_count,
         ROW_NUMBER() OVER (
           PARTITION BY m.speaker, m.body_hash
-          ORDER BY f.mtime_ms DESC, COALESCE(m.timestamp, 0) DESC, m.id DESC
+          ORDER BY ${newest ? "m.sort_timestamp DESC, m.id DESC" : "f.mtime_ms DESC, COALESCE(m.timestamp, 0) DESC, m.id DESC"}
         ) AS duplicate_rank
       FROM transcript_messages_fts
       JOIN transcript_messages AS m ON m.id = transcript_messages_fts.rowid
@@ -585,8 +754,7 @@ function legacySearch(
     FROM ranked
     JOIN transcript_messages_fts ON transcript_messages_fts.rowid = ranked.id
     WHERE ranked.duplicate_rank = 1 AND transcript_messages_fts MATCH ?
-    ORDER BY bm25(transcript_messages_fts), ranked.mtime_ms DESC,
-      COALESCE(ranked.timestamp, 0) DESC, ranked.id DESC
+    ORDER BY ${newest ? "ranked.timestamp DESC, ranked.id DESC" : "bm25(transcript_messages_fts), ranked.mtime_ms DESC, COALESCE(ranked.timestamp, 0) DESC, ranked.id DESC"}
     LIMIT ? OFFSET ?
   `).all(...bindings, query, 10_000, 0) as Array<{
     snippet: string;
@@ -631,7 +799,7 @@ function everyPage(query: string, speaker: "user" | "assistant" | undefined, pro
   return { items, total };
 }
 
-test("ranks, collapses and pages exactly as the SQL it replaced", async () => {
+test("newest-first heap, collapse and paging agree with an independent SQL ordering oracle", async () => {
   /* A seeded corpus dense in the ways that exercise every tie-break: an
      eight-word vocabulary so scores collide, bodies repeated across files with
      whitespace variants so groups span transcripts, five distinct mtimes
@@ -683,7 +851,7 @@ test("ranks, collapses and pages exactly as the SQL it replaced", async () => {
     for (const query of ["cobalt", "cobalt report", "ledger", "weekly totals draft"]) {
       for (const speaker of [undefined, "user", "assistant"] as const) {
         for (const project of [undefined, "project-1"]) {
-          const expected = legacySearch(db, query, speaker, project);
+          const expected = legacySearch(db, query, speaker, project, true);
           const actual = everyPage(query, speaker, project, 3);
           expect(actual.total).toBe(expected.total);
           expect(actual.items).toEqual(expected.items);
@@ -700,7 +868,7 @@ test("ranks, collapses and pages exactly as the SQL it replaced", async () => {
   }
 });
 
-test("equal scores order by newest transcript, then newest message, then highest id", async () => {
+test("message time precedes file time, with persistent IDs breaking equal-time ties", async () => {
   /* Two-token bodies with one hit each score identically under bm25, so only
      the tie-break decides the order. */
   const older = path.join(sandbox, "tie-older.jsonl");
@@ -723,9 +891,9 @@ test("equal scores order by newest transcript, then newest message, then highest
   const items = searchTranscripts({ query: "cobalt" }).items;
 
   expect(items.map((item) => [path.basename(item.transcriptPath), item.lineNumber])).toEqual([
+    ["tie-older.jsonl", 1],
     ["tie-newer.jsonl", 3],
     ["tie-newer.jsonl", 2],
     ["tie-newer.jsonl", 1],
-    ["tie-older.jsonl", 1],
   ]);
 });
