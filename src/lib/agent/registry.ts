@@ -3835,6 +3835,11 @@ export class AgentRegistry {
     }
   }
 
+  /** Releases the SQLite connection. The registry is unusable afterwards. */
+  close(): void {
+    this.sqliteStore?.close();
+  }
+
   private setAsideStaleStore(sqliteFilename: string): void {
     const aside = unusedSibling(sqliteFilename, `stale-${timestampLabel()}`);
     for (const suffix of ["", "-wal", "-shm"]) {
@@ -8322,4 +8327,13 @@ export function agentRegistry(): AgentRegistry {
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {
   registryProcessState.__llvAgentRegistry = value;
+}
+
+/** Closes the process-wide registry's SQLite connection and forgets it, for a
+    suite about to delete its state directory. macOS reports a store removed
+    under an open connection as SQLITE_IOERR_VNODE on the next query, where
+    Linux keeps reading the unlinked file. */
+export function closeAgentRegistryForTests(): void {
+  registryProcessState.__llvAgentRegistry?.close();
+  registryProcessState.__llvAgentRegistry = null;
 }

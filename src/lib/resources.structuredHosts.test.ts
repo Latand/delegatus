@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -464,4 +464,49 @@ test("the collector worker turns a host record into a listed row with kill autho
     sessionId: "worker-host",
     owned: false,
   });
+});
+
+test("the collector worker opens no registry and writes nothing in the state directory (#1870)", async () => {
+  /* An install still on JSON: any AgentRegistry opened here would migrate it
+     into SQLite, rename the JSON and publish a descriptor. The worker is a
+     contained, killable process; the Viewer overlays titles before handoff. */
+  const home = mkdtempSync(path.join(os.tmpdir(), "llv-resource-worker-registry-"));
+  const stateDir = path.join(home, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, "agent-registry.json"), JSON.stringify({ version: 2, entries: {}, receipts: {}, conversations: {} }));
+  const before = readdirSync(stateDir).sort();
+  const request = JSON.stringify({
+    type: "collect",
+    fresh: false,
+    identityEpoch: null,
+    hosts: [],
+    files: [{
+      path: CODEX_PATH, parent: null, title: "Handed-over title", project: "repo", activity: "idle",
+      mtime: MTIME, engine: "codex", pid: null, proc: null, conversationId: CONVERSATION,
+    }],
+  }) + "\n";
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: home,
+    LLV_STATE_DIR: stateDir,
+    TMPDIR: path.join(home, "tmp"),
+  };
+  delete env.XDG_CONFIG_HOME;
+  delete env.LLV_AGENT_REGISTRY_SQLITE;
+  delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+  try {
+    const worker = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/resourceCollector.worker.ts")], {
+      cwd: process.cwd(),
+      env,
+      stdin: new Blob([request]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exit, stdout] = await Promise.all([worker.exited, new Response(worker.stdout).text()]);
+    expect(exit).toBe(0);
+    expect(readdirSync(stateDir).sort()).toEqual(before);
+    expect((JSON.parse(stdout) as { type: string }).type).toBe("observation");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

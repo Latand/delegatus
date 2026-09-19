@@ -359,11 +359,7 @@ async function readStructuredHostRecordsForCollection(): Promise<StructuredHostR
 }
 
 const resourceSnapshotDependencies: ResourceSnapshotDependencies = {
-  readFiles: async (fresh) => {
-    const files = await readResourceFileSnapshot(fresh);
-    overlayResourceSessionTitles(files as FileEntry[]);
-    return files;
-  },
+  readFiles: readResourceFileSnapshot,
   readHosts: (fresh, entries, ppids) => readTranscriptHosts(fresh, entries as FileEntry[], ppids),
   proc: procBackend,
   captureAttachReferences: captureTmuxAttachReferences,
@@ -397,9 +393,14 @@ export function resourceWorkerFileSnapshot(
   }));
 }
 
+/** The Viewer's file observation, titles and conversation identity already
+    projected from the registry. The collector worker takes it as handed over:
+    the registry is the Viewer's to read, never the worker's (#1870). */
 export async function readResourceFileSnapshot(fresh: boolean): Promise<ResourceWorkerFileObservation[]> {
   const scan = fresh ? await currentResourceFileScan() : await completedFileScan({ revalidate: false });
-  return resourceWorkerFileSnapshot(scan.snapshot.files, () => null);
+  const files = resourceWorkerFileSnapshot(scan.snapshot.files, () => null);
+  overlayResourceSessionTitles(files as FileEntry[]);
+  return files;
 }
 
 /** The outermost consecutive ancestor carrying this viewer's host stamp.

@@ -72,12 +72,41 @@ function siblings(filename: string, marker: string): string[] {
   return fs.readdirSync(path.dirname(filename)).filter((name) => name.startsWith(prefix)).sort();
 }
 
+/* Counts inside the implementation: Bun's mockRestore() clears the recorded
+   calls, so a count read from spy.mock.calls after restore is always 0. */
 function registryReads(filename: string): { count(): number; restore(): void } {
-  const spy = spyOn(fs, "readFileSync");
-  return {
-    count: () => spy.mock.calls.filter(([target]) => typeof target === "string" && path.resolve(target) === filename).length,
-    restore: () => spy.mockRestore(),
-  };
+  const original = fs.readFileSync;
+  let reads = 0;
+  const spy = spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+    if (typeof target === "string" && path.resolve(target) === filename) reads += 1;
+    return (original as (...args: unknown[]) => unknown)(target, ...rest);
+  }) as typeof fs.readFileSync);
+  return { count: () => reads, restore: () => spy.mockRestore() };
+}
+
+/** Every write aimed at the JSON path: a mirror temp file opened beside it, a
+    rename onto it, or a lock directory created for it. */
+function jsonPathWrites(filename: string): { writes(): string[]; restore(): void } {
+  const originalOpen = fs.openSync;
+  const originalRename = fs.renameSync;
+  const originalMkdir = fs.mkdirSync;
+  const writes: string[] = [];
+  const beside = (target: unknown) => typeof target === "string" && path.resolve(target).startsWith(`${filename}.`);
+  const spies = [
+    spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      if (beside(target) && String(target).endsWith(".tmp")) writes.push(`open ${path.basename(String(target))}`);
+      return (originalOpen as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.openSync),
+    spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (typeof to === "string" && path.resolve(to) === filename) writes.push(`rename onto ${path.basename(to)}`);
+      return originalRename(from, to);
+    }) as typeof fs.renameSync),
+    spyOn(fs, "mkdirSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      if (beside(target) && String(target).endsWith(".write-lock")) writes.push(`mkdir ${path.basename(String(target))}`);
+      return (originalMkdir as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.mkdirSync),
+  ];
+  return { writes: () => [...writes], restore: () => { for (const spy of spies) spy.mockRestore(); } };
 }
 
 /** A deployment already on SQLite: the store holds the registry, the writer
@@ -131,10 +160,17 @@ test("the leftover mirror is kept renamed and never rewritten on a restart", () 
   expect(fs.existsSync(filename)).toBeFalse();
 });
 
-test("sqlite mode creates no JSON write-lock around a mutation", () => {
+test("sqlite mode writes no mirror and takes no JSON write-lock across open, mutation and checkpoint", () => {
   const filename = seedSqliteDeployment(stateRoot());
-  const registry = managed(filename);
-  registry.ensureConversation("codex", "/sessions/epsilon.jsonl", "epsilon");
+  const observed = jsonPathWrites(filename);
+  try {
+    const registry = managed(filename);
+    registry.ensureConversation("codex", "/sessions/epsilon.jsonl", "epsilon");
+    registry.checkpointRollbackMirror();
+  } finally {
+    observed.restore();
+  }
+  expect(observed.writes()).toEqual([]);
   expect(siblings(filename, ".write-lock")).toEqual([]);
 });
 
