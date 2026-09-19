@@ -232,9 +232,17 @@ test("managed Claude removal reports pending cleanup when a credential stays in 
     const response = await remove(deleteRequest({ id: account.id }));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ removed: { id: account.id }, cleanupPending: true });
+    /* The clean-up names the account while its sign-in file is still stuck,
+       so the dialog never says the file was deleted (#1857). */
+    const stuck = await remove(deleteRequest({ cleanupOrphans: true }));
+    await expect(stuck.json()).resolves.toMatchObject({ unresolved: [account.id] });
   } finally {
     fs.unlinkSync = originalUnlink;
   }
+  const finished = await remove(deleteRequest({ cleanupOrphans: true }));
+  const report = await finished.json() as { unresolved: string[] };
+  expect(report.unresolved).not.toContain(account.id);
+  expect(fs.existsSync(path.join(retiredAccountArchive("claude", account.id), ".credentials.json"))).toBe(false);
 });
 
 test("managed Claude removal retires routing and migration intents targeting the account", async () => {
@@ -314,6 +322,33 @@ test("force cannot bypass an in-flight spawn assigned to the account", async () 
   await expect(response.json()).resolves.toEqual(expect.objectContaining({ blockers: ["live_sessions"] }));
   expect(fs.existsSync(account.home)).toBe(true);
   expect(listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
+});
+
+test("a launch queued for the account's capacity answers queued_pin, apart from a running agent (#1857)", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const account = createManagedClaudeAccount("Queued launch");
+  const store = agentRegistry();
+  const launchProfile = emptyLaunchProfile({ cwd: "/repo", title: "Queued account work" });
+  const begun = beginLegacySpawnFixture(store, { engine: "claude", cwd: "/repo", transport: "structured", accountId: account.id, accountPin: true, launchProfile });
+  if (begun.kind !== "created") throw new Error("expected a queued receipt");
+  store.queuePinnedSpawn(begun.receipt.launchId, {
+    version: 1,
+    retryAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+    accountId: account.id,
+    locale: "en",
+    spec: { engine: "claude", command: "claude", cwd: "/repo", windowName: "queued-pin", launchProfile },
+    ["prompt"]: "continue",
+    imageRefs: [],
+    parentArtifactPath: null,
+    pipelineSourceConversationId: null,
+  }, "queued for account capacity");
+  store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner!);
+
+  const response = await remove(deleteRequest({ id: account.id }));
+
+  expect(response.status).toBe(409);
+  await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "account_removal_blocked", blockers: ["queued_pin"] }));
+  expect(fs.existsSync(account.home)).toBe(true);
 });
 
 test("a Claude home with leftover history is removed and the answer says what moved (#1857)", async () => {

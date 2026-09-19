@@ -39,6 +39,9 @@ const base = (over: Partial<EngineAccountsState> = {}): EngineAccountsState => (
   useResetCredit: async () => true,
   limitsBusy: null,
   limitsVersion: 0,
+  removing: null,
+  removal: null,
+  dismissRemoval: () => {},
   ...over,
 });
 
@@ -260,7 +263,8 @@ test("shows removal only for a managed account and keeps cleanup reachable", () 
   const html = render(base());
   expect(html).toContain('aria-label="Remove Work"');
   expect(html).not.toContain('aria-label="Remove Main"');
-  expect(html).toContain("Clean up abandoned homes");
+  expect(html).toContain("Clean up leftovers");
+  expect(html).not.toContain("Force remove");
 });
 
 // ── Issue #61 — Claude login slice render coverage (Fable contract C12) ──────
@@ -425,7 +429,7 @@ test("the card is the quiet form: identity, status, one limits block with both a
   // No chip, and no confirmation copy anywhere near the two actions.
   expect(html).not.toContain("Bound to");
   expect(html).not.toContain("data-account-projects");
-  expect(html).not.toContain(translate("en", "accounts.removeConfirmCta"));
+  expect(html).not.toContain(translate("en", "accounts.removeConfirm", { label: "Account A" }));
   expect(html).toContain('aria-label="Re-read limits for Account A"');
   expect(html).toContain('aria-label="Use one usage-limit reset on Account A"');
 });

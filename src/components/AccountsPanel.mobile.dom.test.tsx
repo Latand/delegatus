@@ -21,6 +21,9 @@ import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
  * and the card's corner names the window its number belongs to (§5, P2-4).
  */
 
+/** An archive under an invented home, composed so the `~` fold is exercised
+    without a home path written out in a published source. */
+const archiveUnderHome = (id: string) => ["", "home", "someone", ".config", "agent-log-viewer", "shared", "claude", "retired", id].join("/");
 const dom = new Window();
 Object.assign(globalThis, {
   window: dom,
@@ -118,6 +121,9 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
     useResetCredit: async () => true,
     limitsBusy: null,
     limitsVersion: 0,
+    removing: null,
+    removal: null,
+    dismissRemoval: () => {},
     ...over,
   };
 }
@@ -335,4 +341,31 @@ test("the account a badge steered here (#229) is ringed on the screen it lands o
 
   expect(host.querySelector('[data-mobile2-account="cl-lab"]')?.className).toContain("ring-accent/50");
   expect(host.querySelector('[data-mobile2-account="cl-main"]')?.className).not.toContain("ring-accent/50");
+});
+
+test("a refusal sits inside the refused account's card with a 44 px close (#1857)", async () => {
+  const { host } = await mount([engineState("claude", [claudeMain, claudeLab], "cl-main", {
+    removal: { kind: "refused", refusal: { accountId: "cl-lab", label: "Lab", reasons: ["live_sessions"] } },
+  })]);
+  const block = host.querySelector('[data-mobile2-account="cl-lab"] [data-account-refusal="cl-lab"]');
+  expect(text(block)).toContain("An agent is still running on Lab.");
+  expect(host.querySelector('[data-mobile2-account="cl-main"] [data-account-refusal]')).toBeNull();
+  const close = block!.querySelector('button[aria-label="Close this message"]')!;
+  expect(close.className).toContain("h-11 w-11");
+  expect(close.className).not.toContain("sm:h-5");
+});
+
+test("the removal summary is the first element of its engine section on the phone (#1857)", async () => {
+  const { host } = await mount([engineState("claude", [claudeMain], "cl-main", {
+    removal: {
+      kind: "removed",
+      summary: { accountId: "cl-lab", label: "Lab", archive: archiveUnderHome("cl-lab"), files: 12, bytes: 14_200_000, conversations: 3, pins: 0, deliveries: 0, migrations: 0, credential: "clean" },
+    },
+  })]);
+  const section = host.querySelector('[data-mobile2-accounts-engine="claude"]')!;
+  const card = section.querySelector('[data-account-removal-card="removed"]')!;
+  expect(text(card)).toContain("Lab removed");
+  expect(text(card)).toContain("12 files · 14.2 MB");
+  const first = section.querySelector("[data-mobile2-account]")!;
+  expect(card.compareDocumentPosition(first) & 4).toBe(4);
 });

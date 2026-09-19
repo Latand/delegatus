@@ -230,21 +230,25 @@ function liveEntryPaths(file: RegistryFile, engine: ManagedAccountEngine, probe:
   return paths;
 }
 
-/** True when a live session (entry or open launch receipt) owns the account. */
-export function accountHasLiveSessions(
+/** What keeps the account live, for the removal dialog (issue #1857):
+    `live_sessions` for a running entry or open launch receipt, `queued_pin`
+    when the only live thing is a launch queued for account capacity, which
+    will start on it; null when nothing does. */
+export function accountLiveSessionKind(
   file: RegistryFile,
   engine: ManagedAccountEngine,
   accountId: string,
   options: AccountLivenessOptions = {},
-): boolean {
+): "live_sessions" | "queued_pin" | null {
   const probe = livenessProbe(options);
   /* A launch that has not resolved its account yet (accountId null) can still
      land on this home, so it counts for every managed account of the engine. */
   const owned = (candidate: string | null) => candidate === accountId || candidate === null;
   for (const entry of Object.values(file.entries)) {
     if (entry.key.engine !== engine || !owned(entry.accountId)) continue;
-    if (entryIsLive(entry, probe)) return true;
+    if (entryIsLive(entry, probe)) return "live_sessions";
   }
+  let queued = false;
   for (const receipt of Object.values(file.receipts)) {
     /* A pin that is still queued for account capacity is durable in-flight work
        with nothing to probe yet: it will actuate on the account it names, so it
@@ -255,10 +259,20 @@ export function accountHasLiveSessions(
        every other account of the engine (issue #1595). */
     const queuedPin = receipt.accountPin === true && receipt.queuedPinnedSpawn !== null;
     if (receipt.engine !== engine || !owned(receipt.accountId) && !queuedPin) continue;
-    if (queuedPin && OPEN_RECEIPT_STATES.has(receipt.state)) return true;
-    if (receiptIsLive(file, receipt, probe)) return true;
+    if (queuedPin && OPEN_RECEIPT_STATES.has(receipt.state)) { queued = true; continue; }
+    if (receiptIsLive(file, receipt, probe)) return "live_sessions";
   }
-  return false;
+  return queued ? "queued_pin" : null;
+}
+
+/** True when a live session (entry or open launch receipt) owns the account. */
+export function accountHasLiveSessions(
+  file: RegistryFile,
+  engine: ManagedAccountEngine,
+  accountId: string,
+  options: AccountLivenessOptions = {},
+): boolean {
+  return accountLiveSessionKind(file, engine, accountId, options) !== null;
 }
 
 /**
