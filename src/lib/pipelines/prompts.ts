@@ -56,17 +56,19 @@ export function renderStagePrompt(
     hostAccess,
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
-    "Report this stage's completion with the Viewer MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }.",
+    /* One completion channel, one fallback (#1797): asking for the call AND an
+       unconditional fenced block let a stage treat the block as the real answer
+       and skip the call, which is where every unreadable-verdict park fell. The
+       engine still reads the block exactly as before when no report arrived. */
+    "Report this stage's completion with the Viewer MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
+    "Use pass when the stage contract is complete, fail for a retryable stage failure, and needs_decision when operator judgment is required. Pass carries no findings, so use fail or needs_decision when findings describe unresolved work.",
     "",
-    "Finish the completed turn with one fenced JSON object as the final block. Without the tool call, this block is the completion authority; with it, the call wins:",
+    "Fallback, only when the stage_report call returned an error or the tool is absent from this session: quote that error, then end the turn with one fenced JSON object as the final block, with nothing after it.",
     "```json",
     '{"status":"pass","findings":[],"confidence":0.9}',
     "```",
-    "Use pass when the stage contract is complete, fail for a retryable stage failure, and needs_decision when operator judgment is required.",
-    "Pass requires findings to be empty or omitted. Use fail or needs_decision when findings describe unresolved work.",
-    "Every prose terminal marker must agree with the JSON status: APPROVE=pass, REQUEST_CHANGES=fail, COMMENT=needs_decision. NO FINDINGS agrees with pass.",
-    "Human-readable output may appear before the JSON block. Never place text after the block.",
+    "In that block the status uses the same vocabulary, and any prose terminal marker must agree with it: APPROVE=pass, REQUEST_CHANGES=fail, COMMENT=needs_decision, NO FINDINGS agrees with pass.",
   ].join("\n");
 }

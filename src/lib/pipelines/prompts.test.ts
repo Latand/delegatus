@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+
 import { buildPipeline } from "./store";
 import { renderStagePrompt } from "./prompts";
 import type { PipelineStage } from "./types";
@@ -114,4 +116,57 @@ test("a prompt without {{prev.output}} still receives the relayed previous outpu
   const scaffolded = renderStagePrompt(pipeline, stage, { ...role, promptScaffold: "Context: {{prev.output}}" }, "the observation");
   expect(scaffolded).toContain("Context: the observation");
   expect(scaffolded).not.toContain("Previous stage output");
+});
+
+/* #1797: the rendered stage instruction names one completion channel. The
+   fenced block stays in the prompt — the engine still settles from it when no
+   report was recorded — but only under the condition that the call failed. */
+test("the stage prompt names stage_report as the one completion channel and the fenced block as its fallback", () => {
+  const stage: PipelineStage = {
+    id: "build",
+    kind: "run",
+    role: { roleId: "builder" },
+    engine: "claude",
+    ["prompt"]: "Build {{task}}",
+    next: null,
+    effectiveRole: { roleId: "builder", engine: "claude", model: "opus", effort: "medium", access: "read-write", promptScaffold: null },
+  };
+  const pipeline = buildPipeline({
+    id: "12345678",
+    task: "pipeline support",
+    project: "viewer",
+    repoDir: "/repo",
+    stages: [stage],
+    srcPath: null,
+    srcConversationId: null,
+    now: "now",
+  });
+  const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+
+  const call = prompt.indexOf("stage_report");
+  const fence = prompt.indexOf("```json");
+  expect(call).toBeGreaterThan(-1);
+  expect(fence).toBeGreaterThan(call);
+
+  /* Everything introducing the fence is conditional on the call failing, and
+     no earlier line asks for the block unconditionally. */
+  const preamble = prompt.slice(call, fence);
+  expect(preamble).toMatch(/error/i);
+  expect(preamble).toMatch(/absent|not available|unavailable/i);
+  const introduction = preamble.split("\n").filter((line) => line.trim()).at(-1)!;
+  expect(introduction).toMatch(/stage_report/);
+  expect(introduction).toMatch(/only when|unless|if/i);
+
+  /* The status vocabulary is still stated, once. */
+  expect(prompt).toContain('"status":"pass"');
+  expect(prompt.split("needs_decision").length - 1).toBeGreaterThan(0);
+  expect(prompt.split("```json").length - 1).toBe(1);
+});
+
+test("no role scaffold instructs an unconditional fenced verdict (#1797)", () => {
+  for (const role of ROLE_DEFAULTS) {
+    const scaffold = role.promptScaffold ?? "";
+    expect(scaffold).not.toContain("```");
+    expect(scaffold).not.toMatch(/fenced|"status":/i);
+  }
 });
