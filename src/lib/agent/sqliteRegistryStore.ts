@@ -69,7 +69,18 @@ export interface SqliteRegistryMutation<T> {
 }
 
 export interface SqliteRegistryStoreOptions {
-  initialSnapshot: RegistryFile;
+  /** The legacy registry to import on first boot. A loader is called only
+      when the store holds no import marker, so an initialised store never
+      reads the JSON. */
+  initialSnapshot: RegistryFile | (() => RegistryFile);
+  /** Runs inside the import transaction with the source as it was decided and
+      the snapshot read back from the new rows. Throwing rolls the import back,
+      leaving the store unmarked. */
+  verifyImport?(source: RegistryFile, imported: RegistryFile): void;
+  /** Open an existing, imported store for reading only: no schema, no import,
+      no file-mode changes. A preview uses it to see the registry without
+      performing any of a writer's startup work. */
+  readOnly?: boolean;
   normalize(value: unknown): RegistryFile;
   /** Grant bound for the assembled-snapshot rebound below, matching whatever
       `normalize` enforces. Production omits both; a test supplies a policy that
@@ -145,10 +156,10 @@ export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private readonly normalize: (value: unknown) => RegistryFile;
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
-  private readonly onSnapshotLoad: (() => void) | undefined;
-  private readonly onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
-  private readonly onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
-  private readonly onRevisionQuery: (() => void) | undefined;
+  private onSnapshotLoad: (() => void) | undefined;
+  private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
+  private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
+  private onRevisionQuery: (() => void) | undefined;
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
   private revisionCache: { signature: string; revision: number } | null = null;
   private readOnlyCache: SqliteRegistrySnapshot | null = null;
@@ -181,7 +192,6 @@ export class SqliteAgentRegistryStore {
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite registry modes require the Bun runtime");
     const { Database } = sqlite;
-    this.db = new Database(filename, { create: true, strict: true });
     this.normalize = options.normalize;
     this.onWriterWait = options.onWriterWait;
     this.onSnapshotLoad = options.onSnapshotLoad;
@@ -189,6 +199,17 @@ export class SqliteAgentRegistryStore {
     this.onRowPayloadParse = options.onRowPayloadParse;
     this.onRevisionQuery = options.onRevisionQuery;
     this.mcpGrantPolicy = options.mcpGrantPolicy;
+    if (options.readOnly) {
+      this.db = new Database(filename, { readonly: true, strict: true });
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
+      if (!table || !this.imported()) {
+        this.db.close();
+        throw new Error(`${path.basename(filename)} holds no imported registry`);
+      }
+      return;
+    }
+    this.db = new Database(filename, { create: true, strict: true });
     this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS registry_meta (
@@ -227,7 +248,28 @@ export class SqliteAgentRegistryStore {
       WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn';
     `);
     this.secureFiles();
-    this.importFirstBoot(options.initialSnapshot);
+    this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+  }
+
+  /** Runs a read the caller's storage metrics must not count: the import's
+      own read-back is not a registry read. */
+  private unobserved<T>(read: () => T): T {
+    const observers = [this.onSnapshotLoad, this.onRowPayloadRead, this.onRowPayloadParse, this.onRevisionQuery] as const;
+    this.onSnapshotLoad = this.onRowPayloadRead = this.onRowPayloadParse = this.onRevisionQuery = undefined;
+    try {
+      return read();
+    } finally {
+      [this.onSnapshotLoad, this.onRowPayloadRead, this.onRowPayloadParse, this.onRevisionQuery] = observers;
+    }
+  }
+
+  /** Whether the first-boot import has committed. */
+  imported(): boolean {
+    return this.meta("migration_complete") === "1";
+  }
+
+  close(): void {
+    this.db.close();
   }
 
   snapshot(): SqliteRegistrySnapshot {
@@ -626,14 +668,19 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  private importFirstBoot(initialSnapshot: RegistryFile): void {
+  private importFirstBoot(
+    initialSnapshot: SqliteRegistryStoreOptions["initialSnapshot"],
+    verifyImport: SqliteRegistryStoreOptions["verifyImport"],
+  ): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const complete = this.meta("migration_complete");
       if (complete !== "1") {
-        this.persistAll(this.decideAssembled(initialSnapshot), 1);
+        const source = this.decideAssembled(typeof initialSnapshot === "function" ? initialSnapshot() : initialSnapshot);
+        this.persistAll(source, 1);
         this.setMeta("schema_version", "2");
         this.setMeta("migration_complete", "1");
+        if (verifyImport) verifyImport(source, this.unobserved(() => this.loadInTransaction().file));
       }
       this.db.exec("COMMIT");
       this.secureFiles();
@@ -1145,5 +1192,22 @@ export class SqliteAgentRegistryStore {
 
   private rememberRevision(revision: number): void {
     this.revisionCache = { signature: this.storageSignature(), revision };
+  }
+}
+
+/** Whether a registry store already holds a committed import, read without
+    creating, migrating or importing anything. A missing file is `false`. */
+export function sqliteRegistryStoreImported(filename: string): boolean {
+  if (!fs.existsSync(filename)) return false;
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("SQLite registry modes require the Bun runtime");
+  const db = new sqlite.Database(filename, { readonly: true, strict: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
+    if (!table) return false;
+    return db.query<MetaRow, [string]>("SELECT key, value FROM registry_meta WHERE key = ?").get("migration_complete")?.value === "1";
+  } finally {
+    db.close();
   }
 }

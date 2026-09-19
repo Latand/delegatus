@@ -2170,7 +2170,9 @@ test("fresh processes rescue one orphaned immediate structured admission exactly
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+    /* The child names the deprecated JSON mode on purpose; its warning is expected. */
+    const unexpected = stderr.split("\n").filter((line) => line && !line.includes("is deprecated: the registry lives in SQLite only")).join("\n");
+    expect({ exit, stderr: unexpected }).toEqual({ exit: 0, stderr: "" });
     return JSON.parse(stdout) as {
       status: number;
       body: { launchId: string; conversationId: string; state: string };

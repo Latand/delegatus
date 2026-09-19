@@ -180,7 +180,16 @@ test("runtime image reachability scans registry backends, Claude ledger, host ev
   registryDb.query("INSERT INTO registry_rows VALUES (?)").run(JSON.stringify({ runtimeImages: [refs[4]] }));
   registryDb.close();
 
-  expect([...collectRuntimeImageReachableDigests(state)].sort()).toEqual(refs.map((ref) => ref.sha256));
+  /* With the SQLite store present the JSON beside it is a leftover mirror,
+     never an authority (#1870): its reference is not read. */
+  expect([...collectRuntimeImageReachableDigests(state)].sort()).toEqual(refs.slice(1).map((ref) => ref.sha256));
+});
+
+test("runtime image reachability reads the JSON registry only where no SQLite store exists", () => {
+  const state = sandbox();
+  const ref = { sha256: "a".repeat(64), mime: "image/png", bytes: PNG.byteLength };
+  fs.writeFileSync(path.join(state, "agent-registry.json"), JSON.stringify({ heldDeliveries: { one: { runtimeImages: [ref] } } }));
+  expect([...collectRuntimeImageReachableDigests(state)]).toEqual([ref.sha256]);
 });
 
 function reservationRow(sha: string, state: string, at: string | null): Record<string, unknown> {

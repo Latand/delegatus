@@ -103,7 +103,7 @@ untouched.
    `git rev-parse origin/stage` and `staging-release.json`; the UI at
    `http://127.0.0.1:8899` shows the staging badge with that sha prefix.
 2. **Prod untouched** — the deploy script fingerprints (sha256 + mtime)
-   prod's `viewer-release.json`, `agent-registry.json`,
+   prod's `viewer-release.json`, `agent-registry.sqlite`,
    `runtime-events.sqlite`, `board.json`, `pipelines.json`, `flows.json`
    before and after, prints the diff, and **fails** if
    `viewer-release.json` changed (only deploy machinery writes it; the
@@ -112,8 +112,9 @@ untouched.
 3. **Prod still serves prod** — `curl -s http://127.0.0.1:8898/api/staging`
    reports `{"staging":false,…}`.
 4. **Launches stay staging-local** — spawn an agent from the staging UI;
-   it appears on staging's board (`state-staging/agent-registry.json`)
-   and prod's `agent-registry.json` fingerprint stays unchanged.
+   it appears on staging's board and in staging's registry
+   (`state-staging/agent-registry.sqlite`), and prod's registry holds no
+   record of it.
 5. **Agents' Viewer control lands on staging** — the deploy output's
    `agentControl` reads `origin: http://127.0.0.1:8899` and
    `authenticated: true`. The gate resolves the endpoint and credential

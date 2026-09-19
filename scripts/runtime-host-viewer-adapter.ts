@@ -977,8 +977,6 @@ async function checkpointHotStateFence(
   try {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("../src/lib/viewerInstrumentation");
     const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
-    const { agentRegistry } = await import("../src/lib/agent/registry");
-    agentRegistry().checkpointRollbackMirrorForDemotion();
     const current = readHotStateAuthority(stateDir);
     if (current?.mode === "fencing"
       && current.epoch === request.epoch

@@ -415,8 +415,12 @@ export function collectRuntimeImageReachableDigests(
 ): ReadonlySet<string> {
   const retireBefore = (options.now ?? Date.now()) - (options.retiredGraceMs ?? DELIVERED_REF_RETIREMENT_GRACE_MS);
   const digests = new Set<string>();
-  collectJsonFile(path.join(root, "agent-registry.json"), digests, retireBefore);
-  collectRegistrySqliteDigests(path.join(root, "agent-registry.sqlite"), digests, retireBefore);
+  /* The registry lives in SQLite (#1870). The JSON is read only by an install
+     that has no store yet (an explicitly configured JSON mode); beside a
+     store it is a leftover mirror. */
+  const registryStore = path.join(root, "agent-registry.sqlite");
+  if (fs.existsSync(registryStore)) collectRegistrySqliteDigests(registryStore, digests, retireBefore);
+  else collectJsonFile(path.join(root, "agent-registry.json"), digests, retireBefore);
   collectClaudeLedgerDigests(path.join(root, "claude-delivery-ledger"), digests, retireBefore);
   collectJsonDirectory(path.join(root, "structured-host-events"), digests, retireBefore);
   collectJournalDigests(path.join(root, "runtime-events.sqlite"), digests, retireBefore);

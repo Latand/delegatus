@@ -1,68 +1,89 @@
-# Agent registry SQLite rollout
+# Agent registry storage
 
-The registry supports four values for `LLV_AGENT_REGISTRY_SQLITE`:
+The agent registry lives in `agent-registry.sqlite` (WAL, `synchronous=FULL`).
+There is no JSON mirror (#1870). Nothing in the product reads or writes
+`agent-registry.json` once the store is initialised.
 
-- `off` keeps `agent-registry.json` authoritative. This is the default.
-- `dual-write` reads JSON, writes revision-stamped JSON and SQLite under the existing JSON writer lock, and verifies parity after every mutation.
-- `read` reads and transacts through `agent-registry.sqlite` in WAL mode, then refreshes `agent-registry.json` on a bounded five-second checkpoint cadence. Startup and release demotion write a revision-stamped checkpoint.
-- `sqlite` uses SQLite for reads and writes after the parity burn-in. It refreshes the JSON mirror at process start, repairs missing, malformed, stale, or torn mirror state from authoritative SQLite, and removes JSON serialization from registry operations. A mirror revision ahead of SQLite remains fenced because it can indicate durable-state rollback.
+## Mode resolution
 
-The first process that opens any gated SQLite mode creates `agent-registry.sqlite` and imports the normalized contents of `agent-registry.json` in one transaction. An interrupted import has no migration marker, so the next boot retries the complete import. Durable memberships, spawn receipts, capability digests, lineage, conversation generations, migration state, delivery receipts, and routing policy all migrate through the same snapshot.
+`LLV_AGENT_REGISTRY_SQLITE` still accepts four values, and SQLite is the
+default:
 
-Every process with an enabled SQLite mode must run on Bun. The Docker Viewer uses `bun-container --bun`, and the published CLI selects Bun automatically when the gate is enabled. For a source checkout, launch Next with `bun --bun node_modules/.bin/next start`.
+- unset, or `sqlite`: the registry reads and writes `agent-registry.sqlite` only.
+- `off`, `dual-write`, `read`: the JSON-authoritative modes of the original
+  rollout. They run only when named explicitly, log a deprecation warning, and
+  go away with the rest of the legacy import path under #1872.
 
-Managed releases read the mode from the Viewer Compose environment. Set one
-`LLV_AGENT_REGISTRY_SQLITE=<mode>` entry in the service environment before a
-deployment starts. The immutable Viewer candidate receives that validated
-value, its deployment capability response reports the opened registry mode,
-and the runtime-host successor receives the same value after predecessor
-environment deduplication. Candidate health fails when the configured and
-observed modes differ, so promotion cannot publish a split registry fleet.
+A process that has no variable (the MCP server that Claude launches with an
+empty environment, an npm install) resolves the published descriptor
+`agent-registry.backend.json`, and with no descriptor it uses SQLite. A writer
+that resolved its mode publishes the descriptor, so every process opens the
+same store. An unreadable, contradictory or unavailable identity still fails
+closed.
 
-## Rollout
+Every process that opens the registry runs on Bun. The Docker Viewer uses
+`bun-container --bun`; for a source checkout, launch Next with
+`bun --bun node_modules/.bin/next start`.
 
-1. Stop every Viewer and runtime-host process that can mutate the registry. Confirm that no registry writer remains before changing backend files.
-2. Preserve a copy of the current state directory. Archive the known stale `agent-registry.sqlite`, `agent-registry.sqlite-wal`, and `agent-registry.sqlite-shm` together under distinct inactive names, retaining their timestamps and permissions as diagnostic evidence.
-3. Keep the current `agent-registry.json` at its active path and clear only the three active SQLite paths after the archive is verified.
-4. Start exactly one Bun-hosted process with `LLV_AGENT_REGISTRY_SQLITE=dual-write`. Its first boot creates SQLite and imports the authoritative JSON in one transaction. Verify parity and stop this importer before allowing the writer fleet to start.
-5. Start every Bun-hosted Viewer and runtime-host process with `LLV_AGENT_REGISTRY_SQLITE=dual-write`.
-6. Treat `RegistryParityError` as a rollout stop. Keep JSON authoritative while investigating any mismatch.
-7. Restart every registry writer with `LLV_AGENT_REGISTRY_SQLITE=read` for an SQLite-read burn-in with a continuously refreshed JSON rollback mirror.
-8. After that burn-in, restart every writer with `LLV_AGENT_REGISTRY_SQLITE=sqlite` to remove JSON rewrites from the operation path.
-9. Retain `agent-registry.json`, `agent-registry.sqlite`, and the SQLite WAL files throughout both burn-ins.
+## First boot of a JSON install
 
-`/api/files` reports the backend mode, authoritative and JSON-mirror revisions,
-transaction count, transaction p95, writer-wait p95, rollback-mirror checkpoint
-timestamp, and dirty-checkpoint state under `systemHealth.registry`. The cached
-response exposes the stable mirror checkpoint timestamp and omits time-decaying writer rate; rollout probes derive both values at
-observation time. `/api/runtime/deployments/capabilities/v1` reports
-`registryBackendMode` from the registry instance opened by that Viewer process.
-A rollout probe must
-observe one current release owner, a bounded mirror age in `read`, and a stable JSON
-mtime during `sqlite` streaming.
+An install whose authority is still the JSON file (a descriptor that says `off`
+or `dual-write`, or no descriptor and only `agent-registry.json` on disk)
+migrates itself on the first open:
 
-The release gate uses a registry of at least 14,660,822 bytes with ten mixed
-structured-host lanes and a concurrent reader. Registry mutation p95 must stay
-below 250 ms, SQLite writer-wait p95 below 100 ms, reader p95 below 100 ms,
-the cold `/api/files` probe below 1,000 ms, and its warm probe below 500 ms.
-The measured revision delta must equal the admitted material and coalesced
-cursor transactions, and the JSON mirror inode metadata must remain unchanged
-through steady-state `sqlite` traffic.
+1. The opener takes the JSON's own write lock, which every JSON-mode writer
+   also takes, and re-reads the descriptor. A concurrent opener that already
+   finished leaves nothing to do.
+2. A store that already holds an import beside the authoritative JSON is an
+   earlier experiment. The trio is set aside as
+   `agent-registry.sqlite.stale-<time>` (with its `-wal` and `-shm`), which is
+   the old manual rebaseline, automated.
+3. The JSON is imported in one `BEGIN IMMEDIATE` transaction. Before `COMMIT`
+   the rows are read back and their entity count and content digest are
+   compared with the file. A mismatch rolls the import back: the store stays
+   unmarked and the JSON untouched.
+4. The JSON is renamed to `agent-registry.json.imported-<release>` and kept for
+   one release.
+5. The descriptor is published as `sqlite`, last.
 
-A failed scheduled rollback checkpoint retains the dirty revision and retries
-with exponential backoff capped at 30 seconds. Successful convergence resets
-the retry series.
+A crash at any step leaves the next open to finish. If it happens after the
+rename, the descriptor still names the JSON, the JSON is gone and the store
+holds the import, so the next open only publishes.
 
-The `read` and `sqlite` paths bypass the whole-registry writer lock, its retry/backoff loop, stale-lock recovery, temp-file cleanup, and startup JSON compaction. Per-session operation locks remain active. They serialize host actuation independently of registry persistence.
+## A deployment that is already on SQLite
 
-## Rollback
+The first start of this release finds the 63 MB mirror an older release wrote
+and renames it to `agent-registry.json.imported-<release>` without reading it.
+It also removes the JSON-era `agent-registry.json.write-lock.owner.pending-*`
+directories and `retired-*` links whose recorded owner process is gone.
 
-1. Stop every process that can mutate the registry.
-2. Preserve the JSON and SQLite files together for diagnosis.
-3. When rolling back from `sqlite`, start one process with `LLV_AGENT_REGISTRY_SQLITE=read` and stop it after startup. Startup refreshes the JSON mirror to the current SQLite revision.
-4. Restart all processes with `LLV_AGENT_REGISTRY_SQLITE=off`. The JSON mirror is the authoritative rollback source.
-5. A rollback with no subsequent `off`-mode mutations can resume directly in `dual-write`. It admits an existing backend pair only when the revisions and normalized snapshots agree, preserving both files and throwing `RegistryParityError` on any drift.
-6. After any `off`-mode mutation, stop every writer again and archive `agent-registry.sqlite`, `agent-registry.sqlite-wal`, and `agent-registry.sqlite-shm` together under distinct names. Keep that archived trio with the pre-rebaseline JSON for diagnosis.
-7. With the active SQLite paths clear and the current JSON retained, start exactly one Bun process in `dual-write`. First boot creates a fresh database and imports the authoritative JSON in one transaction. Stop that process after initialization, preserve a fresh state-directory copy, then restart every writer in `dual-write`.
+The per-session operation locks under `agent-registry.json.locks/` stay where
+they are. Two releases overlap during a hand-off and must contend on the same
+lock directory; the name is historical.
 
-Keep the SQLite files until the rollback has been validated. The database and WAL artifacts preserve evidence for diagnosing storage failures and caller-level state changes.
+Managed releases pass the configured mode to the candidate and to the
+runtime-host successor. An unset Compose value is sent as `sqlite`, the
+candidate's deployment capability reports its configured mode, and
+candidate health fails when the two differ.
+
+## Rollback and downgrade
+
+A rollback to a release older than this change runs with the same environment,
+in `sqlite` mode. It finds no mirror, writes one at its start as it always did,
+and keeps working from `agent-registry.sqlite`. Rolling forward again renames
+that mirror away. Nothing is lost in either direction, because SQLite is the
+store both releases write.
+
+An npm install downgraded to an older version that reads the backend
+descriptor keeps working the same way: the descriptor says `sqlite`, so it opens
+the store. A version from before the descriptor existed would open an empty
+JSON registry instead.
+
+Do not roll back by setting `LLV_AGENT_REGISTRY_SQLITE=off`. The JSON file is
+gone, so an `off`-mode process would start from an empty registry, and restoring
+the kept copy would lose every change made since the migration. The `off`
+rollback procedure of the original rollout is retired.
+
+`/api/files` reports the backend mode, the revision, the transaction count, and
+the transaction and writer-wait p95 under `systemHealth.registry`. In `sqlite`
+mode the mirror fields are null.

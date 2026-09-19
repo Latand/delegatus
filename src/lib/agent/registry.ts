@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
   captureProcessIdentity,
   processIdentityMayOwn,
@@ -68,13 +69,18 @@ import {
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
+  isDeprecatedRegistryBackendMode,
+  publishedRegistryBackendMode,
   publishRegistryBackendIdentity,
   registryBackendModeFromEnvironment,
+  REGISTRY_BACKEND_ENV,
   resolveRegistryBackend,
+  type RegistryBackendMode,
   type RegistryBackendResolution,
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
+  sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -3513,6 +3519,12 @@ export interface AgentRegistryStorageOptions {
   beforeDualWriteMutationReplace?: () => void;
   beforeMirrorRename?: () => void;
   afterMirrorRename?: () => void;
+  /** Sees (and may corrupt, to exercise the refusal) a copy of the snapshot a
+      first-boot import read back, before it is compared with its source. */
+  onRegistryImportVerify?: (imported: RegistryFile) => void;
+  /** Runs after a migrating open set the JSON aside and before it publishes
+      the SQLite descriptor. */
+  afterRegistryJsonRetired?: () => void;
   mirrorCheckpointMs?: number;
   now?: () => number;
   scheduleMirrorCheckpoint?: (callback: () => void, delayMs: number) => { unref?(): unknown };
@@ -3536,8 +3548,103 @@ export class RegistryParityError extends Error {
   override name = "RegistryParityError";
 }
 
-/** Pure env read: lets health/capability probes answer without paying the
-    full registry load (a multi-MB JSON parse) on first touch. */
+/** A first-boot import read back rows that differ from the JSON it imported.
+    The import rolled back: the store stays unmarked and the JSON untouched. */
+export class RegistryImportVerificationError extends Error {
+  override name = "RegistryImportVerificationError";
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Entity count and content digest of a registry snapshot, the evidence a
+    first-boot import is checked against. */
+function registryImportEvidence(file: RegistryFile): { entities: number; digest: string } {
+  let entities = 0;
+  for (const value of Object.values(file)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) entities += Object.keys(value).length;
+  }
+  return { entities, digest: crypto.createHash("sha256").update(canonicalJson(file)).digest("hex") };
+}
+
+function verifyRegistryImport(
+  source: RegistryFile,
+  imported: RegistryFile,
+  inspect: ((imported: RegistryFile) => void) | undefined,
+): void {
+  const readBack = JSON.parse(JSON.stringify(imported)) as RegistryFile;
+  inspect?.(readBack);
+  const expected = registryImportEvidence(source);
+  const actual = registryImportEvidence(readBack);
+  if (expected.entities !== actual.entities || expected.digest !== actual.digest) {
+    throw new RegistryImportVerificationError(
+      `agent registry import read back ${actual.entities} entities (digest ${actual.digest.slice(0, 12)})`
+      + ` where the JSON holds ${expected.entities} (digest ${expected.digest.slice(0, 12)}); the import was rolled back`,
+    );
+  }
+}
+
+const warnedDeprecatedModes = new Set<RegistryBackendMode>();
+
+function warnDeprecatedMode(mode: RegistryBackendMode, source: RegistryBackendResolution["source"]): void {
+  if (warnedDeprecatedModes.has(mode)) return;
+  warnedDeprecatedModes.add(mode);
+  console.warn(
+    `agent registry backend mode "${mode}" (from the ${source}) is deprecated: the registry lives in SQLite only.`
+    + ` Unset ${REGISTRY_BACKEND_ENV} to migrate this install to SQLite.`,
+  );
+}
+
+function timestampLabel(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/** `<name>.<label>`, or with a timestamp appended when that name is taken, so
+    a kept copy is never overwritten. */
+function unusedSibling(filename: string, label: string): string {
+  const candidate = `${filename}.${label}`;
+  return fs.existsSync(candidate) ? `${candidate}-${timestampLabel()}` : candidate;
+}
+
+function releaseLabel(filename: string): string {
+  try {
+    return hotStateWriterRevision(path.dirname(filename))?.slice(0, 12) ?? timestampLabel();
+  } catch {
+    return timestampLabel();
+  }
+}
+
+function fsyncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, "r");
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function isRegularFile(filename: string): boolean {
+  try {
+    return fs.lstatSync(filename).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Fixtures and child processes that construct a registry without a mode keep
+    the historical JSON default; only the process-wide registry resolves the
+    SQLite default (#1870). */
+function unmanagedBackendMode(): AgentRegistrySqliteMode {
+  return process.env[REGISTRY_BACKEND_ENV] === undefined ? "off" : registryBackendModeFromEnvironment();
+}
+
+/** Pure env read: lets health/capability probes answer without opening the
+    registry. Unset is SQLite, the mode the process-wide registry opens. */
 export function sqliteModeFromEnvironment(): AgentRegistrySqliteMode {
   return registryBackendModeFromEnvironment();
 }
@@ -3602,10 +3709,13 @@ export class AgentRegistry {
        historical env default, so a test directory that happens to hold a store
        is not mistaken for a deployment whose writer went silent. */
     const backend: RegistryBackendResolution = storage.sqliteMode !== undefined
-      ? { mode: storage.sqliteMode, sqliteFilename: null, source: "explicit" }
+      ? { mode: storage.sqliteMode, sqliteFilename: null, source: "explicit", pendingJsonImport: false }
       : storage.resolveBackendIdentity === true
         ? resolveRegistryBackend(filename)
-        : { mode: registryBackendModeFromEnvironment(), sqliteFilename: null, source: "unmanaged" };
+        : { mode: unmanagedBackendMode(), sqliteFilename: null, source: "unmanaged", pendingJsonImport: false };
+    if ((backend.source === "environment" || backend.source === "descriptor") && isDeprecatedRegistryBackendMode(backend.mode)) {
+      warnDeprecatedMode(backend.mode, backend.source);
+    }
     this.sqliteMode = backend.mode;
     const sqliteFilename = storage.sqliteFilename
       ?? backend.sqliteFilename
@@ -3621,21 +3731,26 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
+    const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      /* Lazy: an initialised store never reads the JSON (#1870). */
+      initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
+      verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
+      normalize: (value) => normalizeRegistry(value, storage.mcpGrantPolicy),
+      mcpGrantPolicy: storage.mcpGrantPolicy,
+      onWriterWait: (duration) => {
+        this.recordMetric(this.writerWaits, duration);
+        storage.onSqliteWriterWait?.(duration);
+      },
+      onSnapshotLoad: storage.onSqliteSnapshotLoad,
+      onRowPayloadRead: storage.onSqliteRowPayloadRead,
+      onRowPayloadParse: storage.onSqliteRowPayloadParse,
+      onRevisionQuery: storage.onSqliteRevisionQuery,
+    });
     this.sqliteStore = this.sqliteMode === "off"
       ? null
-      : new SqliteAgentRegistryStore(sqliteFilename, {
-          initialSnapshot: readFile(filename, storage.mcpGrantPolicy),
-          normalize: (value) => normalizeRegistry(value, storage.mcpGrantPolicy),
-          mcpGrantPolicy: storage.mcpGrantPolicy,
-          onWriterWait: (duration) => {
-            this.recordMetric(this.writerWaits, duration);
-            storage.onSqliteWriterWait?.(duration);
-          },
-          onSnapshotLoad: storage.onSqliteSnapshotLoad,
-          onRowPayloadRead: storage.onSqliteRowPayloadRead,
-          onRowPayloadParse: storage.onSqliteRowPayloadParse,
-          onRevisionQuery: storage.onSqliteRevisionQuery,
-        });
+      : backend.pendingJsonImport
+        ? this.migrateJsonRegistry(sqliteFilename, openStore, storage.afterRegistryJsonRetired)
+        : openStore();
     if (this.sqliteMode === "off") {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
@@ -3644,30 +3759,151 @@ export class AgentRegistry {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
     }
-    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
+    if (this.sqliteMode === "read") {
       this.cleanupStaleTempFiles();
       const sqlite = this.sqliteStore!.snapshot();
       const mirrorRevision = sqliteMirrorRevision(this.filename);
       /* `read` is the parity burn-in, so a same-revision mismatch must stop
-         rollout. In authoritative `sqlite` mode the JSON file is a rollback
-         mirror: missing stamps and torn/stale same-revision contents are
-         repaired from the durable SQLite snapshot during every startup. */
-      if (this.sqliteMode === "read" && (mirrorRevision === null || mirrorRevision === sqlite.revision)) {
-        this.assertSqliteParity(sqlite);
-      }
+         rollout. */
+      if (mirrorRevision === null || mirrorRevision === sqlite.revision) this.assertSqliteParity(sqlite);
       if (mirrorRevision !== null && mirrorRevision > sqlite.revision) {
-        if (this.sqliteMode === "sqlite") this.fenceAheadMirror(mirrorRevision, sqlite.revision);
         throw new RegistryParityError(
           `agent registry JSON revision ${mirrorRevision} is ahead of SQLite revision ${sqlite.revision}`,
         );
       }
       this.mirrorSqliteSnapshot(sqlite);
     }
-    /* Only the writer that was TOLD its mode publishes it. Test and child
-       constructions pass `sqliteMode` explicitly and stay silent, so a
-       fixture can never install an identity a reader would then trust. */
-    if (backend.source === "environment") {
+    if (this.sqliteMode === "sqlite") {
+      /* SQLite is the only store (#1870). A JSON file here is a mirror an
+         older release wrote: it is kept renamed for one release, never read
+         and never rewritten. */
+      this.cleanupStaleTempFiles();
+      this.retireJsonMirror();
+      this.removeDeadWriteLockResidue();
+    }
+    /* Only the writer that was TOLD its mode publishes it, or the process-wide
+       registry that resolved the SQLite default. Test and child constructions
+       pass `sqliteMode` explicitly and stay silent, so a fixture can never
+       install an identity a reader would then trust. */
+    if (backend.source === "environment" || backend.source === "default") {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
+    }
+  }
+
+  /**
+   * First open of an install whose authority is still the JSON file (#1870).
+   * Under the JSON's own write lock, which every JSON-mode writer takes:
+   * set a stale SQLite trio aside, import the JSON in one verified
+   * transaction, keep the JSON renamed, then publish the SQLite descriptor.
+   * The descriptor flips last, so a crash at any step leaves the next open to
+   * finish: an unflipped descriptor with the JSON gone and an imported store
+   * is an import that committed and only needs publishing.
+   */
+  private migrateJsonRegistry(
+    sqliteFilename: string,
+    openStore: () => SqliteAgentRegistryStore,
+    afterJsonRetired: (() => void) | undefined,
+  ): SqliteAgentRegistryStore {
+    const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
+    try {
+      const published = publishedRegistryBackendMode(this.filename);
+      /* A concurrent opener finished the migration while this one waited. */
+      if (published === "sqlite" || published === "read") return openStore();
+      const jsonPresent = isRegularFile(this.filename);
+      /* An imported store beside an authoritative JSON is an earlier
+         experiment (or an import this migration never finished publishing,
+         which the JSON reproduces exactly). The documented rebaseline sets it
+         aside; the JSON is the authority. */
+      if (jsonPresent && sqliteRegistryStoreImported(sqliteFilename)) this.setAsideStaleStore(sqliteFilename);
+      const store = openStore();
+      try {
+        if (jsonPresent) {
+          const kept = unusedSibling(this.filename, `imported-${releaseLabel(this.filename)}`);
+          fs.renameSync(this.filename, kept);
+          fsyncDirectory(path.dirname(this.filename));
+          console.info(`agent registry imported into ${path.basename(sqliteFilename)}; the JSON is kept as ${path.basename(kept)}`);
+        }
+        afterJsonRetired?.();
+        publishRegistryBackendIdentity(this.filename, "sqlite", sqliteFilename);
+      } catch (error) {
+        store.close();
+        throw error;
+      }
+      return store;
+    } finally {
+      this.releaseLock(claim);
+    }
+  }
+
+  private setAsideStaleStore(sqliteFilename: string): void {
+    const aside = unusedSibling(sqliteFilename, `stale-${timestampLabel()}`);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        fs.renameSync(`${sqliteFilename}${suffix}`, `${aside}${suffix}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    fsyncDirectory(path.dirname(sqliteFilename));
+    console.warn(`agent registry: set the stale SQLite store aside as ${path.basename(aside)} before importing the JSON`);
+  }
+
+  /** Renames a leftover JSON mirror without reading it. */
+  private retireJsonMirror(): void {
+    if (!isRegularFile(this.filename)) return;
+    try {
+      fs.renameSync(this.filename, unusedSibling(this.filename, `imported-${releaseLabel(this.filename)}`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    fsyncDirectory(path.dirname(this.filename));
+  }
+
+  /** Staging directories and retired claims the JSON write lock left behind
+      in the JSON era. Only a claim whose recorded owner is provably gone is
+      removed; a retired link whose claim is gone is removed with it. */
+  private removeDeadWriteLockResidue(): void {
+    const directory = path.dirname(this.filename);
+    const lock = `${path.basename(this.filename)}.write-lock`;
+    const pendingPrefix = `${lock}.owner.pending-`;
+    const retiredPrefix = `${lock}.retired-`;
+    let names: string[];
+    try {
+      names = fs.readdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const ownerGone = (claim: string): boolean => {
+      let owner: Partial<ProcessIdentity>;
+      try {
+        owner = JSON.parse(fs.readFileSync(path.join(claim, "owner.json"), "utf8")) as Partial<ProcessIdentity>;
+      } catch {
+        return false;
+      }
+      if (!Number.isInteger(owner.pid) || owner.pid! <= 0) return false;
+      return !this.ownerAlive({ pid: owner.pid!, startIdentity: owner.startIdentity ?? null });
+    };
+    for (const name of names) {
+      if (!name.startsWith(pendingPrefix)) continue;
+      const claim = path.join(directory, name);
+      if (ownerGone(claim)) fs.rmSync(claim, { recursive: true, force: true });
+    }
+    for (const name of names) {
+      if (!name.startsWith(retiredPrefix)) continue;
+      const retired = path.join(directory, name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(retired);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        if (!fs.existsSync(retired) || ownerGone(retired)) fs.rmSync(retired, { force: true });
+      } else if (stat.isDirectory() && ownerGone(retired)) {
+        fs.rmSync(retired, { recursive: true, force: true });
+      }
     }
   }
 
@@ -3683,21 +3919,6 @@ export class AgentRegistry {
         ));
       throw new RegistryParityError(`agent registry JSON and SQLite snapshots differ: ${fields.join(", ")}`);
     }
-  }
-
-  private fenceAheadMirror(mirrorRevision: number, sqliteRevision: number): void {
-    const conflictLabel = `sqlite-conflict-r${mirrorRevision}-over-r${sqliteRevision}`;
-    const conflict = `${this.filename}.${conflictLabel}`;
-    try {
-      fs.renameSync(this.filename, conflict);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    throw new RegistryParityError(
-      `agent registry JSON mirror revision ${mirrorRevision} is ahead of authoritative SQLite revision ${sqliteRevision}; `
-      + `conflicting mirror moved beside the registry as ${conflictLabel} and the next startup will rebuild from SQLite`,
-    );
   }
 
   private mirrorSqliteSnapshot(initial: SqliteRegistrySnapshot): void {
@@ -3726,7 +3947,7 @@ export class AgentRegistry {
   }
 
   private currentMirrorRevision(): number | null {
-    if (this.sqliteMode === "off") return null;
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "dual-write") return null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.mirrorRevisionCache?.signature === before) return this.mirrorRevisionCache.revision;
@@ -3766,20 +3987,11 @@ export class AgentRegistry {
   }
 
   checkpointRollbackMirror(): void {
-    if (!this.sqliteStore || this.sqliteMode === "dual-write") return;
+    if (!this.sqliteStore || this.sqliteMode !== "read") return;
     const currentRevision = this.sqliteStore.revision();
     if (!this.mirrorDirty && this.lastMirroredRevision !== null && currentRevision <= this.lastMirroredRevision) return;
     this.mirrorSqliteSnapshot(this.sqliteStore.snapshot());
     this.mirrorCheckpointFailures = 0;
-  }
-
-  checkpointRollbackMirrorForDemotion(maxAttempts = 2): void {
-    if (!this.sqliteStore || this.sqliteMode === "dual-write") return;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      this.checkpointRollbackMirror();
-      if (!this.storageDiagnostics().mirrorDirty) return;
-    }
-    throw new Error(`agent registry rollback mirror did not converge after ${maxAttempts} attempts`);
   }
 
   private scheduleRollbackMirror(delayMs = this.mirrorCheckpointMs): void {
@@ -4238,9 +4450,6 @@ export class AgentRegistry {
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
-      }
-      if (this.sqliteMode === "sqlite") {
-        this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
       }
       return mutation.result;
     }
