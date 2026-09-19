@@ -411,6 +411,9 @@ async function spawnPipelineAgent(
   const resolution = accountManager.resolveProjectSpawn(input.role.engine, {
     project: input.project,
     requestedId: input.requestedAccountId,
+    /* The model this stage will actually launch, so the account's capacity is
+       judged on the window that model draws on (#1796). */
+    model: input.role.model,
     ...(input.unavailableAccountIds?.length
       ? { unavailableIds: input.unavailableAccountIds }
       : {}),
@@ -1475,9 +1478,11 @@ function recoverUsageLimitedAttempt(
   try {
     resolution = ports.resolveProjectSpawn?.(attempt.effectiveRole.engine, {
       project: pipeline.project,
+      model: attempt.effectiveRole.model,
       unavailableIds: unavailableAccountIds,
     }) ?? accountManager.resolveProjectSpawn(attempt.effectiveRole.engine, {
       project: pipeline.project,
+      model: attempt.effectiveRole.model,
       unavailableIds: unavailableAccountIds,
     });
   } catch (error) {
@@ -2643,11 +2648,14 @@ async function tickRunStage(
       const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
       let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
       try {
+        const model = attempt.definition ? attempt.effectiveRole.model : stage.effectiveRole.model;
         resolution = ports.resolveProjectSpawn?.(engine, {
           project: pipeline.project,
+          model,
           unavailableIds,
         }) ?? accountManager.resolveProjectSpawn(engine, {
           project: pipeline.project,
+          model,
           unavailableIds,
         });
       } catch (error) {

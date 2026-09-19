@@ -57,7 +57,7 @@ const window5h = (usedPercent: number, resetsAt: number) => ({ usedPercent, rese
 const windowWeek = (usedPercent: number, resetsAt: number) => ({ usedPercent, resetsAt, windowMinutes: 10_080 });
 
 /** «Main» holds the seat: a 5h window with room, a week nearly spent, and the
-    flagship week #1358 added — three rows, three meters, one corner. */
+    tier weeks #1358/#1796 added — three rows, three meters, one corner. */
 const claudeMain = account({
   id: "cl-main",
   label: "Main",
@@ -66,7 +66,7 @@ const claudeMain = account({
     freshness: "fresh",
     session: window5h(28, NOW + 2 * HOUR),
     weekly: windowWeek(92, NOW + 3 * DAY),
-    flagship: { ...windowWeek(29, NOW + 3 * DAY), tier: "opus" },
+    tiers: [{ ...windowWeek(29, NOW + 3 * DAY), tier: "opus" }],
     plan: "max",
     capturedAt: NOW - 600,
     checkedAt: new Date((NOW - 600) * 1000).toISOString(),
@@ -164,7 +164,7 @@ test("every meter on the active card fills with what remains, and the corner nam
   expect(meters.map((meter) => meter.getAttribute("data-mobile2-meter-tone"))).toEqual(["accent", "danger", "accent"]);
   expect(text(card.querySelector('[data-limit-row="session"]'))).toContain("72% left");
   expect(text(card.querySelector('[data-limit-row="weekly"]'))).toContain("8% left");
-  expect(text(card.querySelector('[data-limit-row="flagship"]'))).toContain("71% left");
+  expect(text(card.querySelector('[data-limit-row="tier:opus"]'))).toContain("71% left");
 
   const corner = card.querySelector("[data-mobile2-account-corner]")!;
   expect(corner.getAttribute("data-mobile2-account-window")).toBe("Week");
@@ -172,7 +172,7 @@ test("every meter on the active card fills with what remains, and the corner nam
   expect(corner.getAttribute("aria-label")).toBe("8% left of the Week window");
   // The number the corner shows is the tightest window's headroom, never the
   // first window's and never what was used.
-  expect(mobileAccountCorner({ session: null, weekly: null, flagship: null, plan: null }, (key: string) => key)).toBeNull();
+  expect(mobileAccountCorner({ session: null, weekly: null, tiers: [], plan: null }, (key: string) => key)).toBeNull();
 });
 
 test("the quiet row of an authenticated account switches future launches on the tap, and the receipt carries Switch back", async () => {

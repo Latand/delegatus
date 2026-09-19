@@ -40,12 +40,14 @@ export type MigrationOrigin = "manual" | "auto";
 /** Conversation scope selected when committing an account routing change. */
 export type AccountMigrationScope = "active" | "all";
 
-/** Quota window that bound the effective-remaining minimum. `flagship` is the
-    model-tier weekly of issue #1358. */
-export type QuotaWindow = "session" | "weekly" | "flagship";
+/** Quota window that bound the effective-remaining minimum. A `tier:<name>`
+    key is one model tier's own weekly (issues #1358, #1796). */
+export type QuotaWindow = "session" | "weekly" | `tier:${string}`;
 
 function parseQuotaWindow(value: unknown): QuotaWindow | null {
-  return value === "weekly" || value === "session" || value === "flagship" ? value : null;
+  if (value === "weekly" || value === "session") return value;
+  if (value === "flagship") return "tier:opus"; // pre-list snapshots used seven_day_opus
+  return typeof value === "string" && value.startsWith("tier:") && value.length > "tier:".length ? value as QuotaWindow : null;
 }
 
 // ── UI-facing DTOs (what the Accounts panel binds to) ─────────────────────────

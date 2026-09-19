@@ -49,6 +49,7 @@ export interface AccountParkSources {
   /** The account's newest limits provenance. */
   limitsProvenance: (engine: "claude" | "codex", accountId: string) => LimitsProvenance | null;
   now?: number;
+  model?: string | null;
 }
 
 /**
@@ -104,7 +105,7 @@ export function accountPark(
   }
   const observation = sources.quotaObservation(engine, accountId);
   if (!observation) return null;
-  const exhausted = rateLimitFromQuotaObservation(observation, now);
+  const exhausted = rateLimitFromQuotaObservation(observation, now, sources.model);
   if (!exhausted) return null;
   if (exhausted.resetAt !== null) {
     return {

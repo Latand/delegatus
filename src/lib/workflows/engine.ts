@@ -262,7 +262,7 @@ async function ensureStageAgent(
          drives every other workflow. */
       let resolution: ProjectSpawnResolution;
       try {
-        resolution = accountManager.resolveProjectSpawn(role.engine, { project: wf.project });
+        resolution = accountManager.resolveProjectSpawn(role.engine, { project: wf.project, model: role.model });
       } catch (error) {
         park(wf, error instanceof Error ? error.message : String(error));
         return "waiting";

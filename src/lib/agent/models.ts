@@ -88,19 +88,16 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
   return null;
 }
 
-/** Claude launch families the provider meters on the flagship tier's own
-    weekly window (issue #1358). Opus and Fable both belong there: the bucket
-    Anthropic reports as `seven_day_opus` is the top-tier weekly, and a Fable
-    spawn is gated by it even when the general week is comfortable. */
-const CLAUDE_FLAGSHIP_FAMILIES: ReadonlySet<ClaudeLaunchModel> = new Set(["fable", "opus"]);
-
-/** Whether a Claude spawn of `model` draws on the flagship weekly window. An
-    unknown or absent model resolves to the launch default, which is flagship
-    class, so "no model chosen" is gated conservatively. */
-export function claudeModelGatedByFlagshipWeekly(model: string | null | undefined): boolean {
-  const family = normalizeClaudeLaunchModel(model);
-  if (family === null) return true;
-  return CLAUDE_FLAGSHIP_FAMILIES.has(family);
+/** The provider tier bucket a Claude spawn of `model` draws on (issues #1796,
+    #1431). The families the Viewer launches are named exactly as the provider
+    spells its `seven_day_<tier>` buckets, so the family IS the tier: a Fable
+    spawn answers to Fable's window and an Opus spawn to Opus's. A family the
+    provider meters no bucket for is gated by the general week alone, which is
+    what the caller sees when this tier names no reported window. An
+    absent model resolves to the launch default. An unknown explicit model has
+    no known tier and uses only the general windows. */
+export function claudeSpawnTier(model: string | null | undefined): string | null {
+  return model?.trim() ? normalizeClaudeLaunchModel(model) : defaultModelFor("claude");
 }
 
 const CLAUDE_TIER_DISPLAY: Record<string, string> = { fable: "Fable", mythos: "Mythos", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };

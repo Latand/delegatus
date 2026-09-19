@@ -62,39 +62,59 @@ describe("quota migration policy", () => {
   });
 });
 
-describe("flagship weekly gating (#1358)", () => {
-  const claude = (session: number, weekly: number, flagship: number | null) => ({
+describe("per-model tier gating (#1358, #1796, #1431)", () => {
+  /* Invented readings. `tiers` is what the provider meters per model tier; the
+     account below reports Fable and Opus and nothing for Sonnet or Haiku. */
+  const claude = (session: number, weekly: number, tiers: { tier: string; usedPercent: number }[]) => ({
     engine: "claude" as MigrationEngine,
     accountId: "a",
     authenticated: true,
     limits: {
       session: { usedPercent: session, resetsAt: null },
       weekly: { usedPercent: weekly, resetsAt: null },
-      flagship: flagship === null ? null : { usedPercent: flagship, resetsAt: null, windowMinutes: 10_080, tier: "opus" },
+      tiers: tiers.map((entry) => ({ usedPercent: entry.usedPercent, resetsAt: null, windowMinutes: 10_080, tier: entry.tier })),
       plan: "max",
       capturedAt: Math.floor(now / 1000),
     },
     provenance: { source: "live" as const, reason: null, staleSince: null },
     observedAt: now,
   });
+  const metered = claude(20, 40, [{ tier: "fable", usedPercent: 95 }, { tier: "opus", usedPercent: 90 }]);
 
-  test("a tighter flagship weekly binds the minimum for a flagship spawn, and for no stated model", () => {
-    expect(effectiveRemaining(claude(20, 40, 90), now)).toEqual({ percent: 10, window: "flagship" });
-    expect(effectiveRemaining(claude(20, 40, 90), now, { model: "fable" })).toEqual({ percent: 10, window: "flagship" });
-    expect(effectiveRemaining(claude(20, 40, 90), now, { model: "claude-opus-5" })).toEqual({ percent: 10, window: "flagship" });
+  test("each model answers to its own tier window, and an unstated model to the launch default's", () => {
+    expect(effectiveRemaining(metered, now, { model: "fable" })).toEqual({ percent: 5, window: "tier:fable" });
+    expect(effectiveRemaining(metered, now, { model: "claude-fable-5-1" })).toEqual({ percent: 5, window: "tier:fable" });
+    expect(effectiveRemaining(metered, now, { model: "claude-opus-5" })).toEqual({ percent: 10, window: "tier:opus" });
+    // No model stated resolves to the launch default, which is Opus.
+    expect(effectiveRemaining(metered, now)).toEqual({ percent: 10, window: "tier:opus" });
   });
 
-  test("a lower-tier spawn is gated by the general windows only", () => {
-    expect(effectiveRemaining(claude(20, 40, 90), now, { model: "sonnet" })).toEqual({ percent: 60, window: "weekly" });
+  test("a model the provider meters no bucket for is gated by the general windows only (#1431)", () => {
+    expect(effectiveRemaining(metered, now, { model: "sonnet" })).toEqual({ percent: 60, window: "weekly" });
+    expect(effectiveRemaining(metered, now, { model: "claude-haiku-4-5-20251001" })).toEqual({ percent: 60, window: "weekly" });
   });
 
-  test("a comfortable flagship weekly never lifts the minimum, and an absent bucket changes nothing", () => {
-    expect(effectiveRemaining(claude(20, 40, 5), now)).toEqual({ percent: 60, window: "weekly" });
-    expect(effectiveRemaining(claude(20, 40, null), now)).toEqual({ percent: 60, window: "weekly" });
+  test("a comfortable tier window never lifts the minimum, and no buckets at all changes nothing", () => {
+    expect(effectiveRemaining(claude(20, 40, [{ tier: "opus", usedPercent: 5 }]), now)).toEqual({ percent: 60, window: "weekly" });
+    expect(effectiveRemaining(claude(20, 40, []), now)).toEqual({ percent: 60, window: "weekly" });
   });
 
-  test("codex observations ignore any flagship field", () => {
-    const codex = { ...claude(20, 40, 90), engine: "codex" as MigrationEngine };
+  test("codex observations ignore any tier windows", () => {
+    const codex = { ...metered, engine: "codex" as MigrationEngine };
     expect(effectiveRemaining(codex, now)).toEqual({ percent: 60, window: "weekly" });
   });
+});
+
+
+test("auto-balance compares the chosen model's tier", () => {
+  const make = (id: string, fable: number, opus: number) => ({ ...observation(id, 10, 20), engine: "claude" as const,
+    limits: { ...observation(id, 10, 20).limits, tiers: [
+      { tier: "fable", usedPercent: fable, resetsAt: null },
+      { tier: "opus", usedPercent: opus, resetsAt: null },
+    ] },
+  });
+  const samples = [make("a", 95, 10), make("b", 10, 100)];
+  expect(chooseAutoBalance("claude", "a", samples, policy(), now, { model: "fable" })?.targetId).toBe("b");
+  expect(chooseAutoBalance("claude", "a", samples, policy(), now, { model: "sonnet" })).toBeNull();
+  expect(chooseAutoBalance("claude", "a", samples, policy(), now, { model: "opus" })).toBeNull();
 });

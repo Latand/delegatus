@@ -123,6 +123,8 @@ export async function applyConversationMigration(
       registry.quotaObservations(conversation.engine),
       accounts,
       allowedAccountIds,
+      Date.now(),
+      source.launchProfile.model,
     );
     if (selection.kind === "none") {
       return { status: 409, body: { error: "no healthy account with fresh quota headroom is available" } };

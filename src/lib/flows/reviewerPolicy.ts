@@ -11,6 +11,7 @@ type AvailabilityResolver = (
   engine: RoleConfig["engine"],
   requestedId?: string | null,
   excludedIds?: string[],
+  model?: string | null,
 ) => HeadlessSpawnAvailability;
 
 /** Chooses the primary reviewer when capacity exists, then its configured fallback. */
@@ -27,7 +28,7 @@ export function chooseHeadlessReviewer(
   for (const role of roles) {
     const prefix = `${role.engine}:`;
     const excludedIds = attemptedAccounts.filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length));
-    const availability = resolve(role.engine, null, excludedIds);
+    const availability = resolve(role.engine, null, excludedIds, role.model);
     if (availability.kind === "available") {
       const choice = { kind: "available" as const, role, account: availability.account };
       if (!attemptedAccounts.includes(`${availability.account.engine}:${availability.account.accountId}`)) return choice;

@@ -123,7 +123,7 @@ test("a failed live read is a 502 and leaves the last observation untouched", as
   expect(agentRegistry().readOnlySnapshot().quotaObservations.codex[created.id]).toBeUndefined();
 });
 
-test("a Claude re-read goes through the same probe port and records the flagship weekly with the rest", async () => {
+test("a Claude re-read goes through the same probe port and records the tier weeklies with the rest", async () => {
   const created = createManagedClaudeAccount("Account C");
   fs.writeFileSync(path.join(created.home, ".credentials.json"), "{}", { mode: 0o600 });
   const now = Date.now();
@@ -136,7 +136,7 @@ test("a Claude re-read goes through the same probe port and records the flagship
         limits: {
           session: { usedPercent: 12, resetsAt: NOW_S + 3_600, windowMinutes: 300 },
           weekly: { usedPercent: 40, resetsAt: NOW_S + 4 * 86_400, windowMinutes: 10_080 },
-          flagship: { usedPercent: 63, resetsAt: NOW_S + 4 * 86_400, windowMinutes: 10_080, tier: "opus" },
+          tiers: [{ usedPercent: 63, resetsAt: NOW_S + 4 * 86_400, windowMinutes: 10_080, tier: "opus" }],
           plan: "max", capturedAt: null,
         },
         provenance: { source: "live", reason: null, staleSince: null }, observedAt: at,
@@ -145,11 +145,11 @@ test("a Claude re-read goes through the same probe port and records the flagship
   };
   const response = await handleLimitsRefresh("claude", request("claude", { id: created.id }), { probe, now });
   expect(response.status).toBe(200);
-  const body = await response.json() as { account: { limits: { checkedAt: string; flagship: { tier: string; usedPercent: number } }; effective: { window: string; percent: number } } };
+  const body = await response.json() as { account: { limits: { checkedAt: string; tiers: { tier: string; usedPercent: number }[] }; effective: { window: string; percent: number } } };
   expect(body.account.limits.checkedAt).toBe(new Date(now).toISOString());
-  expect(body.account.limits.flagship).toMatchObject({ tier: "opus", usedPercent: 63 });
-  expect(body.account.effective).toMatchObject({ window: "flagship", percent: 37 });
-  expect(agentRegistry().readOnlySnapshot().quotaObservations.claude[created.id]?.limits?.flagship).toMatchObject({ tier: "opus" });
+  expect(body.account.limits.tiers).toMatchObject([{ tier: "opus", usedPercent: 63 }]);
+  expect(body.account.effective).toMatchObject({ window: "tier:opus", percent: 37 });
+  expect(agentRegistry().readOnlySnapshot().quotaObservations.claude[created.id]?.limits?.tiers).toMatchObject([{ tier: "opus" }]);
 });
 
 test("the refresh route rejects cross-origin callers, unknown accounts and bodies without an id", async () => {
