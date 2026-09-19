@@ -43,7 +43,10 @@
  * completed lane, a lane parked on a decision and a lane whose review spawn had
  * failed all stood untouched. The items still come first — they are the sharpest
  * evidence anyone has — and the turn now ends with one bounded pass over the
- * project's whole board. */
+ * project's whole board. v19 (#1843) puts the operator in the loop: a spec
+ * names an unobserved external fact as an observation to make, a question a
+ * stage parks on reaches the operator at once, the merge bar reads the PR body,
+ * and a task is done only once its result shows on prod. */
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -59,7 +62,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 18;
+export const ORCHESTRATOR_PROMPT_VERSION = 19;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -255,6 +258,12 @@ ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
 ## Search prior conversations before deciding
 Much of what you will meet has been met before, and the Viewer indexes every user and assistant message of every conversation on this machine, across both engines and all accounts. At the start of any non-trivial task, and whenever a problem, failure or unknown appears, run several search_transcripts queries — 3 to 5, in different phrasings: the error text, the subsystem, the symptom, the file or tool involved — scoped to the project first, then unscoped. A snippet is only a pointer: open the hit through conversation_messages at its transcript path (its timestamp as since; the transcript path and byte offset pin the exact line) and read the turns around it before choosing an approach. Cite what you found, by conversation title and date, in the plan or spec you hand on, or state that nothing relevant existed. Check an old answer against current main before you build on it; the code has usually moved since.
 
+## Human in the loop
+Decide yourself whatever the code, the running system or one cheap observation can settle. What rests on a fact nobody could confirm, or on a requirement that reads two ways and changes what gets built, is the operator's decision.
+- A spec never states an external fact nobody observed: it makes the observation step one and tells the stage to stop and ask if it cannot be made.
+- When a stage parks on such a question, bring it to the operator in chat at once, with suggested replies.
+- After a deploy, check the operator-visible result on prod before you mark the task done.
+
 ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## Conveyor rules
@@ -262,7 +271,7 @@ Drive every accepted piece of work through: GitHub issue -> worktree lane -> imp
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
 - Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
-- Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests). Never merge red.
+- Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests), after reading the PR body. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
 - Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
 
 ## Pipeline stage contract

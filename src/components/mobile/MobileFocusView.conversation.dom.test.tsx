@@ -238,11 +238,20 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(state.className).toContain("shrink-0");
   expect(state.className).toContain("whitespace-nowrap");
   expect(state.className).toContain("text-success");
-  /* The model and its reasoning tier are what give way first. */
-  const model = state.parentElement!.querySelector(".truncate") as unknown as HTMLElement;
+  /* The model and its reasoning tier are ONE reading and are not cut (#1795).
+     The account is not on this line at all: at 390 px the state phrase and the
+     model leave it nothing, so it rides the title line above. */
+  const model = state.parentElement!.querySelector("[data-mobile2-chat-model]") as unknown as HTMLElement;
   expect(model.textContent).toContain("Opus");
   expect(model.textContent).toContain("high");
-  expect(model.className).toContain("min-w-0");
+  expect(model.className).toContain("shrink-0");
+  expect(model.className).toContain("whitespace-nowrap");
+  expect(state.parentElement!.querySelector("[data-mobile2-chat-account]")).toBeNull();
+  const accountCell = dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
+  /* Beside the title, which is the elastic cell there. */
+  expect(accountCell.previousElementSibling?.hasAttribute("data-mobile2-title-text")).toBe(true);
+  expect(accountCell.className).toContain("shrink-0");
+  expect(accountCell.className).toContain("truncate");
   expect(dom.document.querySelector("[data-mobile2-chat-stage]")?.textContent).toBe("stage 2/2");
   /* The engine rides the line as a MARK, never as a word (§3.2): spelling it
      out is what made the strip read "Claude · Claude · Claude", and the model
@@ -251,6 +260,40 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(mark?.getAttribute("data-mobile2-engine")).toBe("claude");
   expect(mark!.getAttribute("aria-hidden")).toBe("true");
   expect(dom.document.querySelector("[data-mobile2-chat-title]")?.textContent).not.toContain("Claude");
+});
+
+/* #1795: the phone had no card header to carry the account badge, so nothing
+   on the phone said which account a conversation was running on — the meta
+   line does now, read off the transcript path like every other surface, and it
+   names the legacy home too, with the same word the runtime sheet uses. */
+test("the meta line names the account the conversation runs on, managed or the legacy home", async () => {
+  const managed = entry({
+    path: "/state/agent-log-viewer/shared/accounts/claude/spare/projects/demo/managed.jsonl",
+    title: "Rebuild the board status projection",
+    conversationId: "conv-managed",
+    activity: "live",
+    mtime: 9_000,
+  });
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [managed], managed.path);
+  await settle();
+  const account = dom.document.querySelector("[data-mobile2-chat-account]");
+  expect(account?.textContent).toBe("@ spare");
+  /* It does not yield to the state phrase or the model: it is beside the title,
+     which is the cell that gives way. A very long id yields at its own cap. */
+  expect((account as unknown as HTMLElement).className).toContain("shrink-0");
+  expect((account as unknown as HTMLElement).className).toContain("max-w-[45%]");
+
+  /* The legacy home is an answer too, and the sheet gives the same one. */
+  dom.document.body.replaceChildren();
+  const { host: second } = browser();
+  const legacy = createMobileNav(second);
+  detach = legacy.attach();
+  mount(legacy, [stageConversation], stageConversation.path);
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-chat-account]")?.textContent).toBe("@ default");
 });
 
 test("offline is screen-level: the meta line says so instead of the last state, and drops the identity", async () => {

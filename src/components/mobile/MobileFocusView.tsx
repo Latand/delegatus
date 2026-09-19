@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "@/components/icons";
 import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
+import { accountIdFromPath } from "@/lib/accounts/badge";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
@@ -740,6 +741,59 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 }
 
 /**
+ * The identity half of a bar meta line: the engine mark and the model with its
+ * reasoning tier. One cell for both title cells — a conversation's own and a
+ * review round's — because a round opened from the board said only
+ * «working 6:44» while the sheet it opens changes exactly these things (#1795).
+ *
+ * The model and its tier are ONE reading and do not yield; the state phrase
+ * before them still outranks everything.
+ */
+function ChatIdentity({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const badge = engineBadge(file);
+  const model = file.model
+    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
+    : badge.label;
+  return (
+    <>
+      <span aria-hidden className="shrink-0 text-muted">·</span>
+      <ChatEngineMark file={file} />
+      <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
+    </>
+  );
+}
+
+/**
+ * The account the conversation runs on, at the end of the TITLE line.
+ *
+ * It was on the meta line under it, and at 390 px that line has no room left:
+ * the state phrase with its timer and the model with its tier need 116 px of
+ * the 197 px the line has, and what was left could not hold «@ spare» — the
+ * cell rendered «@ s…» on every phone surface (#1795, second critique). The
+ * title line is one long sentence that already truncates, so a few pixels there
+ * cost a word of a title instead of the whole answer to «which account is
+ * this». A long account id still yields, at the cap below, before the title is
+ * left with nothing.
+ *
+ * Read off the live transcript path, as every other account surface reads it.
+ * The legacy home is named too — «default» is the answer to that question, and
+ * the runtime sheet answers it with the same word.
+ */
+function ChatAccountTag({ file }: { file: FileEntry }) {
+  const account = accountIdFromPath(file.path);
+  return (
+    <span
+      data-mobile2-chat-account
+      className="max-w-[45%] shrink-0 truncate text-label font-medium leading-tight text-muted"
+      title={account}
+    >
+      @ {account}
+    </span>
+  );
+}
+
+/**
  * The bar's title cell for a conversation (§3.2, §4.2): the title on one line,
  * and under it the meta line — the dot, the state phrase, the engine mark, the
  * model and its reasoning tier, and `stage k/n` when this conversation is its
@@ -753,10 +807,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
-  const badge = engineBadge(file);
-  const model = file.model
-    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
-    : badge.label;
   return (
     <span
       data-mobile2-chat-title
@@ -764,17 +814,18 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {cleanTitle(renamed ?? file.title, 90)}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {cleanTitle(renamed ?? file.title, 90)}
+        </span>
+        <ChatAccountTag file={file} />
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         {offline ? null : (
           <>
-            <span aria-hidden className="shrink-0 text-muted">·</span>
-            <ChatEngineMark file={file} />
-            <span className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+            <ChatIdentity file={file} />
             {stage?.current ? (
               <>
                 <span aria-hidden className="shrink-0 text-muted">·</span>
@@ -821,16 +872,22 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {entry.label}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {entry.label}
+        </span>
+        {entry.file ? <ChatAccountTag file={entry.file} /> : null}
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
         {bits ? (
           <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         ) : (
           <span data-mobile2-chat-state className="min-w-0 truncate">{entry.meta}</span>
         )}
+        {/* The round on screen is a conversation like any other: it says which
+            model, tier and account the sheet on this surface would change. */}
+        {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (
           <WakeupChip key={wakeupChipKey(entry.file.pendingWakeup)} wakeup={entry.file.pendingWakeup} interactive={false} className="ml-0.5" />

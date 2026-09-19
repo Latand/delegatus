@@ -495,12 +495,14 @@ test("at 390px the chip opens the «Next message» sheet, which stays open acros
   const chip = host.querySelector("[data-runtime-pill]")!;
   expect(chip.getAttribute("data-mobile2-open")).toBe("model");
   await click(chip);
-  const sheet = host.querySelector('[role="dialog"][data-runtime-sheet]')!;
+  /* Portalled to the body (#1795), like the popover beside it, so it is looked
+     for in the document rather than under the mount. */
+  const sheet = document.querySelector('[role="dialog"][data-runtime-sheet]')!;
   expect(sheet.getAttribute("aria-modal")).toBe("true");
   expect(sheet.getAttribute("aria-label")).toBe("Model and reasoning — applies to your next message");
   expect(sheet.getAttribute("data-mobile2-sheet")).toBe("model");
   /* It says what it applies to, and in the operator's own tier words (§7 Q5). */
-  expect(host.querySelector("[data-mobile2-next-message]")!.textContent)
+  expect(document.querySelector("[data-mobile2-next-message]")!.textContent)
     .toBe("Applies to your next message: 5.6-Sol · high");
   const sections = [...sheet.querySelectorAll('[role="radiogroup"]')];
   expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Model", "Reasoning", "Speed"]);
@@ -513,7 +515,67 @@ test("at 390px the chip opens the «Next message» sheet, which stays open acros
   const ultra = rows.find((row) => row.textContent === "ultra")!;
   await click(ultra);
   expect(JSON.parse(localStorage.getItem(key + ":profile")!)).toEqual({ effort: "ultra" });
-  expect(host.querySelector("[data-runtime-sheet]")).not.toBeNull();
+  expect(document.querySelector("[data-runtime-sheet]")).not.toBeNull();
+  await act(async () => root.unmount());
+});
+
+/* #1795: the operator tapped `high` on a conversation already running `high`
+   and the Viewer tried to move it to a "new" reasoning tier. A patch equal to
+   the face is not a change: nothing is applied, nothing is sent, and the sheet
+   the tap was made in closes. */
+test("re-selecting the tier, the model or the speed the conversation already runs on sends nothing and closes the sheet", async () => {
+  mobile = true;
+  const { host, root } = await renderPill(
+    <RuntimePill file={codexFile} surface="live-root" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  const chip = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+  const openSheet = async () => {
+    await click(chip);
+    return document.querySelector("[data-runtime-sheet]")!;
+  };
+  const rowFor = (sheet: Element, label: string) =>
+    [...sheet.querySelectorAll("[data-runtime-sheet-row]")].find((row) => row.textContent === label)!;
+
+  const tier = rowFor(await openSheet(), "high");
+  expect(tier.getAttribute("aria-checked")).toBe("true");
+  await click(tier);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  const model = rowFor(await openSheet(), "GPT-5.6-Sol");
+  expect(model.getAttribute("aria-checked")).toBe("true");
+  await click(model);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  const speed = rowFor(await openSheet(), "Standard");
+  expect(speed.getAttribute("aria-checked")).toBe("true");
+  await click(speed);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-sheet]")).toBeNull();
+
+  /* The stored draft is untouched too — a no-op writes no profile. */
+  expect(localStorage.getItem(key)).toBeNull();
+
+  /* And a row that IS a change still goes out, so the guard is about equality
+     and nothing else. */
+  await click(rowFor(await openSheet(), "low"));
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ action: "reconfigure", effort: "low" });
+  await act(async () => root.unmount());
+});
+
+test("on the desktop, re-selecting the checked tier closes the menu and sends nothing", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={codexFile} surface="live-root" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  const pill = host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+  await click(pill);
+  const checked = [...document.querySelectorAll("[data-runtime-row=\"tier\"]")]
+    .find((row) => row.getAttribute("aria-checked") === "true")!;
+  await click(checked);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector("[data-runtime-popover]")).toBeNull();
   await act(async () => root.unmount());
 });
 
