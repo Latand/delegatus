@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 
-import { listRoles, resolveRole, resolveSpawnRole } from "./registry";
+import { PROCESS_CLEANUP_MARKER } from "./defaults";
+import { defaultRoleParameterValue } from "./parameters";
+import { listRoles, resolveRole, resolveSpawnRole, roleScaffoldBody } from "./registry";
 
 test("role registry exposes the frozen eight role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
@@ -106,6 +108,24 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
     if (!role.ok) throw new Error(role.error);
     expect(role.value.prompt).toContain("search_transcripts");
     expect(role.value.prompt).toContain("conversation_messages");
+  }
+});
+
+/* #1770 — a stage cleaned up its probe servers by port and killed an unrelated
+   local server. The standing rule reaches every seat and every pipeline stage
+   only if every registry role renders it, so assert the whole registry. */
+test("every registry role scaffold carries the process-cleanup rule", () => {
+  const roles = listRoles();
+  expect(roles.length).toBe(8);
+  for (const definition of roles) {
+    /* The renderer both the spawn path and the pipeline stage lookup call, so
+       a role whose required params are unset (a stage resolves them to registry
+       defaults) is covered the same way a spawn is. */
+    const params = Object.fromEntries(definition.parameters.map((parameter) => [parameter.key, defaultRoleParameterValue(parameter)]));
+    const rendered = roleScaffoldBody(definition, params);
+    expect(rendered).toContain(PROCESS_CLEANUP_MARKER);
+    expect(rendered).toContain("pkill");
+    expect(rendered).toContain("port 0");
   }
 });
 
