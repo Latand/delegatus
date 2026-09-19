@@ -103,7 +103,7 @@
         "paint": {
           "animation": "attention-arrival-pulse",
           "duration": "0.85s",
-          "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.530663 0.0339188 -0.206729 / 0.22029) 0px 0px 24.1449px 7.07246px",
+          "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.392623) 0px 0px 0px 5.30533px, oklab(0.530663 0.0339188 -0.206729 / 0.220205) 0px 0px 24.1476px 7.07377px",
           "position": "relative"
         },
         "mark": "on"
@@ -295,7 +295,7 @@
         "paint": {
           "animation": "attention-arrival-pulse",
           "duration": "0.85s",
-          "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.686886 0.0401993 -0.166043 / 0.22029) 0px 0px 24.1449px 7.07246px",
+          "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.392623) 0px 0px 0px 5.30533px, oklab(0.686886 0.0401993 -0.166043 / 0.220205) 0px 0px 24.1476px 7.07377px",
           "position": "relative"
         },
         "mark": "on"
@@ -523,7 +523,7 @@
           "w": 366,
           "h": 56
         },
-        "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.372121) 0px 0px 0px 5.45909px, oklab(0.530663 0.0339188 -0.206729 / 0.206879) 0px 0px 24.5576px 7.27879px",
+        "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.530663 0.0339188 -0.206729 / 0.22029) 0px 0px 24.1449px 7.07246px",
         "animation": "attention-arrival-pulse",
         "mark": "lift"
       },
