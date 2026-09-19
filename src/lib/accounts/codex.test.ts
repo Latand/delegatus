@@ -12,10 +12,14 @@ process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
 const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
 const { agentRegistry } = await import("@/lib/agent/registry");
+const { pathAllowed } = await import("@/lib/scanner/roots");
+const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
+const { retiredAccountArchive } = await import("./removal");
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
+  fs.rmSync(path.join(SANDBOX, "shared"), { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -104,47 +108,6 @@ test("managed Codex account removal deletes its registry record and home, then c
   expect(fs.existsSync(account.home)).toBe(false);
   expect(cleaned).toEqual({ removed: ["probe-login"], unresolved: [] });
   expect(fs.existsSync(orphan)).toBe(false);
-});
-
-test("removing an account with history retains its sessions in place and scrubs everything else (issue #643)", () => {
-  const account = createManagedCodexAccount("Retire me");
-  const session = path.join(account.sessionsDir, "2026", "07", "24", "rollout-2026-07-24T00-00-00-12345678-1234-1234-1234-123456789abc.jsonl");
-  fs.mkdirSync(path.dirname(session), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(session, "{}\n", { mode: 0o600 });
-  agentRegistry().ensureConversation("codex", session, account.id);
-  fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
-
-  const removal = removeManagedCodexAccount(account.id);
-
-  expect(removal).toEqual({ cleanupPending: false });
-  expect(listCodexAccounts().map((item) => item.id)).not.toContain(account.id);
-  expect(fs.readFileSync(session, "utf8")).toBe("{}\n");
-  expect(codexSessionRoots()).toContain(account.sessionsDir);
-  expect(fs.readdirSync(account.home)).toEqual(["sessions"]);
-  expect(cleanupOrphanedCodexHomes()).toEqual({ removed: [], unresolved: [] });
-  expect(fs.existsSync(session)).toBe(true);
-  expect(createManagedCodexAccount("Retire me").id).not.toBe(account.id);
-});
-
-test("a home deletion failure leaves a removable Codex orphan after logical removal", () => {
-  const account = createManagedCodexAccount("Retry removal");
-  const originalRmdir = fs.rmdirSync;
-  fs.rmdirSync = ((target: fs.PathLike) => {
-    if (path.resolve(String(target)) === path.resolve(account.home)) throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return originalRmdir(target);
-  }) as typeof fs.rmdirSync;
-  let removal: { cleanupPending: boolean } | undefined;
-  try {
-    removal = removeManagedCodexAccount(account.id);
-  } finally {
-    fs.rmdirSync = originalRmdir;
-  }
-
-  expect(removal).toEqual({ cleanupPending: true });
-  expect(listCodexAccounts().map((item) => item.id)).not.toContain(account.id);
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(cleanupOrphanedCodexHomes().removed).toContain(account.id);
-  expect(fs.existsSync(account.home)).toBe(false);
 });
 
 test("orphan cleanup reports unsafe Codex children for manual recovery", () => {
@@ -241,4 +204,194 @@ test("legacy pane records without a timestamp remain readable", () => {
   fs.writeFileSync(registry, JSON.stringify({ version: 1, active: "work", accounts: [{ id: "work", label: "Work", kind: "managed", createdAt: 1, loginPane: { paneId: "%4", windowName: "codex-login" } }] }));
 
   expect(listCodexAccounts().find((account) => account.id === "work")?.loginPane).toEqual({ paneId: "%4", windowName: "codex-login", startedAt: 0 });
+});
+
+/* ---- #1857: removal moves the whole home into the shared archive ---- */
+
+const ROLLOUT_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
+const STRAY_ID = ["019f4906", "3f67", "7b72", "9fbc", "000000000001"].join("-");
+const DAY = path.join("sessions", "2026", "09", "01");
+const CODEX_LEFTOVERS: Record<string, string> = {
+  [path.join(DAY, `rollout-2026-09-01T00-00-00-${ROLLOUT_ID}.jsonl`)]: "{\"type\":\"session_meta\"}\n",
+  [path.join(DAY, `rollout-2026-09-01T01-00-00-${STRAY_ID}.jsonl`)]: "{\"type\":\"session_meta\",\"stray\":true}\n",
+  [path.join(DAY, `rollout-2026-09-01T00-00-00-${ROLLOUT_ID}.json`)]: "{}\n",
+  "state_5.sqlite": "sqlite bytes",
+  "state_5.sqlite-wal": "wal bytes",
+  "state_5.sqlite-shm": "shm bytes",
+  [path.join("log", "codex-tui.log")]: "tui log\n",
+  "history.jsonl": "{\"text\":\"prompt\"}\n",
+  "installation_id": "invented-installation\n",
+  [path.join("plugins", ".remote-plugin-install-staging", "pkg", "manifest.json")]: "{}\n",
+};
+const GROUP_WRITABLE = path.join("plugins", ".remote-plugin-install-staging", "pkg", "manifest.json");
+
+/** A home shaped like the operator's Codex D: registered and stray rollouts,
+    provider SQLite with WAL/SHM, logs, and group-writable plugin staging. */
+function usedCodexHome(label: string) {
+  const account = createManagedCodexAccount(label);
+  for (const [relative, contents] of Object.entries(CODEX_LEFTOVERS)) {
+    fs.mkdirSync(path.dirname(path.join(account.home, relative)), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(account.home, relative), contents, { mode: 0o600 });
+  }
+  fs.chmodSync(path.join(account.home, GROUP_WRITABLE), 0o664);
+  fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
+  const rollout = path.join(account.home, DAY, `rollout-2026-09-01T00-00-00-${ROLLOUT_ID}.jsonl`);
+  const conversation = agentRegistry().ensureConversation("codex", rollout, account.id);
+  return { account, rollout, conversation, archive: retiredAccountArchive("codex", account.id) };
+}
+
+function codexRegistryJson(): { removals?: unknown[]; retired: Array<{ id: string; archived?: boolean }> } {
+  return JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json"), "utf8"));
+}
+
+test("a used Codex home is removed and every rollout stays readable in the shared archive (#1857)", () => {
+  const fixture = usedCodexHome("Invented Delta");
+
+  const removal = removeManagedCodexAccount(fixture.account.id);
+
+  const bytes = Object.values(CODEX_LEFTOVERS).reduce((sum, contents) => sum + Buffer.byteLength(contents), 0);
+  expect(removal).toEqual({
+    archive: fixture.archive,
+    files: Object.keys(CODEX_LEFTOVERS).length,
+    bytes,
+    conversationsRewritten: 1,
+    pinsCleared: 0,
+    deliveriesDropped: 0,
+    migrationsSettled: 0,
+    cleanupPending: false,
+  });
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  for (const [relative, contents] of Object.entries(CODEX_LEFTOVERS)) {
+    expect(fs.readFileSync(path.join(fixture.archive, relative), "utf8")).toBe(contents);
+  }
+  expect(fs.statSync(path.join(fixture.archive, GROUP_WRITABLE)).mode & 0o777).toBe(0o664);
+  for (const name of ["auth.json", "skills", "prompts", "config.toml", "AGENTS.md", "memories", "rules", path.join("plugins", "cache")]) {
+    expect(() => fs.lstatSync(path.join(fixture.archive, name))).toThrow();
+  }
+  const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(moved);
+  // The scanner reads the archive, and /api/log admits both archived rollouts.
+  expect(codexSessionRoots()).toContain(path.join(fixture.archive, "sessions"));
+  expect(pathAllowed(moved)).toBe(true);
+  expect(pathAllowed(path.join(fixture.archive, DAY, `rollout-2026-09-01T01-00-00-${STRAY_ID}.jsonl`))).toBe(true);
+  expect(pathAllowed(path.join(fixture.archive, "history.jsonl"))).toBe(false);
+  expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(codexRegistryJson().retired).toContainEqual(expect.objectContaining({ id: fixture.account.id, archived: true }));
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
+});
+
+test("an existing Codex archive destination refuses removal and leaves the home untouched", () => {
+  const fixture = usedCodexHome("Invented Taken");
+  fs.mkdirSync(fixture.archive, { recursive: true, mode: 0o700 });
+
+  expect(() => removeManagedCodexAccount(fixture.account.id)).toThrow("archive destination already exists");
+
+  expect(fs.readdirSync(fixture.archive)).toEqual([]);
+  expect(fs.readFileSync(fixture.rollout, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+  expect(fs.existsSync(path.join(fixture.account.home, "auth.json"))).toBe(true);
+  expect(listCodexAccounts().map((item) => item.id)).toContain(fixture.account.id);
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
+});
+
+async function crashCodexRemovalAt(accountId: string, checkpoint: string): Promise<void> {
+  const child = Bun.spawn({
+    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "codex", accountId, checkpoint],
+    env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME! },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  await child.exited;
+  expect(child.signalCode).toBe("SIGKILL");
+}
+
+for (const checkpoint of ["journaled", "renamed"] as const) {
+  test(`a Codex removal killed after "${checkpoint}" puts the home and its registry paths back`, async () => {
+    const fixture = usedCodexHome(`Invented Crash ${checkpoint}`);
+    await crashCodexRemovalAt(fixture.account.id, checkpoint);
+    expect(codexRegistryJson().removals).toHaveLength(1);
+
+    expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+    expect(fs.readFileSync(fixture.rollout, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+    expect(fs.existsSync(path.join(fixture.account.home, "auth.json"))).toBe(true);
+    expect(fs.existsSync(fixture.archive)).toBe(false);
+    expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.rollout);
+    expect(listCodexAccounts().map((item) => item.id)).toContain(fixture.account.id);
+    expect(codexRegistryJson().removals ?? []).toEqual([]);
+  });
+}
+
+test("a Codex removal killed after the agent registry retired the account completes on recovery", async () => {
+  const fixture = usedCodexHome("Invented Crash retired");
+  const store = agentRegistry();
+  store.setConversationMigration(fixture.conversation.id, {
+    intentId: "intent-parked",
+    phase: "failed-recoverable",
+    targetId: "default",
+    revision: 1,
+    error: "successor never verified",
+    updatedAt: new Date().toISOString(),
+  });
+  const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
+  store.setEngineRouting("codex", fixture.account.id);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.conversations[fixture.conversation.id].pinnedAccountId = fixture.account.id;
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  await crashCodexRemovalAt(fixture.account.id, "registry-retired");
+  expect(codexRegistryJson().removals).toHaveLength(1);
+
+  expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  // The retirement the crash interrupted is finished, never half undone.
+  expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(false);
+  const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+  expect(fs.readFileSync(moved, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const conversation = snapshot.conversations[fixture.conversation.id]!;
+  expect(conversation.generations[0]!.path).toBe(moved);
+  expect(conversation.pinnedAccountId ?? null).toBeNull();
+  expect(conversation.migration).toBeNull();
+  expect(snapshot.heldDeliveries[delivery.id]?.state).toBe("failed");
+  expect(snapshot.engineRouting.codex.activeAccountId).toBe("default");
+  expect(codexRegistryJson().retired).toEqual([expect.objectContaining({ id: fixture.account.id, archived: true })]);
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
+});
+
+test("a Codex removal killed after the accounts registry committed finishes on recovery", async () => {
+  const fixture = usedCodexHome("Invented Crash committed");
+  await crashCodexRemovalAt(fixture.account.id, "accounts-committed");
+  expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(true);
+
+  expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(fs.existsSync(path.join(fixture.archive, "auth.json"))).toBe(false);
+  expect(() => fs.lstatSync(path.join(fixture.archive, "skills"))).toThrow();
+  const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));
+  expect(fs.readFileSync(moved, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+  expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
+});
+
+test("the first account listing in a restarted Viewer recovers an interrupted removal", async () => {
+  const fixture = usedCodexHome("Invented Restart");
+  await crashCodexRemovalAt(fixture.account.id, "renamed");
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+
+  const restarted = Bun.spawn({
+    cmd: [process.execPath, "-e", `
+      const m = await import(${JSON.stringify(path.join(import.meta.dir, "codex.ts"))});
+      console.log(JSON.stringify(m.listCodexAccounts().map((account) => account.id)));
+    `],
+    env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME! },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(await restarted.exited).toBe(0);
+
+  expect(JSON.parse(await new Response(restarted.stdout).text())).toContain(fixture.account.id);
+  expect(fs.readFileSync(fixture.rollout, "utf8")).toBe("{\"type\":\"session_meta\"}\n");
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.rollout);
+  expect(codexRegistryJson().removals ?? []).toEqual([]);
 });

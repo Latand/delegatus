@@ -54,7 +54,7 @@ import {
   type IdentityWaveSeat,
 } from "./identityWaveMigration";
 import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, type McpGrantPolicy } from "./mcpAllowlist";
-import { liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
+import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
 import { loadSpawnNestingPolicy } from "./nestingPolicy";
 import {
   SpawnAdmissionError,
@@ -717,6 +717,68 @@ export interface ConversationObservation {
 }
 
 export type MigrationScope = "active" | "all";
+
+/** One prefix move applied to every registry path under a removed account's
+    home (issue #1857). `from` and `to` are absolute directory paths. */
+export interface AccountPathRewrite {
+  from: string;
+  to: string;
+}
+
+/** What `retireAccount` changed, reported back to the removal dialog. */
+export interface AccountRetirementReport {
+  conversationsRewritten: number;
+  pinsCleared: number;
+  deliveriesDropped: number;
+  migrationsSettled: number;
+}
+
+const ACCOUNT_REMOVED_DELIVERY_REASON = "delivery dropped because its account was removed";
+
+function rewriteAccountPath(pathname: string, rewrites: readonly AccountPathRewrite[]): string {
+  for (const { from, to } of rewrites) {
+    if (pathname === from) return to;
+    if (pathname.startsWith(`${from}${path.sep}`)) return path.join(to, pathname.slice(from.length + 1));
+  }
+  return pathname;
+}
+
+/** Applies path rewrites to every registry field that addresses a transcript
+    artifact. Returns the ids of the conversations whose paths changed. */
+function rewriteRegistryAccountPaths(
+  file: RegistryFile,
+  engine: Extract<AgentEngine, "claude" | "codex">,
+  rewrites: readonly AccountPathRewrite[],
+): Set<ViewerConversationId> {
+  const changed = new Set<ViewerConversationId>();
+  if (rewrites.length === 0) return changed;
+  const move = (pathname: string) => rewriteAccountPath(pathname, rewrites);
+  const moveAll = (paths: string[]) => paths.map(move);
+  for (const conversation of Object.values(file.conversations)) {
+    if (conversation.engine !== engine) continue;
+    const before = JSON.stringify([conversation.generations.map((generation) => generation.path), conversation.continuityPaths, conversation.abandonedContinuityPaths, conversation.providerForkPaths, conversation.migration?.pendingContinuityPaths ?? [], conversation.migration?.providerReceipt ?? null]);
+    for (const generation of conversation.generations) generation.path = move(generation.path);
+    conversation.continuityPaths = moveAll(conversation.continuityPaths);
+    conversation.abandonedContinuityPaths = moveAll(conversation.abandonedContinuityPaths);
+    conversation.providerForkPaths = moveAll(conversation.providerForkPaths);
+    if (conversation.migration) {
+      conversation.migration.pendingContinuityPaths = moveAll(conversation.migration.pendingContinuityPaths);
+      const receipt = conversation.migration.providerReceipt;
+      if (receipt) conversation.migration.providerReceipt = { ...receipt, path: move(receipt.path), continuityPaths: moveAll(receipt.continuityPaths) };
+    }
+    const after = JSON.stringify([conversation.generations.map((generation) => generation.path), conversation.continuityPaths, conversation.abandonedContinuityPaths, conversation.providerForkPaths, conversation.migration?.pendingContinuityPaths ?? [], conversation.migration?.providerReceipt ?? null]);
+    if (before !== after) changed.add(conversation.id);
+  }
+  for (const entry of Object.values(file.entries)) {
+    if (entry.key.engine === engine) entry.artifactPath = move(entry.artifactPath);
+  }
+  for (const receipt of Object.values(file.receipts)) {
+    if (receipt.engine !== engine) continue;
+    if (receipt.artifactPath) receipt.artifactPath = move(receipt.artifactPath);
+    if (receipt.resumeSourcePath) receipt.resumeSourcePath = move(receipt.resumeSourcePath);
+  }
+  return changed;
+}
 
 export interface MigrationScopeCounts {
   total: number;
@@ -6640,17 +6702,57 @@ export class AgentRegistry {
       conversation is *genuinely live* on the account — the same liveness
       definition `accountRemovalBlockers` enforces at the DELETE route (issue
       #643), so the two can never disagree about whether a home may go. Dead,
-      unhosted history keeps its account provenance: the transcripts survive as
-      a retained archive, so the generation stays truthful about where it ran. */
+      unhosted history keeps its account provenance: the generation stays
+      truthful about where it ran.
+
+      Account removal (issue #1857) moves the home into an archive in the same
+      breath, so this one transaction also moves every registry path under the
+      home (`rewrite`), clears pins naming the account, and settles what can
+      never run again on it: owed deliveries on its conversations and their
+      parked `failed-recoverable` migrations. */
   retireAccount(
     engine: Extract<AgentEngine, "claude" | "codex">,
     accountId: string,
     fallbackAccountId: string,
     liveness: AccountLivenessOptions = {},
-  ): void {
-    withAccountMutationLock(() => this.mutate((file) => {
+    options: { rewrite?: readonly AccountPathRewrite[] } = {},
+  ): AccountRetirementReport {
+    return withAccountMutationLock(() => this.mutate((file) => {
+      if (accountHasLiveSessions(file, engine, accountId, liveness)) throw new Error("account has live sessions");
       if (liveAccountConversationIds(file, engine, accountId, liveness).length > 0) throw new Error("account has current conversations");
       const changedAt = now();
+      const report: AccountRetirementReport = { conversationsRewritten: 0, pinsCleared: 0, deliveriesDropped: 0, migrationsSettled: 0 };
+      const touched = rewriteRegistryAccountPaths(file, engine, options.rewrite ?? []);
+      report.conversationsRewritten = touched.size;
+      for (const conversation of Object.values(file.conversations)) {
+        if (conversation.engine !== engine) continue;
+        if (conversation.pinnedAccountId === accountId) {
+          conversation.pinnedAccountId = null;
+          report.pinsCleared += 1;
+          touched.add(conversation.id);
+        }
+        if (conversation.generations.at(-1)?.accountId !== accountId) continue;
+        for (const delivery of Object.values(file.heldDeliveries)) {
+          if (delivery.state === "delivered" || delivery.state === "failed") continue;
+          if (resolveConversationAlias(file, delivery.conversationId) !== conversation.id) continue;
+          terminalizeHeldDelivery(file, delivery, ACCOUNT_REMOVED_DELIVERY_REASON);
+          report.deliveriesDropped += 1;
+          touched.add(conversation.id);
+        }
+        if (conversation.migration?.phase === "failed-recoverable") {
+          abandonPendingContinuityPaths(conversation);
+          queueAbandonedMigrationCleanup(file, conversation, changedAt);
+          conversation.migration = null;
+          report.migrationsSettled += 1;
+          touched.add(conversation.id);
+        }
+      }
+      for (const id of touched) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        conversation.updatedAt = changedAt;
+        file.conversationRevision[conversation.engine] += 1;
+      }
       const route = file.engineRouting[engine];
       if (route.activeAccountId === accountId) {
         route.activeAccountId = fallbackAccountId;
@@ -6666,7 +6768,7 @@ export class AgentRegistry {
         intent.updatedAt = changedAt;
         intent.stoppedAt = changedAt;
       }
-      if (retiredIntentIds.size === 0) return;
+      if (retiredIntentIds.size === 0) return report;
       for (const conversation of Object.values(file.conversations)) {
         if (!conversation.migration || !retiredIntentIds.has(conversation.migration.intentId)) continue;
         abandonPendingContinuityPaths(conversation);
@@ -6676,6 +6778,24 @@ export class AgentRegistry {
         conversation.updatedAt = changedAt;
         file.conversationRevision[conversation.engine] += 1;
       }
+      return report;
+    }));
+  }
+
+  /** Moves registry paths back after an interrupted account removal returned
+      its home to place (issue #1857). Nothing else changes: this undoes only
+      the path half of `retireAccount`, and is a no-op when that never ran. */
+  rewriteAccountPaths(engine: Extract<AgentEngine, "claude" | "codex">, rewrite: readonly AccountPathRewrite[]): number {
+    return withAccountMutationLock(() => this.mutate((file) => {
+      const changedAt = now();
+      const touched = rewriteRegistryAccountPaths(file, engine, rewrite);
+      for (const id of touched) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        conversation.updatedAt = changedAt;
+        file.conversationRevision[conversation.engine] += 1;
+      }
+      return touched.size;
     }));
   }
 

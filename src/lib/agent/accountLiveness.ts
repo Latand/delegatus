@@ -62,6 +62,10 @@ const HOSTED_ENTRY_STATUSES = new Set<AgentRegistryEntry["status"]>(["starting",
 const OPEN_RECEIPT_STATES = new Set<SpawnReceipt["state"]>(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
 /** Migration phases with nothing left in flight. */
 const SETTLED_MIGRATION_PHASES = new Set(["committed", "rolled-back"]);
+/** For account removal, a parked `failed-recoverable` migration is settled too
+    (issue #1857): the coordinator already treats it as terminal, and removal
+    settles the record inside the retirement transaction. */
+const REMOVAL_SETTLED_MIGRATION_PHASES = new Set([...SETTLED_MIGRATION_PHASES, "failed-recoverable"]);
 /**
  * Held-delivery states where the Viewer still owes the conversation a message.
  *
@@ -181,19 +185,27 @@ export function conversationIsLive(
   conversation: RegistryConversation,
   liveEntryPaths: ReadonlySet<string>,
   probe: LivenessProbe,
+  purpose: "current" | "removal" = "current",
 ): boolean {
   const generation = conversation.generations.at(-1);
   if (generation && identityAlive(generation.host?.tmuxHost?.agent, probe)) return true;
   for (const artifactPath of liveEntryPaths) {
     if (conversationOwnsPath(conversation, artifactPath)) return true;
   }
-  if (conversation.migration && !SETTLED_MIGRATION_PHASES.has(conversation.migration.phase)) return true;
+  const settled = purpose === "removal" ? REMOVAL_SETTLED_MIGRATION_PHASES : SETTLED_MIGRATION_PHASES;
+  if (conversation.migration && !settled.has(conversation.migration.phase)) return true;
   const owns = (id: ViewerConversationId) => canonicalId(file, id) === conversation.id;
   for (const delivery of Object.values(file.heldDeliveries)) {
     if (!UNDELIVERED_DELIVERY_STATES.has(delivery.state)) continue;
     if (!owns(delivery.conversationId) && !owns(delivery.runtimeConversationId)) continue;
-    /* held/assigned: the queued turn has not been attempted — always current. */
-    if (delivery.state !== "delivery-uncertain") return true;
+    /* held/assigned: the queued turn has not been attempted — always current,
+       except to account removal (issue #1857). Reaching here means no host is
+       live; a live receipt is checked below. With neither, no host can ever
+       take the message, so removal terminalizes it instead of waiting on it. */
+    if (delivery.state !== "delivery-uncertain") {
+      if (purpose === "removal") continue;
+      return true;
+    }
     /* delivery-uncertain (issue #652): reaching here means this conversation
        already has no live host and a settled migration (the checks above
        returned otherwise). The attempt can still recover only while its grace
@@ -284,7 +296,9 @@ export function staleUndeliverableHeldDeliveryIds(
   return ids;
 }
 
-/** Conversations whose latest generation is genuinely live on the account. */
+/** Conversations whose latest generation is genuinely live on the account, by
+    the account-removal definition: a parked migration and an owed delivery no
+    host can take are settled by the removal, never a reason to refuse it. */
 export function liveAccountConversationIds(
   file: RegistryFile,
   engine: ManagedAccountEngine,
@@ -296,7 +310,7 @@ export function liveAccountConversationIds(
   const live: ViewerConversationId[] = [];
   for (const conversation of Object.values(file.conversations)) {
     if (conversation.engine !== engine || conversation.generations.at(-1)?.accountId !== accountId) continue;
-    if (conversationIsLive(file, conversation, paths, probe)) live.push(conversation.id);
+    if (conversationIsLive(file, conversation, paths, probe, "removal")) live.push(conversation.id);
   }
   return live;
 }

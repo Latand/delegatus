@@ -17,6 +17,13 @@ const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
 const { agentRegistry } = await import("@/lib/agent/registry");
+const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
+
+function deleteRequest(body: unknown) {
+  return new NextRequest("http://127.0.0.1/api/accounts/codex", {
+    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
 
 class FakeChild extends EventEmitter {
   readonly stdin = { write: (line: string) => { this.onWrite(JSON.parse(line) as Record<string, unknown>); return true; }, end: () => undefined };
@@ -140,62 +147,61 @@ test("managed Codex removal retires routing and migration intents targeting the 
   expect(registry.snapshot().migrationIntents[intent.id]?.state).toBe("stopped");
 });
 
-test("managed Codex removal reports pending cleanup when local data survives", async () => {
+test("managed Codex removal reports pending cleanup when a credential stays in the archive", async () => {
   const account = createManagedCodexAccount("Cleanup pending");
-  const originalRmdir = fs.rmdirSync;
-  fs.rmdirSync = ((target: fs.PathLike) => {
-    if (path.resolve(String(target)) === path.resolve(account.home)) throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return originalRmdir(target);
-  }) as typeof fs.rmdirSync;
+  fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
+  const originalUnlink = fs.unlinkSync;
+  fs.unlinkSync = ((target: fs.PathLike) => {
+    if (path.basename(String(target)) === "auth.json") throw Object.assign(new Error("denied"), { code: "EACCES" });
+    return originalUnlink(target);
+  }) as typeof fs.unlinkSync;
   try {
-    const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
-      method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id }),
-    }));
+    const response = await remove(deleteRequest({ id: account.id }));
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ removed: { id: account.id }, cleanupPending: true });
+    await expect(response.json()).resolves.toMatchObject({ removed: { id: account.id }, cleanupPending: true });
   } finally {
-    fs.rmdirSync = originalRmdir;
+    fs.unlinkSync = originalUnlink;
   }
 });
 
-test("managed Codex removal stays blocked while a live conversation depends on the account", async () => {
+test("managed Codex removal stays blocked while a migration is in flight on the account", async () => {
   const account = createManagedCodexAccount("Current history");
   const registry = agentRegistry();
   const conversation = registry.ensureConversation("codex", "/current-codex.jsonl", account.id);
-  registry.holdDelivery(conversation.id, "still owed to this conversation");
+  registry.setConversationMigration(conversation.id, {
+    intentId: "intent-moving", phase: "preparing", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
+  });
 
-  const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
-    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id, force: true }),
-  }));
+  const response = await remove(deleteRequest({ id: account.id, force: true }));
 
   expect(response.status).toBe(409);
-  await expect(response.json()).resolves.toEqual(expect.objectContaining({ blockers: ["current_conversations"] }));
+  await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "account_removal_blocked", blockers: ["current_conversations"] }));
+  expect(fs.existsSync(account.home)).toBe(true);
 });
 
-test("an unowned Codex session blocks managed-home removal", async () => {
+test("a Codex home with leftover history is removed and the answer says what moved (#1857)", async () => {
   const account = createManagedCodexAccount("Unowned session");
   const session = path.join(account.sessionsDir, "2026", "09", "01", "rollout-unowned.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true, mode: 0o700 });
   fs.writeFileSync(session, "{}\n", { mode: 0o600 });
+  fs.writeFileSync(path.join(account.home, "state_5.sqlite"), "sqlite", { mode: 0o600 });
+  const conversation = agentRegistry().ensureConversation("codex", session, account.id);
+  agentRegistry().holdDelivery(conversation.id, "owed for weeks");
+  const archive = retiredAccountArchive("codex", account.id);
 
-  const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
-    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id, force: true }),
-  }));
+  const response = await remove(deleteRequest({ id: account.id, force: true }));
 
-  expect(response.status).toBe(409);
-  await expect(response.json()).resolves.toEqual(expect.objectContaining({
-    code: "account_removal_blocked",
-    blockers: ["filesystem_history"],
-    history: {
-      home: account.home,
-      artifacts: expect.arrayContaining([{
-        path: path.relative(account.home, session),
-        classification: "history",
-        history: true,
-      }]),
-    },
-  }));
-  expect(fs.readFileSync(session, "utf8")).toBe("{}\n");
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toEqual({
+    removed: { id: account.id },
+    cleanupPending: false,
+    moved: { archive, files: 2, bytes: 9 },
+    conversationsRewritten: 1,
+    pinsCleared: 0,
+    deliveriesDropped: 1,
+    migrationsSettled: 0,
+  });
+  expect(fs.readFileSync(path.join(archive, path.relative(account.home, session)), "utf8")).toBe("{}\n");
 });
 
 test("managed Codex removal proceeds over dead history and keeps its sessions readable (issue #643)", async () => {
@@ -204,43 +210,56 @@ test("managed Codex removal proceeds over dead history and keeps its sessions re
   const session = path.join(account.sessionsDir, "2026", "07", "24", "rollout-2026-07-24T00-00-00-99999999-1234-1234-1234-123456789abc.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true, mode: 0o700 });
   fs.writeFileSync(session, "{}\n", { mode: 0o600 });
-  registry.ensureConversation("codex", session, account.id);
+  const conversation = registry.ensureConversation("codex", session, account.id);
 
-  const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
-    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id }),
-  }));
+  const response = await remove(deleteRequest({ id: account.id }));
 
   expect(response.status).toBe(200);
-  await expect(response.json()).resolves.toEqual({ removed: { id: account.id }, cleanupPending: false });
-  expect(fs.readFileSync(session, "utf8")).toBe("{}\n");
-  expect(registry.conversationForPath(session)).not.toBeNull();
+  const moved = path.join(retiredAccountArchive("codex", account.id), path.relative(account.home, session));
+  expect(fs.readFileSync(moved, "utf8")).toBe("{}\n");
+  expect(registry.conversationForPath(moved)?.id).toBe(conversation.id);
 });
 
-test("managed Codex removal restores routing when the underlying deletion fails after routing was retired", async () => {
-  const account = createManagedCodexAccount("Unsafe home");
+test("managed Codex removal restores routing and the home when the accounts registry cannot commit", async () => {
+  const account = createManagedCodexAccount("Commit failure");
   const registry = agentRegistry();
   registry.setEngineRouting("codex", account.id);
   const before = registry.snapshot();
-  // Simulates the home becoming unsafe in the window between the route's
-  // initial listCodexAccounts() check and removeManagedCodexAccount's own
-  // re-read: retireAccount is the last synchronous step before that re-read,
-  // so corrupting the home here lands exactly in that window.
-  const originalRetire = registry.retireAccount.bind(registry);
-  registry.retireAccount = ((...args: Parameters<typeof originalRetire>) => {
-    originalRetire(...args);
-    fs.chmodSync(account.home, 0o755);
-  }) as typeof registry.retireAccount;
+  const accountsRegistry = path.join(process.env.LLV_STATE_DIR!, "codex-accounts.json");
+  const originalRename = fs.renameSync;
+  let retired = false;
+  setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") retired = true; });
+  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
+    if (retired && path.resolve(String(destination)) === path.resolve(accountsRegistry)) {
+      retired = false;
+      throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
+    }
+    return originalRename(source, destination);
+  }) as typeof fs.renameSync;
 
   try {
-    const response = await remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
-      method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id }),
-    }));
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "accounts_locked" }));
-    expect(registry.snapshot()).toEqual(before);
+    const response = await remove(deleteRequest({ id: account.id }));
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "removal_failed", errno: "EACCES" }));
+    expect(registry.snapshot().engineRouting).toEqual(before.engineRouting);
+    expect(fs.existsSync(account.home)).toBe(true);
+    expect(fs.existsSync(retiredAccountArchive("codex", account.id))).toBe(false);
   } finally {
-    registry.retireAccount = originalRetire;
+    fs.renameSync = originalRename;
+    setAccountRemovalCheckpointForTests(null);
   }
+});
+
+test("an occupied Codex archive destination answers archive_unavailable", async () => {
+  const account = createManagedCodexAccount("Taken archive");
+  const archive = retiredAccountArchive("codex", account.id);
+  fs.mkdirSync(archive, { recursive: true, mode: 0o700 });
+
+  const response = await remove(deleteRequest({ id: account.id }));
+
+  expect(response.status).toBe(409);
+  await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "archive_unavailable", archive }));
+  expect(fs.existsSync(account.home)).toBe(true);
 });
 
 test("managed Codex removal reports a corrupt registry as locked", async () => {
