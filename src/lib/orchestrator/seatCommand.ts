@@ -15,6 +15,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 
@@ -835,7 +836,7 @@ async function runOrchestratorSeatRequest(
       clientMessageId: `orchmandate_${clientRequestId}`,
       /* On a pending replay the ORIGINAL intent's mandate is what completes:
          a retry that recomposed its text must not deliver a second variant. */
-      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate),
+      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, loadRoleDefinitionsOrDefaults()),
     });
     if (!delivery.ok) {
       const error = delivery.error ?? "mandate delivery failed";
@@ -931,7 +932,7 @@ async function runOrchestratorSeatRequest(
   /* A pending replay spawns the ORIGINAL intent's mandate: the spawn receipt is
      matched by clientAttemptId AND request digest, so a recomposed retry would
      otherwise conflict with its own first attempt. */
-  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate);
+  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, loadRoleDefinitionsOrDefaults());
 
   const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"
@@ -1427,12 +1428,13 @@ function renderRotationMandate(
   reason: string | null,
 ): RotationMandate {
   const overhead = launchOverheadBytes("spawn", input.roleParams);
+  const roles = loadRoleDefinitionsOrDefaults();
   const composed = composeSuccessorMandate({
     core,
     history,
     handoff: input.handoff,
     budgetBytes: MAX_STRUCTURED_TEXT_BYTES - overhead,
-    deliver: orchestratorMandateForDelivery,
+    deliver: (mandate) => orchestratorMandateForDelivery(mandate, roles),
   });
   if (composed.kind === "too_large") {
     return {

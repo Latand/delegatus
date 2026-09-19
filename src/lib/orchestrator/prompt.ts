@@ -46,7 +46,14 @@
  * project's whole board. v19 (#1843) puts the operator in the loop: a spec
  * names an unobserved external fact as an observation to make, a question a
  * stage parks on reaches the operator at once, the merge bar reads the PR body,
- * and a task is done only once its result shows on prod. */
+ * and a task is done only once its result shows on prod. v20 (#1880) makes
+ * "role per the role table" name a table that exists: delivery renders one
+ * from the live role registry, so a seat that omits a runtime knows the
+ * engine, model and effort it is choosing. */
+
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { BUILDER_APPLY_FIXES_CONFIG, BUILDER_FRONTEND_CONFIG } from "@/lib/roles/paramConfig";
+import type { RoleConfig, RoleDefinition } from "@/lib/roles/types";
 
 /** Initial draft values. The operator may choose any engine, model, account, and
     effort the shared launch controls support before creating the project seat. */
@@ -62,7 +69,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     `ORCHESTRATOR_SYSTEM_PROMPT`: seats record the version their mandate was
     based on, and `get_orchestrator` reports it so a stale incumbent is visible
     without diffing prompts. */
-export const ORCHESTRATOR_PROMPT_VERSION = 19;
+export const ORCHESTRATOR_PROMPT_VERSION = 20;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -269,7 +276,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 ## Conveyor rules
 Drive every accepted piece of work through: GitHub issue -> worktree lane -> implementer agent -> review flow -> merge bar -> this project's own release step, where it has one -> cleanup.
 - One lane (worktree + branch) per issue; one owner per file across active worktrees.
-- Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table; workers end with "REVIEW_READY: <PR url>".
+- Spawn implementers via POST /api/spawn with title = a semantic task name, taskId = the outcome's board task, src = YOUR transcript path (lineage draws the diagram edges), and role per the role table at the end of this mandate; workers end with "REVIEW_READY: <PR url>".
 - Reviews run as flows (POST /api/flows) or fresh reviewer spawns (role: "reviewer", reviews: <implementer ref>, taskId) — a fresh reviewer every round, verdict contract "VERDICT: APPROVE|REQUEST_CHANGES".
 - Merge bar: merge only on an APPROVE verdict with green gates (tsc + tests), after reading the PR body. Never merge red; a PR that calls a premise unverified, assumed or synthetic goes to the operator.
 - Keep the outcome's ONE task card updated via /api/tasks; pipelines and spawns for it carry its id at launch. Report state changes as bridge reports.
@@ -285,6 +292,51 @@ When the operator asks for work, assess complexity, compose stages/roles, POST /
 - If this checkout carries an llv-conveyor skill, it is your playbook, subordinate to this mandate wherever the two disagree; otherwise the conveyor rules above are the playbook.
 - Replacing manual spawns is a non-goal: the user's own agents keep working; you coordinate, you do not take over.
 - Re-derive board state per turn from bounded snapshots rather than accumulating it in context.`;
+
+/** Identifies the generated role table inside a delivered mandate. The table
+    runs from this heading to the first blank line, and delivery replaces it
+    whole, so it always shows the registry as it is at delivery. */
+export const ORCHESTRATOR_ROLE_TABLE_HEADING = "## Role table — what a stage runs when you name no runtime";
+
+function runtimeLabel(config: RoleConfig): string {
+  return `${config.engine}/${config.model}/${config.effort}`;
+}
+
+/** One line per role, from the registry handed in. Access is the stage
+    default `pipelineRoleLookup` derives from the same capabilities. */
+function roleTableRow(role: RoleDefinition): string {
+  const access = role.capabilities.includes("read-only") ? "read-only" : "read-write";
+  const variants = role.id === "builder"
+    ? ` domain=frontend runs ${runtimeLabel(BUILDER_FRONTEND_CONFIG)}; mode=apply-fixes runs ${runtimeLabel(BUILDER_APPLY_FIXES_CONFIG)}.`
+    : "";
+  return `| ${role.id} | ${role.config.engine} | ${role.config.model} | ${role.config.effort} | ${access} | ${role.description}${variants} |`;
+}
+
+/** The role table (#1880), rendered at delivery. It changes no default: it
+    shows the ones a stage or spawn gets when it names no runtime. */
+export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string {
+  return [
+    ORCHESTRATOR_ROLE_TABLE_HEADING,
+    "Read from this install's role registry when this mandate was delivered. A stage or spawn that omits engine, model and effort runs exactly its role's row.",
+    "| role | engine | model | effort | access | for |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...roles.map(roleTableRow),
+    "- Runtime overrides (engine, model, effort, access) go on the stage beside role, never inside it. A review-loop stage is always read-only.",
+    "- Choose effort deliberately: low or medium for routine, read-only or mechanical work; keep high and xhigh for work that needs them.",
+    "- Set the runtime at creation. override-stage binds from the NEXT attempt (pending-next-attempt): an attempt already running keeps the runtime it started with.",
+    "- create_pipeline's answer lists each stage's resolved engine, model and effort. Read it back and correct a wrong runtime before attempt 1 spends quota: create a draft, or pause, override-stage, then start.",
+  ].join("\n");
+}
+
+/** Removes every role table a mandate carries, with the blank line before it. */
+function withoutRoleTable(text: string): string {
+  const start = text.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING);
+  if (start < 0) return text;
+  const end = text.indexOf("\n\n", start);
+  const before = text.slice(0, start).replace(/\n\n$/, "");
+  const after = end < 0 ? "" : text.slice(end);
+  return withoutRoleTable(before ? before + after : after.replace(/^\n\n/, ""));
+}
 
 /** What delivery appends, in order, and the text each is recognized by: a
     section with its own heading is recognized by that heading, so a caller who
@@ -313,13 +365,19 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
     body is replayed verbatim on a pending retry and carried through a rotation,
     so the version bump alone would leave those bytes in front of managers who
     must never read them. The removal is an exact string match against what
-    shipped, and delivery asks nothing about whose project this is. */
-export function orchestratorMandateForDelivery(mandate: string): string {
+    shipped, and delivery asks nothing about whose project this is.
+
+    Last, delivery renders the role table (#1880) from `roles` and puts it at
+    the end, replacing any table the mandate already carried. Server callers
+    pass the live registry; the built-in presets are only the fallback for a
+    caller that has none to read. */
+export function orchestratorMandateForDelivery(mandate: string, roles: readonly RoleDefinition[] = ROLE_DEFAULTS): string {
   const withoutShippedDeploys = mandate
     .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
     .split(SHIPPED_DEPLOYS_SECTION).join("");
-  return DELIVERED_DIRECTIVES.reduce(
+  const withDirectives = DELIVERED_DIRECTIVES.reduce(
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
-    withoutShippedDeploys,
+    withoutRoleTable(withoutShippedDeploys),
   );
+  return `${withDirectives}\n\n${orchestratorRoleTable(roles)}`;
 }
