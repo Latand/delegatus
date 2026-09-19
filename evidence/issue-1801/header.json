@@ -1,5 +1,17 @@
 {
-  "commit": "e7c7969aebf4bf97c2d93092a9115ce53ca858a6",
+  "commit": "777e2eda7d40ceebb7b81698c25d398f355b0bb9",
+  "2540-en-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "2540-en-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "2540-en-light": {
     "bars": 1,
     "bar": {
@@ -370,6 +382,18 @@
       ],
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
+  },
+  "2540-en-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "2540-en-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "2540-en-dark": {
     "bars": 1,
@@ -742,6 +766,18 @@
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
   },
+  "2540-uk-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "2540-uk-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "2540-uk-light": {
     "bars": 1,
     "bar": {
@@ -1112,6 +1148,18 @@
       ],
       "text": "Вимкнути звукові сповіщенняРівні звуку В архів Видалити проєкт з диска"
     }
+  },
+  "2540-uk-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "2540-uk-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "2540-uk-dark": {
     "bars": 1,
@@ -1484,6 +1532,18 @@
       "text": "Вимкнути звукові сповіщенняРівні звуку В архів Видалити проєкт з диска"
     }
   },
+  "1850-en-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1850-en-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "1850-en-light:create": [
     "New task",
     "New conversation with an agent"
@@ -1835,6 +1895,18 @@
       ],
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
+  },
+  "1850-en-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1850-en-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "1850-en-dark:create": [
     "New task",
@@ -2188,6 +2260,18 @@
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
   },
+  "1850-uk-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1850-uk-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "1850-uk-light:create": [
     "Нова задача",
     "Нова розмова з агентом"
@@ -2539,6 +2623,18 @@
       ],
       "text": "Вимкнути звукові сповіщенняРівні звуку В архів Видалити проєкт з диска"
     }
+  },
+  "1850-uk-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1850-uk-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "1850-uk-dark:create": [
     "Нова задача",
@@ -2892,6 +2988,18 @@
       "text": "Вимкнути звукові сповіщенняРівні звуку В архів Видалити проєкт з диска"
     }
   },
+  "1280-en-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1280-en-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "1280-en-light:create": [
     "New task",
     "New conversation with an agent"
@@ -3243,6 +3351,18 @@
       ],
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
+  },
+  "1280-en-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1280-en-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "1280-en-dark:create": [
     "New task",
@@ -3596,6 +3716,18 @@
       "text": "Mute sound notificationsSound levels Archive Delete project from disk"
     }
   },
+  "1280-uk-light:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1280-uk-light:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
+  },
   "1280-uk-light:create": [
     "Нова задача",
     "Нова розмова з агентом"
@@ -3947,6 +4079,18 @@
       ],
       "text": "Вимкнути звукові сповіщенняРівні звуку В архів Видалити проєкт з диска"
     }
+  },
+  "1280-uk-dark:accountsOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": false
+  },
+  "1280-uk-dark:menuOnTop": {
+    "found": true,
+    "points": 64,
+    "covered": [],
+    "overlapsIsland": true
   },
   "1280-uk-dark:create": [
     "Нова задача",
