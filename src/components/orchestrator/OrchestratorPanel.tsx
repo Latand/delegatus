@@ -445,7 +445,7 @@ export function OrchestratorPanel({
             <StateBadge state={state} file={file} word />
           </span>
           {state.kind === "loading" || failed ? null : (
-            <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed} />
+            <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed} currentEngine={seatEngine} />
           )}
           {/* The seat is short on purpose: who holds it and its host control
               ride this row instead of rows of their own under it. */}

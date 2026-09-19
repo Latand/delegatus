@@ -32,7 +32,7 @@ export interface SeatListRow {
 
 /** The rows the popover lists, the live seat first. Empty while the read is
     loading or failed, and then the control is not drawn. */
-export function seatListRows(status: OrchestratorSeatStatus | null, tasks: readonly Pick<BoardTask, "id" | "text" | "origin">[] = []): SeatListRow[] {
+export function seatListRows(status: OrchestratorSeatStatus | null, tasks: readonly Pick<BoardTask, "id" | "text" | "origin">[] = [], currentEngine: string | null = null): SeatListRow[] {
   if (!status) return [];
   const titleOf = (taskId: string | null) => {
     const task = taskId ? tasks.find((entry) => entry.id === taskId) : undefined;
@@ -43,7 +43,7 @@ export function seatListRows(status: OrchestratorSeatStatus | null, tasks: reado
   const seat = status.seat;
   if (seat?.conversationId && status.exists) {
     const taskId = status.currentTaskId ?? null;
-    rows.push({ conversationId: seat.conversationId, title: titleOf(taskId), engine: seat.engine ?? null, heldFrom: seat.activatedAt, heldTo: null, taskId, current: true });
+    rows.push({ conversationId: seat.conversationId, title: titleOf(taskId), engine: currentEngine ?? seat.engine ?? null, heldFrom: seat.activatedAt, heldTo: null, taskId, current: true });
   }
   for (const previous of status.previous ?? []) {
     rows.push({ ...previous, title: previous.title ?? titleOf(previous.taskId), current: false });
@@ -133,8 +133,10 @@ function rowHasNotes(row: SeatListRow, tasks: readonly Pick<BoardTask, "id" | "d
  * The seat head's control and its popover. `compact` is the collapsed strip's
  * form: the icon and the count only.
  */
-export function PreviousSeatsControl({ status, tasks, compact = false, onOpenConversation }: {
+export function PreviousSeatsControl({ status, tasks, compact = false, currentEngine = null, onOpenConversation }: {
   status: OrchestratorSeatStatus | null;
+  /** The live seat's engine, as its conversation reports it. */
+  currentEngine?: string | null;
   /** The project's tasks as the page already carries them, for titles and notes. */
   tasks?: readonly Pick<BoardTask, "id" | "text" | "origin" | "details">[];
   compact?: boolean;
@@ -143,7 +145,7 @@ export function PreviousSeatsControl({ status, tasks, compact = false, onOpenCon
 }) {
   const { t } = useLocale();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const rows = seatListRows(status, tasks);
+  const rows = seatListRows(status, tasks, currentEngine);
   const previous = rows.filter((row) => !row.current).length;
   const current = rows.find((row) => row.current) ?? null;
   const notesOnly = previous === 0 && current !== null && rowHasNotes(current, tasks);

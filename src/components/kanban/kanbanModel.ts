@@ -457,6 +457,11 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       seatTasks.push(task);
       return [];
     }
+    /* A band no task owns that carried only seat conversations (a seat
+       drawn as its own lineage root) is gone with them. */
+    const heldSeat = band.members.some((member) => member.kind === "node" && member.file && seatFile(member.file))
+      || band.mirrors.some((mirror) => seatFile(mirror.file));
+    if (!task && heldSeat && !members.length && !mirrors.length && !summaries.length && !otherSurfaces && !drafts.length && !band.flow) return [];
     return [{
       id: band.id,
       /* One project's board answers `project` for every card alike; the

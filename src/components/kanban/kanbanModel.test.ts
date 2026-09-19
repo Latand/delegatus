@@ -559,3 +559,15 @@ test("a rotation moves the old seat's card off the board with no task write (#18
   expect(after.columns.assigned.cards.map((card) => card.task?.id)).toEqual(["work"]);
   expect(after.seatTasks.map((entry) => entry.id)).toEqual(["seat-a"]);
 });
+
+test("a seat conversation no task holds draws no Not-on-a-task card either (#1841)", () => {
+  const files = [1, 2].map((index) => file(index));
+  const tasks: BoardTask[] = [];
+  const projection = projectTaskWorkflows([], [], [], [...files]);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const known = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: [files[0]!.conversationId!], paths: [], previous: { conversationIds: [], paths: [] } }, now: NOW });
+  expect(known.unlinked.map((card) => card.members.map((member) => member.file.path))).toEqual([[files[1]!.path]]);
+  /* The same read without `previous` (a failed read) draws both. */
+  const unread = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, seat: { conversationIds: [files[0]!.conversationId!], paths: [] }, now: NOW });
+  expect(unread.unlinked.length).toBe(2);
+});
