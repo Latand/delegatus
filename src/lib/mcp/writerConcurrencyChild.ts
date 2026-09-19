@@ -23,7 +23,7 @@ const originalReadFileSync = fs.readFileSync.bind(fs);
 let gated = false;
 
 fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-  if (gated || String(filePath) !== stateFile) {
+  if (gated || kind === "task" || String(filePath) !== stateFile) {
     return originalReadFileSync(filePath, ...(args as Parameters<typeof fs.readFileSync> extends [unknown, ...infer Rest] ? Rest : never));
   }
   gated = true;
@@ -32,6 +32,26 @@ fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
   while (!fs.existsSync(releasePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
   return value;
 }) as typeof fs.readFileSync;
+
+/* Since #1870 the task store is the `tasks` collection of `state.sqlite`, and a
+   write serializes on the collection lease. Hold the lease inside the write's
+   read step, after the committed state was read, exactly where the file-read
+   gate above held the file lock. */
+if (kind === "task") {
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const patchSync = SqliteStateCollection.prototype.patchSync;
+  SqliteStateCollection.prototype.patchSync = function gatedPatchSync(this: InstanceType<typeof SqliteStateCollection>, prepare) {
+    return patchSync.call(this, () => {
+      const patch = prepare();
+      if (!gated) {
+        gated = true;
+        fs.writeFileSync(readyPath, "ready\n", "utf8");
+        while (!fs.existsSync(releasePath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+      return patch;
+    });
+  } as typeof patchSync;
+}
 
 if (kind === "task" && operation === "create" && writer === "http") {
   const input = { project: "viewer", text: `${writer} task`, placement: "unplaced" as const, clientRequestId: `${writer}-task-request` };

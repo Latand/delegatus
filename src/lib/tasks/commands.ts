@@ -328,7 +328,7 @@ export function createTask(
     updatedAt: now,
   };
   const nextRecent = clientRequestId
-    ? [...recentCreates, { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
+    ? [...recentCreates.filter((entry) => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId: id }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
   return { ok: true, tasks: [...existing, task], task, recentCreates: nextRecent, replay: false };
 }

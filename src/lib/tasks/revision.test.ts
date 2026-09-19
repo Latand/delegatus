@@ -14,13 +14,18 @@ const { loadTasks, saveTasks, saveTasksFile, mutateTasks, mutateTasksFile, TASKS
 const { patchTask, applyAssignmentPatches, removeAssignment } = await import("./commands");
 const { taskRevision } = await import("./revision");
 const { createServerRuntimeConsumers } = await import("@/lib/runtime/serverConsumers");
+const { readStateCollectionRows } = await import("@/lib/state/sqliteStateStore");
 import type { BoardTask } from "./types";
 const now = "2026-09-01T00:00:00.000Z";
 function row(id = "task-a"): BoardTask {
   return { id, project: "fixture-project", text: "A", placement: "pinned", pos: { x: 0, y: -1.5 },
     status: "inbox", assignments: [], createdAt: now, updatedAt: now };
 }
-function file() { return path.join(sandbox, `${crypto.randomUUID()}.json`); }
+/* Each store gets its own directory: its database is the `state.sqlite` beside it (#1870). */
+function file() { return path.join(fs.mkdtempSync(path.join(sandbox, "store-")), "tasks.json"); }
+function storedRows(filePath: string): Record<string, unknown>[] {
+  return (readStateCollectionRows(path.join(path.dirname(filePath), "state.sqlite"), "tasks") ?? []) as Record<string, unknown>[];
+}
 function patch(filePath: string, input: Parameters<typeof patchTask>[2]) {
   return mutateTasks(tasks => {
     const result = patchTask(tasks, "task-a", input, now);
@@ -48,37 +53,38 @@ test("all four writers advance generations; ABA, identical writes and recreation
   const savedFile = { tasks: loadTasks(f), recentCreates: [] }; savedFile.tasks[0]!.text = "whole-file"; saveTasksFile(savedFile, f); remember();
   expect(loadTasks(f)[1]).toEqual(other);
   for (const token of seen) {
-    const before = fs.readFileSync(f, "utf8");
+    const before = JSON.stringify(storedRows(f));
     if (token === taskRevision(loadTasks(f)[0]!)) continue;
     expect(patch(f, { pos: { x: 1, y: 1 }, expectedProject: "fixture-project", expectedRevision: token }).ok).toBe(false);
-    expect(fs.readFileSync(f, "utf8")).toBe(before);
+    expect(JSON.stringify(storedRows(f))).toBe(before);
   }
   mutateTasks(tasks => ({ tasks: tasks.filter(t => t.id !== "task-a"), result: undefined }), f);
   mutateTasks(tasks => ({ tasks: [row(), ...tasks], result: undefined }), f); remember();
 });
 
-test("legacy reads are stable and read-only; first update persists a generation and retains extension fields", () => {
+test("legacy rows import unchanged with stable tokens; first update persists a generation and retains extension fields", () => {
   const f = file();
   const legacy = { ...row(), extension: { retained: [1, 2] } };
   const untouched = { ...row("untouched"), extension: "keep" };
   const raw = { tasks: [legacy, untouched], recentCreates: [{ clientRequestId: "old", taskId: "task-a" }] };
   fs.writeFileSync(f, JSON.stringify(raw));
-  const bytes = fs.readFileSync(f, "utf8");
   const token = taskRevision(loadTasks(f)[0]!);
   expect(token.startsWith("task-legacy:")).toBe(true);
   expect(taskRevision(loadTasks(f)[0]!)).toBe(token);
-  expect(fs.readFileSync(f, "utf8")).toBe(bytes);
+  expect(storedRows(f).slice(0, 2)).toEqual([legacy, untouched]);
   expect(patch(f, { text: "B", expectedProject: "fixture-project", expectedRevision: token }).ok).toBe(true);
   patch(f, { text: "A" });
   expect(taskRevision(loadTasks(f)[0]!)).not.toBe(token);
-  const persisted = JSON.parse(fs.readFileSync(f, "utf8"));
-  expect(persisted.tasks[0].extension).toEqual(legacy.extension);
-  expect(persisted.tasks[1]).toEqual(untouched);
-  expect(persisted.recentCreates).toEqual(raw.recentCreates);
+  const persisted = storedRows(f);
+  expect(persisted[0]!.extension).toEqual(legacy.extension);
+  expect(persisted[1]).toEqual(untouched);
+  expect(persisted.slice(2)).toEqual(raw.recentCreates);
 });
 
-test("corrupt, null, malformed revisions, duplicate ids and unreadable state never authorize a write", () => {
-  for (const raw of ["{", "null", JSON.stringify({ tasks: [{ ...row(), revision: "bad" }] }), JSON.stringify({ tasks: [row(), row()] }), JSON.stringify({ tasks: [{ id: "invalid" }] })]) {
+test("null, malformed revisions, duplicate ids and invalid rows never authorize a write", () => {
+  /* Bytes that are not JSON at all import as a gap since #1870
+     (store.sqlite.test.ts); JSON that fails validation keeps refusing. */
+  for (const raw of ["null", JSON.stringify({ tasks: [{ ...row(), revision: "bad" }] }), JSON.stringify({ tasks: [row(), row()] }), JSON.stringify({ tasks: [{ id: "invalid" }] })]) {
     const f = file(); fs.writeFileSync(f, raw);
     let called = false;
     expect(() => mutateTasks(tasks => { called = true; return { tasks, result: null }; }, f)).toThrow();
@@ -87,8 +93,6 @@ test("corrupt, null, malformed revisions, duplicate ids and unreadable state nev
     expect(() => saveTasksFile({ tasks: [row()], recentCreates: [] }, f)).toThrow();
     expect(fs.readFileSync(f, "utf8")).toBe(raw);
   }
-  const directory = file(); fs.mkdirSync(directory);
-  expect(() => saveTasks([row()], directory)).toThrow();
 });
 
 test("actual runtime acknowledgment invalidates the token after nested in-place assignment mutation", () => {
