@@ -615,25 +615,43 @@ export interface LimitWindow {
   windowMinutes?: number | null;
 }
 
-/** A weekly window the provider meters separately for one model tier (issue
-    #1358): Anthropic's OAuth usage payload carries the flagship tier's own
-    seven-day bucket beside the general week. `tier` is the bucket's tier name
+/** A weekly window the provider meters separately for one model tier (issues
+    #1358, #1796): Anthropic's OAuth usage payload carries a seven-day bucket
+    per metered tier beside the general week. `tier` is the bucket's tier name
     as the provider spelled it (`opus` for `seven_day_opus`), so the label the
     row carries is the provider's, never a guess. */
 export interface TierLimitWindow extends LimitWindow {
   tier: string;
 }
 
-/** The quota window that bound an effective-remaining minimum. `flagship` is
-    the model-tier weekly of {@link EngineLimits.flagship}. */
-export type QuotaWindowKey = "session" | "weekly" | "flagship";
+/** The quota window that bound an effective-remaining minimum. A `tier:<name>`
+    key names one of {@link EngineLimits.tiers} — the provider's own tier
+    spelling, so a tier nobody has heard of yet still has a key. */
+export type TierWindowKey = `tier:${string}`;
+export type QuotaWindowKey = "session" | "weekly" | TierWindowKey;
+
+/** Read the pre-tier-list cache/registry shape without relabelling its bucket. */
+export function modelTierWindows(limits: { tiers?: TierLimitWindow[]; flagship?: TierLimitWindow | null } | null | undefined): TierLimitWindow[] {
+  if (Array.isArray(limits?.tiers)) return limits.tiers;
+  return limits?.flagship ? [limits.flagship] : [];
+}
+
+export function tierWindowKey(tier: string): TierWindowKey { return `tier:${tier}`; }
+
+/** The tier a window key names, or null for the session/general-weekly keys. */
+export function tierOfWindowKey(key: string): string | null {
+  return key.startsWith("tier:") ? key.slice("tier:".length) || null : null;
+}
 
 /** Plan rate limits of one engine, returned by GET /api/limits. */
 export interface EngineLimits {
   session: LimitWindow | null;
   weekly: LimitWindow | null;
-  /** The flagship model tier's own weekly window when the account reports one
-      (issue #1358); absent or null when the provider meters no distinct tier. */
+  /** Every model-tier weekly the provider meters for this account (issues
+      #1358, #1796), one entry per reported tier, ordered by tier name. Absent
+      or empty when the provider meters no distinct tier. */
+  tiers?: TierLimitWindow[];
+  /** Read compatibility for snapshots persisted before tier lists. */
   flagship?: TierLimitWindow | null;
   plan: string | null;
   /** Unix seconds of the oldest selected window observation. Null means the

@@ -37,7 +37,8 @@ const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
-const ACCOUNTS = SCENARIO === "accounts";
+const TIER_LIMITS = SCENARIO === "tier-limits";
+const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
@@ -462,6 +463,15 @@ if (ACCOUNTS) {
 
 /* K6: the accounts of each engine, as `GET /api/accounts` answers them, and the project's accounts (#1279). */
 const resetIn = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 60;
+const tierLimits = {
+  session: { usedPercent: 12, resetsAt: resetIn(120), windowMinutes: 300 },
+  weekly: { usedPercent: 30, resetsAt: resetIn(6000), windowMinutes: 10080 },
+  tiers: [
+    { tier: "fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
+    { tier: "opus", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
+  ],
+  plan: "max", capturedAt: now,
+};
 const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number) => ({
   id, label, kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null,
   auth: { state: "authenticated", plan },
@@ -967,7 +977,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ pipeline: record });
     }
   }
-  if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(TIER_LIMITS ? {
+    ...accountsBody,
+    claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
+      ? { ...row, limits: { ...tierLimits, state: "fresh", checkedAt: iso(0) } } : row) },
+  } : accountsBody);
   if (ACCOUNTS && url.pathname === "/api/account-project-bindings" && method === "GET") {
     return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(bindingsBody);
   }
@@ -1047,11 +1061,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/limits") {
     return json({
-      claude: null,
+      claude: TIER_LIMITS ? tierLimits : null,
       codex: { session: { usedPercent: 40, resetsAt: now + 3_600, windowMinutes: 300 }, weekly: { usedPercent: 10, resetsAt: now + 172_800, windowMinutes: 10_080 }, plan: "pro", capturedAt: now },
-      claudeAccountId: null,
+      claudeAccountId: TIER_LIMITS ? "default" : null,
       codexAccountId: null,
-      provenance: { claude: { source: "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
+      provenance: { claude: { source: TIER_LIMITS ? "live" : "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
       staleSince: null,
     });
   }

@@ -73,6 +73,9 @@ export function queuedPinnedSpawnTitle(locale: "en" | "uk", retryAt: string): st
 export async function resolvePinnedSpawnAdmission(
   engine: "claude" | "codex",
   account: AccountContext,
+  /** The model the pinned launch names, so a tier weekly it does not draw on
+      never refuses it (issues #1796, #1431). */
+  model?: string | null,
 ): Promise<SpawnAccountAdmission> {
   if (engine === "codex") {
     return { kind: "admissible", basis: "current", stale: false, retryAt: null };
@@ -81,7 +84,7 @@ export async function resolvePinnedSpawnAdmission(
     path.join(account.home, ".credentials.json"),
     Date.now,
     PINNED_SPAWN_HEALTH_TIMEOUT_MS,
-  ));
+  ), Date.now(), model);
 }
 
 export interface StructuredHostAccessMaterialization {

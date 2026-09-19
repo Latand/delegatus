@@ -29,6 +29,7 @@ import { orderedConversationTail } from "./conversation/tailOrder";
 import {
   publishTranscriptEchoes,
   retireLaunchOutboxOnAdoption,
+  retireLaunchOutboxOnTranscriptTurn,
   seedLaunchOutbox,
   settleLaunchOutboxDelivered,
   settleLaunchOutboxFailed,
@@ -273,6 +274,27 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       owner: launchOwner,
     });
   }, [memoryKey, file?.launch?.launchId, launchOwner, launchOwnsThisPane]);
+  /* The transcript the launch CREATED is an adoption signal of its own (issue
+     #1793). The server's launch facts are the bubble's only carrier of the
+     delivery receipt, and they retire on the row's first assistant turn — a
+     single poll can carry a conversation from "no transcript" to "already
+     answered", after which nothing left in the payload can settle the bubble
+     and it reads "Delivering" under a finished turn. The row still proves it:
+     a transcript that began at or after the launch's admission holds that
+     launch's message as its first user record, and an assistant turn at or
+     after the same admission proves the agent answered it. */
+  const transcriptStartedAtMs = file?.sessionStartedAt ? Date.parse(file.sessionStartedAt) : Number.NaN;
+  const transcriptAssistantAtMs = typeof file?.lastAssistantMessageAt === "number"
+    ? file.lastAssistantMessageAt
+    : Number.NaN;
+  useEffect(() => {
+    if (!memoryKey || !paneLaunchOwner) return;
+    retireLaunchOutboxOnTranscriptTurn(memoryKey, {
+      owner: paneLaunchOwner,
+      startedAt: transcriptStartedAtMs,
+      assistantTurnAt: transcriptAssistantAtMs,
+    });
+  }, [memoryKey, paneLaunchOwner, transcriptStartedAtMs, transcriptAssistantAtMs]);
   /* Live streaming text: `delta` events from the structured host render the
      in-flight assistant reply immediately, ahead of the transcript flush. The
      host is resolved by conversation identity FIRST (round-1 P1#3): during

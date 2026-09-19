@@ -23,6 +23,7 @@ export function chooseReseatTarget(
   observations: readonly DurableQuotaObservation[],
   accounts: readonly { id: string; label: string }[],
   now = Date.now(),
+  model?: string | null,
 ): ReseatTarget | null {
   const labels = new Map(accounts.map((account) => [account.id, account.label] as const));
   const candidates = observations.flatMap((observation) => {
@@ -37,7 +38,7 @@ export function chooseReseatTarget(
       provenance: observation.provenance,
       observedAt: Date.parse(observation.observedAt),
       authCheckedAt: Date.parse(observation.authCheckedAt),
-    }, now);
+    }, now, { model });
     if (!remaining || remaining.percent <= AUTO_BALANCE_THRESHOLD) return [];
     return [{ accountId: observation.accountId, label, remainingPercent: remaining.percent, window: remaining.window }];
   });
@@ -70,11 +71,12 @@ export function chooseProjectReseatTarget(
   accounts: readonly { id: string; label: string }[],
   allowedAccountIds: readonly string[] | null,
   now = Date.now(),
+  model?: string | null,
 ): ProjectReseatSelection {
   const candidates = allowedAccountIds === null
     ? accounts
     : accounts.filter((account) => allowedAccountIds.includes(account.id));
-  const target = chooseReseatTarget(currentAccountId, observations, candidates, now);
+  const target = chooseReseatTarget(currentAccountId, observations, candidates, now, model);
   if (target) return { kind: "target", target };
   return allowedAccountIds === null
     ? { kind: "none" }

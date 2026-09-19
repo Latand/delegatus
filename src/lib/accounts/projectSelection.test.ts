@@ -195,3 +195,27 @@ test("a binding on one engine leaves the other engine's selection alone", () => 
     now: NOW,
   })).toEqual({ kind: "available", accountId: SPARE });
 });
+
+
+test("project capacity and headless selection use the requested model's bucket", () => {
+  const sample = observation(RESERVED, 10);
+  sample.limits!.weekly = { usedPercent: 20, resetsAt: NOW / 1000 + 3600 };
+  sample.limits!.tiers = [
+    { tier: "fable", usedPercent: 10, resetsAt: NOW / 1000 + 3600 },
+    { tier: "opus", usedPercent: 100, resetsAt: NOW / 1000 + 7200 },
+  ];
+  for (const bindings of [[], [binding(RESERVED)]]) {
+    const select = (model: string) => selectProjectAccount({ project: ATLAS, engine: "claude", accounts: [ACCOUNTS[0]],
+      observations: [sample], bindings, unbound: "capacity", model, now: NOW });
+    for (const model of ["fable", "sonnet", "haiku", "unknown-model"]) {
+      expect(select(model)).toEqual({ kind: "available", accountId: RESERVED });
+    }
+    expect(select("opus").kind).toBe("exhausted");
+    sample.limits!.tiers![0].usedPercent = 100;
+    sample.limits!.tiers![1].usedPercent = 10;
+    expect(select("fable").kind).toBe("exhausted");
+    expect(select("opus").kind).toBe("available");
+    sample.limits!.tiers![0].usedPercent = 10;
+    sample.limits!.tiers![1].usedPercent = 100;
+  }
+});

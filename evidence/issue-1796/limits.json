@@ -1,0 +1,89 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-limits",
+  "values": "invented",
+  "footer": {
+    "text": "System\nClaude\nmax\n12%\nAccount A\n5h\nleft 88%\nreset in 2h · 12:16\nWeek\nleft 70%\nreset in 5d · Sep 23 14:16\nFable · Week\nleft 12%\nreset in 5d · Sep 23 14:16\nOpus · Week\nleft 37%\nreset in 5d · Sep 23 14:16\nCodex\n65%\nAccount B\n5h\nleft 65%\nreset in 4h · 13:36\nTelegram\nNot connected",
+    "restoredAfterFold": true
+  },
+  "desktop": {
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "rows": [
+      {
+        "key": "session",
+        "text": "5h88%left· reset in 2h · 12:16",
+        "width": 354
+      },
+      {
+        "key": "weekly",
+        "text": "Week70%left· reset in 5d · Sep 23 14:16",
+        "width": 354
+      },
+      {
+        "key": "tier:fable",
+        "text": "Fable · Week12%left· reset in 5d · Sep 23 14:16",
+        "width": 354
+      },
+      {
+        "key": "tier:opus",
+        "text": "Opus · Week37%left· reset in 5d · Sep 23 14:16",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h82%left· reset in 3h · 13:06",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h59%left· reset in 3h · 12:21",
+        "width": 354
+      },
+      {
+        "key": "session",
+        "text": "5h0%left· reset in 80m · 11:36",
+        "width": 354
+      }
+    ],
+    "overflow": 0,
+    "pageErrors": []
+  },
+  "phone": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "rows": [
+      {
+        "key": "session",
+        "text": "5h88% leftreset in 2h · 12:16",
+        "width": 342
+      },
+      {
+        "key": "weekly",
+        "text": "Week70% leftreset in 5d · Sep 23 14:16",
+        "width": 342
+      },
+      {
+        "key": "tier:fable",
+        "text": "Fable · Week12% leftreset in 5d · Sep 23 14:16",
+        "width": 342
+      },
+      {
+        "key": "tier:opus",
+        "text": "Opus · Week37% leftreset in 5d · Sep 23 14:16",
+        "width": 342
+      },
+      {
+        "key": "session",
+        "text": "5h65% leftreset in 4h · 13:36",
+        "width": 342
+      }
+    ],
+    "overflow": 0,
+    "pageErrors": []
+  }
+}

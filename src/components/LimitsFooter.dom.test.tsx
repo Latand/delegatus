@@ -275,13 +275,13 @@ test("an account B limits payload cannot override account A at the rendering sea
   expect(text).not.toContain("0%");
 });
 
-// ── Issue #1358 — the flagship tier's weekly as its own footer row ───────────
+// ── Issues #1358 / #1796 — each metered tier's weekly as its own footer row ──
 
-const claudePayload = (flagship: number | null): LimitsPayload => ({
+const claudePayload = (tiers: { tier: string; usedPercent: number }[]): LimitsPayload => ({
   claude: {
     session: { usedPercent: 12, resetsAt: NOW + 3_600, windowMinutes: 300 },
     weekly: { usedPercent: 40, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080 },
-    ...(flagship === null ? {} : { flagship: { usedPercent: flagship, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080, tier: "opus" } }),
+    tiers: tiers.map((entry) => ({ usedPercent: entry.usedPercent, resetsAt: NOW + 4 * 86_400, windowMinutes: 10_080, tier: entry.tier })),
     plan: "max",
     capturedAt: NOW,
   },
@@ -300,8 +300,8 @@ function claudeBlock(host: HTMLElement): HTMLElement {
   return trigger!.closest("div.relative") as HTMLElement;
 }
 
-test("no flagship bucket: the Claude block keeps its two rows and no placeholder", async () => {
-  limits = claudePayload(null);
+test("no tier bucket: the Claude block keeps its two rows and no placeholder", async () => {
+  limits = claudePayload([]);
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("5h");
   expect(block.textContent).toContain("Week");
@@ -309,8 +309,8 @@ test("no flagship bucket: the Claude block keeps its two rows and no placeholder
   expect(block.textContent).toContain("60%"); // the general week binds the chip
 });
 
-test("a healthy flagship bucket renders as a third row named by the tier, and the general week still binds the chip", async () => {
-  limits = claudePayload(10);
+test("a healthy tier bucket renders as a third row named by the tier, and the general week still binds the chip", async () => {
+  limits = claudePayload([{ tier: "opus", usedPercent: 10 }]);
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("Opus · Week");
   expect(block.textContent).toContain("90%");
@@ -318,10 +318,19 @@ test("a healthy flagship bucket renders as a third row named by the tier, and th
   expect(block.textContent?.match(/reset/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
 });
 
-test("a flagship bucket tighter than the general week binds the chip", async () => {
-  limits = claudePayload(80);
+test("a tier bucket tighter than the general week binds the chip", async () => {
+  limits = claudePayload([{ tier: "opus", usedPercent: 80 }]);
   const block = claudeBlock(await render());
   expect(block.textContent).toContain("Opus · Week");
   const chip = block.querySelector("span.tabular-nums");
   expect(chip?.textContent).toBe("20%");
+});
+
+test("every tier the provider meters gets its own footer line, Fable included (#1796)", async () => {
+  limits = claudePayload([{ tier: "fable", usedPercent: 88 }, { tier: "opus", usedPercent: 63 }]);
+  const block = claudeBlock(await render());
+  expect(block.textContent).toContain("Fable · Week");
+  expect(block.textContent).toContain("Opus · Week");
+  expect(block.textContent).toContain("12%"); // Fable is the tightest, so it binds the chip
+  expect(block.textContent).toContain("37%");
 });

@@ -12,7 +12,7 @@ import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/li
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
 import { quotaAsEngineLimits, quotaUsesSource, reconcileQuotaReadings } from "@/lib/rateLimit";
-import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type BurndownPayload, type BurndownSeries, type EngineBurndown, type EngineLimits, type LimitSample, type LimitsPayload, type LimitsProvenance, type LimitWindow, type TierLimitWindow } from "./types";
+import { modelTierWindows, LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type BurndownPayload, type BurndownSeries, type EngineBurndown, type EngineLimits, type LimitSample, type LimitsPayload, type LimitsProvenance, type LimitWindow, type TierLimitWindow } from "./types";
 
 /** Resolved at call time (not module load) so LLV_STATE_DIR set after this
     module is first evaluated — e.g. in tests importing it statically — still
@@ -99,7 +99,8 @@ function safeCacheEntry(value: unknown): EngineCacheEntry | null {
       (entry.retryAt !== undefined && entry.retryAt !== null && typeof entry.retryAt !== "number") ||
       (entry.consecutive429s !== undefined && (!Number.isInteger(entry.consecutive429s) || entry.consecutive429s < 0)) ||
       (entry.consecutiveInitializeTimeouts !== undefined && (!Number.isInteger(entry.consecutiveInitializeTimeouts) || entry.consecutiveInitializeTimeouts < 0))) return null;
-  return entry as EngineCacheEntry;
+  const normalize = (data: EngineLimits | null | undefined) => data ? { ...data, tiers: modelTierWindows(data) } : data;
+  return { ...entry, data: normalize(entry.data), ...(entry.baseData === undefined ? {} : { baseData: normalize(entry.baseData) }) } as EngineCacheEntry;
 }
 
 function readDiskCache(): LimitsCache {
@@ -396,7 +397,7 @@ export async function fetchClaudeLimits(
     const data: EngineLimits = {
       session: oauthWindow(json.five_hour, SESSION_WINDOW_MINUTES),
       weekly: oauthWindow(json.seven_day, WEEKLY_WINDOW_MINUTES),
-      flagship: oauthFlagshipWindow(json),
+      tiers: oauthTierWindows(json),
       plan,
       capturedAt: null,
     };
@@ -425,17 +426,36 @@ function oauthWindow(w: OauthWindow | undefined, windowMinutes: number): LimitWi
   return { usedPercent: w.utilization, resetsAt: Number.isFinite(resets) ? Math.round(resets / 1000) : null, windowMinutes };
 }
 
-/** The flagship tier's own weekly bucket beside `seven_day` (issue #1358).
-    The usage endpoint meters the top tier as `seven_day_opus` — the only
-    flagship bucket the Claude CLI itself reads. `seven_day_sonnet` is a lower
-    tier's bucket and `seven_day_oauth_apps` / `seven_day_overage_included` are
-    not tier windows at all, so none of them can become the flagship row. */
-const OAUTH_FLAGSHIP_BUCKET = "seven_day_opus";
+const OAUTH_TIER_PREFIX = "seven_day_";
 
-function oauthFlagshipWindow(json: Record<string, unknown>): TierLimitWindow | null {
-  const value = json[OAUTH_FLAGSHIP_BUCKET];
-  const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
-  return window ? { ...window, tier: OAUTH_FLAGSHIP_BUCKET.slice("seven_day_".length) } : null;
+/** `seven_day_*` buckets the provider meters that are NOT model tiers, as the
+    Claude CLI itself enumerates them: overage accounting, the OAuth-app pool,
+    and the product pools that ride the same key shape. Everything else under
+    the prefix is a model tier and earns its own window (issue #1796) — a tier
+    the provider adds tomorrow renders the day it is reported, which is the
+    whole point of reading the payload instead of one hard-coded key. */
+const OAUTH_NON_TIER_BUCKETS: ReadonlySet<string> = new Set([
+  "overage_included",
+  "oauth_apps",
+  "cowork",
+  "omelette",
+]);
+
+/** Every model-tier weekly bucket beside `seven_day` (issues #1358, #1796),
+    ordered by tier name so the rows never reshuffle between reads. A bucket
+    whose suffix carries an underscore is an accounting key rather than a tier
+    name, so it is excluded by shape as well as by the list above. */
+function oauthTierWindows(json: Record<string, unknown>): TierLimitWindow[] {
+  return Object.keys(json)
+    .flatMap((key) => {
+      if (!key.startsWith(OAUTH_TIER_PREFIX)) return [];
+      const tier = key.slice(OAUTH_TIER_PREFIX.length);
+      if (!tier || tier.includes("_") || OAUTH_NON_TIER_BUCKETS.has(tier)) return [];
+      const value = json[key];
+      const window = oauthWindow(value && typeof value === "object" ? value as OauthWindow : undefined, WEEKLY_WINDOW_MINUTES);
+      return window ? [{ ...window, tier }] : [];
+    })
+    .sort((left, right) => left.tier.localeCompare(right.tier));
 }
 
 /* -------------------------------- Codex -------------------------------- */

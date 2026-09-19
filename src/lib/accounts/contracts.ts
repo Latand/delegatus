@@ -86,6 +86,8 @@ export type ProjectSpawnRequest = {
    * rather than the dangerous one, but failing all the same.
    */
   preferredId?: string | null;
+  /** The model the launch names, so a per-model quota window gates it (#1796). */
+  model?: string | null;
   /** Accounts already attempted for this launch, deprioritized as before. */
   excludedIds?: string[];
   /** Accounts with terminal evidence that they cannot accept this launch.
@@ -113,7 +115,7 @@ export interface AccountManager {
    * fence failing open at the one seam whose whole job is to hold it. Required,
    * a new caller has to answer the question.
    */
-  resolveHeadlessSpawn(engine: "claude" | "codex", requestedId: string | null, excludedIds: string[], project: string | null): HeadlessSpawnAvailability;
+  resolveHeadlessSpawn(engine: "claude" | "codex", requestedId: string | null, excludedIds: string[], project: string | null, model?: string | null): HeadlessSpawnAvailability;
   /** The one seam every project-owned launch resolves its account through. */
   resolveProjectSpawn(engine: "claude" | "codex", request: ProjectSpawnRequest): ProjectSpawnResolution;
   resolveTranscriptOwner(engine: "claude" | "codex", transcript: string): AccountContext | null;

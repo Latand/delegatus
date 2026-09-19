@@ -104,16 +104,17 @@ export type AccountLimitWindow = { usedPercent: number; resetsAt: number | null;
 /** Per-account quota detail surfaced in the Accounts panel (issue #40): the
     session and weekly windows with reset times, plus how fresh the read is.
     Every capacity chip is reconciled from these windows. */
-/** The flagship tier's weekly window (issue #1358): a weekly window that also
-    names the tier the provider meters it for (`opus` for `seven_day_opus`). */
+/** A model tier's weekly window (issues #1358, #1796): a weekly window that
+    also names the tier the provider meters it for (`opus` for
+    `seven_day_opus`). */
 export type AccountTierLimitWindow = AccountLimitWindow & { tier: string };
 
 export type AccountLimits = {
   freshness: "fresh" | "stale";
   session: AccountLimitWindow | null;
   weekly: AccountLimitWindow | null;
-  /** Present only when the account reports a distinct flagship weekly bucket. */
-  flagship?: AccountTierLimitWindow | null;
+  /** One entry per model tier the account reports; empty when it reports none. */
+  tiers?: AccountTierLimitWindow[];
   /** ISO timestamp of the read these numbers come from, when the route sent one. */
   checkedAt?: string | null;
 };
@@ -189,14 +190,18 @@ export function parseAccountLimits(raw: unknown): AccountLimits | null {
   if (!freshness) return null;
   const session = parseLimitWindow(record.session);
   const weekly = parseLimitWindow(record.weekly);
-  const flagship = parseTierLimitWindow(record.flagship);
-  if (!session && !weekly && !flagship) return null;
+  const tiers = (Array.isArray(record.tiers) ? record.tiers : record.flagship ? [record.flagship] : [])
+    .flatMap((raw) => {
+      const window = parseTierLimitWindow(raw);
+      return window ? [window] : [];
+    });
+  if (!session && !weekly && !tiers.length) return null;
   const checkedAt = typeof record.checkedAt === "string" && Number.isFinite(Date.parse(record.checkedAt)) ? record.checkedAt : null;
-  return { freshness, session, weekly, ...(flagship ? { flagship } : {}), checkedAt };
+  return { freshness, session, weekly, ...(tiers.length ? { tiers } : {}), checkedAt };
 }
 
 /** A tier window needs a tier name on top of a valid window; anything else is
-    no flagship bucket, and the row simply does not render. */
+    no tier bucket, and the row simply does not render. */
 function parseTierLimitWindow(raw: unknown): AccountTierLimitWindow | null {
   const window = parseLimitWindow(raw);
   if (!window) return null;

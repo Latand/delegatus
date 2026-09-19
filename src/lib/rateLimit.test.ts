@@ -714,31 +714,35 @@ test("a pane signal wins and receives the structured reset time", () => {
   });
 });
 
-test("the flagship weekly reconciles as its own window and binds the effective quota when tighter (#1358)", () => {
-  const flagship = (usedPercent: number) => ({ usedPercent, resetsAt: RESET + 86_400, windowMinutes: 10_080, tier: "opus" });
+test("each tier weekly reconciles as its own window and the tightest binds the effective quota (#1358, #1796)", () => {
+  const tier = (name: string, usedPercent: number) => ({ usedPercent, resetsAt: RESET + 86_400, windowMinutes: 10_080, tier: name });
   const reconciled = reconcileQuotaReadings(
-    { limits: { ...quota(30, 1_000), flagship: flagship(50) }, observedAt: 1_000, stale: false, source: "live" },
-    { limits: { ...quota(30, 2_000), flagship: flagship(80) }, observedAt: 2_000, stale: false, source: "account" },
+    { limits: { ...quota(30, 1_000), tiers: [tier("fable", 20), tier("opus", 50)] }, observedAt: 1_000, stale: false, source: "live" },
+    { limits: { ...quota(30, 2_000), tiers: [tier("opus", 80)] }, observedAt: 2_000, stale: false, source: "account" },
     2_100,
   );
-  expect(reconciled.flagship).toMatchObject({ value: { usedPercent: 80, tier: "opus" }, observedAt: 2_000, source: "account" });
-  expect(quotaAsEngineLimits(reconciled)?.flagship).toMatchObject({ usedPercent: 80, tier: "opus", observedAt: 2_000 });
+  // Each tier reconciles against its OWN tier in the other reading, and a tier
+  // only one reading carries stands on that reading alone.
+  expect(reconciled.tiers.map((window) => window.value.tier)).toEqual(["fable", "opus"]);
+  expect(reconciled.tiers[1]).toMatchObject({ value: { usedPercent: 80, tier: "opus" }, observedAt: 2_000, source: "account" });
+  expect(reconciled.tiers[0]).toMatchObject({ value: { usedPercent: 20, tier: "fable" }, observedAt: 1_000, source: "live" });
+  expect(quotaAsEngineLimits(reconciled)?.tiers?.[1]).toMatchObject({ usedPercent: 80, tier: "opus", observedAt: 2_000 });
   const { effectiveQuota } = require("./rateLimit") as typeof import("./rateLimit");
-  expect(effectiveQuota(reconciled)).toMatchObject({ window: "flagship", percent: 20 });
-  // A comfortable flagship bucket leaves the general week in charge.
+  expect(effectiveQuota(reconciled)).toMatchObject({ window: "tier:opus", percent: 20 });
+  // Comfortable tier buckets leave the general week in charge.
   const comfortable = reconcileQuotaReadings(
-    { limits: { ...quota(60, 2_000), flagship: flagship(10) }, observedAt: 2_000, stale: false, source: "live" },
+    { limits: { ...quota(60, 2_000), tiers: [tier("opus", 10)] }, observedAt: 2_000, stale: false, source: "live" },
     null,
     2_100,
   );
   expect(effectiveQuota(comfortable)).toMatchObject({ window: "weekly", percent: 40 });
   // No bucket on either reading: nothing is invented.
   const none = reconcileQuotaReadings({ limits: quota(60, 2_000), observedAt: 2_000, stale: false, source: "live" }, null, 2_100);
-  expect(none.flagship).toBeNull();
-  expect(quotaAsEngineLimits(none)?.flagship).toBeNull();
+  expect(none.tiers).toEqual([]);
+  expect(quotaAsEngineLimits(none)?.tiers).toEqual([]);
 });
 
-test("an exhausted flagship weekly walls the account under the weekly horizon (#1358)", () => {
+test("an exhausted tier weekly walls the account under the weekly horizon (#1358)", () => {
   const observedAt = new Date(NOW - 60_000).toISOString();
   const state = rateLimitFromQuotaObservation({
     engine: "claude",
@@ -748,7 +752,7 @@ test("an exhausted flagship weekly walls the account under the weekly horizon (#
     limits: {
       session: { usedPercent: 10, resetsAt: RESET, windowMinutes: 300 },
       weekly: { usedPercent: 20, resetsAt: RESET + 86_400, windowMinutes: 10_080 },
-      flagship: { usedPercent: 100, resetsAt: RESET + 172_800, windowMinutes: 10_080, tier: "opus" },
+      tiers: [{ usedPercent: 100, resetsAt: RESET + 172_800, windowMinutes: 10_080, tier: "opus" }],
       plan: "max",
       capturedAt: Math.floor(NOW / 1000),
     },
@@ -757,4 +761,27 @@ test("an exhausted flagship weekly walls the account under the weekly horizon (#
     bootId: "test",
   }, NOW);
   expect(state).toEqual({ source: "account", accountId: "account-a", window: "weekly", resetAt: RESET + 172_800 });
+});
+
+
+test("parking uses only the requested tier, including its reset time", () => {
+  const sample = { ...observation(10), engine: "claude" as const,
+    limits: { ...quota(10, NOW / 1000), tiers: [
+      { tier: "fable", usedPercent: 100, resetsAt: RESET },
+      { tier: "opus", usedPercent: 100, resetsAt: RESET + 86400 },
+    ] },
+  };
+  expect(rateLimitFromQuotaObservation(sample, NOW, "sonnet")).toBeNull();
+  expect(rateLimitFromQuotaObservation(sample, NOW, "haiku")).toBeNull();
+  expect(rateLimitFromQuotaObservation(sample, NOW, "fable")?.resetAt).toBe(RESET);
+  expect(rateLimitFromQuotaObservation(sample, NOW, "opus")?.resetAt).toBe(RESET + 86400);
+});
+
+test("legacy stored flagship readings retain their named tier", () => {
+  const limits = { ...quota(10, NOW / 1000), flagship: { tier: "opus", usedPercent: 100, resetsAt: RESET } };
+  const reconciled = reconcileQuotaReadings({ limits, observedAt: NOW / 1000, stale: false, source: "cache" }, null, NOW / 1000);
+  expect(quotaAsEngineLimits(reconciled)?.tiers?.[0]).toMatchObject(limits.flagship);
+  const sample = { ...observation(10), engine: "claude" as const, limits };
+  expect(rateLimitFromQuotaObservation(sample, NOW, "opus")?.resetAt).toBe(RESET);
+  expect(rateLimitFromQuotaObservation(sample, NOW, "fable")).toBeNull();
 });

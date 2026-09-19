@@ -1,3 +1,4 @@
+import { modelTierWindows } from "@/lib/types";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { AUTO_BALANCE_FRESH_MS, effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 
@@ -34,8 +35,8 @@ export interface AccountObservationProjection {
     state: "fresh" | "stale" | "unavailable";
     session: NonNullable<DurableQuotaObservation["limits"]>["session"];
     weekly: NonNullable<DurableQuotaObservation["limits"]>["weekly"];
-    /** The flagship tier's weekly window when the account reports one (#1358). */
-    flagship: NonNullable<DurableQuotaObservation["limits"]>["flagship"] | null;
+    /** Every model-tier weekly the account reports (#1358, #1796). */
+    tiers: NonNullable<NonNullable<DurableQuotaObservation["limits"]>["tiers"]>;
     checkedAt: string | null;
   };
   /** Usage-limit reset credits at the last read (#1373); null until a read
@@ -75,7 +76,7 @@ export function accountProjection(observation: DurableQuotaObservation | undefin
       state: eligible ? "fresh" : observation?.limits ? "stale" : "unavailable",
       session: observation?.limits?.session ?? null,
       weekly: observation?.limits?.weekly ?? null,
-      flagship: observation?.limits?.flagship ?? null,
+      tiers: modelTierWindows(observation?.limits),
       checkedAt: observation?.observedAt ?? null,
     },
     resetCredits: observation?.resetCredits ?? null,
