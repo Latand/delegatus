@@ -4,6 +4,7 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 import { statePath } from "@/lib/configDir";
 import { deliverConversationMessage, type DeliveryOutcome } from "@/lib/delivery";
 import { canonicalOrchestratorProject, type StillbornSeatRollback } from "@/lib/orchestrator/seats";
+import { recordSeatProjectSuccessions } from "@/lib/orchestrator/seatProjectIdentity";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, runtimeIdempotencyKeyAdmissible } from "@/lib/runtime/contracts";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { mutateTasksFile } from "@/lib/tasks/store";
@@ -24,8 +25,8 @@ import { redactBounded, redactMonitorText } from "./redact";
 import { seatTickProposalMessage, seatTickWakeMessage } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
-import { effectiveSeatTickSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
-import { readSeatTickState, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
+import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
+import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
 import {
   defaultSeatTickSources,
   gatherSeatTickInput,
@@ -89,6 +90,9 @@ import type {
 
 export interface SeatTickControllerDependencies {
   sources?: SeatTickSources;
+  /** Records the identity successions seated projects owe (#1874); the sweep
+      runs it before it lists the projects to check. */
+  recordSuccessions?: () => unknown[];
   policy?: SeatTickPolicy | null;
   readState?: typeof readSeatTickState;
   writeState?: typeof writeSeatTickState;
@@ -1499,6 +1503,36 @@ async function releaseOwnsTraffic(): Promise<boolean> {
  * not a transaction — and each project's own failure is a journal line of its
  * own, written by {@link runSeatTickCheck}.
  */
+/**
+ * Identity successions, at the tick's own boundary (#1874). A seat keyed by its
+ * folder's old identity moves to the new key, and the tick's own rows under the
+ * old key — its settings, and the accounting that holds its event cursor and
+ * outstanding wake — are carried to the new key when it has none, so the seat's
+ * next check continues rather than starting over. Idempotent, and a failure
+ * costs this pass only.
+ */
+function followProjectSuccessions(
+  record: (() => unknown[]) | undefined = recordSeatProjectSuccessions,
+  log: (line: string) => void = (line) => console.error(line),
+): void {
+  try {
+    const recorded = record();
+    if (recorded.length > 0) log(`[seat tick] recorded ${recorded.length} project identity succession(s) for seated projects`);
+    const settings = readSeatTickSettingsFile();
+    for (const [project, row] of Object.entries(settings)) {
+      const current = canonicalOrchestratorProject(project);
+      if (current !== project && !settings[current]) writeSeatTickSettings(current, { ...row, project: current });
+    }
+    const states = readSeatTickStateFile();
+    for (const [project, row] of Object.entries(states)) {
+      const current = canonicalOrchestratorProject(project);
+      if (current !== project && !states[current]) writeSeatTickState(current, { ...row, accounting: undefined });
+    }
+  } catch (error) {
+    log(`[seat tick] project identity succession failed: ${error instanceof Error ? error.name : "unknown"}`);
+  }
+}
+
 export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
@@ -1526,6 +1560,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     stopSeatTick();
     return [];
   }
+  followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
   for (const project of seatTickProjects(sources)) {
     try {
@@ -1564,6 +1599,7 @@ const tickHost = globalThis as typeof globalThis & {
  * already read.
  */
 export function startSeatTick(ports: {
+  recordSuccessions?: () => unknown[];
   scheduleInterval?: (callback: () => void, delayMs: number) => ReturnType<typeof setInterval>;
   sweep?: () => Promise<unknown>;
   policy?: SeatTickPolicy | null;
@@ -1594,6 +1630,9 @@ export function startSeatTick(ports: {
     }
     return false;
   }
+  /* Boot: a seat keyed by its folder's old identity moves before anything
+     reads it (#1874), whether or not the tick itself is switched on. */
+  followProjectSuccessions(ports.recordSuccessions, log);
   const policy = ports.policy === undefined ? seatTickPolicy() : ports.policy;
   if (!policy) {
     log("[seat tick] not started: LLV_SEAT_TICK_CHECK_MINUTES=0 turns the tick off");
