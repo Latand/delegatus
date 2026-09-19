@@ -27,9 +27,12 @@ import {
   pipelineStagePosition,
   resolveStageNavFile,
   stageAttempts,
-  stageChipLabel,
+  stageCardLabel,
   stageChipState,
   stageConfigurable,
+  stageDisplayName,
+  stageLatestAttemptPlace,
+  stageRoleAside,
   verdictStatusLabel,
 } from "../pipelines/pipelineModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
@@ -292,23 +295,24 @@ function StageMark({ state, index }: { state: string; index: number }) {
 }
 
 /**
- * A stage row's title: the product's own stage identity, minus the position
- * that the row's own mark already gives (`stagePaneTitle`, #658). The role
- * alone is not an identity — a five-stage chain has three Builder stages, and
- * three rows reading «Builder» name nothing; the pipeline's own id for the
- * stage is what tells `fix` from `merge`.
+ * A stage row's title: the stage's name as its tiles on the board carry it
+ * (#1865) — «Critique», and «Critique · 2» once it ran twice. The position is
+ * the row's own mark; the role preset, which is no identity (a five-stage chain
+ * has three Builder stages), moves into the meta line.
  */
-export function stageRowTitle(t: TFunction, stage: PipelineStage): string {
-  const role = stageChipLabel(t, stage);
-  return role === stage.id ? role : t("mobile2.pipeline.stageTitle", { role, stage: stage.id });
+export function stageRowTitle(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+  return t("mobile2.pipeline.stageTitle", { stage: stageCardLabel(t, stage, stageLatestAttemptPlace(pipeline, stage.id)) });
 }
 
-/** The stage's meta line: what kind of stage it is, where its round stands and
-    what it returned — every word from the product's own dictionary. */
+/** The stage's meta line: the role preset the title gave up, what kind of
+    stage it is, where its round stands and what it returned — every word from
+    the product's own dictionary. */
 export function stageMetaLine(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
   const attempt = latestAttempt(pipeline, stage.id);
   const findings = attempt?.verdict?.findings?.length ?? 0;
+  const role = stageRoleAside(t, stage);
   return [
+    role ? t("mobile2.pipeline.stageMetaRole", { role }) : null,
     stage.kind === "review-loop"
       ? attempt ? t("mobile2.pipeline.reviewRound", { round: attempt.n }) : t("mobile2.pipeline.review")
       : t("mobile2.pipeline.run"),
@@ -404,7 +408,7 @@ export function MobilePipelineScreen({
       h: 0,
     };
     return (
-      <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: stageRowTitle(t, configStage) })} onClose={close}>
+      <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: stageRowTitle(t, pipeline, configStage) })} onClose={close}>
         <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
           <StagePlaceholderPane slot={slot} interactive />
         </div>
@@ -483,17 +487,18 @@ export function MobilePipelineScreen({
               findings={findings}
               numbered
               mobile
-              /* The heading in the product's own words: the stage as the board
-                 names it, the round it is on, and the count the verdict
-                 carries — never a hand-written «Review · round 3». */
+              /* The heading in the product's own words: the stage's name, the
+                 round it is on, and the count the verdict carries — never a
+                 hand-written «Review · round 3». The attempt number stays on
+                 the stage row, where it cannot read as a count (#1865). */
               heading={cursorStage.kind === "review-loop" && cursorAttempt
                 ? t("mobile2.pipeline.findingsHeading", {
-                  stage: stageRowTitle(t, cursorStage),
+                  stage: stageDisplayName(t, cursorStage),
                   round: cursorAttempt.n,
                   findings: t("pipelineVerdict.findings", { count: findings.length }),
                 })
                 : t("mobile2.pipeline.findingsHeadingRunless", {
-                  stage: stageRowTitle(t, cursorStage),
+                  stage: stageDisplayName(t, cursorStage),
                   findings: t("pipelineVerdict.findings", { count: findings.length }),
                 })}
             />
@@ -637,7 +642,7 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   const file = resolveStageNavFile(attemptNavTarget(attempt), files);
   /* Configurable by the one rule the desktop's pane and strip read too. */
   const configurable = !file && stageConfigurable(pipeline, stage.id);
-  const title = stageRowTitle(t, stage);
+  const title = stageRowTitle(t, pipeline, stage);
   /* Who runs it, and how often work came back to it: the same mark, ladder and
      circled count the desktop's graph draws (#1743). */
   const identity = stageIdentity(pipeline, stage);
@@ -666,14 +671,14 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
         <StageMark state={state} index={index} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+            <span data-mobile2-stage-title className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
             {returns.map((count, at) => (
               <ReturnMark key={at} count={count} />
             ))}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
             <StageIdentity identity={identity} density="line" />
-            <span className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
+            <span data-mobile2-stage-meta className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
           </span>
         </span>
         {file ? (

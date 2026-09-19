@@ -1,0 +1,121 @@
+{
+  "results": [
+    {
+      "key": "en-light",
+      "lang": "en",
+      "scheme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 failed · 2 findings·15m 1sneeds a decision",
+      "rows": [
+        {
+          "stage": "design",
+          "title": "Design · 2",
+          "meta": "Architect · run · passed",
+          "width": 58.2,
+          "need": 58.2,
+          "cut": false
+        },
+        {
+          "stage": "critique",
+          "title": "Critique · 2",
+          "meta": "Architect · run · failed · 2 findings",
+          "width": 64.2,
+          "need": 64.2,
+          "cut": false
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "en-dark",
+      "lang": "en",
+      "scheme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 failed · 2 findings·15m 1sneeds a decision",
+      "rows": [
+        {
+          "stage": "design",
+          "title": "Design · 2",
+          "meta": "Architect · run · passed",
+          "width": 58.2,
+          "need": 58.2,
+          "cut": false
+        },
+        {
+          "stage": "critique",
+          "title": "Critique · 2",
+          "meta": "Architect · run · failed · 2 findings",
+          "width": 64.2,
+          "need": 64.2,
+          "cut": false
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "uk-light",
+      "lang": "uk",
+      "scheme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження·15 хв 1 спотрібне рішення",
+      "rows": [
+        {
+          "stage": "design",
+          "title": "Design · 2",
+          "meta": "Архітектор · запуск · пройдено",
+          "width": 58.2,
+          "need": 58.2,
+          "cut": false
+        },
+        {
+          "stage": "critique",
+          "title": "Critique · 2",
+          "meta": "Архітектор · запуск · провалено · 2 зауваження",
+          "width": 64.2,
+          "need": 64.2,
+          "cut": false
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "key": "uk-dark",
+      "lang": "uk",
+      "scheme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження·15 хв 1 спотрібне рішення",
+      "rows": [
+        {
+          "stage": "design",
+          "title": "Design · 2",
+          "meta": "Архітектор · запуск · пройдено",
+          "width": 58.2,
+          "need": 58.2,
+          "cut": false
+        },
+        {
+          "stage": "critique",
+          "title": "Critique · 2",
+          "meta": "Архітектор · запуск · провалено · 2 зауваження",
+          "width": 64.2,
+          "need": 64.2,
+          "cut": false
+        }
+      ],
+      "pageErrors": []
+    }
+  ],
+  "failures": []
+}

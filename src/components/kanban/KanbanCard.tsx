@@ -10,7 +10,7 @@ import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
-import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttemptPlace, stageCardLabel } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
@@ -98,7 +98,7 @@ function parseActing(encoded: string): Map<string, PipelineActionKind> {
 }
 
 function memberRole(t: TFunction, member: KanbanMember): string {
-  if (member.stage) return stageChipLabel(t, member.stage.stage);
+  if (member.stage) return stageCardLabel(t, member.stage.stage, stageAttemptPlace(member.stage.pipeline, member.stage.stage.id, member.file));
   return cleanTitle(member.file.title ?? "", 80) || t("kanban.untitledConversation");
 }
 

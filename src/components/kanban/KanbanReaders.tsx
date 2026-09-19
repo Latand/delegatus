@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
-import { stageChipLabel } from "@/components/pipelines/pipelineModel";
+import { stageAttemptPlace, stageCardLabel, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
@@ -214,10 +214,15 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const stateWord = t(`kanban.memberState.${row.key}`);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
-  const role = owner?.stage ? stageChipLabel(t, owner.stage.stage) : null;
-  const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
-  const needs = row.dot === "warning";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  /* The header names the stage the way the stage list does, with the attempt
+     once it ran twice, «Critique · 2», and keeps the role preset for the
+     tooltip (#1865). */
+  const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
+  const role = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : null;
+  const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  const titleHint = owner?.stage && place ? `${stageLabelTitle(t, owner.stage.stage, place, engine ? engineWord(engine) : null)} · ${owner.cardTitle}` : title;
+  const needs = row.dot === "warning";
   const identity = (
     <>
       {engine ? (
@@ -303,7 +308,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       <div className="conv-head">
         <div className="ch-row">
           <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
-          <span className="ch-title" title={title}>{title}</span>
+          <span className="ch-title" title={titleHint}>{title}</span>
           <span className="spacer" />
           <button
             type="button"

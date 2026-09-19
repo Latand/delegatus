@@ -59,6 +59,10 @@ const MANY = SCENARIO === "issue1765";
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* #1865: the header lane the operator read — design → build → critique, where
+   design and critique share the architect preset and critique ran twice — so
+   each stage's conversation can be read for which stage it is. */
+const LABELS = SCENARIO === "issue1865";
 /* #1820: the Overview draws the SAME board over every project, filtered to the
    cards a worker is working on right now. Two invented projects join `atlas`
    so the shared columns can be read across three, each bringing one card with
@@ -410,8 +414,33 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
   ];
 })() : [];
 
+const labelPipelines: Pipeline[] = LABELS ? (() => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
+  const design = conv("labels-design", "Lay out the header lane", { mtime: now - 240 * MIN });
+  const build1 = conv("labels-build-1", "First build of the header lane", { mtime: now - 200 * MIN });
+  const critique1 = conv("labels-critique-1", "Sent it back: the lane overlaps the search field", { mtime: now - 160 * MIN });
+  const build2 = conv("labels-build-2", "Second build after the critique", { mtime: now - 90 * MIN });
+  const critique2 = conv("labels-critique-2", "Reading the header render at 1280", working({ plan: { current: "Reading the header render at 1280" } }));
+  return [pipeline("p-labels", "Build the board header lane", "t-labels", "running", [
+    stage("design", "architect", "build", { effectiveRole: role("architect") }),
+    stage("build", "builder", "critique"),
+    stage("critique", "architect", null, { effectiveRole: role("architect"), onFail: { to: "build", maxRounds: 3 } }),
+  ], [
+    { stageId: "design", attempts: [attempt(1, "passed", design, { effectiveRole: role("architect"), startedAt: iso(240 * MIN) })] },
+    { stageId: "build", attempts: [
+      attempt(1, "passed", build1, { startedAt: iso(200 * MIN), activatedBy: { stageId: "design", attempt: 1, edge: "pass" } }),
+      attempt(2, "passed", build2, { startedAt: iso(90 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
+    ] },
+    { stageId: "critique", attempts: [
+      attempt(1, "failed", critique1, { effectiveRole: role("architect"), startedAt: iso(160 * MIN), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } }),
+      attempt(2, "running", critique2, { effectiveRole: role("architect"), startedAt: iso(60 * MIN), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } }),
+    ] },
+  ], { stageId: "critique", state: "running", input: null, activatedBy: null })];
+})() : [];
+
 const pipelines: Pipeline[] = [
   ...arcPipelines,
+  ...labelPipelines,
   ...marksPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -615,6 +644,7 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 if (OVERVIEW_SCOPE) {

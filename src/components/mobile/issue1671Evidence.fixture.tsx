@@ -72,7 +72,29 @@ const pipelines = [
   lane("lane-parked-again", "Board bands keep their order", [failedRound(1, 9_000, 8_400), failedRound(2, 3_000, 2_400)], { dismissedAt: iso(7_800) }),
 ];
 
-/* The running conversation lives under a managed account home, the way a real
+/* #1865, only when the page asks for it (`?stages=1`): a lane whose design and
+   critique stages share the architect preset, parked on its second critique,
+   so the queue row and the stage rows can be read for which stage is which. */
+if (new URLSearchParams(location.search).has("stages")) {
+  const architect = { roleId: "architect", engine: "claude", model: "opus", effort: "high", access: "read-only", promptScaffold: null };
+  const ran = (n: number, state: string, startedAgo: number, over: Record<string, unknown> = {}) => ({
+    n, state, startedAt: iso(startedAgo), completedAt: state === "running" ? null : iso(startedAgo - 300), effectiveRole: architect, ...over,
+  });
+  pipelines.unshift(lane("lane-labels", "Header lane reads which stage is which", [], {
+    stages: [
+      { id: "design", kind: "run", role: { roleId: "architect" }, effectiveRole: architect, next: "critique" },
+      { id: "critique", kind: "run", role: { roleId: "architect" }, effectiveRole: architect, next: null, onFail: { to: "design", maxRounds: 3 } },
+    ],
+    runs: [
+      { stageId: "design", attempts: [ran(1, "passed", 5_400), ran(2, "passed", 2_400)] },
+      { stageId: "critique", attempts: [ran(1, "failed", 3_600), ran(2, "failed", 1_200, { verdict: { status: "fail", findings: ["finding 1", "finding 2"] } })] },
+    ],
+    cursor: { stageId: "critique", state: "running", input: null, activatedBy: null },
+    createdAt: iso(600),
+  }));
+}
+
+/* The running conversation lives under a managed account home/* The running conversation lives under a managed account home, the way a real
    transcript of a managed account does, so the surfaces that name the account
    (#1795) have a real one to name rather than the legacy default. The id is
    `?account=` so one page can be asked for a long one, which is what crowds a

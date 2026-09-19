@@ -111,7 +111,7 @@ test("the sheet lists conversations and needs_decision pipelines as one list und
   /* The pipeline row: the board's words, prefixed with what it is. */
   expect(rows[2]!.getAttribute("data-mobile2-pipeline-row")).toBe("pipeline_atlas_p2");
   expect(rows[2]!.textContent).toContain("Fast conversation switching");
-  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("pipeline · stage 3/5 · review loop failed · 2 findings");
+  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("pipeline · stage 3/5 · review failed · 2 findings");
   expect(rows[2]!.textContent).toContain("1h");
   /* Every row is a 44 px target. */
   for (const row of rows) expect(row.className).toContain("min-h-11");

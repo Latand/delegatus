@@ -9,7 +9,7 @@ import { Bot } from "lucide-react";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-import { stageChipLabel } from "../pipelines/pipelineModel";
+import { stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
 
@@ -242,10 +242,10 @@ const PHRASE_TONE: Record<MobileRowState["key"], string> = {
  */
 export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipelineRow; onOpen?: (pipeline: Pipeline) => void }) {
   const { t } = useLocale();
-  /* The stage in the operator's words — the role's name, «review loop» for a
-     loop — never the raw stage id, and lowercased inside the sentence the way
-     the prototype writes it: «stage 3/5 · review failed · 2 findings». */
-  const stageName = row.stageRef ? stageChipLabel(t, row.stageRef).toLocaleLowerCase() : "";
+  /* The stage in the operator's words — its name and, once it ran twice, the
+     attempt (#1865) — lowercased inside the sentence the way the prototype
+     writes it: «stage 3/5 · critique · 2 failed · 2 findings». */
+  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
   const meta = [
     /* `stage k/n · <stage> · <state>` (README §4.1, §4.7). The state word is
        the failing round's — «needs a decision» is already the badge, so saying
