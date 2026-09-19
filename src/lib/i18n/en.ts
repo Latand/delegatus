@@ -2698,6 +2698,8 @@ export const en = {
   "mobile2.composer.accountReady": "ready",
   "mobile2.composer.accountCancelSwitch": "cancel switch",
   "mobile2.composer.accountCancelSwitchAria": "Stay on {account} and cancel the switch",
+  "mobile2.composer.accountSwitching": "switching now",
+  "mobile2.composer.accountSwitchingAria": "{account}: the switch has started and can no longer be cancelled",
   "mobile2.composer.accountReadyAria": "Send the next message from {account}",
   "mobile2.composer.accountSignIn": "sign in",
   "mobile2.composer.accountSignInAria": "Sign in to {account} — it takes no message until it returns",

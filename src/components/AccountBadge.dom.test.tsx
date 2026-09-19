@@ -320,3 +320,34 @@ test("the account it runs on takes a waiting pick back, and nothing waits a minu
   expect(toasts).toEqual([]);
   await act(async () => root.unmount());
 });
+
+test("a pick a message already engaged offers no cancel on the chip, and a tap keeps no local pick", async () => {
+  const applying = {
+    conversationId: "conversation_account_switch",
+    pendingReconfigure: { operationId: "pick-target", model: "gpt-5.6-sol", effort: "high", fast: false, accountId: "target" },
+    recentReceipts: [{
+      operationId: "pick-target", idempotencyKey: "pick-target", conversationId: "conversation_account_switch",
+      kind: "reconfigure", status: "applying", at: "2026-09-19T10:00:00.000Z", revision: 6,
+    }],
+  } as unknown as import("./runtime/runtimeModel").RuntimeSession;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => { root.render(<AccountBadge engine="codex" accountId="source" file={file} runtimeSession={applying} />); });
+  expect(host.querySelector("[data-conversation-account-chip]")!.getAttribute("data-conversation-account-next")).toBe("target");
+  await act(async () => {
+    host.querySelector<HTMLElement>("[data-conversation-account-chip]")!
+      .dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+  });
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+  expect(rows[0]!.querySelector("[data-conversation-account-cancel]")).toBeNull();
+  expect(rows[0]!.querySelector("[data-conversation-account-switching]")!.textContent).toBe("switching now");
+  expect(rows[0]!.disabled).toBe(true);
+  await act(async () => {
+    rows[0]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(requests).toEqual([]);
+  expect(host.querySelector("[data-conversation-account-chip]")!.getAttribute("data-conversation-account-next")).toBe("target");
+  await act(async () => root.unmount());
+});

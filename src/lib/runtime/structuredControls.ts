@@ -64,15 +64,17 @@ export interface StructuredControlRequest {
   actor?: AccountChoiceActor;
 }
 
-/** An account pick still waiting for its conversation's next engagement (#1846). */
+/** An account pick for this conversation that has not settled (#1846). */
 interface WaitingSwitch {
   operationId: string;
   accountId: string;
+  /** `waiting`: admitted and not engaged, so it can still be taken back. `applying`: a message engaged it and the move is under way. */
+  phase: "waiting" | "applying";
 }
 
 /**
- * The latest account pick for this conversation that has not started moving
- * it: admitted, not applying, not withdrawn. An unreadable journal answers
+ * The latest account pick for this conversation that has not settled:
+ * admitted or applying, and not withdrawn. An unreadable journal answers
  * null, which leaves every reconfigure exactly as it was before this read.
  */
 async function waitingSwitch(
@@ -103,7 +105,8 @@ async function waitingSwitch(
     }
     if (!latest || registry.reconfigureCancelled(conversationId, latest.operationId)) return null;
     const status = (await client.operationStatus(latest.operationId))?.receipt.status;
-    return status === "queued" || status === "pending" ? { operationId: latest.operationId, accountId: latest.accountId } : null;
+    if (status === "queued" || status === "pending") return { operationId: latest.operationId, accountId: latest.accountId, phase: "waiting" };
+    return status === "applying" ? { operationId: latest.operationId, accountId: latest.accountId, phase: "applying" } : null;
   } catch {
     return null;
   }
@@ -262,7 +265,21 @@ export async function dispatchStructuredControl(
        its next engagement. Three consequences are settled here, where every caller's pick arrives. */
     if (reconfiguration?.value) {
       const named = reconfiguration.value.accountId;
-      const waiting = await waitingSwitch(client, registry, conversation.id);
+      const unsettled = await waitingSwitch(client, registry, conversation.id);
+      const waiting = unsettled?.phase === "waiting" ? unsettled : null;
+      if (named !== undefined && named === generation.accountId && unsettled?.phase === "applying") {
+        /* A message already engaged the pick and the conversation is moving: taking it back here would answer
+           success while the move carries on. Too late for this route; a claimed switch is cancelled through
+           the conversation migration (#1705). */
+        return {
+          status: 409,
+          body: {
+            error: `the switch to ${unsettled.accountId} is already applying and can no longer be taken back here`,
+            code: "switch-applying",
+            applying: unsettled.operationId,
+          },
+        };
+      }
       if (named !== undefined && named === generation.accountId) {
         /* Naming the account it runs on moves nothing (#1279), so it is no switch at all: it withdraws the
            pick still waiting, and it is how a message held by a failed switch goes out on this account. */

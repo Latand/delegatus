@@ -1140,6 +1140,21 @@ test("picking B and then the account it runs on withdraws B, and no migration is
   journal.close();
 });
 
+test("naming the account it runs on once the pick is applying is refused, and the move is left alone", async () => {
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient("b-applying");
+  const profile = { model: "gpt-5.6-sol", effort: "high", fast: true };
+  await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" });
+  /* A message engaged the pick: the queue claimed it and the move is under way. */
+  journal.transitionOperation("pick-b", "applying");
+
+  const back = await pickAccount(fixture, client, "pick-a", { ...profile, accountId: "codex-subscription" });
+  expect(back).toMatchObject({ status: 409, body: { code: "switch-applying", applying: "pick-b" } });
+  expect(commands.map((command) => command.operationId)).toEqual(["pick-b"]);
+  expect(fixture.registry.reconfigureCancelled(fixture.id, "pick-b")).toBe(false);
+  journal.close();
+});
+
 test("a settings change made while a pick waits keeps the picked account", async () => {
   const fixture = profiledConversation();
   const { journal, client, commands } = journalClient("carry-forward");

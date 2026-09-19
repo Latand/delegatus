@@ -2,6 +2,8 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
+import type { RuntimeSession } from "@/lib/runtime/contracts";
+
 /*
  * #1846: the account an operator just picked for a conversation, shared by
  * every surface on the page that names that conversation's account — the
@@ -56,6 +58,17 @@ export function useIntendedAccount(key: string, runsOn: string, projected: strin
     if (picked !== null && picked === projectedNext) setPickedAccount(key, null);
   }, [key, picked, projectedNext]);
   return { runsOn, next: picked ?? projectedNext };
+}
+
+/**
+ * The pick the runtime session projects has been engaged by a message and is moving the conversation now.
+ * It can no longer be taken back from an account surface, so none of them offers «cancel switch» for it; the
+ * reconfigure route refuses that too (the board cancels a claimed switch through the migration, #1705).
+ */
+export function pickApplying(session: Pick<RuntimeSession, "pendingReconfigure" | "recentReceipts"> | null | undefined): boolean {
+  const pending = session?.pendingReconfigure;
+  if (!pending?.accountId) return false;
+  return (session?.recentReceipts ?? []).some((receipt) => receipt.operationId === pending.operationId && receipt.status === "applying");
 }
 
 /** A pick the delivery queue withdrew (the operator took it back) or replaced with a later one: settled, never a failure. */

@@ -353,3 +353,51 @@ test("the desktop pill's face carries the waiting pick, and drops it once the pi
   expect(pill().getAttribute("aria-label")).not.toContain("next on");
   await act(async () => root.unmount());
 });
+
+/** The projected pick to B after a message engaged it: the queue is moving the conversation now. */
+function applyingSession(): RuntimeSession {
+  return {
+    ...session("acct-b"),
+    revision: 6,
+    recentReceipts: [{
+      operationId: "pick-op", idempotencyKey: "pick-op", conversationId: "conversation_intent",
+      kind: "reconfigure", status: "applying", at: "2026-09-19T10:00:00.000Z", revision: 6,
+    }],
+  };
+}
+
+test("a pick a message already engaged offers no cancel on the sheet, and a tap keeps no local pick", async () => {
+  const { root } = await openSheet(<RuntimePill file={file} surface="structured" runtimeSession={applyingSession()} />);
+  expect(header()).toBe("runs on Account A · next on Account B");
+  expect(row("acct-a").querySelector("[data-runtime-account-cancel]")).toBeNull();
+  expect(row("acct-a").querySelector("[data-runtime-account-switching]")!.textContent).toBe("switching now");
+  expect(row("acct-a").disabled).toBe(true);
+  act(() => { row("acct-a").click(); });
+  expect(header()).toBe("runs on Account A · next on Account B");
+  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+test("a pick a message already engaged offers no cancel in the desktop popover's Account panel", async () => {
+  mobile = false;
+  const { host, root } = await mount(<RuntimePill file={file} surface="structured" runtimeSession={applyingSession()} />);
+  await act(async () => {
+    (host.querySelector("[data-runtime-pill]") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    (document.querySelector('[data-runtime-row="submenu"][data-runtime-value="account"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  for (let attempt = 0; attempt < 40 && document.querySelectorAll('[data-runtime-row="account"]').length < 2; attempt += 1) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  }
+  const running = document.querySelector('[data-runtime-row="account"][data-runtime-value="account-acct-a"]') as HTMLButtonElement;
+  expect(running.querySelector('[data-runtime-row-detail="action"]')).toBeNull();
+  expect(running.textContent).toContain("switching now");
+  act(() => { running.click(); });
+  expect(document.querySelector("[data-runtime-popover-account]")?.textContent ?? "runs on Account A · next on Account B")
+    .toBe("runs on Account A · next on Account B");
+  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  await act(async () => root.unmount());
+});

@@ -9,7 +9,7 @@ import { useAccountName, useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import {
-  isQuietReconfigureFailure, onAccountChoiceRequest, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
+  isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
 import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -187,6 +187,8 @@ export function RuntimePill({
   /* Accounts are named by label on every surface, the id only for one the list does not enumerate. */
   const nameOf = useAccountName(engine ?? "claude");
   const moving = nextAccount !== runsOnAccount;
+  /* A pick a message already engaged is moving the conversation: too late to take back (#1846 review). */
+  const switchApplying = pillSurface === "structured" && pickApplying(runtimeSession);
 
   /* eslint-disable react-hooks/set-state-in-effect -- reloading the persisted
      draft/phase from localStorage when the conversation identity changes is a
@@ -474,7 +476,7 @@ export function RuntimePill({
    * next message goes. Picking the account it runs on withdraws a pick that is still waiting.
    */
   const pickAccount = useCallback(async (accountId: string) => {
-    if (!engine || accountId === nextAccount) return;
+    if (!engine || accountId === nextAccount || (switchApplying && accountId === runsOnAccount)) return;
     const previous = readPickedAccount(cardId);
     setPickedAccount(cardId, accountId);
     /* The pick carries the draft, so a model change still waiting is folded into it and ends quietly. */
@@ -506,7 +508,7 @@ export function RuntimePill({
       if (readPickedAccount(cardId) === accountId) setPickedAccount(cardId, previous);
       pushTaskToast("err", cause instanceof Error ? cause.message : t("runtimeConfig.failed"));
     }
-  }, [cardId, engine, file, nameOf, nextAccount, runsOnAccount, runtimeConversationId, t]);
+  }, [cardId, engine, file, nameOf, nextAccount, runsOnAccount, runtimeConversationId, switchApplying, t]);
 
   const closePopover = useCallback(() => {
     setOpen(false);
@@ -518,6 +520,7 @@ export function RuntimePill({
     ? {
         runsOn: runsOnAccount,
         next: nextAccount,
+        applying: switchApplying,
         pick: (accountId) => {
           void pickAccount(accountId);
           if (!isMobile) closePopover();
@@ -781,6 +784,8 @@ interface AccountChoice {
   runsOn: string;
   /** Where the next message goes: the intended account while a pick waits, else `runsOn`. */
   next: string;
+  /** A message engaged the pick and the conversation is moving now: it can no longer be taken back. */
+  applying: boolean;
   pick: (accountId: string) => void;
 }
 
@@ -1037,11 +1042,14 @@ function buildRows({
            above already names it as the one the conversation runs on (#1846 critique). */
         ...(option.id !== accountChoice.runsOn
           ? {}
-          : accountChoice.next !== accountChoice.runsOn
-            ? { detail: t("mobile2.composer.accountCancelSwitch"), detailAction: true }
-            : { detail: t("mobile2.composer.accountCurrent") }),
+          : accountChoice.next === accountChoice.runsOn
+            ? { detail: t("mobile2.composer.accountCurrent") }
+            : accountChoice.applying
+              ? { detail: t("mobile2.composer.accountSwitching") }
+              : { detail: t("mobile2.composer.accountCancelSwitch"), detailAction: true }),
         checked: option.id === accountChoice.next,
-        enabled: true,
+        /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands. */
+        enabled: !(accountChoice.applying && option.id === accountChoice.runsOn && accountChoice.next !== accountChoice.runsOn),
         role: "menuitemradio",
         activate: () => accountChoice.pick(option.id),
       })),
@@ -1357,9 +1365,12 @@ function AccountSection({ t, engine, account, nameOf, limit, choice }: {
            away, which is the one thing that could fix it (#1795 review P2). */
         const next = !blocked && authenticated && option.id === (choice ? choice.next : state.active);
         /* Already the target, or walled, or unreachable: nothing to send. */
-        const inert = blocked || next || (!authenticated && !signInReachable);
-        /* While a pick waits, the account it runs on is the way back, and says so (#1846). */
-        const cancels = Boolean(choice) && current && !next && choice!.next !== account;
+        /* While a pick waits, the account it runs on is the way back, and says so (#1846); once a message
+           engaged the pick and the move is under way, it is too late for that. */
+        const leaving = Boolean(choice) && current && !next && choice!.next !== account;
+        const switching = leaving && choice!.applying;
+        const cancels = leaving && !switching;
+        const inert = blocked || next || switching || (!authenticated && !signInReachable);
         return (
           <button
             key={option.id}
@@ -1375,7 +1386,9 @@ function AccountSection({ t, engine, account, nameOf, limit, choice }: {
                 ? t("mobile2.composer.accountSignInAria", { account: option.label })
                 : next
                   ? t("mobile2.composer.accountNextAria", { account: option.label })
-                  : cancels
+                  : switching
+                    ? t("mobile2.composer.accountSwitchingAria", { account: option.label })
+                    : cancels
                     ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
                     : t("mobile2.composer.accountReadyAria", { account: option.label })}
             onClick={() => {
@@ -1413,6 +1426,8 @@ function AccountSection({ t, engine, account, nameOf, limit, choice }: {
                 <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
                 <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
               </>
+            ) : switching ? (
+              <span className="shrink-0 text-label font-semibold text-muted" data-runtime-account-switching>{t("mobile2.composer.accountSwitching")}</span>
             ) : cancels ? (
               <span className="shrink-0 text-label font-semibold text-accent" data-runtime-account-cancel>{t("mobile2.composer.accountCancelSwitch")}</span>
             ) : (

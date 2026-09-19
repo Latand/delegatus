@@ -8,7 +8,7 @@ import { type AccountAuthHealth, useEngineAccounts } from "@/hooks/useEngineAcco
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
-import { readPickedAccount, setPickedAccount, useIntendedAccount } from "@/lib/accounts/intendedAccount";
+import { pickApplying, readPickedAccount, setPickedAccount, useIntendedAccount } from "@/lib/accounts/intendedAccount";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import { type MessageKey, type TFunction, useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
@@ -102,6 +102,8 @@ export function AccountBadge({
   const key = file ? conversationIdentity(file) : accountId;
   const { next } = useIntendedAccount(key, accountId, runtimeSession?.pendingReconfigure?.accountId);
   const moving = Boolean(file) && next !== accountId;
+  /* A pick a message already engaged is moving the conversation: too late to take back (#1846 review). */
+  const switching = moving && pickApplying(runtimeSession);
   const tint = accountTint(accountId);
   const health = healthOf(accounts.accounts.find((account) => account.id === accountId));
   /* The pick is named by the labels the menu rows use, as every other account surface names it (#1846). */
@@ -148,7 +150,7 @@ export function AccountBadge({
 
   /** Picks where the next message goes; picking the account it runs on takes a waiting pick back. */
   const switchConversation = async (targetId: string) => {
-    if (!file || targetId === next) return;
+    if (!file || targetId === next || (switching && targetId === accountId)) return;
     const previous = readPickedAccount(key);
     setPickedAccount(key, targetId);
     setOpen(false);
@@ -240,15 +242,16 @@ export function AccountBadge({
       </div>
       {accounts.accounts.map((account) => {
         const available = account.authPresent && !account.loginPending;
-        /* While a pick waits, the account it runs on is the way back (#1846). */
-        const cancels = moving && account.id === accountId;
+        /* While a pick waits, the account it runs on is the way back (#1846); not once the move is under way. */
+        const leaving = moving && account.id === accountId;
+        const cancels = leaving && !switching;
         return (
           <button
             key={account.id}
             type="button"
             role="menuitemradio"
             aria-checked={account.id === next}
-            disabled={!available && !cancels}
+            disabled={(leaving && switching) || (!available && !cancels)}
             onClick={() => void switchConversation(account.id)}
             className="flex min-h-9 w-full items-center gap-2 rounded-control px-2 py-1.5 text-left hover:bg-sunken disabled:opacity-45"
           >
@@ -256,6 +259,10 @@ export function AccountBadge({
             {cancels ? (
               <span className="shrink-0 text-[11px] font-semibold text-accent" data-conversation-account-cancel>
                 {t("mobile2.composer.accountCancelSwitch")}
+              </span>
+            ) : leaving ? (
+              <span className="shrink-0 text-[11px] font-semibold text-muted" data-conversation-account-switching>
+                {t("mobile2.composer.accountSwitching")}
               </span>
             ) : null}
             {account.id === next ? <Check className="h-3.5 w-3.5 text-accent" aria-hidden /> : null}

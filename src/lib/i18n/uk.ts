@@ -2623,6 +2623,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.composer.accountReady": "готовий",
   "mobile2.composer.accountCancelSwitch": "скасувати перехід",
   "mobile2.composer.accountCancelSwitchAria": "Лишитися на {account} і скасувати перехід",
+  "mobile2.composer.accountSwitching": "перехід уже йде",
+  "mobile2.composer.accountSwitchingAria": "{account}: перехід почався, його вже не скасувати",
   "mobile2.composer.accountReadyAria": "Надіслати наступне повідомлення з {account}",
   "mobile2.composer.accountSignIn": "увійти",
   "mobile2.composer.accountSignInAria": "Увійти в {account} — він не бере повідомлень, доки не повернеться",
