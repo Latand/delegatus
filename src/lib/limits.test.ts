@@ -1270,8 +1270,11 @@ test("a Claude success resets 429 backoff and preserves the fresh-cache fast pat
     expect(recovered.claude?.session?.usedPercent).toBe(21);
     await readLimits({ codexLiveReader, now: () => 4_080_000 });
     expect(fetches).toBe(2);
-    const limitedAgain = await readLimits({ codexLiveReader, now: () => 4_090_002 });
-    expect(limitedAgain.provenance.claude.retryAt).toBe(new Date(4_150_002).toISOString());
+    // Claude reads rest for the 50-second window both paths share (#1849).
+    await readLimits({ codexLiveReader, now: () => 4_110_000 });
+    expect(fetches).toBe(2);
+    const limitedAgain = await readLimits({ codexLiveReader, now: () => 4_110_002 });
+    expect(limitedAgain.provenance.claude.retryAt).toBe(new Date(4_170_002).toISOString());
     expect(fetches).toBe(3);
   } finally {
     globalThis.fetch = realFetch;
@@ -1835,5 +1838,156 @@ test("a cached snapshot an older parser wrote never holds back a tier the live p
     // rests on the backoff again rather than going live every poll.
     const disk = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { engines: { claude: Record<string, { parser?: number }> } };
     expect(disk.engines.claude.default.parser).toBe(2);
+  } finally { request.mockRestore(); resetLimitsCache(); }
+});
+
+/* ---- One usage snapshot per account, shared by the footer and the accounts path ---- */
+
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { QuotaController } = await import("@/lib/accounts/migration/quotaController");
+
+function claudeAccountFixture() {
+  return { id: "default", label: "Main", kind: "legacy" as const, home: process.env.LLV_CLAUDE_HOME!, projectsDir: path.join(process.env.LLV_CLAUDE_HOME!, "projects"), authPresent: true, createdAt: 0 };
+}
+
+/** The accounts path as production wires it: the quota controller over the
+    production Claude probe, with only the CLI's auth-status read stubbed. */
+async function accountsPath(registry: InstanceType<typeof AgentRegistry>) {
+  const { claudeQuotaObservation } = await import("@/lib/accounts/migration/quotaController");
+  const account = claudeAccountFixture();
+  const port = {
+    list: () => [account],
+    active: () => account.id,
+    probe: (_engine: "claude" | "codex", _candidate: unknown, now: number, options?: { force?: boolean }) =>
+      claudeQuotaObservation(account, now, { ...options, authStatus: async () => ({ loggedIn: true }) }),
+  };
+  return { port, controller: new QuotaController(registry, port as never) };
+}
+
+/** What production held: a snapshot the older parser wrote with no tiers,
+    resting on a 429 backoff that the footer path kept extending. */
+function writeTierlessThrottledCache(now: number): void {
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.writeFileSync(cacheFile, JSON.stringify({
+    version: 2,
+    engines: {
+      claude: {
+        default: {
+          at: now - 60_000,
+          data: { session: { usedPercent: 11, resetsAt: Math.floor(now / 1000) + 3_600 }, weekly: { usedPercent: 35, resetsAt: Math.floor(now / 1000) + 86_400 }, tiers: [], plan: "max", capturedAt: null },
+          provenance: { source: "cache", reason: "oauth-rate-limited", staleSince: new Date(now - 20 * 60_000).toISOString(), retryAt: new Date(now + 15 * 60_000).toISOString() },
+          retryAt: now + 15 * 60_000,
+          consecutive429s: 4,
+          parser: 2,
+        },
+      },
+      codex: {},
+    },
+  }));
+  delete (globalThis as { __llvLimitsCache?: unknown }).__llvLimitsCache;
+}
+
+test("the footer answers with the tier the accounts path recorded while its own path is rate-limited (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  writeTierlessThrottledCache(now);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => new Response(null, { status: 429 })) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const account = claudeAccountFixture();
+    /* The accounts path already holds a live snapshot with the Fable tier. */
+    const live = await readUsage(usagePayloadWithCodenamedTier(providerLimits(16)));
+    await new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      probe: async (engine, candidate, observedAt) => ({ engine, accountId: candidate.id, authenticated: true, authCheckedAt: observedAt, limits: live.data, provenance: { source: "live", reason: null, staleSince: null }, observedAt }),
+    }, "boot", () => now).tick("claude");
+
+    const payload = await readLimits({ codexLiveReader, now: () => now + 1_000 });
+    expect(payload.claude?.tiers?.map((tier) => [tier.tier, tier.label, tier.usedPercent])).toEqual([["fable", "Fable", 16]]);
+
+    /* The next accounts tick meets the same backoff; the older tierless
+       snapshot does not replace the newer one with the tier on either path. */
+    await (await accountsPath(registry)).controller.tick("claude");
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const later = await readLimits({ codexLiveReader, now: () => now + 2_000 });
+    expect(later.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const { adoptClaudeLimitsSnapshot } = await import("./limits");
+    expect(adoptClaudeLimitsSnapshot("default", { ...live.data!, tiers: [] }, now - 1, now + 3_000)).toBeFalse();
+    expect((await readLimits({ codexLiveReader, now: () => now + 3_000 })).claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    expect(request).toHaveBeenCalledTimes(0);
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("both paths refreshing one account inside the window call the provider once, and share one backoff (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  let status = 200;
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => status === 200
+    ? Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))
+    : new Response(null, { status })) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const { controller } = await accountsPath(registry);
+    await controller.tick("claude");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    const footer = await readLimits({ codexLiveReader, now: () => Date.now() });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(footer.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+
+    /* The footer's read after the window meets a 429; the accounts path's
+       next tick rests on that backoff instead of calling again. */
+    status = 429;
+    const throttled = await readLimits({ codexLiveReader, now: () => now + 120_000 });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(throttled.provenance.claude.reason).toBe("oauth-rate-limited");
+    expect(throttled.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    await new QuotaController(registry, (await accountsPath(registry)).port as never, "boot", () => now + 125_000).tick("claude");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(registry.readOnlySnapshot().quotaObservations.claude.default?.limits?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an operator's live re-read lands in the snapshot the footer answers from, with one provider read (#1849)", async () => {
+  resetLimitsCache();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-shared-snapshot-"));
+  const now = Date.now();
+  writeTierlessThrottledCache(now);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))) as unknown as typeof fetch);
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
+    const result = await refreshAccountLimits("claude", "default", { registry, probe: (await accountsPath(registry)).port as never, now });
+    expect(result.kind).toBe("refreshed");
+    expect(request).toHaveBeenCalledTimes(1);
+    const footer = await readLimits({ codexLiveReader, now: () => now + 1_000 });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(footer.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    expect(footer.provenance.claude.source).toBe("live");
+  } finally { request.mockRestore(); resetLimitsCache(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a snapshot the other process wrote is what the next read answers from (#1849)", async () => {
+  resetLimitsCache();
+  const now = Date.now();
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(16)))) as unknown as typeof fetch);
+  try {
+    await readLimits({ codexLiveReader, now: () => now });
+    expect(request).toHaveBeenCalledTimes(1);
+    /* The inventory sidecar's quota tick writes the same file from its own
+       process; this one's copy in memory must not outlive that write. */
+    const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+    const written = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    expect(written.engines.claude.default.data.weekly.usedPercent).not.toBe(77);
+    written.engines.claude.default.data.weekly.usedPercent = 77;
+    fs.writeFileSync(cacheFile, JSON.stringify(written));
+    fs.utimesSync(cacheFile, new Date(), new Date(Date.now() + 5_000));
+    const payload = await readLimits({ codexLiveReader, now: () => now + 2_000 });
+    expect(payload.claude?.weekly?.usedPercent).toBe(77);
+    expect(request).toHaveBeenCalledTimes(1);
   } finally { request.mockRestore(); resetLimitsCache(); }
 });
