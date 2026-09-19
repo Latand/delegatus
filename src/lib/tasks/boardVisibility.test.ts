@@ -259,10 +259,13 @@ test("a deferral does not consume the once-per-process attempt, and an unreadabl
   ensureEmptyTaskBoardVisibilityMigration(scanFiles, file);
   expect(loadTasksFile(file).tasks[0]!.board).toBe("hidden");
 
-  /* A permanently unreadable file is retried a bounded number of times rather
-     than re-entering the transaction on every poll for the life of the process. */
-  const broken = path.join(dir, "broken.json");
-  fs.writeFileSync(broken, "{ not json", "utf8");
+  /* A permanently unreadable store is retried a bounded number of times rather
+     than re-entering the transaction on every poll for the life of the process.
+     Since #1870 unparseable bytes import as a gap; a legacy file whose rows
+     fail validation is what keeps refusing, and it needs its own directory
+     because the database sits beside the legacy path. */
+  const broken = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-visibility-broken-")), "tasks.json");
+  fs.writeFileSync(broken, JSON.stringify({ tasks: [{ id: "broken" }] }), "utf8");
   resetEmptyTaskBoardVisibilityMigrationGuard();
   const errors: unknown[][] = [];
   const previous = console.error;

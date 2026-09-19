@@ -25,6 +25,7 @@ process.env.LLV_STATE_DIR = sandbox;
 const createRoute = await import("./route");
 const taskRoute = await import("./[id]/route");
 const { saveTasks, loadTasks, TASKS_FILE } = await import("@/lib/tasks/store");
+const { resetTaskStore } = await import("@/lib/tasks/storeFixture");
 const { BOARD_TASKS_PER_PROJECT_LIMIT } = await import("@/lib/tasks/commands");
 
 afterAll(() => {
@@ -73,8 +74,8 @@ function patch(id: string, body: Record<string, unknown>): Promise<Response> {
 beforeEach(() => {
   /* The store resolved its path when it was first imported, which in a
      multi-file run may have been another file's sandbox; using the path it
-     actually resolved keeps every case here reading and writing one file. */
-  fs.rmSync(TASKS_FILE, { force: true });
+     actually resolved keeps every case here reading and writing one store. */
+  resetTaskStore(TASKS_FILE);
 });
 
 test("a project whose stored history dwarfs the cap still takes a new task", async () => {
