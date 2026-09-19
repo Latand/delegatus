@@ -535,11 +535,11 @@ test("uk: the switch, the working count and ⋯ read in Ukrainian", async () => 
     const host = mount();
     expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
     await settle();
-    expect(text(host.querySelector('button[data-view-tab="kanban"]'))).toContain(uk["kanban.viewTab"]);
-    expect(text(host.querySelector('button[data-view-tab="list"]'))).toContain(uk["dash.viewList"]);
+    expect(text(host.querySelector('button[data-view-tab="kanban"]'))).toContain(translate("uk", "kanban.viewTab"));
+    expect(text(host.querySelector('button[data-view-tab="list"]'))).toContain(translate("uk", "dash.viewList"));
     expect(text(bar(host).querySelector("[data-bar-working]"))).toBe(translate("uk", "kanban.summaryWorking", { count: 0 }));
     const menu = openMore(host);
-    expect(text(menu)).toContain(uk["search.open"]);
+    expect(text(menu)).toContain(translate("uk", "search.open"));
   } finally {
     setLocale("en");
   }
