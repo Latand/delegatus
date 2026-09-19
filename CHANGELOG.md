@@ -7,6 +7,34 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-09-19
+
+### Fixed
+- A project whose folder gains a git origin after first use keeps one identity:
+  the orchestrator seat, its tasks and its conversations follow the project from
+  its folder key to its repository key, so the seat is woken between stages and
+  `request_attention` is accepted. Before this the sidebar showed the project
+  twice and the seat was never woken (#1874).
+- A pipeline stage stays open while its agent still has a background task
+  running, instead of settling as failed and parking the lane (#1441).
+- Removing an account succeeds and moves its leftovers into a shared archive;
+  conversations stay readable (#1857, first slice).
+- Conversations a deploy cuts get one durable continuation (#1835, first slice).
+- One layering scale for every overlay: the composer's microphone menu and the
+  image preview opened from an expanded conversation are no longer covered
+  (#1858).
+
+### Changed
+- Account switches are instant and optimistic: the pick shows at once and the
+  conversation moves with its next message (#1846).
+- The project board header is one 48 px bar that says each fact once, with one
+  search and one control style; the close-only Undo/Redo buttons are gone
+  (#1801).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.1 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.1`.
+
 ## [1.2.0] — 2026-09-19
 
 ### Added
@@ -602,7 +630,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.2...v1.0.3
