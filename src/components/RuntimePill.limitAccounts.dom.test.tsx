@@ -4,6 +4,7 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { resetEngineAccountsStoresForTests } from "@/hooks/useEngineAccounts";
 import { setLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
@@ -59,20 +60,34 @@ const realFetch = globalThis.fetch;
     for it looks stuck. */
 let active = "acct-one";
 
+/** Two invented Codex accounts, one of them signed out. Codex has no in-place
+    sign-in for an existing account, which is the other half of the rule. */
+const CODEX_ACCOUNTS = [
+  { id: "codex-one", label: "Codex one", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
+  { id: "codex-two", label: "Codex two", kind: "managed", authPresent: false, authHealth: "signed_out", loginPending: false, loginState: "idle", deviceAuth: null },
+];
+let codexActive = "codex-one";
+
 beforeEach(() => {
   setLocale("en");
   calls.length = 0;
   active = "acct-one";
+  codexActive = "codex-one";
+  /* A store reads the accounts once per process, so without this every case
+     after the first would assert against the first one's payload. */
+  resetEngineAccountsStoresForTests();
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : (input as URL).toString());
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
     calls.push({ url, body });
     if (url === "/api/accounts") {
-      return new Response(JSON.stringify({ claude: { active, accounts: ACCOUNTS, migration: null, autoBalance: null } }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
+      return new Response(JSON.stringify({
+        claude: { active, accounts: ACCOUNTS, migration: null, autoBalance: null },
+        codex: { active: codexActive, accounts: CODEX_ACCOUNTS, migration: null, autoBalance: null },
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.endsWith("/api/accounts/claude/active") && body?.mode === "select" && typeof body.id === "string") active = body.id;
+    if (url.endsWith("/api/accounts/codex/active") && body?.mode === "select" && typeof body.id === "string") codexActive = body.id;
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 });
@@ -113,6 +128,17 @@ async function openSheet(file: FileEntry = limitedFile): Promise<{ host: HTMLEle
     await new Promise((r) => setTimeout(r, 5));
   });
   return { host, root };
+}
+
+/** Settles once the sheet has read the accounts payload this case set up: the
+    store is one per engine and outlives a test, so asserting on its selection
+    means waiting for the read that carries it, not for a fixed delay. */
+async function accountsRead(before: number): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    if (calls.filter((call) => call.url === "/api/accounts").length > before) return;
+  }
+  throw new Error("the sheet never read the accounts");
 }
 
 /* The sheet is portalled to the document's body (#1795) — inside the phone's
@@ -230,6 +256,66 @@ test("tapping another authenticated account with no limit sends the same select 
   expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-two")!.disabled).toBe(true);
   /* The conversation still runs where it always ran: that mark does not move. */
   expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-one")!.textContent).toContain("current");
+  await act(async () => root.unmount());
+});
+
+/* #1795 review P2: the accounts API keeps an account selected across a
+   sign-out and a credential expiry, so the account the engine would launch from
+   can be one that cannot take a message. Marking it «next message» and making
+   it inert — which is what a selection-only test for that marker did — takes
+   away the one row that could fix it. Credentials come first. */
+test("a signed-out account that is still the selected one keeps its sign-in row", async () => {
+  active = "acct-three";
+  const reads = calls.filter((call) => call.url === "/api/accounts").length;
+  const { root } = await openSheet({ ...limitedFile, rateLimit: null } as FileEntry);
+  await accountsRead(reads);
+  const signedOut = rows().find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-three")!;
+  /* It says what it is, not where the next message goes… */
+  expect(signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
+  expect(signedOut.getAttribute("data-runtime-account-next")).toBeNull();
+  expect(signedOut.textContent).toContain("sign in");
+  expect(signedOut.textContent).not.toContain("next message");
+  expect(signedOut.getAttribute("aria-label")).toContain("takes no message until it returns");
+  expect(signedOut.disabled).toBe(false);
+  /* …and no row claims the next message while the selected one cannot take it. */
+  expect(rows().some((row) => row.getAttribute("data-runtime-account-next") === "true")).toBe(false);
+  await act(async () => {
+    signedOut.click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  /* The tap is the existing device sign-in, and it moves no launch. */
+  const login = calls.find((call) => (call.body as { action?: string } | null)?.action === "retry");
+  expect(login).toBeTruthy();
+  expect(login!.body).toMatchObject({ action: "retry", id: "acct-three" });
+  expect(calls.some((call) => call.url.endsWith("/api/accounts/claude/active"))).toBe(false);
+  await act(async () => root.unmount());
+});
+
+test("a Codex account that is selected while signed out keeps its needs-sign-in row and sends nothing", async () => {
+  codexActive = "codex-two";
+  const codexFile = {
+    ...limitedFile,
+    path: "/codex-session.jsonl", root: "codex-sessions", name: "codex-session.jsonl", fmt: "codex",
+    engine: "codex", conversationId: "conversation_codex_1795", model: "gpt-5.6-sol", rateLimit: null,
+  } as FileEntry;
+  const reads = calls.filter((call) => call.url === "/api/accounts").length;
+  const { root } = await openSheet(codexFile);
+  await accountsRead(reads);
+  const signedOut = rows().find((row) => row.getAttribute("data-runtime-sheet-account") === "codex-two")!;
+  expect(signedOut.getAttribute("data-runtime-account-state")).toBe("needs-sign-in");
+  expect(signedOut.getAttribute("data-runtime-account-next")).toBeNull();
+  /* Codex has no in-place sign-in for an existing account, so the row states
+     the fact and stays inert — it does not offer a tap that would do nothing. */
+  expect(signedOut.textContent).toContain("needs sign-in");
+  expect(signedOut.textContent).not.toContain("next message");
+  expect(signedOut.disabled).toBe(true);
+  expect(rows().some((row) => row.getAttribute("data-runtime-account-next") === "true")).toBe(false);
+  await act(async () => {
+    signedOut.click();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  expect(calls.some((call) => call.url.includes("/api/accounts/codex/active"))).toBe(false);
+  expect(calls.some((call) => (call.body as { action?: string } | null)?.action === "retry")).toBe(false);
   await act(async () => root.unmount());
 });
 

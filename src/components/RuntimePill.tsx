@@ -1051,14 +1051,19 @@ function limitResetClock(limit: RateLimitState): string | null {
  * last one:
  *
  *  - the blocked account, naming its wall (`limit · resets 16:40`), inert;
- *  - the account this conversation RUNS ON, checked and inert — choosing what
- *    is already chosen changes nothing, exactly as a re-tapped model row does;
+ *  - an account that is not signed in as a `sign in →` row, WHATEVER ELSE it
+ *    is. It opens the device sign-in and NEVER becomes the launch target on
+ *    that tap: the limit stays until an authenticated account is chosen,
+ *    because an account whose credentials have not come back cannot take a
+ *    message — and one that is still selected after a sign-out needs that row
+ *    more than any other, not a marker saying the next message goes there;
+ *  - the account the next message WILL go to, checked and inert — choosing
+ *    what is already chosen changes nothing, exactly as a re-tapped model row;
  *  - every other AUTHENTICATED account as a `ready` row — one tap sends the
- *    next message there, the same `select` the accounts screen uses;
- *  - an account that is not signed in as a `sign in →` row. It opens the
- *    device sign-in and NEVER becomes the launch target on that tap: the limit
- *    stays until an authenticated account is chosen, because an account whose
- *    credentials have not come back cannot take a message.
+ *    next message there, the same `select` the accounts screen uses.
+ *
+ * The account this conversation RUNS ON carries its own quiet tag on whichever
+ * of those rows it lands.
  *
  * The sign-in row exists exactly where the accounts screen's does — Claude's
  * `retryLogin`. Codex has no in-place sign-in for an existing account there
@@ -1099,9 +1104,14 @@ function AccountSection({ t, engine, account, limit }: {
            below moves). A tap that moved the second one changed nothing on
            screen while only the first was marked (#1795 critique P1). */
         const current = option.id === account;
-        const next = !blocked && option.id === state.active;
         const authenticated = option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
         const signInReachable = !authenticated && engine === "claude";
+        /* Credentials outrank the selection. The accounts API keeps an account
+           selected across a sign-out and a credential expiry, so the account
+           the engine would launch from can be one that cannot take a message:
+           marking it «next message» and making it inert took its sign-in row
+           away, which is the one thing that could fix it (#1795 review P2). */
+        const next = !blocked && authenticated && option.id === state.active;
         /* Already the target, or walled, or unreachable: nothing to send. */
         const inert = blocked || next || (!authenticated && !signInReachable);
         return (
@@ -1109,17 +1119,17 @@ function AccountSection({ t, engine, account, limit }: {
             key={option.id}
             type="button"
             data-runtime-sheet-account={option.id}
-            data-runtime-account-state={blocked ? "limit" : current ? "current" : authenticated ? "ready" : "needs-sign-in"}
+            data-runtime-account-state={blocked ? "limit" : !authenticated ? "needs-sign-in" : current ? "current" : "ready"}
             data-runtime-account-next={next ? "true" : undefined}
             disabled={inert || state.mutation !== null}
             aria-disabled={inert || undefined}
             aria-label={blocked
               ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
-              : next
-                ? t("mobile2.composer.accountNextAria", { account: option.label })
-                : authenticated
-                  ? t("mobile2.composer.accountReadyAria", { account: option.label })
-                  : t("mobile2.composer.accountSignInAria", { account: option.label })}
+              : !authenticated
+                ? t("mobile2.composer.accountSignInAria", { account: option.label })
+                : next
+                  ? t("mobile2.composer.accountNextAria", { account: option.label })
+                  : t("mobile2.composer.accountReadyAria", { account: option.label })}
             onClick={() => {
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
@@ -1142,20 +1152,20 @@ function AccountSection({ t, engine, account, limit }: {
               <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-caption font-bold text-warning">
                 {reset === null ? t("mobile2.composer.accountLimitBadge") : t("mobile2.composer.accountLimitBadgeAt", { time: reset })}
               </span>
-            ) : next ? (
-              <>
-                <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
-                <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-              </>
-            ) : authenticated ? (
-              <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountReady")}</span>
             ) : signInReachable ? (
               <span className="inline-flex shrink-0 items-center gap-1 text-label font-semibold text-accent">
                 {t("mobile2.composer.accountSignIn")}
                 <ChevronRight className="h-3.5 w-3.5" aria-hidden />
               </span>
-            ) : (
+            ) : !authenticated ? (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountNeedsSignIn")}</span>
+            ) : next ? (
+              <>
+                <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
+                <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+              </>
+            ) : (
+              <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountReady")}</span>
             )}
           </button>
         );
