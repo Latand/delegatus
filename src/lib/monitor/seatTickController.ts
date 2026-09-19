@@ -22,6 +22,7 @@ import {
 import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
 import { appendSeatTickRecord } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
+import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickProposalMessage, seatTickWakeMessage } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
@@ -1235,12 +1236,15 @@ async function check(
       ? seatTickWakeMessage({
         project: input.project,
         reasons: verdict.reasons,
-        items: verdict.items,
+        /* A settled child's final message rides on its line (#1881), read from
+           its transcript's tail now that the wake is going out. */
+        items: withChildFinalMessages(verdict.items),
         deferred: verdict.deferred,
         /* Said once, as counts (#1749, #1783): the children this check declined
            to list because their outcomes are a retired seat's, not this one's,
            and the ones whose transcript no seat can read. */
         skippedChildren: verdict.skippedChildren,
+        unreadableChildren: verdict.unreadableChildren,
         signals: input.signals,
         /* What the check could not read travels with the wake it could still
            raise (#1298), so the seat acts on the rest knowing what is missing
