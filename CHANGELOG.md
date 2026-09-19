@@ -7,6 +7,65 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-09-19
+
+### Added
+- The kanban board is the desktop board: tasks as status columns, conversations
+  inside cards, pipeline summaries with stage graphs and past attempts, in-place
+  task editing, colours, group hide with a Hidden tray, account chips and
+  pickers on stages, and an Overview across every project (#1695, #1699–#1712,
+  #1768, #1820).
+- Task cards keep agent context in a collapsed Details field, separate from the
+  human description (#1834).
+- Pipelines are editable graphs: a started pipeline's stages and edges can be
+  edited, stages report completion through one MCP call, fail edges count their
+  traversals, and every stage shows who runs it (#1726, #1730, #1743, #1798).
+- The Viewer's own state decides pipeline stages; publishing to GitHub is opt-in
+  (#1692). `create_pipeline` answers at once while the controller provisions the
+  worktree (#1799).
+- Seat tick: the Viewer wakes a project's orchestrator seat when work is owed,
+  with controls on desktop and phone (#1681, #1749, #1783).
+- Model-tier usage limits: tier lines in the accounts dialog and the limits
+  footer, and spawns gated by the model they request (#1833, #1842, #1849).
+- Native Codex queue, steering and orchestrator Voice (#1636).
+- The phone's runtime sheet covers the screen and shows and picks the account
+  (#1795).
+- Durable, owner-bound review handoffs between agents (#1578).
+- MCP: conversation actions reach live hosts, transcript search returns newest
+  matches first with stable paging, and pipeline writes answer compactly with
+  stage-level reads (#1829, #1828, #1845).
+
+### Changed
+- One control hides the project rail, and one puts the footer and the
+  orchestrator panel away (#1819, #1802).
+- Role prompts name `stage_report` as the completion channel, carry one
+  process-cleanup rule, and tell agents when to stop and ask (#1797, #1770,
+  #1843).
+- A lane just created shows on the board at once, and `request_attention` lands
+  on it (#1836).
+
+### Fixed
+- Pipelines survive a deploy and a refused spawn: a cut turn resumes, a refused
+  spawn retries, a busy refusal never consumes the request id, and a stage whose
+  work is done never parks for an unreadable verdict (#1747, #1750, #1766,
+  #1756).
+- Message delivery: a refused send stays editable, an unconfirmed admission
+  reconciles, a queued message stays queued through account contention, and a
+  delivered launch prompt never reads as delivering (#1593, #1830, #1716, #1793).
+- Memory and speed: one resident worker serves a burst of file polls, finished
+  conversations are no longer re-hosted at boot, and opening a conversation does
+  less work (#1814, #1812, #1718).
+- Seat and rotation: a rotation that cannot seat a readable successor keeps the
+  previous seat, and a refused wake can no longer mute a seat (#1757, #1771).
+- Accounts: dead pinned receipts stop blocking removal, and manual account
+  choice is restored (#1595, #1618).
+- Next.js 16.3.3 security patch (#1588).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.0 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.0`. Node 20.9 or later and Bun 1.4.0 or
+  later are required; the launcher runs the server under Bun.
+
 ## [1.1.0] — 2026-09-08
 
 ### Added
@@ -543,7 +602,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.1...v1.0.2
