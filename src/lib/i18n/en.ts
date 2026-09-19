@@ -1976,6 +1976,7 @@ export const en = {
   "overview.firstRunElsewhere": "…or run any claude / codex session inside a repo.",
   "overview.workingOnly": "Only what is working right now",
   "overview.noneWorking": "No agent is working in any project right now.",
+  "overview.noneWorkingHint": "Only cards someone is working on appear here; a project's own board holds the rest.",
 
   // Catalog fetch failure (issue #696) — never the idle empty-state copy
   "catalog.unreachable": "catalog unavailable",

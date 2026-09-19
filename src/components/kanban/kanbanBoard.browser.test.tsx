@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
 
+import { en } from "@/lib/i18n/en";
+
 import { openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 
@@ -4265,6 +4267,9 @@ describe("#1820 the Overview is the project board over every project", () => {
    *     column head says how many of its cards are shown;
    *   - what needs one project to write into — «+ Task», «+ Agent», the
    *     orchestrator seat — is drawn nowhere;
+   *   - `?scenario=issue1820-quiet` — projects and tasks, nobody working —
+   *     keeps the board and says why it is empty in the operator's words: the
+   *     Overview's own filter, never advice about a search nobody typed;
    *   - `?scenario=issue1820-empty` still draws the first-run panel and no
    *     board at all.
    *
@@ -4284,6 +4289,11 @@ describe("#1820 the Overview is the project board over every project", () => {
   const QUIET = ["task:t-ledger-quiet", "task:t-mesh-quiet"] as const;
   const PROJECT_LABELS = ["acme-ledger", "river-mesh", "atlas"] as const;
   const KEYS = ["acme-ledger", "river-mesh"] as const;
+  /* Drawn when the Overview's own filter empties a column, and never drawn
+     there: the search's own no-match copy. */
+  const QUIET_TITLE = en["overview.noneWorking"];
+  const QUIET_BODY = en["overview.noneWorkingHint"];
+  const SEARCH_COPY = [en["kanban.noMatch"], en["kanban.noMatchHint"]] as const;
 
   interface OverviewMeasure {
     boards: number;
@@ -4294,6 +4304,7 @@ describe("#1820 the Overview is the project board over every project", () => {
     singleProjectControls: { newTask: number; newAgent: number; seat: number; addAgent: number };
     firstRun: boolean;
     headerLine: string;
+    emptyStates: Array<{ status: string; text: string }>;
   }
 
   const measure = (page: Page) => page.evaluate((): OverviewMeasure => {
@@ -4320,6 +4331,10 @@ describe("#1820 the Overview is the project board over every project", () => {
       },
       firstRun: Boolean(document.querySelector('[data-testid="overview-first-run"]')),
       headerLine: text(document.querySelector("h1")?.parentElement),
+      emptyStates: [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column")].map((column) => ({
+        status: column.dataset.status ?? "",
+        text: text(column.querySelector(".empty")),
+      })),
     };
   });
 
@@ -4374,6 +4389,39 @@ describe("#1820 the Overview is the project board over every project", () => {
       }
     };
 
+    /* Projects, tasks, and nobody working: the board stays and every column
+       names the Overview's own filter (#696 — a filtered-out board and a
+       fruitless search must not render the same screen). */
+    const quiet = async (viewport: (typeof VIEWPORTS)[number]) => {
+      const label = `${viewport.label}-quiet`;
+      const opened = await openFixture(browser, `${server.base}?scenario=issue1820-quiet`, { width: viewport.width, height: viewport.height }, "light");
+      try {
+        await opened.page.waitForSelector("[data-kanban-board] section.column .empty", { state: "attached", timeout: 30_000 });
+        await opened.page.waitForTimeout(700);
+        const measured = await measure(opened.page);
+        await opened.page.screenshot({ path: path.join(OUT, `issue-1820-${label}.png`), fullPage: true });
+        frames[label] = { viewport, measured };
+
+        if (measured.boards !== 1) failures.push(`${label}: ${measured.boards} boards drawn on an installation with projects but no work`);
+        if (measured.firstRun) failures.push(`${label}: the first-run panel is drawn over an installation that has projects`);
+        if (measured.cards.length) failures.push(`${label}: ${measured.cards.length} card(s) drawn while nobody is working`);
+        for (const column of measured.emptyStates) {
+          if (!column.text.includes(QUIET_TITLE)) failures.push(`${label}: ${column.status} empty state reads ${JSON.stringify(column.text)}`);
+          if (!column.text.includes(QUIET_BODY)) failures.push(`${label}: ${column.status} empty state carries no word about the filter`);
+          if (SEARCH_COPY.some((copy) => column.text.includes(copy))) failures.push(`${label}: ${column.status} offers advice about a search nobody typed`);
+        }
+        /* The counts still read «0 of N»: the inventory is there, narrowed. */
+        for (const column of measured.columnCounts) {
+          if (!/^0 of \d+$/.test(column.count)) failures.push(`${label}: ${column.status} head reads ${JSON.stringify(column.count)}`);
+        }
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
     const empty = async (viewport: (typeof VIEWPORTS)[number]) => {
       const label = `${viewport.label}-empty`;
       const opened = await openFixture(browser, `${server.base}?scenario=issue1820-empty`, { width: viewport.width, height: viewport.height }, "light");
@@ -4396,6 +4444,7 @@ describe("#1820 the Overview is the project board over every project", () => {
     try {
       for (const viewport of VIEWPORTS) {
         await board(viewport);
+        await quiet(viewport);
         await empty(viewport);
       }
     } finally {

@@ -55,7 +55,11 @@ const MARKS = SCENARIO === "issue1743";
    so the shared columns can be read across three, each bringing one card with
    a worker on it and one with nobody. `issue1820-empty` answers every route
    with nothing, which is the Overview's first run. */
-const OVERVIEW_SCOPE = SCENARIO === "issue1820";
+/* `issue1820-quiet` is the same installation with nobody working in it: the
+   Overview's most common state, where the board is narrowed to nothing by its
+   own permanent filter and no search was ever typed. */
+const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet";
+const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
 const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
 const LEDGER = "acme-ledger";
 const MESH = "river-mesh";
@@ -677,16 +681,32 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
     /* #1820's first run: an installation with nothing in it at all. */
+    /* Nothing is working in the quiet installation: every conversation has
+       an idle process and a turn that closed, nothing waits on the operator,
+       and no pipeline is in flight. The projects and their tasks are the
+       same ones. */
+    const shown = OVERVIEW_QUIET
+      ? files.map((file) => ({
+        ...file,
+        activity: "idle",
+        proc: null,
+        pid: null,
+        waitingInput: null,
+        pendingQuestion: null,
+        authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(4 * 60 * MIN) },
+        lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 },
+      } as unknown as FileEntry))
+      : files;
     const scoped = OVERVIEW_EMPTY
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : {
-        files,
-        projectCatalog: [...new Set(files.map((file) => file.project))].map((project) => {
-          const own = files.filter((file) => file.project === project);
+        files: shown,
+        projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
+          const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
         }),
-        flows,
-        pipelines,
+        flows: OVERVIEW_QUIET ? [] : flows,
+        pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
       };
     const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });

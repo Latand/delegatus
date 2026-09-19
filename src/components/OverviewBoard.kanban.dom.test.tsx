@@ -7,6 +7,7 @@ import { en } from "@/lib/i18n/en";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { KanbanBoard } from "./kanban/KanbanBoard";
 import { OverviewBoard } from "./OverviewBoard";
 
 /*
@@ -164,6 +165,50 @@ function mount(files: FileEntry[], tasks: BoardTask[]): { host: HTMLElement; tap
   return { host: host as unknown as HTMLElement, taps };
 }
 
+/* One project's own board, mounted straight, so the two narrowings can be
+   compared on the same component: the Overview passes `overview`, a project
+   does not. */
+function mountProjectBoard(): HTMLElement {
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(
+    <KanbanBoard
+      project={LEDGER}
+      groups={[]}
+      manual={[]}
+      files={[]}
+      flows={[]}
+      pipelines={[]}
+      tasks={[task("t-own", LEDGER, "inbox", "Reconcile the ledger export", null)]}
+      allTasks={[task("t-own", LEDGER, "inbox", "Reconcile the ledger export", null)]}
+      drafts={[]}
+      now={NOW}
+      loaded
+      catalogFailures={0}
+      selection={new Set()}
+      onOpenConversations={() => {}}
+      seatRefs={null}
+    />,
+  ));
+  roots.push(root);
+  return host as unknown as HTMLElement;
+}
+
+/* Type into the board's own find box, the way the operator does — and the way
+   the project board's own test does it: under happy-dom the `input` alone
+   leaves React's state update pending, and the keydown behind it flushes. */
+function search(host: HTMLElement, query: string): void {
+  const input = host.querySelector<HTMLInputElement>("[data-kanban-search]")!;
+  input.focus();
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => {
+    setter.call(input, query);
+    input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event);
+  });
+}
+
 const cardIds = (host: HTMLElement) => [...host.querySelectorAll(".card")].map((card) => (card as HTMLElement).dataset.id ?? "");
 const cardOf = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`.card[data-id="task:${id}"]`);
 const columnOf = (host: HTMLElement, id: string) => cardOf(host, id)?.closest<HTMLElement>(".column")?.dataset.status ?? null;
@@ -245,8 +290,40 @@ test("an installation with projects but nothing working keeps the board and says
 
   expect(cardIds(host)).toEqual([]);
   expect(host.querySelector("[data-testid='overview-first-run']")).toBeNull();
-  expect(host.querySelector(".column[data-status='assigned'] .empty")?.textContent).toContain(en["kanban.noMatch"]);
   expect(host.textContent).toContain(en["overview.workingOnly"]);
+
+  /* The board is empty because of the Overview's own permanent filter, and
+     the operator typed no search: every column names the filter and none of
+     them offers advice about a search that was never made (#696). */
+  for (const status of ["inbox", "assigned", "blocked", "done"]) {
+    const empty = host.querySelector(`.column[data-status='${status}'] .empty`)?.textContent ?? "";
+    expect(empty).toContain(en["overview.noneWorking"]);
+    expect(empty).toContain(en["overview.noneWorkingHint"]);
+    expect(empty).not.toContain(en["kanban.noMatch"]);
+    expect(empty).not.toContain(en["kanban.noMatchHint"]);
+  }
+});
+
+test("a search that finds nothing still says so — on the Overview, and on a project's own board", () => {
+  const { host } = mount(FILES, TASKS);
+  search(host, "nothing matches this");
+
+  expect(cardIds(host)).toEqual([]);
+  const overviewEmpty = host.querySelector(".column[data-status='assigned'] .empty")?.textContent ?? "";
+  expect(overviewEmpty).toContain(en["kanban.noMatch"]);
+  expect(overviewEmpty).toContain(en["kanban.noMatchHint"]);
+  expect(overviewEmpty).not.toContain(en["overview.noneWorking"]);
+
+  /* The same board without the Overview's inputs — one project, no filter —
+     keeps the search copy it has always drawn, and keeps its own empty copy
+     when nothing is narrowing it at all. */
+  const project = mountProjectBoard();
+  expect(project.querySelector(".column[data-status='blocked'] .empty")?.textContent).toContain(en["kanban.empty.blocked.title"]);
+  search(project, "nothing matches this");
+  const projectEmpty = project.querySelector(".column[data-status='inbox'] .empty")?.textContent ?? "";
+  expect(projectEmpty).toContain(en["kanban.noMatch"]);
+  expect(projectEmpty).toContain(en["kanban.noMatchHint"]);
+  expect(projectEmpty).not.toContain(en["overview.noneWorking"]);
 });
 
 test("a first run has no projects, so it keeps its own panel and mounts no board", () => {

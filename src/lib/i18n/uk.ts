@@ -1917,6 +1917,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "overview.firstRunElsewhere": "…або просто запусти claude чи codex у будь-якому репозиторії.",
   "overview.workingOnly": "Тільки те, над чим працюють зараз",
   "overview.noneWorking": "Зараз у жодному проєкті не працює агент.",
+  "overview.noneWorkingHint": "Тут з'являються лише картки, над якими хтось працює; решта — на дошці самого проєкту.",
 
   "catalog.unreachable": "каталог недоступний",
   "catalog.errorTitle": "Не вдалося завантажити каталог сесій",

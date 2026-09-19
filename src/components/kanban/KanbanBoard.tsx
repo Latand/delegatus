@@ -1908,7 +1908,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const onboardCount = model.totals.onBoard;
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
-  const filtering = query.trim().length > 0 || Boolean(props.overview);
+  const searching = query.trim().length > 0;
+  const filtering = searching || Boolean(props.overview);
+  /* What an empty column says depends on WHICH narrowing emptied it: a search
+     the operator typed is advice about the search, the Overview's permanent
+     filter is not (#696 — a filtered-out board and a fruitless search must not
+     render the same screen). Null leaves the column its own empty copy. */
+  const emptyFiltered = searching
+    ? { title: t("kanban.noMatch"), body: t("kanban.noMatchHint") }
+    : props.overview
+      ? { title: t("overview.noneWorking"), body: t("overview.noneWorkingHint") }
+      : null;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
@@ -2000,6 +2010,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       mode={mode}
       activeTab={tab}
       filtering={filtering}
+      emptyFiltered={emptyFiltered}
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       pendingIds={controller}
@@ -2276,7 +2287,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
@@ -2293,6 +2304,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
   mode: KanbanLayoutMode;
   activeTab: TaskStatus;
   filtering: boolean;
+  /** Title and body an empty column draws while a narrowing hides cards, or null. */
+  emptyFiltered: { title: string; body: string } | null;
   collapsed: ReadonlySet<string>;
   nowMs: number;
   pendingIds: { pending(id: string): boolean };
@@ -2357,8 +2370,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
         {newTask}
         {empty ? (
           <div className="empty">
-            <strong>{filtering ? t("kanban.noMatch") : t(`kanban.empty.${status}.title`)}</strong>
-            <span>{filtering ? t("kanban.noMatchHint") : t(`kanban.empty.${status}.body`)}</span>
+            <strong>{emptyFiltered ? emptyFiltered.title : t(`kanban.empty.${status}.title`)}</strong>
+            <span>{emptyFiltered ? emptyFiltered.body : t(`kanban.empty.${status}.body`)}</span>
           </div>
         ) : null}
         {active.map(renderCard)}
