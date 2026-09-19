@@ -29,12 +29,23 @@ import {
   completeStructuredDeliveryQueueStartup,
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
+  recordDemotionInterruption,
+  releaseStructuredDeliveryHostsForDemotion,
+  type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
+import {
+  interruptionContinuationText,
+  interruptionObligationDirectory,
+  interruptionObligationStore,
+  interruptionObligationUnresolved,
+  type InterruptionObligation,
+  type InterruptionObligationStore,
+} from "./interruptionObligations";
 
 type AdoptedStructuredHost = AdoptedCodexHost | AdoptedClaudeHost;
 let adoptedHosts: AdoptedStructuredHost[] = [];
@@ -133,33 +144,18 @@ interface StructuredStartupSignals {
   hostedRunningConversationIds: ReadonlySet<string>;
   pendingOperationConversationIds: ReadonlySet<string>;
   pendingCodexContinuationConversationIds: ReadonlySet<string>;
+  /** Every send or steer the runtime admitted, by canonical conversation: what
+      tells an interruption obligation that someone else already resumed it. */
+  admittedMessages: ReadonlyMap<string, readonly { idempotencyKey: string; at: number }[]>;
 }
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
 const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";
 const INTERRUPTED_CODEX_CONTINUATION_TEXT = "Continue the interrupted turn from the transcript.";
-const ORCHESTRATOR_RESTART_RECOVERY_PREFIX = "orchestrator-restart-recovery";
-
-/**
- * What the surviving restart nudge says (#1276).
- *
- * It names the turn it is talking about, because that is the only thing this
- * message is for: a seat whose own turn was cut off mid-flight, which nothing
- * else will ever answer. It no longer asks the seat to "re-arm any scheduled
- * work" — since #1245/#1261 the Viewer owns the clock, the tick's state is
- * durable across restarts, and a seat has no lever to arm a schedule of its
- * own. That sentence comes back only when #1280 gives it one, pointed at that
- * record rather than at a session-held schedule.
- */
-function orchestratorRestartRecoveryText(severed: SeveredTurnEvidence): string {
-  const at = severed.at === null ? "an unrecorded time" : new Date(severed.at).toISOString();
-  return "Viewer restarted and severed your structured host mid-turn."
-    + ` The severed turn is the one whose last transcript event is ${severed.kind ?? "a record"} at ${at},`
-    + " which nothing answered. You were re-hosted automatically; resume that turn.";
-}
-/* One module lifetime is one Viewer Node boot. Startup retries reuse this key;
-   a successor process mints a fresh recovery operation for the next restart. */
-const STRUCTURED_STARTUP_BOOT_ID = crypto.randomUUID();
+/** Owed continuations older than this are retired unsent: a turn cut that
+    long ago has been looked at by someone, and a paid turn resuming it now
+    would act on a stale picture. */
+const INTERRUPTION_OBLIGATION_MAX_AGE_MS = 24 * 3_600_000;
 
 /** The turn a restart cut off, as the transcript recorded it. Captured once at
     boot and carried across startup retries so the message a seat receives never
@@ -177,6 +173,11 @@ interface OrchestratorRestartRecoveryTarget {
   path: string;
   seatEpoch: number;
   hostKey: string;
+  /** The process the registry recorded as owning the severed turn, and its
+      turn: with the evidence below, the identity of the cut (#1835). */
+  owner: ProcessIdentity | null;
+  turnRef: string | null;
+  claimEpoch: number;
   severed: SeveredTurnEvidence;
 }
 
@@ -254,6 +255,9 @@ async function orchestratorRestartRecoveryTargets(
       path: generation.path,
       seatEpoch: seat.seatEpoch,
       hostKey,
+      owner: entry.structuredHost.process ? { ...entry.structuredHost.process } : null,
+      turnRef: entry.structuredHost.activeTurnRef ?? null,
+      claimEpoch: entry.claimEpoch,
       severed: { kind: liveness.lastEvent.kind, at: liveness.lastEvent.at, reason: liveness.reason },
     });
   }
@@ -318,38 +322,219 @@ function orchestratorRestartRecoveriesByHostKey(
   return byHostKey;
 }
 
-async function enqueueOrchestratorRestartRecoveries(
-  registry: AgentRegistry,
-  client: RuntimeHostClient | null,
+/** A seat this boot found severed is owed the same durable continuation a
+    release records (#1835): keyed by the cut itself, so a successor boot that
+    finds the same severed turn lands on the same record and the same delivery
+    key, and a cut the release already recorded is not recorded twice. */
+function recordOrchestratorRestartObligations(
+  store: InterruptionObligationStore,
   targets: readonly OrchestratorRestartRecoveryTarget[],
-  publishedHostKeys: ReadonlySet<string>,
-  orchestratorSeats: () => OrchestratorSeat[],
-): Promise<void> {
+): void {
   for (const target of targets) {
-    if (!publishedHostKeys.has(target.hostKey)
-      || !orchestratorRestartRecoveryTargetIsCurrent(registry, target, orchestratorSeats())) continue;
-    const clientMessageId = `${ORCHESTRATOR_RESTART_RECOVERY_PREFIX}-${STRUCTURED_STARTUP_BOOT_ID}-${target.seatEpoch}`;
-    const result = await enqueueStructuredMessage({
-      path: target.path,
+    store.record({
       conversationId: target.conversationId,
-      clientMessageId,
-      text: orchestratorRestartRecoveryText(target.severed),
+      engine: target.hostKey.startsWith("claude:") ? "claude" : "codex",
+      hostKey: target.hostKey,
+      path: target.path,
+      owner: target.owner ? { pid: target.owner.pid, startIdentity: target.owner.startIdentity } : null,
+      claimEpoch: target.claimEpoch,
+      turnRef: target.turnRef,
+      boundary: `viewer-restart:${target.severed.at ?? "unrecorded"}`,
+      reason: "viewer-restart",
+      checkpoint: { lastEventKind: target.severed.kind, lastEventAt: target.severed.at },
+      seat: { project: target.project, seatEpoch: target.seatEpoch },
+    });
+  }
+}
+
+/**
+ * Why an unresolved obligation is no longer owed, or null while it still is.
+ *
+ * Identity first: the conversation, its generation's host row and — for a
+ * seat — the seat itself must still be what was cut. Then evidence that the
+ * turn was already taken up: a message admitted for the conversation after the
+ * cut, by an operator or a controller, resumed it, so a continuation now would
+ * be a second prompt. Provider bookkeeping written into the transcript on
+ * resume (a replayed continuation, a synthetic no-response) is not admitted
+ * work and is never read here.
+ */
+function interruptionObligationDischarge(
+  registry: AgentRegistry,
+  obligation: InterruptionObligation,
+  snapshot: RegistryFile,
+  seats: readonly OrchestratorSeat[],
+  admittedMessages: StructuredStartupSignals["admittedMessages"],
+  settledStageConversationIds: ReadonlySet<string>,
+  now = Date.now(),
+): string | null {
+  const conversationId = registry.canonicalConversationId(obligation.conversationId);
+  const conversation = snapshot.conversations[conversationId];
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return "the conversation no longer exists";
+  if (conversation.supersededBy) return "the conversation was superseded";
+  if (sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== obligation.hostKey) {
+    return "the conversation moved to another generation";
+  }
+  if (obligation.seat) {
+    const seat = seats.find((candidate) => candidate.project === obligation.seat!.project);
+    if (!seat
+      || seat.state !== "active"
+      || seat.seatEpoch !== obligation.seat.seatEpoch
+      || !seat.conversationId?.startsWith("conversation_")
+      || registry.canonicalConversationId(seat.conversationId as ViewerConversationId) !== conversationId) {
+      return "the orchestrator seat was rotated";
+    }
+  }
+  if (settledStageConversationIds.has(conversationId)) return "its pipeline stage is already settled";
+  const recordedAt = Date.parse(obligation.recordedAt);
+  if (now - recordedAt > INTERRUPTION_OBLIGATION_MAX_AGE_MS) return "the interruption is too old to resume unattended";
+  /* An admitted continuation is replayed under its own key until it reports
+     arrival; a later message cannot un-send it. */
+  if (obligation.state !== "owed") return null;
+  const newerHeld = Object.values(snapshot.heldDeliveries).some((delivery) =>
+    registry.canonicalConversationId(delivery.conversationId) === conversationId
+      && delivery.clientMessageId !== obligation.id
+      && Date.parse(delivery.createdAt) > recordedAt);
+  const newerAdmitted = (admittedMessages.get(conversationId) ?? []).some((message) =>
+    message.idempotencyKey !== obligation.id && message.at > recordedAt);
+  return newerHeld || newerAdmitted ? "a newer message already resumed the conversation" : null;
+}
+
+/**
+ * Settles each `submitted` obligation from the delivery its continuation was
+ * admitted as: arrival or refusal of that reservation is the obligation's own.
+ *
+ * The queue reports a first admission as queued; nothing in that send comes
+ * back to say it arrived, so a later boot is where it is read. A reservation
+ * whose row is gone was compacted after it settled — compaction drops only
+ * settled rows — so the continuation went out and is never sent again: a
+ * replay under its key would find no reservation to answer it and mint a
+ * second one. Returns what stays unresolved.
+ */
+function settleSubmittedInterruptionObligations(
+  registry: AgentRegistry,
+  store: InterruptionObligationStore,
+  obligations: readonly InterruptionObligation[],
+): InterruptionObligation[] {
+  const snapshot = registry.readOnlySnapshot();
+  const unresolved: InterruptionObligation[] = [];
+  for (const obligation of obligations) {
+    if (obligation.state !== "submitted") {
+      unresolved.push(obligation);
+      continue;
+    }
+    const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
+      delivery.clientMessageId === obligation.id
+        && registry.canonicalConversationId(delivery.conversationId)
+          === registry.canonicalConversationId(obligation.conversationId));
+    const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;
+    const settled = reservation
+      ? reservation.state === "delivered" || reservation.state === "failed" ? reservation.state : null
+      : owner?.terminalState ?? "delivered";
+    if (settled === null) {
+      unresolved.push(obligation);
+      continue;
+    }
+    const resolution = settled === "failed"
+      ? reservation?.error || owner?.terminalReason || "the continuation delivery failed"
+      : reservation || owner ? "delivered" : "delivered; its settled reservation was compacted";
+    store.update(obligation.id, { state: settled, resolvedAt: new Date().toISOString(), resolution });
+  }
+  return unresolved;
+}
+
+function dischargeInterruptionObligations(
+  registry: AgentRegistry,
+  store: InterruptionObligationStore,
+  obligations: readonly InterruptionObligation[],
+  seats: readonly OrchestratorSeat[],
+  admittedMessages: StructuredStartupSignals["admittedMessages"],
+  settledStageConversationIds: ReadonlySet<string>,
+): InterruptionObligation[] {
+  const snapshot = registry.readOnlySnapshot();
+  const owed: InterruptionObligation[] = [];
+  for (const obligation of obligations) {
+    const reason = interruptionObligationDischarge(
+      registry, obligation, snapshot, seats, admittedMessages, settledStageConversationIds,
+    );
+    if (reason === null) {
+      owed.push(obligation);
+      continue;
+    }
+    store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: reason });
+    console.error("[structured hosts] interrupted turn needs no continuation", {
+      conversationId: obligation.conversationId, obligation: obligation.id, reason,
+    });
+  }
+  return owed;
+}
+
+/**
+ * Delivers the one continuation each still-owed obligation is owed (#1835).
+ *
+ * Only through a host this pass published, and only once the process that
+ * owned the cut turn no longer owns the row: a survivor the release could not
+ * stop keeps the obligation owed until adoption has taken the row from it.
+ * The obligation id is the delivery's client message id, so a retry, a
+ * replay after an unknown outcome, and a successor boot all converge on one
+ * reservation; the queue answers a repeat with the delivery it already made.
+ */
+async function deliverInterruptionContinuations(
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  store: InterruptionObligationStore,
+  obligations: readonly InterruptionObligation[],
+  publishedHostKeys: ReadonlySet<string>,
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const obligation of obligations) {
+    if (!publishedHostKeys.has(obligation.hostKey)) continue;
+    const snapshot = registry.readOnlySnapshot();
+    const recorded = snapshot.entries[obligation.hostKey]?.structuredHost?.process ?? null;
+    if (obligation.owner && recorded
+      && recorded.pid === obligation.owner.pid
+      && recorded.startIdentity === obligation.owner.startIdentity) continue;
+    const conversation = snapshot.conversations[registry.canonicalConversationId(obligation.conversationId)];
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || !generation) continue;
+    const result = await enqueueStructuredMessage({
+      path: generation.path,
+      conversationId: conversation.id,
+      clientMessageId: obligation.id,
+      text: interruptionContinuationText(obligation),
       images: [],
     }, {
       enabled: () => true,
       client: () => client,
       registry: () => registry,
     });
-    if (result?.ok) continue;
-    console.error("[structured hosts] orchestrator restart recovery delivery failed", {
-      conversationId: target.conversationId,
-      status: result?.status ?? 503,
-      error: result?.error ?? "structured delivery unavailable",
+    if (result?.ok) {
+      store.update(obligation.id, {
+        state: result.outcome === "delivered" ? "delivered" : "submitted",
+        operationId: result.operationId,
+        attempts: obligation.attempts + 1,
+        ...(result.outcome === "delivered" ? { resolvedAt: new Date().toISOString(), resolution: "delivered" } : {}),
+      });
+      continue;
+    }
+    const error = result?.error ?? "structured delivery unavailable";
+    const status = result?.status ?? 503;
+    console.error("[structured hosts] interrupted turn continuation was not admitted", {
+      conversationId: obligation.conversationId, obligation: obligation.id, status, error,
     });
-    throw new RuntimeHostUnavailableError(
-      result?.error ?? "orchestrator restart recovery delivery admission failed",
-    );
+    /* A refusal the queue will repeat for this key forever is final; anything
+       else — an unavailable host, an outcome nobody saw — keeps the obligation
+       owed under the same key for the next pass. */
+    if (status === 409 && !result?.transportUncertain) {
+      store.update(obligation.id, {
+        state: "failed", attempts: obligation.attempts + 1, resolvedAt: new Date().toISOString(), resolution: error,
+      });
+      continue;
+    }
+    store.update(obligation.id, { attempts: obligation.attempts + 1 });
+    failures.push(`${obligation.conversationId}: ${error}`);
   }
+  return failures;
 }
 
 /**
@@ -623,6 +808,25 @@ function canonicalConversationId(registry: AgentRegistry, conversationId: string
     : conversationId;
 }
 
+/** Every send or steer the runtime snapshot shows admitted, by canonical
+    conversation. */
+function admittedRuntimeMessages(
+  registry: AgentRegistry,
+  runtime: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>,
+): StructuredStartupSignals["admittedMessages"] {
+  const admittedMessages = new Map<string, { idempotencyKey: string; at: number }[]>();
+  for (const receipt of [...runtime.recentOperations, ...runtime.sessions.flatMap((session) => session.recentReceipts ?? [])]) {
+    if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
+    const at = Date.parse(receipt.admittedAt ?? receipt.at);
+    if (!Number.isFinite(at)) continue;
+    const conversationId = canonicalConversationId(registry, receipt.conversationId);
+    const messages = admittedMessages.get(conversationId) ?? [];
+    messages.push({ idempotencyKey: receipt.idempotencyKey, at });
+    admittedMessages.set(conversationId, messages);
+  }
+  return admittedMessages;
+}
+
 async function structuredStartupSignals(
   registry: AgentRegistry,
   client: RuntimeHostClient | null,
@@ -632,6 +836,7 @@ async function structuredStartupSignals(
       hostedRunningConversationIds: new Set(),
       pendingOperationConversationIds: new Set(),
       pendingCodexContinuationConversationIds: new Set(),
+      admittedMessages: new Map(),
     };
   }
   const runtime = await client.snapshot();
@@ -647,6 +852,7 @@ async function structuredStartupSignals(
     .filter((receipt) => receipt.kind !== "kill")
     .map((receipt) => canonicalConversationId(registry, receipt.conversationId)));
   const pendingCodexContinuationConversationIds = new Set<string>();
+  const admittedMessages = admittedRuntimeMessages(registry, runtime);
   let afterEventSeq = 0;
   while (true) {
     const batch = await client.effectBatch(STRUCTURED_HOST_OPERATION_EFFECT_KINDS, afterEventSeq);
@@ -673,6 +879,7 @@ async function structuredStartupSignals(
     hostedRunningConversationIds,
     pendingOperationConversationIds,
     pendingCodexContinuationConversationIds,
+    admittedMessages,
   };
 }
 
@@ -693,6 +900,7 @@ async function structuredStartupAdoptionFilter(
   settledStageConversationIds: ReadonlySet<string> = new Set(),
   deferredStageConversationIds: ReadonlySet<string> = new Set(),
   lastEventByHost: Map<string, number | null> = new Map(),
+  interruptedHostKeys: ReadonlySet<string> = new Set(),
 ): Promise<StructuredHostAdoptionFilter> {
   const conversationsByCurrentEntry = new Map(Object.values(snapshot.conversations).flatMap((conversation) => {
     const generation = conversation.generations.at(-1);
@@ -723,6 +931,11 @@ async function structuredStartupAdoptionFilter(
        revive a retired round, held work or not — the successor owns it. */
     if (conversation.supersededBy) return false;
     if (deferredStageConversationIds.has(registry.canonicalConversationId(conversation.id))) return false;
+    /* A turn a release or restart cut is owed its continuation whatever the
+       transcript now reads: provider bookkeeping written on the way down can
+       close the turn on disk without anyone having resumed it (#1835). */
+    if (interruptedHostKeys.has(sessionKeyId(entry.key))
+      && (entry.status === "live" || entry.status === "idle")) return true;
     const orchestratorRecoveryTargets = orchestratorRecoveries.get(sessionKeyId(entry.key));
     if (orchestratorRecoveryTargets?.some((target) =>
       orchestratorRestartRecoveryTargetIsCurrent(registry, target, orchestratorSeats()))) {
@@ -844,6 +1057,9 @@ export interface StructuredStartupDependencies {
       setTimeout, so the re-probe never holds a Viewer that is shutting down. */
   schedule?: (callback: () => void, delayMs: number) => { unref?(): void };
   orchestratorSeats?: typeof activeOrchestratorSeats;
+  /** Durable interruption obligations (#1835). Defaults to the directory
+      beside the registry file. */
+  interruptions?: InterruptionObligationStore;
   /** Reconciles transcript state, answering which conversations it could not
       read. A stub that answers nothing reports nothing unreadable. */
   refreshTranscriptState?: (registry: AgentRegistry) => Promise<ReadonlySet<string> | void>;
@@ -926,6 +1142,9 @@ export async function adoptStructuredHostsAtStartup(
     ),
   );
   const orchestratorRecoveriesByHostKey = orchestratorRestartRecoveriesByHostKey(orchestratorRecoveries);
+  const interruptions = dependencies.interruptions
+    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries);
   const controllerBoundEarly = client !== null;
   if (client && !hasStructuredDeliveryController(registry)) {
     await bindStructuredDeliveryQueue([], {
@@ -961,19 +1180,43 @@ export async function adoptStructuredHostsAtStartup(
       orchestratorRecoveries,
       orchestratorSeats(),
     );
+    /* Every unresolved obligation keeps its row out of the generic Codex nudge
+       and out of dead-wrapper cleanup, including one this pass discharges: a
+       turn somebody else already resumed is owed nothing more by anyone. */
+    const unresolvedInterruptions = settleSubmittedInterruptionObligations(
+      registry,
+      interruptions,
+      interruptions.list().filter(interruptionObligationUnresolved),
+    );
+    const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
+    let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
+    const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     let nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry,
       retryAdoptedHosts,
       registry.readOnlySnapshot(),
-      orchestratorHostKeys,
+      retainedRecoveryHostKeys(),
     );
     rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
     registry.drainDeadSupersededHeldDeliveries();
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
-    reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key)) || deferredHostKeys.has(sessionKeyId(entry.key)));
+    reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
+      || interruptionHostKeys.has(sessionKeyId(entry.key))
+      || deferredHostKeys.has(sessionKeyId(entry.key)));
     const signals = await structuredStartupSignals(registry, client);
+    /* Only a continuation not yet admitted forces its row's adoption. One the
+       queue holds is pending work of its own, which makes the row eligible for
+       as long as it stays unsettled. */
+    interruptedHostKeys = new Set(dischargeInterruptionObligations(
+      registry,
+      interruptions,
+      unresolvedInterruptions,
+      orchestratorSeats(),
+      signals.admittedMessages,
+      pipelineEvidence.settled,
+    ).filter((obligation) => obligation.state === "owed").map((obligation) => obligation.hostKey));
     const eligible = await structuredStartupAdoptionFilter(
       registry,
       signals,
@@ -984,6 +1227,7 @@ export async function adoptStructuredHostsAtStartup(
       pipelineEvidence.settled,
       pipelineEvidence.deferred,
       lastEventByHost,
+      interruptedHostKeys,
     );
     const shouldAdopt: StructuredHostAdoptionFilter = (entry) => {
       // Let an adopter return the handles it already created. Throwing from
@@ -1117,7 +1361,7 @@ export async function adoptStructuredHostsAtStartup(
       registry,
       nextAdoptedHosts,
       registry.readOnlySnapshot(),
-      orchestratorHostKeys,
+      retainedRecoveryHostKeys(),
     );
     rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
@@ -1133,7 +1377,8 @@ export async function adoptStructuredHostsAtStartup(
       || shouldAdopt(entry);
     const candidateCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
-        && !orchestratorHostKeys.has(sessionKeyId(item.key)),
+        && !orchestratorHostKeys.has(sessionKeyId(item.key))
+        && !interruptionHostKeys.has(sessionKeyId(item.key)),
     );
     const existingCodexContinuations = client
       ? await interruptedCodexContinuations(registry, client, candidateCodexHosts)
@@ -1150,7 +1395,7 @@ export async function adoptStructuredHostsAtStartup(
       registry,
       nextAdoptedHosts,
       publicationSnapshot,
-      orchestratorHostKeys,
+      retainedRecoveryHostKeys(),
     );
     rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
     const finalShouldAdopt = await structuredStartupAdoptionFilter(
@@ -1163,6 +1408,7 @@ export async function adoptStructuredHostsAtStartup(
       pipelineEvidence.settled,
       pipelineEvidence.deferred,
       lastEventByHost,
+      interruptedHostKeys,
     );
     assertActive();
     const finalHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
@@ -1177,7 +1423,8 @@ export async function adoptStructuredHostsAtStartup(
     );
     const finalCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
-        && !orchestratorHostKeys.has(sessionKeyId(item.key)),
+        && !orchestratorHostKeys.has(sessionKeyId(item.key))
+        && !interruptionHostKeys.has(sessionKeyId(item.key)),
     );
     reportProgress("finalizing structured delivery");
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
@@ -1188,15 +1435,28 @@ export async function adoptStructuredHostsAtStartup(
       await completeStructuredDeliveryQueueStartup(nextAdoptedHosts, reportProgress, assertActive);
       assertAdoptedHostsAreClaimed(nextAdoptedHosts, dependencies.hostClaimed);
     }
-    reportProgress("recovering orchestrator deliveries");
-    await enqueueOrchestratorRestartRecoveries(
-      registry,
-      client,
-      orchestratorRecoveries.filter((target) => !deferredHostKeys.has(target.hostKey)),
-      finalHostKeys,
-      orchestratorSeats,
-    );
     if (client) {
+      reportProgress("recovering orchestrator deliveries");
+      /* Re-read: identity, a seat rotation or a message admitted while this
+         pass adopted can each discharge an obligation it adopted for. The
+         runtime's receipts are read again too — adoption can take tens of
+         seconds, and a send it admitted in that time is not in `signals`. A
+         pass with nothing owed skips that snapshot. */
+      const unresolvedAfterAdoption = interruptions.list().filter((obligation) =>
+        interruptionObligationUnresolved(obligation)
+          && interruptedHostKeys.has(obligation.hostKey)
+          && !deferredHostKeys.has(obligation.hostKey));
+      const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
+        registry,
+        interruptions,
+        unresolvedAfterAdoption,
+        orchestratorSeats(),
+        admittedRuntimeMessages(registry, await client.snapshot()),
+        pipelineEvidence.settled,
+      );
+      const continuationFailures = await deliverInterruptionContinuations(
+        registry, client, interruptions, owedInterruptions, finalHostKeys,
+      );
       reportProgress("recovering interrupted deliveries");
       await enqueueInterruptedCodexContinuations(
         registry,
@@ -1208,6 +1468,13 @@ export async function adoptStructuredHostsAtStartup(
       );
       reportProgress("kicking recovered deliveries");
       await kickStructuredDeliveryQueue();
+      /* The pass retries until every owed continuation is admitted; each retry
+         replays the same key, so a slow admission never becomes a second one. */
+      if (continuationFailures.length > 0) {
+        throw new RuntimeHostUnavailableError(
+          `interrupted turn continuation admission failed: ${continuationFailures.join("; ")}`,
+        );
+      }
     }
     /* A pending launch receipt reserved for a fenced pipeline conversation is
        provisioning for that pipeline: replaying it would seat a writer beside
@@ -1341,11 +1608,19 @@ export function structuredStartupHosts(): readonly AdoptedStructuredHost[] {
 /** Quiesced startup may have created hosts before reaching controller
  * registration. They belong to this boot and must also cross the release
  * boundary before its mirror acknowledgement. External workers never enter
- * these retained handle sets. */
-export async function releaseUnpublishedStartupHostsForDemotion(): Promise<void> {
+ * these retained handle sets.
+ *
+ * Such a host can be running a turn — its engine outlived the previous Viewer
+ * — so the release records the continuation it owes first, exactly as the
+ * published path does (#1835). A host whose record fails is left running and
+ * the failure is reported. */
+export async function releaseUnpublishedStartupHostsForDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
   const registry = agentRegistry();
   const unpublished = retainAdoptedHosts(adoptedHosts, retryAdoptedHosts)
     .filter((item) => !hasStructuredDeliveryHost(item.key));
+  const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
     const state = await host.health();
     if ((state.status !== "active" && state.status !== "attention")
@@ -1354,8 +1629,42 @@ export async function releaseUnpublishedStartupHostsForDemotion(): Promise<void>
     if (!registry.markStructuredHostHandoff(key, identity)) {
       throw new Error("unpublished startup host changed before release handover");
     }
+    try {
+      await recordDemotionInterruption(registry, key, state, options);
+    } catch (error) {
+      console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
+        hostKey: sessionKeyId(key), error,
+      });
+      throw error;
+    }
     await host.release();
+    released.add(sessionKeyId(key));
   }));
+  /* A released handle is gone for good: no later pass in this process may
+     retain or publish it. */
+  const kept = (item: AdoptedStructuredHost) => !released.has(sessionKeyId(item.key));
+  adoptedHosts = adoptedHosts.filter(kept);
+  retryAdoptedHosts = retryAdoptedHosts.filter(kept);
   const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
   if (failures.length) throw new AggregateError(failures, "unpublished startup hosts did not quiesce");
+}
+
+/** Every structured host this Viewer holds crosses the release boundary:
+ * the ones startup adopted but had not published, then the published ones.
+ * Both steps always run. A host the first step could not hand over must not
+ * keep the published hosts from recording what they are owed and being
+ * released — left running, the successor's adoption would end their engines
+ * as orphans with no obligation on record (#1835). */
+export async function releaseStructuredHostsForViewerDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of [releaseUnpublishedStartupHostsForDemotion, releaseStructuredDeliveryHostsForDemotion]) {
+    try {
+      await step(options);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "structured hosts did not all cross the release boundary");
 }

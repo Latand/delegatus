@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, listClaudeAccounts, removeManagedClaudeAccount } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
-import { AccountHistoryInventoryBlockedError, accountRemovalBlockers } from "@/lib/accounts/removal";
+import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -106,33 +105,22 @@ export async function DELETE(req: NextRequest) {
       if (blockers.length > 0) {
         return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers }, { status: 409 });
       }
-      const registry = agentRegistry();
-      const beforeRetirement = registry.readOnlySnapshot();
       try {
         if (login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase)) await claudeLoginSupervisor.cancel(login.operationId);
-        registry.retireAccount("claude", account.id, "default");
-        const retired = registry.readOnlySnapshot();
-        try {
-          const removal = removeManagedClaudeAccount(account.id);
-          requestAccountMigrationTick();
-          return NextResponse.json({ removed: { id: account.id }, cleanupPending: removal.cleanupPending });
-        } catch (error) {
-          registry.restoreSnapshot(retired, beforeRetirement);
-          throw error;
-        }
+        const removal = removeManagedClaudeAccount(account.id);
+        requestAccountMigrationTick();
+        return NextResponse.json(removalResponse(account.id, removal));
       } catch (error) {
-        if (error instanceof AccountHistoryInventoryBlockedError) {
-          return NextResponse.json({
-            error: "Claude account history inventory blocked removal",
-            code: "account_removal_blocked",
-            blockers: ["filesystem_history"],
-            history: error.report,
-          }, { status: 409 });
+        if (error instanceof AccountRemovalBlockedError) {
+          return NextResponse.json({ error: "Claude account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers }, { status: 409 });
+        }
+        if (error instanceof AccountArchiveUnavailableError) {
+          return NextResponse.json({ error: error.message, code: "archive_unavailable", archive: error.archive }, { status: 409 });
         }
         if (error instanceof UnknownClaudeAccountError) return failure(404, "unknown_account", "Claude account is unavailable");
         if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
         if (error instanceof UnsafeClaudeHomeError) return failure(409, "unsafe_home", "Claude account home failed safety checks");
-        return failure(500, "removal_failed", "Claude account could not be removed");
+        return NextResponse.json({ error: "Claude account could not be removed", code: "removal_failed", ...removalErrno(error) }, { status: 500 });
       }
     });
   } catch {
