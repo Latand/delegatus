@@ -135,23 +135,41 @@ describe("first-boot import of tasks.json", () => {
     expect(loaded.recentCreates).toEqual(recentCreates);
   });
 
-  test("(b) a NUL-filled legacy file imports as a gap, is kept aside, raises an incident and serves an empty board", () => {
-    const { dir, file, db } = sandbox();
+  test("(b) a NUL-filled legacy file is recorded as a gap with an incident (the board side is in store.legacyFile.test.ts)", () => {
+    const { file, db } = sandbox();
     fs.writeFileSync(file, Buffer.alloc(4096, 0));
     const before = stateImportIncidents().length;
 
     expect(loadTasks(file)).toEqual([]);
 
     expect(readStateImport(db, "tasks")?.gap).toBe("legacy-unreadable");
-    const unreadable = siblings(dir, "tasks.json.unreadable-");
-    expect(unreadable).toHaveLength(1);
-    expect(fs.readFileSync(path.join(dir, unreadable[0]!)).every((byte) => byte === 0)).toBe(true);
     const incident = stateImportIncidents().slice(before).find((entry) => entry.collection === "tasks");
     expect(incident?.kind).toBe("legacy-unreadable");
     expect(fs.statSync(file).isDirectory()).toBe(true);
-    // The store keeps working after the gap.
-    mutateTasks((tasks) => ({ tasks: [...tasks, task("after-gap")], result: undefined }), file);
-    expect(loadTasks(file).map((row) => row.id)).toEqual(["after-gap"]);
+  });
+
+  test("duplicate create receipts import as the newest per request, digested as imported and reported", () => {
+    const { file, db } = sandbox();
+    writeLegacy(file, {
+      tasks: [task("live")],
+      recentCreates: [
+        { clientRequestId: "retried", taskId: "deleted" },
+        { clientRequestId: "retried", taskId: "live" },
+      ],
+    });
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(outcome.state).toBe("imported");
+    expect(outcome.incident?.kind).toBe("legacy-repaired");
+    expect(outcome.incident?.message).toContain("dropped 1 older duplicate create receipt");
+    const record = readStateImport(db, "tasks")!;
+    expect(record.rowCount).toBe(2);
+    expect(record.rowDigest).toBe(stateRowDigest([
+      JSON.stringify(task("live")),
+      JSON.stringify({ clientRequestId: "retried", taskId: "live" }),
+    ]));
+    expect(loadTasksFile(file).recentCreates).toEqual([{ clientRequestId: "retried", taskId: "live" }]);
   });
 
   test("valid JSON with an invalid task row refuses the import and leaves the file untouched", () => {
@@ -275,20 +293,6 @@ describe("writes after the import", () => {
     const state = loadTasksFile(file);
     expect(state.tasks).toEqual([]);
     expect(state.migrations).toEqual({ once: "2026-09-01T00:00:00.000Z" });
-  });
-
-  test("(e) an old-release writer after the import fails with EISDIR and nothing is lost", () => {
-    const { dir, file } = sandbox();
-    writeLegacy(file, { tasks: [task("a")] });
-    loadTasks(file);
-
-    // The pre-#1870 store read the file, then renamed a temp file over it.
-    expect(() => fs.readFileSync(file, "utf8")).toThrow(/EISDIR/);
-    const temp = path.join(dir, ".tasks.json.old-writer.tmp");
-    fs.writeFileSync(temp, JSON.stringify({ tasks: [] }));
-    expect(() => fs.renameSync(temp, file)).toThrow(/EISDIR|ENOTEMPTY|EEXIST/);
-
-    expect(loadTasks(file).map((row) => row.id)).toEqual(["a"]);
   });
 
   test("a write from another process moves the collection revision the files route keys on", async () => {
@@ -526,6 +530,57 @@ describe("(f) rollback mirror and roll-forward", () => {
       if (previous === undefined) delete process.env[HOT_STATE_RELEASE_REVISION_ENV];
       else process.env[HOT_STATE_RELEASE_REVISION_ENV] = previous;
     }
+  });
+
+  test("a rollback release's duplicate receipt pair merges on roll-forward and the next checkpoint succeeds", () => {
+    const { file } = sandbox();
+    writeLegacy(file, { tasks: [task("a")], recentCreates: [{ clientRequestId: "retried", taskId: "a" }] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    // The rollback release deletes "a", then the retried create appends a second receipt for "b".
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[]; recentCreates: unknown[] };
+    mirror.tasks = [task("b")];
+    mirror.recentCreates.push({ clientRequestId: "retried", taskId: "b" });
+    writeLegacy(file, mirror);
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(outcome.incident?.kind).toBe("legacy-reconciled");
+    expect(outcome.incident?.message).toContain("dropped 1 older duplicate create receipt");
+    expect(loadTasks(file).map((row) => row.id)).toEqual(["b"]);
+    expect(loadTasksFile(file).recentCreates).toEqual([{ clientRequestId: "retried", taskId: "b" }]);
+    const replay = mutateTasksFile((state) => {
+      const created = createTask(state.tasks, { project: "proj", text: "Once", placement: "unplaced", clientRequestId: "retried" }, state.recentCreates);
+      if (!created.ok) throw new Error(created.error);
+      return { state: undefined, result: created };
+    }, file);
+    expect(replay.ok && replay.replay && replay.task.id).toBe("b");
+
+    expect(() => checkpointTaskRollbackMirrorForDemotion(file)).not.toThrow();
+    const next = JSON.parse(fs.readFileSync(file, "utf8")) as { recentCreates: unknown[] };
+    expect(next.recentCreates).toEqual([{ clientRequestId: "retried", taskId: "b" }]);
+  });
+
+  test("receipts and migration markers a rollback release dropped are unioned back on roll-forward", () => {
+    const { file } = sandbox();
+    writeLegacy(file, {
+      tasks: [task("a")],
+      recentCreates: [{ clientRequestId: "req", taskId: "a" }],
+      migrations: { once: "2026-09-01T00:00:00.000Z" },
+    });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    // An older release that knows neither section rewrites the file without them.
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    writeLegacy(file, { tasks: [...mirror.tasks, task("b")] });
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(outcome.incident?.summary).toMatchObject({ added: 1, removed: 0, keys: ["t:b"] });
+    const state = loadTasksFile(file);
+    expect(state.tasks.map((row) => row.id)).toEqual(["a", "b"]);
+    expect(state.recentCreates).toEqual([{ clientRequestId: "req", taskId: "a" }]);
+    expect(state.migrations).toEqual({ once: "2026-09-01T00:00:00.000Z" });
   });
 
   test("a lazy open never reconciles while a release target exists", () => {

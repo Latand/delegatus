@@ -27,6 +27,10 @@ export interface LegacyCollectionSpec<P> {
   /** Validate parsed JSON. Throwing refuses the import and leaves the file untouched. */
   parse(raw: unknown): P;
   toRows(parsed: P): StateImportRow[];
+  /** What `toRows` repaired in a file older code wrote (duplicates it
+      dropped), or null. Reported as an incident; the digest covers the
+      repaired rows. */
+  repairs?(parsed: P): string | null;
   /** Fold a legacy file that changed after the import back into the collection.
       Runs under the legacy file lock; writes through the store's collection.
       `baseline` names the revision the file was last written from, so a row
@@ -50,7 +54,7 @@ export interface LegacyReconcileSummary {
 }
 
 export interface StateIncident {
-  kind: "legacy-unreadable" | "legacy-reconciled" | "tombstone-without-import";
+  kind: "legacy-unreadable" | "legacy-reconciled" | "legacy-repaired" | "tombstone-without-import";
   collection: string;
   message: string;
   preservedAs?: string;
@@ -222,6 +226,7 @@ export function importLegacyCollection<P>(
     let gap: string | null = null;
     let incident: StateIncident | null = null;
     let unreadable = false;
+    let repaired: string | null = null;
     if (legacy.kind === "tombstone") {
       gap = "tombstone-without-import";
       incident = raise({
@@ -231,8 +236,11 @@ export function importLegacyCollection<P>(
       });
     } else if (legacy.kind === "file") {
       const parsed = parseJsonBytes(legacy.bytes);
-      if (parsed.ok) rows = spec.toRows(spec.parse(parsed.value));
-      else {
+      if (parsed.ok) {
+        const body = spec.parse(parsed.value);
+        rows = spec.toRows(body);
+        repaired = spec.repairs?.(body) ?? null;
+      } else {
         gap = "legacy-unreadable";
         unreadable = true;
       }
@@ -258,6 +266,13 @@ export function importLegacyCollection<P>(
         preservedAs,
         message: `${path.basename(spec.legacyPath)} could not be parsed (${legacy.kind === "file" ? legacy.bytes.length : 0} bytes); `
           + `the collection starts empty and the file is kept as ${path.basename(preservedAs)}. Restore from the newest backup to recover it.`,
+      });
+    }
+    if (repaired) {
+      incident = raise({
+        kind: "legacy-repaired",
+        collection: spec.collection,
+        message: `${path.basename(spec.legacyPath)} imported after a repair: ${repaired}`,
       });
     }
     retire(spec, "keep", hooks);
@@ -321,7 +336,9 @@ function reconcileChangedLegacy<P>(
       message: `${path.basename(spec.legacyPath)} reappeared unreadable after the import; kept as ${path.basename(preservedAs)}, SQLite unchanged`,
     });
   }
-  const summary = spec.reconcile(spec.parse(parsed.value), record, options);
+  const body = spec.parse(parsed.value);
+  const summary = spec.reconcile(body, record, options);
+  const repaired = spec.repairs?.(body) ?? null;
   const preservedAs = retire(spec, "keep", hooks);
   return raise({
     kind: "legacy-reconciled",
@@ -330,7 +347,8 @@ function reconcileChangedLegacy<P>(
     ...(preservedAs ? { preservedAs } : {}),
     message: `${path.basename(spec.legacyPath)} changed after the import (a rollback release or an older writer); `
       + `merged ${summary.added} added, ${summary.replaced} replaced and ${summary.removed} removed rows, `
-      + `kept ${summary.kept} SQLite rows changed since the mirror`,
+      + `kept ${summary.kept} SQLite rows changed since the mirror`
+      + (repaired ? `; ${repaired}` : ""),
   });
 }
 

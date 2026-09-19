@@ -222,10 +222,19 @@ function taskRowKey(row: TaskStateRow): string {
   return "";
 }
 
+/** One receipt per `clientRequestId`, the last one written. A create retried
+    after its task was deleted appended a second receipt before #1870, and the
+    last is the task that create made. Order follows each survivor's position. */
+function uniqueReceipts(recentCreates: RecentCreate[]): RecentCreate[] {
+  const last = new Map<string, number>();
+  recentCreates.forEach((entry, index) => last.set(entry.clientRequestId, index));
+  return last.size === recentCreates.length ? recentCreates : recentCreates.filter((entry, index) => last.get(entry.clientRequestId) === index);
+}
+
 function stateRows(tasksRows: unknown[], recentCreates: RecentCreate[], migrations: TaskMigrations): TaskStateRow[] {
   return [
     ...tasksRows as TaskStateRow[],
-    ...recentCreates.map((entry) => ({ ...entry }) as TaskStateRow),
+    ...uniqueReceipts(recentCreates).map((entry) => ({ ...entry }) as TaskStateRow),
     ...Object.entries(migrations).map(([name, appliedAt]) => ({ name, appliedAt }) satisfies MigrationRow as TaskStateRow),
   ];
 }
@@ -244,7 +253,7 @@ function stateFromBody(raw: TasksFile | undefined): TasksFileState {
   if (raw.recentCreates !== undefined && (!Array.isArray(raw.recentCreates) || !raw.recentCreates.every(isRecentCreate))) {
     throw new Error("invalid persisted task receipts");
   }
-  const recentCreates = (raw.recentCreates ?? []) as RecentCreate[];
+  const recentCreates = uniqueReceipts((raw.recentCreates ?? []) as RecentCreate[]);
   if (raw.migrations !== undefined && !isMigrations(raw.migrations)) throw new Error("invalid persisted task migrations");
   return { tasks, recentCreates, migrations: { ...((raw.migrations ?? {}) as TaskMigrations) } };
 }
@@ -295,7 +304,9 @@ function parseLegacyBody(raw: unknown): TasksFile {
     was written from, so the file's version wins, and its absence from the file
     deletes it. A row SQLite rewrote since then stays unless the file holds a
     task strictly newer by `updatedAt`; either way it is listed as a conflict.
-    A row only the file holds is added. */
+    A row only the file holds is added. Receipts and migration markers are
+    unioned: one the file lacks is never deleted, since a replay or a one-time
+    transition must not run twice. */
 function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
   const collection = openTaskCollection(legacyDatabasePath(filePath));
   const since = legacyBaselineRevision(baseline);
@@ -331,7 +342,7 @@ function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImpo
     }
     const deleteKeys: string[] = [];
     for (const key of current.keys()) {
-      if (incomingKeys.has(key)) continue;
+      if (incomingKeys.has(key) || !key.startsWith("t:")) continue;
       if ((revisions.get(key) ?? 0) > since) {
         summary.conflicts.push(key);
         summary.kept += 1;
@@ -359,6 +370,11 @@ export function taskLegacyCollection(filePath = TASKS_FILE): LegacyCollectionSpe
       (body.recentCreates ?? []) as RecentCreate[],
       (body.migrations ?? {}) as TaskMigrations,
     ).map((row) => ({ key: taskRowKey(row), value: row, controllerActive: row.status !== "done" })),
+    repairs: (body) => {
+      const receipts = (body.recentCreates ?? []) as RecentCreate[];
+      const dropped = receipts.length - uniqueReceipts(receipts).length;
+      return dropped ? `dropped ${dropped} older duplicate create receipt${dropped === 1 ? "" : "s"}, keeping the newest per clientRequestId` : null;
+    },
     reconcile: (body, baseline, options) => mergeLegacyTasks(filePath, body, baseline, options),
     mirrorBody: () => {
       const collection = openTaskCollection(legacyDatabasePath(filePath));
