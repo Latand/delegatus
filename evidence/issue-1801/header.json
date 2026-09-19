@@ -1,7 +1,5 @@
 {
-  "commit": "af0ab86b359200071179c82b5a101854d2e72266",
-  "note": "Captured once from a git archive export of the commit above (production build, Chromium, synthetic home) with BOARD_CAPTURE_CASE=header bun scripts/capture-board-geometry.ts. The home is seeded like production, all names invented: Claude accounts Main, Account B and Account C and Codex Main with usage readings, bound to the project through the Viewer's own modules; three AskUserQuestion transcripts held open by live processes (the island reads 3); five working agents across five tasks; two tasks off the board (Hidden 2); a quiet second project whose menu shows Archive and Delete. The export has no .git, so the commit is recorded here from the exported tree.",
-  "failures": [],
+  "commit": "",
   "2540-en-light": {
     "bars": 1,
     "bar": {
@@ -12,18 +10,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "Claude accounts — switch or add — Main",
         "rect": {
-          "x": 320,
+          "x": 408.96875,
           "y": 7.5,
           "w": 114.96875,
           "h": 32
@@ -32,7 +30,7 @@
       {
         "name": "Codex accounts — switch or add — Main",
         "rect": {
-          "x": 442.96875,
+          "x": 531.9375,
           "y": 7.5,
           "w": 111.75,
           "h": 32
@@ -41,7 +39,7 @@
       {
         "name": "5 working",
         "rect": {
-          "x": 570.71875,
+          "x": 659.6875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -151,7 +149,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harborClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -170,14 +168,15 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       8,
       8,
       16,
-      473,
+      384.5,
       16,
       8,
       16,
@@ -186,6 +185,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -234,7 +234,7 @@
     },
     "accountsPanel": {
       "rect": {
-        "x": 320,
+        "x": 408.96875,
         "y": 47.5,
         "w": 400,
         "h": 600.21875
@@ -247,7 +247,69 @@
         "w": 201.875,
         "h": 32
       },
-      "texts": "harborClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7"
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 2292,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 2251.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "2540-en-light:quiet": {
@@ -303,18 +365,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "Claude accounts — switch or add — Main",
         "rect": {
-          "x": 320,
+          "x": 408.96875,
           "y": 7.5,
           "w": 114.96875,
           "h": 32
@@ -323,7 +385,7 @@
       {
         "name": "Codex accounts — switch or add — Main",
         "rect": {
-          "x": 442.96875,
+          "x": 531.9375,
           "y": 7.5,
           "w": 111.75,
           "h": 32
@@ -332,7 +394,7 @@
       {
         "name": "5 working",
         "rect": {
-          "x": 570.71875,
+          "x": 659.6875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -442,7 +504,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harborClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -461,14 +523,15 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       8,
       8,
       16,
-      473,
+      384.5,
       16,
       8,
       16,
@@ -477,6 +540,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -525,7 +589,7 @@
     },
     "accountsPanel": {
       "rect": {
-        "x": 320,
+        "x": 408.96875,
         "y": 47.5,
         "w": 400,
         "h": 600.21875
@@ -538,7 +602,69 @@
         "w": 201.875,
         "h": 32
       },
-      "texts": "harborClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7"
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 2292,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 2251.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "2540-en-dark:quiet": {
@@ -594,18 +720,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "Акаунти Claude — змінити або додати — Main",
         "rect": {
-          "x": 320,
+          "x": 408.96875,
           "y": 7.5,
           "w": 114.96875,
           "h": 32
@@ -614,7 +740,7 @@
       {
         "name": "Акаунти Codex — змінити або додати — Main",
         "rect": {
-          "x": 442.96875,
+          "x": 531.9375,
           "y": 7.5,
           "w": 111.75,
           "h": 32
@@ -623,7 +749,7 @@
       {
         "name": "5 працюють",
         "rect": {
-          "x": 570.71875,
+          "x": 659.6875,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -733,7 +859,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harborClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -752,14 +878,15 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       8,
       8,
       16,
-      434,
+      345,
       16,
       8,
       16,
@@ -768,6 +895,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -816,7 +944,7 @@
     },
     "accountsPanel": {
       "rect": {
-        "x": 320,
+        "x": 408.96875,
         "y": 47.5,
         "w": 400,
         "h": 600.21875
@@ -829,7 +957,69 @@
         "w": 180.578125,
         "h": 32
       },
-      "texts": "harborClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7"
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 2292,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 2251.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "2540-uk-light:quiet": {
@@ -885,18 +1075,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "Акаунти Claude — змінити або додати — Main",
         "rect": {
-          "x": 320,
+          "x": 408.96875,
           "y": 7.5,
           "w": 114.96875,
           "h": 32
@@ -905,7 +1095,7 @@
       {
         "name": "Акаунти Codex — змінити або додати — Main",
         "rect": {
-          "x": 442.96875,
+          "x": 531.9375,
           "y": 7.5,
           "w": 111.75,
           "h": 32
@@ -914,7 +1104,7 @@
       {
         "name": "5 працюють",
         "rect": {
-          "x": 570.71875,
+          "x": 659.6875,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -1024,7 +1214,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harborClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -1043,14 +1233,15 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       8,
       8,
       16,
-      434,
+      345,
       16,
       8,
       16,
@@ -1059,6 +1250,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -1107,7 +1299,7 @@
     },
     "accountsPanel": {
       "rect": {
-        "x": 320,
+        "x": 408.96875,
         "y": 47.5,
         "w": 400,
         "h": 600.21875
@@ -1120,7 +1312,69 @@
         "w": 180.578125,
         "h": 32
       },
-      "texts": "harborClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7"
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 2292,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 2251.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 2260,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "2540-uk-dark:quiet": {
@@ -1180,18 +1434,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 328,
+          "x": 416.96875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -1290,7 +1544,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 workingHidden 27",
+    "texts": "harbor-ledger-service5 workingHidden 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1304,12 +1558,13 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
-      397,
+      308,
       16,
       8,
       16,
@@ -1317,6 +1572,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -1392,7 +1648,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 branches running · 22 treesSearch your messages (/)7"
+      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1602,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 1561.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1850-en-light:quiet": {
@@ -1452,18 +1770,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 328,
+          "x": 416.96875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -1562,7 +1880,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 workingHidden 27",
+    "texts": "harbor-ledger-service5 workingHidden 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1576,12 +1894,13 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
-      397,
+      308,
       16,
       8,
       16,
@@ -1589,6 +1908,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -1664,7 +1984,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 branches running · 22 treesSearch your messages (/)7"
+      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1602,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 1561.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1850-en-dark:quiet": {
@@ -1724,18 +2106,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 328,
+          "x": 416.96875,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -1834,7 +2216,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюютьПриховані 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1848,12 +2230,13 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
-      362,
+      273,
       16,
       8,
       16,
@@ -1861,6 +2244,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -1936,7 +2320,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7"
+      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1602,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 1561.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1850-uk-light:quiet": {
@@ -1996,18 +2442,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 136.96875,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 328,
+          "x": 416.96875,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -2106,7 +2552,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюютьПриховані 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2120,12 +2566,13 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 136.96875,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
-      362,
+      273,
       16,
       8,
       16,
@@ -2133,6 +2580,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -2208,7 +2656,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7"
+      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1602,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 1561.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1570,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1850-uk-dark:quiet": {
@@ -2268,18 +2778,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 102.90625,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 328,
+          "x": 382.90625,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -2288,9 +2798,9 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 425.359375,
+          "x": 480.265625,
           "y": 7.5,
-          "w": 214.90625,
+          "w": 160,
           "h": 32
         }
       },
@@ -2378,7 +2888,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 workingHidden 27",
+    "texts": "harbor-ledger-service5 workingHidden 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2392,9 +2902,10 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 102.90625,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
       32,
@@ -2405,6 +2916,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -2480,7 +2992,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 branches running · 22 treesSearch your messages (/)7"
+      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 991.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1280-en-light:quiet": {
@@ -2540,18 +3114,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 102.90625,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 328,
+          "x": 382.90625,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -2560,9 +3134,9 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 425.359375,
+          "x": 480.265625,
           "y": 7.5,
-          "w": 214.90625,
+          "w": 160,
           "h": 32
         }
       },
@@ -2650,7 +3224,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 workingHidden 27",
+    "texts": "harbor-ledger-service5 workingHidden 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2664,9 +3238,10 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 102.90625,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
       32,
@@ -2677,6 +3252,7 @@
       8,
       16
     ],
+    "islandClearance": 19.953125,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -2752,7 +3328,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 branches running · 22 treesSearch your messages (/)7"
+      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "islandClearance": 19.953125
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 19.953125,
+      "toast": {
+        "x": 991.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": false
+          },
+          {
+            "label": "all",
+            "ok": false
+          },
+          {
+            "label": "Close the task panel",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "this project",
+            "ok": true
+          },
+          {
+            "label": "all",
+            "ok": true
+          },
+          {
+            "label": "Close the task panel",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1280-en-dark:quiet": {
@@ -2812,18 +3450,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 68.015625,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 328,
+          "x": 348.015625,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -2832,9 +3470,9 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 440.53125,
+          "x": 460.546875,
           "y": 7.5,
-          "w": 180.015625,
+          "w": 160,
           "h": 32
         }
       },
@@ -2922,7 +3560,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюютьПриховані 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2936,9 +3574,10 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 68.015625,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
       32,
@@ -2949,6 +3588,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -3024,7 +3664,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7"
+      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 991.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1280-uk-light:quiet": {
@@ -3084,18 +3786,18 @@
     },
     "controls": [
       {
-        "name": "harbor",
+        "name": "harbor-ledger-service",
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 48,
+          "w": 68.015625,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 328,
+          "x": 348.015625,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -3104,9 +3806,9 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 440.53125,
+          "x": 460.546875,
           "y": 7.5,
-          "w": 180.015625,
+          "w": 160,
           "h": 32
         }
       },
@@ -3194,7 +3896,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюютьПриховані 27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3208,9 +3910,10 @@
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 48,
+      "w": 68.015625,
       "h": 19.5625
     },
+    "wrap": false,
     "gaps": [
       16,
       32,
@@ -3221,6 +3924,7 @@
       8,
       16
     ],
+    "islandClearance": 30.484375,
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -3296,7 +4000,69 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7"
+      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "islandClearance": 30.484375
+    },
+    "tasksOpen": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "wrap": false,
+      "overflow": 0,
+      "islandClearance": 30.484375,
+      "toast": {
+        "x": 991.15625,
+        "y": 54,
+        "w": 272.84375,
+        "h": 62
+      },
+      "panelUnderToast": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": false
+          },
+          {
+            "label": "всі",
+            "ok": false
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": false
+          }
+        ]
+      },
+      "panel": {
+        "rect": {
+          "x": 1000,
+          "y": 48,
+          "w": 280,
+          "h": 852
+        },
+        "hit": [
+          {
+            "label": "цей проєкт",
+            "ok": true
+          },
+          {
+            "label": "всі",
+            "ok": true
+          },
+          {
+            "label": "Закрити панель задач",
+            "ok": true
+          }
+        ]
+      }
     }
   },
   "1280-uk-dark:quiet": {
@@ -3345,7 +4111,7 @@
   "390-en-light": {
     "h": 52,
     "w": 390,
-    "text": "harbor3",
+    "text": "harbor-ledger-service3",
     "targets": [
       {
         "w": 236.09375,
@@ -3379,7 +4145,7 @@
   "390-en-dark": {
     "h": 52,
     "w": 390,
-    "text": "harbor3",
+    "text": "harbor-ledger-service3",
     "targets": [
       {
         "w": 236.09375,
@@ -3413,7 +4179,7 @@
   "390-uk-light": {
     "h": 52,
     "w": 390,
-    "text": "harbor3",
+    "text": "harbor-ledger-service3",
     "targets": [
       {
         "w": 236.09375,
@@ -3447,7 +4213,7 @@
   "390-uk-dark": {
     "h": 52,
     "w": 390,
-    "text": "harbor3",
+    "text": "harbor-ledger-service3",
     "targets": [
       {
         "w": 236.09375,
@@ -3477,5 +4243,6 @@
       "accounts",
       "host"
     ]
-  }
+  },
+  "failures": []
 }
