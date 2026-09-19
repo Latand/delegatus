@@ -4,21 +4,25 @@ import tailwind from "@tailwindcss/postcss";
 import type { Browser } from "playwright-core";
 import postcss from "postcss";
 
-/* The rendered-evidence harness shared by the #1695 browser tests: the real
-   Viewer over `issue1695Evidence.fixture.tsx`, bundled for the browser and
-   served with the production stylesheet on an ephemeral loopback port. */
+/* The rendered-evidence harness shared by the browser drivers: a fixture
+   module bundled for the browser and served with the production stylesheet on
+   an ephemeral loopback port. `entry` defaults to the kanban board's fixture,
+   so every #1695 caller is unchanged; another surface's driver passes its own. */
 
-export async function serveEvidenceFixture(outDir: string): Promise<{ base: string; stop: () => void }> {
+export async function serveEvidenceFixture(
+  outDir: string,
+  entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+): Promise<{ base: string; stop: () => void }> {
   /* Bundled by a separate `bun build`: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
      others, and the fixture's graph is one of the others. */
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
-    process.execPath, "build", path.resolve("src/components/kanban/issue1695Evidence.fixture.tsx"),
+    process.execPath, "build", path.resolve(entryFixture),
     "--target=browser", `--outdir=${bundle}`, "--define", 'process.env.NODE_ENV="production"', "--define", "process.env={}",
   ], { stdout: "pipe", stderr: "pipe" });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
-  const entry = path.join(bundle, "issue1695Evidence.fixture.js");
+  const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
   const server = Bun.serve({
     hostname: "127.0.0.1",
