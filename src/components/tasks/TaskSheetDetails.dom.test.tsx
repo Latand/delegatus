@@ -66,14 +66,21 @@ function task(details?: string): BoardTask {
 }
 
 function open(row: BoardTask): HTMLElement {
+  return opened(row).host;
+}
+
+/** The sheet, plus the poll that brings the task back: `refresh` renders the
+    same root with the stored task the server now holds. */
+function opened(row: BoardTask): { host: HTMLElement; refresh: (next: BoardTask) => void } {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   roots.push(root);
-  flushSync(() => root.render(
-    <TaskSheet project="orbit-api" tasks={[row]} files={[]} initialView={{ taskId: row.id }} onClose={() => {}} />,
+  const draw = (task: BoardTask) => flushSync(() => root.render(
+    <TaskSheet project="orbit-api" tasks={[task]} files={[]} initialView={{ taskId: task.id }} onClose={() => {}} />,
   ));
-  return host;
+  draw(row);
+  return { host, refresh: draw };
 }
 
 const toggle = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-task-details-toggle]");
@@ -154,6 +161,64 @@ test("leaving the details field unchanged writes nothing", async () => {
     flushSync(() => field(host)!.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("clearing the details empties the field, and its whole row goes with the save", async () => {
+  const sent: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(init?.body ? JSON.parse(String(init.body)) : null);
+    return new Response(JSON.stringify({ ok: true, task: task() }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const view = opened(task(AGENT_CONTEXT));
+    flushSync(() => toggle(view.host)!.click());
+    const editor = field(view.host)!;
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
+    flushSync(() => {
+      setter.call(editor, "");
+      editor.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    flushSync(() => editor.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual([{ details: "" }]);
+    /* The save took the row with it: no empty editor and no toggle left
+       standing, and nothing the operator has to click to be rid of them. */
+    flushSync(() => {});
+    expect(field(view.host)).toBeNull();
+    /* And the poll that brings the cleared task back leaves the whole block
+       gone, exactly as a task that never had details renders. */
+    view.refresh(task());
+    expect(view.host.querySelector("[data-task-details]")).toBeNull();
+    expect(toggle(view.host)).toBeNull();
+    expect(textField(view.host)!.value).toBe(HUMAN_TEXT);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a refused clear keeps the open field and the draft, so the retry is one blur away", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: RequestInfo | URL) =>
+    new Response(JSON.stringify({ error: "task is gone" }), { status: 409, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const view = opened(task(AGENT_CONTEXT));
+    flushSync(() => toggle(view.host)!.click());
+    const editor = field(view.host)!;
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
+    flushSync(() => {
+      setter.call(editor, "");
+      editor.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    flushSync(() => editor.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => {});
+    expect(field(view.host)).not.toBeNull();
+    expect(field(view.host)!.value).toBe("");
+    expect(toggle(view.host)!.getAttribute("aria-expanded")).toBe("true");
   } finally {
     globalThis.fetch = originalFetch;
   }

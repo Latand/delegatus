@@ -166,6 +166,14 @@ function TaskDetailView({
      committed when the field is left. */
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsDraft, setDetailsDraft] = useState(task.details ?? "");
+  /* What this view last saved, until the polled task carries it: a cleared
+     field has to take its row with it now, not one poll later. Dropped as soon
+     as the task moves, so an agent's own write is what is shown again. */
+  const [detailsSaved, setDetailsSaved] = useState<string | null>(null);
+  const storedDetails = detailsSaved ?? task.details ?? "";
+  useEffect(() => {
+    setDetailsSaved(null);
+  }, [task.details]);
 
   useEffect(() => {
     if (!armDelete) return;
@@ -201,11 +209,19 @@ function TaskDetailView({
   };
 
   /* Written on its own, so the text above is left exactly as stored; an empty
-     draft clears the field and the row goes with it. */
+     draft clears the field and the row goes with it — the save closes the
+     disclosure itself, or an emptied editor would keep standing where there is
+     no longer anything to disclose. A refused save keeps the draft and the open
+     field, which is what the operator retries from. */
   const commitDetails = async (): Promise<void> => {
-    if (detailsDraft === (task.details ?? "")) return;
+    if (detailsDraft === storedDetails) return;
     const error = await updateTask(task.id, { details: detailsDraft });
-    if (error) pushTaskToast("err", error);
+    if (error) {
+      pushTaskToast("err", error);
+      return;
+    }
+    setDetailsSaved(detailsDraft);
+    if (!detailsDraft) setDetailsOpen(false);
   };
 
   const send = async () => {
@@ -259,7 +275,7 @@ function TaskDetailView({
         </div>
       </div>
 
-      {task.details || detailsOpen ? (
+      {storedDetails || detailsOpen ? (
         <div className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card p-2" data-task-details={task.id}>
           <button
             type="button"
