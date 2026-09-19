@@ -608,7 +608,7 @@ async function captureOnboarding(): Promise<void> {
      still open, because transcripts are not Viewer state. */
   const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
   fs.mkdirSync(folder, { recursive: true });
-  writeConversation(folder, "00000001-1876-4000-8000-000000000000", "Tidy the harbor README", "Done: the README now names the project.", false, "2100-01-02T10:00:05.000Z");
+  writeConversation(folder, `${"1".padStart(8, "0")}-1876-4000-8000-000000000000`, "Tidy the harbor README", "Done: the README now names the project.", false, "2100-01-02T10:00:05.000Z");
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
