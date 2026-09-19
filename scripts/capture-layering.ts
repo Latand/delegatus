@@ -18,6 +18,11 @@
  * and the conversation has to still be open afterwards. The hover hints are
  * read the same way as the menus, from a real hover (a focus on the phone).
  *
+ * The microphone's menu is also opened from the keyboard: focus on Dictate,
+ * Shift+F10. Focus has to be inside the menu after it opens and after one Tab,
+ * and back on Dictate after Escape, because a portalled menu is otherwise out
+ * of Tab's reach at the end of the document.
+ *
  * Everything runs against the invented demo home (`fixtures/demo-home`) copied
  * under the temp root, on a production server this script starts on a port it
  * chose and stops by the handle it holds. The one addition to the fixture is a
@@ -454,7 +459,19 @@ async function previewPicture(page: Page, scope: string, steps: string[], host: 
 
 /** Escape closed the overlay (`closed`) and left the surface it was opened from open
     (`keptOpen`); `host`, when read, is what is on top of the opener afterwards. */
-interface After { closed: boolean; keptOpen: boolean; host?: Coverage | null }
+interface After { closed: boolean; keptOpen: boolean; host?: Coverage | null; keyboard?: KeyboardReach }
+/** Where focus was at each step of the keyboard path through the microphone's menu. */
+interface KeyboardReach {
+  /** document.activeElement, described, right after Shift+F10 and the options loading. */
+  afterOpen: string;
+  afterOpenInside: boolean;
+  /** …after one Tab. */
+  afterTab: string;
+  afterTabInside: boolean;
+  /** …after Escape: it has to be the Dictate button it was opened from. */
+  afterEscape: string;
+  returnedToDictate: boolean;
+}
 interface Opened { selector: string; after?: () => Promise<After>; note?: string }
 type Step = (page: Page, steps: string[]) => Promise<Opened>;
 
@@ -476,6 +493,55 @@ function micMenuEscape(page: Page, steps: string[], host: string): Opened {
     after: async () => {
       await pressEscape(page, steps, "the microphone's menu");
       return { closed: (await page.locator(MIC_MENU).count()) === 0, keptOpen: await stillOpen(page, host) };
+    },
+  };
+}
+
+/** Where focus is: whether it is inside the microphone's menu, whether it is on
+    the Dictate button, and a short description. Runs inside the page. */
+function readFocus(menu: string): { inside: boolean; dictate: boolean; element: string } {
+  const el = document.activeElement as HTMLElement | null;
+  const label = el?.getAttribute("aria-label") ?? el?.textContent?.trim().slice(0, 40) ?? "";
+  return {
+    inside: Boolean(el && document.querySelector(menu)?.contains(el)),
+    dictate: el?.getAttribute("aria-label") === "Dictate",
+    element: el ? `${el.tagName.toLowerCase()}${el.getAttribute("role") ? `[role="${el.getAttribute("role")}"]` : ""} "${label}"` : "none",
+  };
+}
+
+/** Opens the microphone's menu from the keyboard (focus on Dictate, Shift+F10),
+    requires focus inside it after opening and after one Tab, then closes it
+    with Escape and requires focus back on Dictate with the host still open. */
+async function micMenuFromKeyboard(page: Page, scope: string, steps: string[], where: string, host: string): Promise<Opened> {
+  const mic = page.locator(`${scope} button[aria-label="Dictate"]`).first();
+  await mic.scrollIntoViewIfNeeded();
+  await mic.focus();
+  steps.push(`focused Dictate on ${where}`);
+  await page.keyboard.press("Shift+F10");
+  steps.push("pressed Shift+F10");
+  await page.locator(`${MIC_MENU} [role="menuitemradio"]`).first().waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForTimeout(300);
+  const opened = await page.evaluate(readFocus, MIC_MENU);
+  await page.keyboard.press("Tab");
+  steps.push("pressed Tab once");
+  const tabbed = await page.evaluate(readFocus, MIC_MENU);
+  return {
+    selector: MIC_MENU,
+    after: async () => {
+      await pressEscape(page, steps, "the microphone's menu");
+      const escaped = await page.evaluate(readFocus, MIC_MENU);
+      return {
+        closed: (await page.locator(MIC_MENU).count()) === 0,
+        keptOpen: await stillOpen(page, host),
+        keyboard: {
+          afterOpen: opened.element,
+          afterOpenInside: opened.inside,
+          afterTab: tabbed.element,
+          afterTabInside: tabbed.inside,
+          afterEscape: escaped.element,
+          returnedToDictate: escaped.dictate,
+        },
+      };
     },
   };
 }
@@ -539,6 +605,24 @@ const CASES: Record<string, { desktop: Step; phone: Step }> = {
       await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation (full screen on a phone)");
       await rightClickMic(page, "body", steps, "the full-screen conversation");
       return micMenuEscape(page, steps, PHONE_CONVERSATION);
+    },
+  },
+  /* The portalled menu stays reachable from the keyboard. */
+  "mic-menu-keyboard-orchestrator": {
+    desktop: async (page, steps) => micMenuFromKeyboard(page, "section.seat", steps, "the orchestrator seat above the board", "section.seat"),
+    phone: async (page, steps) => {
+      await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation");
+      return micMenuFromKeyboard(page, "body", steps, "the orchestrator's conversation", PHONE_CONVERSATION);
+    },
+  },
+  "mic-menu-keyboard-in-expanded-conversation": {
+    desktop: async (page, steps) => {
+      const full = await expandOrchestrator(page, steps);
+      return micMenuFromKeyboard(page, full, steps, "the expanded conversation", full);
+    },
+    phone: async (page, steps) => {
+      await openOnPhone(page, steps, "Open the orchestrator's conversation — finished", "the orchestrator's conversation (full screen on a phone)");
+      return micMenuFromKeyboard(page, "body", steps, "the full-screen conversation", PHONE_CONVERSATION);
     },
   },
   /* Symptom 2: the picture opens behind the expanded conversation. */
@@ -620,7 +704,9 @@ async function runCase(browser: Browser, baseUrl: string, project: string, viewp
     const afterReading = after ? await after() : undefined;
     const ok = Boolean(reading && reading.points > 0 && reading.covered === 0)
       && (afterReading === undefined || (afterReading.closed && afterReading.keptOpen
-        && (afterReading.host === undefined || Boolean(afterReading.host && afterReading.host.covered === 0))));
+        && (afterReading.host === undefined || Boolean(afterReading.host && afterReading.host.covered === 0))
+        && (afterReading.keyboard === undefined
+          || (afterReading.keyboard.afterOpenInside && afterReading.keyboard.afterTabInside && afterReading.keyboard.returnedToDictate))));
     return { id, viewport: viewport.name, ok, steps, coverage: reading, ...(afterReading ? { after: afterReading } : {}), ...(note ? { note } : {}) };
   } catch (error) {
     if (SHOTS) await page.screenshot({ path: path.join(BASE, `${id}-${viewport.name}-error.png`) }).catch(() => undefined);

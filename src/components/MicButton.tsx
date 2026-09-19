@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { Check, Copy, Loader2, Mic, Square, X } from "@/components/icons";
@@ -104,9 +104,47 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
     };
   }, [locale]);
 
+  /* THE MENU TAKES FOCUS. A portal leaves the tab order behind at the Dictate
+     button, so a menu opened from the keyboard (Shift+F10, the context-menu
+     key) was out of Tab's reach at the end of the document. The menu itself
+     holds focus while its options load, then hands it to the selected option;
+     Tab and the arrows cycle inside it, and closing from the keyboard or with
+     a pick gives focus back to the button. */
+  const optionsReady = info !== null;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const target = root.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([disabled])')
+      ?? root.querySelector<HTMLElement>("button:not([disabled])")
+      ?? root;
+    target.focus();
+  }, [optionsReady, keyFor]);
+
+  const close = () => {
+    const root = rootRef.current;
+    const hadFocus = Boolean(root && root.contains(document.activeElement));
+    onClose();
+    if (hadFocus) anchorRef.current?.focus();
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === "Tab" ? (event.shiftKey ? -1 : 1)
+      : event.key === "ArrowDown" ? 1
+      : event.key === "ArrowUp" ? -1
+      : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled])"));
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next = at === -1 ? (step > 0 ? 0 : items.length - 1) : (at + step + items.length) % items.length;
+    items[next].focus();
+  };
+
   /* Click-away and Escape both dismiss; the menu never outlives the composer,
-     and its Escape never reaches a modal it was opened in. */
-  useOverlayEscape(onClose);
+     and its Escape never reaches a modal it was opened in. A click away leaves
+     focus wherever that click puts it. */
+  useOverlayEscape(close);
   useEffect(() => {
     const away = (event: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) onClose();
@@ -136,7 +174,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
         return;
       }
       setInfo(json);
-      onClose();
+      close();
     } catch {
       setError(t("common.serverUnavailable"));
     } finally {
@@ -152,11 +190,13 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
       ref={rootRef}
       role="menu"
       aria-label={t("mic.menuTitle")}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
       data-mic-backend-menu
       style={placement
         ? { left: placement.left, top: placement.top, bottom: placement.bottom, maxHeight: placement.maxHeight }
         : { left: -9999, top: 0, visibility: "hidden" }}
-      className={`fixed ${Z.popover} w-[300px] overflow-y-auto rounded-[12px] border border-border bg-card p-1.5 shadow-2`}
+      className={`fixed ${Z.popover} w-[300px] overflow-y-auto outline-none rounded-[12px] border border-border bg-card p-1.5 shadow-2`}
     >
       {keyOption ? (
         <div className="flex flex-col gap-2 p-2">
