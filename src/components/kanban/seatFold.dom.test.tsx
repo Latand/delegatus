@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
+import type { ReactNode } from "react";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { setLocale, translate } from "@/lib/i18n";
@@ -75,6 +76,8 @@ mock.module("@/hooks/useLogTail", () => ({
 
 const { KanbanSeat } = await import("./KanbanSeat");
 const { SEAT_STORAGE_KEY, SEAT_STORAGE_KEY_V1 } = await import("./kanbanSeatStore");
+const { popoverLeft } = await import("./kanbanMenus");
+const { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } = await import("@/components/orchestrator/PreviousSeats");
 
 const PROJECT = "atlas";
 const CONVERSATION = "conversation_orch";
@@ -292,6 +295,7 @@ test("the seat docks at the side and back, remembered per browser, and each plac
   expect(dock().getAttribute("aria-label")).toBe(translate("en", "orchPanel.dockSide"));
 
   /* Top, collapsed: the 40 px strip, without the project name or Rotate. */
+  expect(foldButton(host).querySelector("svg")?.getAttribute("class")).toContain("lucide-chevron-up");
   click(foldButton(host));
   expect(host.querySelector("[data-seat-head]")?.getAttribute("data-seat-head")).toBe("strip");
   expect(host.querySelector(".seat-title .proj")).toBeNull();
@@ -304,6 +308,8 @@ test("the seat docks at the side and back, remembered per browser, and each plac
   expect(JSON.parse(dom.localStorage.getItem(SEAT_STORAGE_KEY) ?? "{}").placement).toBe("side");
   expect(host.querySelector('[data-seat-grip="width"]')?.getAttribute("aria-orientation")).toBe("vertical");
   expect(dock().getAttribute("aria-label")).toBe(translate("en", "orchPanel.dockTop"));
+  /* The fold's arrow points where the panel goes: left, into the rail. */
+  expect(foldButton(host).querySelector("svg")?.getAttribute("class")).toContain("lucide-chevron-left");
 
   /* Side, collapsed: the rail is one button that expands it. */
   click(foldButton(host));
@@ -379,6 +385,9 @@ test("Previous seats: closed by default, counted, newest first under the live se
 
   click(newest.querySelector("[data-seat-notes-toggle]") as HTMLElement);
   expect(popover.querySelectorAll("[data-seat-notes]").length).toBe(1);
+  /* The open row's toggle says so; its chevron turns on that state. */
+  expect(newest.querySelector("[data-seat-notes-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+  expect(newest.querySelector("[data-seat-notes-toggle] svg")).not.toBeNull();
   expect(newest.querySelector("[data-seat-notes]")?.textContent).toBe("release notes\nline two");
   click(popover.querySelector('[data-seat-row="conversation_prev_old"] [data-seat-notes-toggle]') as HTMLElement);
   expect(popover.querySelectorAll("[data-seat-notes]").length).toBe(1);
@@ -397,4 +406,41 @@ test("Previous seats is hidden at zero, and reads Seat notes when only the live 
   await settle();
   const control = notesOnly.querySelector("[data-previous-seats]") as HTMLButtonElement;
   expect(control.textContent).toContain(translate("en", "orchPanel.seatNotesOnly"));
+});
+
+test("the popover sits under its control when right-aligning it would cross the panel's left edge", () => {
+  /* Side placement at 1440: the panel starts at 248, the control ends at 394. */
+  expect(popoverLeft({ left: 300, right: 394 }, 340, 1440, 248)).toBe(300);
+  /* Top, expanded: right-aligned, as every other popover. */
+  expect(popoverLeft({ left: 900, right: 1040 }, 340, 1440, 248)).toBe(700);
+  /* Never past the viewport. */
+  expect(popoverLeft({ left: 1300, right: 1330 }, 340, 1440, 1200)).toBe(1092);
+  expect(popoverLeft({ left: 20, right: 60 }, 340, 1440)).toBe(8);
+});
+
+function mountNode(node: ReactNode): HTMLElement {
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  flushSync(() => root.render(node));
+  return host as unknown as HTMLElement;
+}
+
+test("phone: the sheet row reads Seat notes with the live seat alone, and the list carries the live seat first", () => {
+  const status = (read: never) => (read as unknown as { status: never }).status;
+  /* No previous seats: the live seat's notes are still reachable. */
+  const alone = mountNode(<MobilePreviousSeatsRow status={status(withPrevious([]))} onOpen={() => {}} />);
+  const row = alone.querySelector("[data-mobile-previous-seats]") as HTMLElement;
+  expect(row.getAttribute("data-mobile-previous-seats")).toBe("0");
+  expect(row.textContent).toContain(translate("en", "orchPanel.seatNotesOnly"));
+  expect(row.querySelector("svg.lucide-chevron-right")).not.toBeNull();
+  /* Neither a task for the live seat nor a previous one: no row. */
+  expect(mountNode(<MobilePreviousSeatsRow status={status(withPrevious([], null))} onOpen={() => {}} />).querySelector("[data-mobile-previous-seats]")).toBeNull();
+
+  const list = mountNode(<MobilePreviousSeatsScreen status={status(withPrevious(PREVIOUS))} onBack={() => {}} />);
+  const rows = [...list.querySelectorAll("[data-seat-row]")].map((node) => [node.getAttribute("data-seat-row"), node.getAttribute("data-seat-current")]);
+  expect(rows).toEqual([[CONVERSATION, "1"], ["conversation_prev_new", "0"], ["conversation_prev_old", "0"]]);
+  /* Back names the sheet it returns to. */
+  expect(list.querySelector("[data-mobile-previous-back]")?.textContent?.trim()).toBe(translate("en", "orchPanel.title"));
 });

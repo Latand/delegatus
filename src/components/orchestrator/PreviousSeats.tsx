@@ -1,11 +1,12 @@
 "use client";
 
-import { History } from "lucide-react";
+import { ChevronLeft, ChevronRight, History } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { EngineMark } from "@/components/EngineMark";
 import { KanbanPopover } from "@/components/kanban/kanbanMenus";
+import { MobileSheetRow } from "@/components/mobile/MobileSheet";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -220,7 +221,7 @@ export function PreviousSeatsPopover({ anchor, rows, tasks, title, onClose, onOp
     />
   );
   return createPortal(
-    <KanbanPopover anchor={anchor} label={title} onClose={onClose} className="seats-pop" initialFocus="a, button">
+    <KanbanPopover anchor={anchor} within={anchor.closest<HTMLElement>(".seat")} label={title} onClose={onClose} className="seats-pop" initialFocus="a, button">
       <div data-previous-seats-popover="">
         {current.length ? (
           <>
@@ -271,7 +272,8 @@ function SeatRow({ row, tasks, notesOpen, onToggleNotes, onOpen, openByLink }: {
         </a>
         {hasNotes ? (
           <button type="button" className="notes-btn" aria-expanded={notesOpen} aria-controls={notesId} data-seat-notes-toggle="" onClick={onToggleNotes}>
-            {t("orchPanel.seatNotes")} ›
+            {t("orchPanel.seatNotes")}
+            <ChevronRight aria-hidden />
           </button>
         ) : null}
       </div>
@@ -295,36 +297,44 @@ function SeatRow({ row, tasks, notesOpen, onToggleNotes, onOpen, openByLink }: {
 
 /* ── The phone (390): a row in the seat sheet, a list screen, a notes screen ── */
 
-/** The seat sheet's row: «Previous seats 2 ›». Absent at zero. */
+/** The seat sheet's row, under the tick row and drawn the same way:
+    «Previous seats 2 ›», or «Seat notes ›» while the live seat is the only one
+    and keeps a task for its notes. Absent when there is neither. */
 export function MobilePreviousSeatsRow({ status, onOpen }: { status: OrchestratorSeatStatus | null; onOpen: () => void }) {
   const { t } = useLocale();
-  const count = status?.previous?.length ?? 0;
-  if (!count) return null;
+  const rows = seatListRows(status);
+  const count = rows.filter((row) => !row.current).length;
+  const notesOnly = count === 0 && rows.some((row) => row.current && row.taskId);
+  if (!count && !notesOnly) return null;
+  const label = notesOnly ? t("orchPanel.seatNotesOnly") : t("orchPanel.previousSeats");
   return (
-    <button
-      type="button"
-      data-mobile-previous-seats={count}
-      aria-label={t("orchPanel.previousSeatsAria", { count })}
-      onClick={onOpen}
-      className="flex min-h-11 w-full shrink-0 items-center gap-3 rounded-control text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-    >
-      <History className="h-[18px] w-[18px] shrink-0 text-secondary" aria-hidden />
-      <span className="min-w-0 flex-1 truncate">{t("orchPanel.previousSeats")}</span>
-      <span className="shrink-0 text-label font-semibold tabular-nums text-muted">{count}</span>
-      <span className="shrink-0 text-muted" aria-hidden>›</span>
-    </button>
+    <MobileSheetRow
+      icon={<History className="h-[18px] w-[18px]" aria-hidden />}
+      label={label}
+      onSelect={onOpen}
+      ariaLabel={notesOnly ? label : t("orchPanel.previousSeatsAria", { count })}
+      attrs={{ "data-mobile-previous-seats": String(count) }}
+      trailing={
+        <>
+          {notesOnly ? null : <span className="tabular-nums">{count}</span>}
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        </>
+      }
+    />
   );
 }
 
 /**
- * The list screen the row opens, inside the seat sheet: the same two-line
- * rows at 56 px, and a row's notes as a sub-screen. `onBack` returns to the
- * seat.
+ * The list screen the row opens, inside the seat sheet: the live seat under
+ * «Current», then the previous ones, as the same two-line rows at 56 px, and
+ * a row's notes as a sub-screen. `onBack` returns to the seat.
  */
 export function MobilePreviousSeatsScreen({ status, onBack }: { status: OrchestratorSeatStatus | null; onBack: () => void }) {
   const { t, locale } = useLocale();
   const [notesFor, setNotesFor] = useState<SeatListRow | null>(null);
-  const rows = seatListRows(status).filter((row) => !row.current);
+  const rows = seatListRows(status);
+  const current = rows.filter((row) => row.current);
+  const previous = rows.filter((row) => !row.current);
   const back = (label: string, run: () => void) => (
     <button
       type="button"
@@ -332,46 +342,60 @@ export function MobilePreviousSeatsScreen({ status, onBack }: { status: Orchestr
       onClick={run}
       className="flex min-h-11 items-center gap-1 self-start text-ui font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     >
-      <span aria-hidden>‹</span> {label}
+      <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden /> {label}
     </button>
   );
   if (notesFor) {
     return (
       <div className="flex flex-col gap-2" data-mobile-previous-notes={notesFor.conversationId}>
-        {back(t("orchPanel.previousSeats"), () => setNotesFor(null))}
+        {back(t(previous.length ? "orchPanel.previousSeats" : "orchPanel.seatNotesOnly"), () => setNotesFor(null))}
         <p className="truncate text-body font-semibold text-primary">{notesFor.title ?? t("orchPanel.seatUntitled")}</p>
         <MobileNotes taskId={notesFor.taskId} />
       </div>
     );
   }
+  const renderRow = (row: SeatListRow) => (
+    <div key={row.conversationId} className="flex min-h-14 items-center gap-2 border-t border-border first:border-t-0" data-seat-row={row.conversationId} data-seat-current={row.current ? "1" : "0"}>
+      <a
+        href={"#c=" + encodeURIComponent(row.conversationId)}
+        className="flex min-h-14 min-w-0 flex-1 flex-col justify-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      >
+        <span className="flex min-w-0 items-center gap-1.5 text-ui font-semibold text-primary">
+          {row.engine ? <EngineMark engine={row.engine} size={12} /> : null}
+          <span className="truncate">{row.title ?? t("orchPanel.seatUntitled")}</span>
+        </span>
+        <span className="truncate text-caption tabular-nums text-muted">{seatSpan(t, locale, row)}</span>
+      </a>
+      {row.taskId ? (
+        <button
+          type="button"
+          data-seat-notes-toggle=""
+          onClick={() => setNotesFor(row)}
+          className="inline-flex min-h-11 shrink-0 items-center gap-0.5 px-1 text-label font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {t("orchPanel.seatNotes")}
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        </button>
+      ) : null}
+    </div>
+  );
   return (
     <div className="flex flex-col" data-mobile-previous-list="">
-      {back(t("orchPanel.seatCurrent"), onBack)}
-      <p className="pb-1 pt-2 text-label font-semibold text-muted">{t("orchPanel.previousSeats")}</p>
-      {rows.map((row) => (
-        <div key={row.conversationId} className="flex min-h-14 items-center gap-2 border-t border-border first:border-t-0" data-seat-row={row.conversationId}>
-          <a
-            href={"#c=" + encodeURIComponent(row.conversationId)}
-            className="flex min-h-14 min-w-0 flex-1 flex-col justify-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-          >
-            <span className="flex min-w-0 items-center gap-1.5 text-ui font-semibold text-primary">
-              {row.engine ? <EngineMark engine={row.engine} size={12} /> : null}
-              <span className="truncate">{row.title ?? t("orchPanel.seatUntitled")}</span>
-            </span>
-            <span className="truncate text-caption tabular-nums text-muted">{seatSpan(t, locale, row)}</span>
-          </a>
-          {row.taskId ? (
-            <button
-              type="button"
-              data-seat-notes-toggle=""
-              onClick={() => setNotesFor(row)}
-              className="inline-flex min-h-11 shrink-0 items-center px-1 text-label font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              {t("orchPanel.seatNotes")} ›
-            </button>
-          ) : null}
-        </div>
-      ))}
+      {/* Back to the seat sheet, named for it: «Current» here would read as
+          a link to the live seat, which the list itself carries. */}
+      {back(t("orchPanel.title"), onBack)}
+      {current.length ? (
+        <>
+          <p className="pb-1 pt-2 text-label font-semibold text-muted">{t("orchPanel.seatCurrent")}</p>
+          <div className="flex flex-col">{current.map(renderRow)}</div>
+        </>
+      ) : null}
+      {previous.length ? (
+        <>
+          <p className="pb-1 pt-3 text-label font-semibold text-muted">{t("orchPanel.previousSeats")}</p>
+          <div className="flex flex-col">{previous.map(renderRow)}</div>
+        </>
+      ) : null}
     </div>
   );
 }

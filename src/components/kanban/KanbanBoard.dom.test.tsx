@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
-import { KanbanBoard, kanbanLayoutMode } from "./KanbanBoard";
+import { KanbanBoard, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
 /* The board rendered by React against invented tasks and scripted task ports.
@@ -53,7 +53,7 @@ function task(id: string, status: TaskStatus, text: string, extra: Partial<Board
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
+function mount(tasks: BoardTask[], ports: TaskMutationPorts, extra: Partial<KanbanBoardProps> = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -76,6 +76,7 @@ function mount(tasks: BoardTask[], ports: TaskMutationPorts) {
       onOpenConversations={() => {}}
       seatRefs={null}
       mutationPorts={ports}
+      {...extra}
     />,
   ));
   render(tasks);
@@ -97,6 +98,17 @@ test("the layout mode follows the board's own width, tabbed from 640 px up to 76
   expect(kanbanLayoutMode(1200)).toBe("narrow");
   expect(kanbanLayoutMode(1399)).toBe("narrow");
   expect(kanbanLayoutMode(1400)).toBe("wide");
+});
+
+test("a seat docked at the side never costs the columns: what it leaves scrolls instead of folding into tabs (#1841)", () => {
+  /* 1280 window: 1032 px of board, a 380 px seat leaves 652. */
+  expect(kanbanLayoutModeBeside(1032, 380)).toBe("scroll");
+  expect(kanbanLayoutModeBeside(1192, 380)).toBe("scroll");
+  expect(kanbanLayoutModeBeside(1880, 380)).toBe("wide");
+  expect(kanbanLayoutModeBeside(1032, 0)).toBe("scroll");
+  /* A board already too narrow for columns stays tabbed. */
+  expect(kanbanLayoutModeBeside(700, 380)).toBe("tabs");
+  expect(kanbanLayoutModeBeside(700, 0)).toBe("tabs");
 });
 
 test("four columns hold every task; an empty task taken off the board is counted, never dropped", () => {
@@ -307,6 +319,21 @@ test("a shelf takes the wide share, one at a time, and gives it back when work r
   click(widthButton(again.host, "done"));
   expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
   expect(wideColumns(again.host)).toEqual(["assigned"]);
+  localStorage.clear();
+}));
+
+test("the Overview keeps its fixed shares: no width control and no read of a project's pin", () => atDesktopWidth(() => {
+  localStorage.clear();
+  localStorage.setItem("llv:kanban-wide:v1", "blocked");
+  const tasks = [task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review")];
+  const { host } = mount(tasks, NO_PORTS, { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } });
+  expect(host.querySelector("[data-board]")?.getAttribute("data-mode")).toBe("wide");
+  expect(host.querySelector("[data-col-width], [data-col-pin]")).toBeNull();
+  expect(host.querySelector('.column[data-wide]')).toBeNull();
+  expect(host.querySelector<HTMLElement>("[data-board]")!.style.getPropertyValue("--c-blocked")).toBe("");
+  /* The project board still reads the pin. */
+  const project = mount(tasks, NO_PORTS);
+  expect(wideColumns(project.host)).toEqual(["blocked"]);
   localStorage.clear();
 }));
 

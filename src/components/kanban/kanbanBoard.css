@@ -271,6 +271,11 @@
   transition: border-color var(--motion-fast);
 }
 .kb .tile:hover { border-color: var(--border-strong); }
+/* A shelf's tiles fill its narrow column. Whichever column holds the wide
+   share lays them out as the workspace does, and Assigned given a shelf's
+   width fills it (#1841). */
+.kb .tile.fill, .kb .column.shelf .tile { width: 100%; }
+.kb .column.wide .tile.fill { width: 196px; }
 .kb .tile .row { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .tile .engine { flex-shrink: 0; }
@@ -707,7 +712,7 @@
 .kb .seat-rail .rail-expand svg { width: 15px; height: 15px; }
 .kb .seat { transition: height var(--motion-base) var(--ease-standard); }
 @media (prefers-reduced-motion: reduce) {
-  .kb .seat, .kb .seat.side, .kb .board { transition: none; }
+  .kb .seat, .kb .seat.side, .kb .board, .kb .seats-pop .notes-btn svg { transition: none; }
 }
 
 /* The Previous seats popover: 340 px, scrolling inside. */
@@ -720,7 +725,10 @@
 .kb .seats-pop .seat-row .t1 { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
 .kb .seats-pop .seat-row .t1 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .seats-pop .seat-row .t2 { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kb .seats-pop .notes-btn { flex-shrink: 0; font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 4px 2px; }
+.kb .seats-pop .notes-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 4px 2px; }
+/* The chevron turns down on the open row. */
+.kb .seats-pop .notes-btn svg { width: 13px; height: 13px; transition: transform var(--motion-fast) var(--ease-standard); }
+.kb .seats-pop .notes-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
 .kb .seats-pop .notes {
   margin: 0 14px 10px; padding: 10px; border-radius: var(--radius-control); background: var(--surface-well);
   font-size: var(--text-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; color: var(--color-secondary);

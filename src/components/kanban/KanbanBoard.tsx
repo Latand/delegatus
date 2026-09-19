@@ -81,6 +81,15 @@ export function kanbanLayoutMode(width: number): KanbanLayoutMode {
   return "tabs";
 }
 
+/** The columns' mode beside a seat docked at the side (#1841). The seat is the
+    operator's choice, so it never costs them the columns: where the board
+    alone would still show them, what the seat leaves scrolls rather than
+    folding into tabs. */
+export function kanbanLayoutModeBeside(width: number, seatWidth: number): KanbanLayoutMode {
+  const mode = kanbanLayoutMode(width - seatWidth);
+  return mode === "tabs" && seatWidth > 0 && kanbanLayoutMode(width) !== "tabs" ? "scroll" : mode;
+}
+
 /**
  * Cross-project mode (#1820). Present ⇒ this board's columns carry the cards
  * of EVERY project it was fed, not one: the task projection is no longer
@@ -635,7 +644,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     const apply = () => {
       const barWidth = element.getBoundingClientRect().width;
-      setMode(kanbanLayoutMode(barWidth - (aside?.getBoundingClientRect().width ?? 0) - (seat?.getBoundingClientRect().width ?? 0)));
+      setMode(kanbanLayoutModeBeside(barWidth - (aside?.getBoundingClientRect().width ?? 0), seat?.getBoundingClientRect().width ?? 0));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
@@ -2070,8 +2079,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }
   if (composingTask) readingStatuses.add("inbox");
   /* One column holds the wide share (#1841): Assigned, or the shelf the
-     operator widened. Tabs already show one column at full width. */
-  const wideShelf = mode === "tabs" ? null : wideColumns.wide;
+     operator widened. Tabs already show one column at full width, and the
+     cross-project Overview keeps its fixed shares and reads no pin. */
+  const widthControls = mode !== "tabs" && !props.overview;
+  const wideShelf = widthControls ? wideColumns.wide : null;
   const gridMode = mode === "wide" || mode === "narrow";
   const shelfShare = mode === "narrow" ? "220px" : "minmax(232px, var(--shelf-w))";
   const workShare = mode === "narrow" ? "minmax(440px, 1fr)" : "minmax(var(--work-min), 1fr)";
@@ -2138,7 +2149,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       incomingEdits={incomingEdits}
       onHideIdle={() => hideIdle(status)}
       reading={readingStatuses.has(status)}
-      widths={mode === "tabs" ? null : { state: wideColumns, wide: wideShelf }}
+      widths={widthControls ? { state: wideColumns, wide: wideShelf } : null}
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}

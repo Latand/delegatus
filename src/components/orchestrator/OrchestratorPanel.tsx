@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, LoaderCircle, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, LoaderCircle, PanelLeft, PanelTop, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -504,7 +504,9 @@ export function OrchestratorPanel({
             aria-label={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
             title={t(collapsed ? "orchPanel.seatExpand" : "orchPanel.seatCollapse")}
           >
-            {collapsed ? <ChevronDown aria-hidden /> : <ChevronUp aria-hidden />}
+            {/* The arrow points where the panel goes: up into the strip on top,
+                left into the rail at the side. */}
+            {collapsed ? <ChevronDown aria-hidden /> : placement === "side" ? <ChevronLeft aria-hidden /> : <ChevronUp aria-hidden />}
             <span>{t(collapsed ? "orchPanel.seatUnfoldWord" : "orchPanel.seatFoldWord")}</span>
           </button>
         </header>

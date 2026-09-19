@@ -2473,6 +2473,11 @@ function readSeatBoard() {
     rect: box(column)!,
     cards: [...column.querySelectorAll(".card")].map((card) => card.querySelector(".title")?.textContent?.trim() ?? ""),
     clippedTitles: [...column.querySelectorAll<HTMLElement>(".card .title")].filter((title) => title.scrollWidth > title.clientWidth + 1).length,
+    /* Conversation tiles: a wrapping grid of ~196 px tiles in the wide column. */
+    tileWidths: [...column.querySelectorAll(".tile")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
+    /* The head holds on one line: its tallest child is no taller than one line. */
+    headHeight: Math.round(column.querySelector(".col-head")?.getBoundingClientRect().height ?? 0),
+    widthControls: column.querySelectorAll("[data-col-width], [data-col-pin]").length,
     /* Cards carrying a seat conversation anywhere: its title, a tile, a mirror. */
     seatCards: [...column.querySelectorAll(".card")].filter((card) => /seat conversation/.test(card.textContent ?? "")).length,
   }));
@@ -2599,6 +2604,7 @@ async function seatsMain(which: SeatCase): Promise<void> {
         if (popover) {
           must(popover.rect.x >= 0 && popover.rect.y >= 0 && popover.rect.x + popover.rect.w <= width && popover.rect.y + popover.rect.h <= 900, `${tag}: the popover leaves the viewport ${JSON.stringify(popover.rect)}`);
           must(near(popover.rect.w, 340, 1), `${tag}: the popover is ${popover.rect.w}px wide`);
+          must(head.seat !== null && popover.rect.x >= head.seat.x - 0.5, `${tag}: the popover starts at ${popover.rect.x}, left of the seat at ${head.seat?.x}`);
           must(popover.rows.map((row) => row.title).join("|") === [seats.live.title, ...seats.retired.map((seed) => seed.title)].join("|"), `${tag}: rows ${popover.rows.map((row) => row.title).join(" | ")}`);
           must(popover.rows[0]?.current === true && popover.rows.slice(1).every((row) => !row.current), `${tag}: the live seat is not first under Current`);
           must(popover.rows.every((row) => row.height >= 52), `${tag}: a row is under 52 px`);
@@ -2620,12 +2626,40 @@ async function seatsMain(which: SeatCase): Promise<void> {
         await page.waitForTimeout(400);
         states.topCollapsed = await page.evaluate(readSeatBoard);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-top-collapsed.png`) });
+        entry.popoverStrip = await (async () => {
+          await page.click("[data-previous-seats]");
+          await page.waitForSelector("[data-previous-seats-popover]");
+          const reading = await page.evaluate(() => ({
+            popoverX: Math.round(document.querySelector("[data-previous-seats-popover]")!.closest(".popover")!.getBoundingClientRect().x),
+            seatX: Math.round(document.querySelector("[data-kanban-seat]")!.getBoundingClientRect().x),
+          }));
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(150);
+          must(reading.popoverX >= reading.seatX, `${tag} strip: the popover starts at ${reading.popoverX}, left of the strip at ${reading.seatX}`);
+          return reading;
+        })();
         await page.click("[data-seat-collapse]");
         await page.waitForTimeout(300);
         await page.click("[data-seat-placement]");
         await page.waitForTimeout(600);
         states.sideExpanded = await page.evaluate(readSeatBoard);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-side.png`) });
+        /* The popover under its control, not hanging over the rail. */
+        const popoverIn = async (name: string) => {
+          await page.click("[data-previous-seats]");
+          await page.waitForSelector("[data-previous-seats-popover]");
+          const reading = await page.evaluate(() => {
+            const pop = document.querySelector("[data-previous-seats-popover]")!.closest(".popover")!.getBoundingClientRect();
+            const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+            const control = document.querySelector("[data-previous-seats]")!.getBoundingClientRect();
+            return { popoverX: Math.round(pop.x), seatX: Math.round(seat.x), controlX: Math.round(control.x), controlRight: Math.round(control.right) };
+          });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(150);
+          must(reading.popoverX >= reading.seatX && (reading.popoverX === reading.controlX || Math.abs(reading.popoverX + 340 - reading.controlRight) <= 1), `${tag} ${name}: the popover starts at ${reading.popoverX}, the seat at ${reading.seatX}, the control at ${reading.controlX}–${reading.controlRight}`);
+          return reading;
+        };
+        entry.popoverSide = await popoverIn("side");
         await page.click("[data-seat-collapse]");
         await page.waitForTimeout(600);
         states.sideCollapsed = await page.evaluate(readSeatBoard);
@@ -2635,6 +2669,10 @@ async function seatsMain(which: SeatCase): Promise<void> {
         must(topCollapsed!.headKind === "strip" && topCollapsed!.head !== null && near(topCollapsed!.head.h, 40, 1), `${tag}: the top strip is ${topCollapsed!.head?.h}px`);
         must(topCollapsed!.frame !== null && topExpanded!.frame !== null && topCollapsed!.frame.y < topExpanded!.frame.y - 100, `${tag}: collapsing on top freed ${(topExpanded!.frame?.y ?? 0) - (topCollapsed!.frame?.y ?? 0)}px`);
         must(sideExpanded!.seatPlacement === "side" && sideExpanded!.seat !== null && near(sideExpanded!.seat.w, 380, 1), `${tag}: the side seat is ${sideExpanded!.seat?.w}px`);
+        /* Docked at the side the board keeps its columns: scrolling at 1280, never tabs. */
+        must(sideExpanded!.board !== "tabs" && sideExpanded!.columns.every((column) => column.rect.w >= 200), `${tag}: beside the side seat the board is ${sideExpanded!.board} (${sideExpanded!.columns.map((column) => `${column.status} ${column.rect.w}`).join(", ")})`);
+        /* The fold points left, into the rail. */
+        must(await page.evaluate(() => document.querySelector("[data-seat-collapse] svg")?.getAttribute("class")?.includes("lucide-chevron-left") ?? false), `${tag}: the side fold does not point left`);
         /* The side head's first row holds the title and both controls. */
         const sideRow = (name: RegExp) => sideExpanded!.headControls.find((control) => name.test(control.name))?.rect.y ?? -1;
         must(sideRow(/Dock|Закріпити/) === sideRow(/(Collapse|Згорнути)/), `${tag}: at the side the fold sits on another row than the placement switch`);
@@ -2671,6 +2709,11 @@ async function seatsMain(which: SeatCase): Promise<void> {
         must(share(doneWide, "done") > share(doneWide, "assigned") + 150, `${tag}: Done ${share(doneWide, "done")}px vs Assigned ${share(doneWide, "assigned")}px`);
         must(near(share(doneWide, "done"), share(base, "assigned"), 2), `${tag}: Done took ${share(doneWide, "done")}px of Assigned's ${share(base, "assigned")}px`);
         must(doneWide.columns.find((column) => column.status === "done")!.clippedTitles === 0, `${tag}: a title in the wide column is clipped`);
+        /* The wide column lays its tiles out as the workspace does: fixed tiles, not full-width rows. */
+        const wideTiles = doneWide.columns.find((column) => column.status === "done")!.tileWidths;
+        must(wideTiles.length > 0 && wideTiles.every((w) => w <= 200), `${tag}: the wide Done's tiles are ${wideTiles.join(", ")}px`);
+        const shelfTiles = doneWide.columns.find((column) => column.status === "assigned")!;
+        must(shelfTiles.tileWidths.every((w) => w <= shelfTiles.rect.w), `${tag}: a tile in the narrowed Assigned overflows it (${shelfTiles.tileWidths.join(", ")} in ${shelfTiles.rect.w})`);
         await page.click('[data-col-width="blocked"]');
         await page.waitForTimeout(300);
         await page.click('[data-col-pin="blocked"]');
@@ -2694,8 +2737,18 @@ async function seatsMain(which: SeatCase): Promise<void> {
         await page.waitForTimeout(2_000);
         const reloaded = await page.evaluate(readSeatBoard);
         must(wideOnes(reloaded).join() === "blocked", `${tag}: after a reload, wide is ${wideOnes(reloaded).join()}`);
-        entry.states = { default: base.columns, doneWide: doneWide.columns, blockedPinned: pinned.columns, reloaded: reloaded.columns };
-        await page.click('[data-col-width="blocked"]');
+        /* The Overview keeps its fixed shares with the project's pin stored: no
+           width controls, Assigned the wide one, every column head on one line. */
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent("__overview__")}`, { waitUntil: "domcontentloaded" });
+        await page.waitForSelector('[data-kanban-board] header.bar[data-bar="overview"]', { timeout: 60_000 });
+        await page.waitForTimeout(2_000);
+        const overview = await page.evaluate(readSeatBoard);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-overview.png`) });
+        must(overview.columns.every((column) => column.widthControls === 0 && column.wide === null), `${tag} overview: width controls draw (${overview.columns.map((column) => `${column.status} ${column.widthControls}`).join(", ")})`);
+        must(share(overview, "assigned") > share(overview, "blocked"), `${tag} overview: Assigned ${share(overview, "assigned")}px beside Blocked ${share(overview, "blocked")}px`);
+        const oneLine = Math.min(...overview.columns.map((column) => column.headHeight));
+        must(overview.columns.every((column) => column.headHeight <= oneLine + 1), `${tag} overview: a column head wraps (${overview.columns.map((column) => `${column.status} ${column.headHeight}`).join(", ")})`);
+        entry.states = { default: base.columns, doneWide: doneWide.columns, blockedPinned: pinned.columns, reloaded: reloaded.columns, overview: overview.columns };
       }
       report[tag] = entry;
       await context.close();
@@ -2721,22 +2774,35 @@ async function seatsMain(which: SeatCase): Promise<void> {
         const row = await page.evaluate(() => {
           const node = document.querySelector("[data-mobile-previous-seats]")!;
           const r = node.getBoundingClientRect();
-          return { count: node.getAttribute("data-mobile-previous-seats"), h: r.height, text: node.textContent?.trim() ?? "" };
+          /* Drawn as the Seat tick row above it: the same inset, icon and chevron. */
+          const tick = document.querySelector("[data-seat-tick-row]");
+          const icon = (el: Element | null) => el?.querySelector("svg")?.getBoundingClientRect().x ?? null;
+          return {
+            count: node.getAttribute("data-mobile-previous-seats"), h: r.height, text: node.textContent?.trim() ?? "",
+            iconX: icon(node), tickIconX: icon(tick),
+            right: r.right, tickRight: tick?.getBoundingClientRect().right ?? null,
+            chevron: node.querySelector("svg.lucide-chevron-right") !== null,
+          };
         });
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-sheet.png`) });
         must(row.count === "2" && row.h >= 44, `${tag}: the sheet row reads ${row.count} at ${row.h}px`);
+        must(row.iconX !== null && row.iconX === row.tickIconX && row.right === row.tickRight && row.chevron, `${tag}: the row's icon at ${row.iconX} vs the tick row's ${row.tickIconX}, right ${row.right} vs ${row.tickRight}, chevron ${row.chevron}`);
         await page.click("[data-mobile-previous-seats]");
         await page.waitForSelector("[data-mobile-previous-list]");
-        const list = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile-previous-list] [data-seat-row]")].map((node) => ({ h: node.getBoundingClientRect().height, text: node.textContent?.trim() ?? "", notes: node.querySelector("[data-seat-notes-toggle]")?.getBoundingClientRect().height ?? 0 })));
+        const list = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile-previous-list] [data-seat-row]")].map((node) => ({ current: node.dataset.seatCurrent === "1", h: node.getBoundingClientRect().height, text: node.textContent?.trim() ?? "", notes: node.querySelector("[data-seat-notes-toggle]")?.getBoundingClientRect().height ?? 0 })));
+        const backText = await page.evaluate(() => document.querySelector("[data-mobile-previous-back]")?.textContent?.trim() ?? "");
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-list.png`) });
-        must(list.length === 2 && list.every((entry) => entry.h >= 56 && entry.notes >= 44), `${tag}: the list rows ${JSON.stringify(list)}`);
+        /* The live seat first, under Current, then the two previous ones. */
+        must(list.length === 3 && list[0]!.current && list.slice(1).every((entry) => !entry.current) && list.every((entry) => entry.h >= 56 && entry.notes >= 44), `${tag}: the list rows ${JSON.stringify(list)}`);
+        must(backText === (lang === "uk" ? "Оркестратор" : "Orchestrator"), `${tag}: the back link reads «${backText}»`);
         await page.click("[data-mobile-previous-list] [data-seat-notes-toggle] >> nth=0");
         await page.waitForSelector("[data-mobile-previous-notes] [data-seat-notes]");
         await page.waitForFunction(() => !/…/.test(document.querySelector("[data-mobile-previous-notes] [data-seat-notes]")?.textContent ?? "…"), undefined, { timeout: 15_000 }).catch(() => {});
         const notes = await page.evaluate(() => document.querySelector("[data-mobile-previous-notes] [data-seat-notes]")?.textContent ?? "");
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-notes.png`) });
-        must(notes === seats.retired[0]!.notes, `${tag}: the notes screen reads «${notes}»`);
-        report[tag] = { row, list, notes };
+        /* The first row is the live seat: its notes are readable on the phone too. */
+        must(notes === seats.live.notes, `${tag}: the notes screen reads «${notes}»`);
+        report[tag] = { row, list, backText, notes };
         await phone.close();
       }
     }

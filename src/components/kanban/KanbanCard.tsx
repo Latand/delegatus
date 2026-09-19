@@ -118,10 +118,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
     <button
       type="button"
       role="listitem"
-      className={`tile${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}`}
+      className={`tile${workspace ? "" : " fill"}${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}`}
       data-member={member.file.path}
       aria-label={t("kanban.openMember", { role, state })}
-      style={workspace ? undefined : { width: "100%" }}
       onClick={() => onOpen(member.file)}
     >
       <span className="row">
