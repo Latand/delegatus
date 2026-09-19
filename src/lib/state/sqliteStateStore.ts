@@ -175,7 +175,7 @@ function connectDatabase(filename: string): Database {
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       try {
-        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
         if (!isBusyError(error)) throw error;

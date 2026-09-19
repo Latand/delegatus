@@ -26,7 +26,7 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite handoff queue requires the Bun runtime");
     this.db = new sqlite.Database(filename, { create: true, strict: true });
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS handoff_rows (
         operation_id TEXT PRIMARY KEY,

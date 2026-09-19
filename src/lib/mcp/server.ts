@@ -1510,7 +1510,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     this.now = options.now ?? Date.now;
     /* The journal mode cannot change inside a transaction, so these run
        before the schema transaction below. */
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA auto_vacuum = INCREMENTAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
     this.initializeSchema();
     this.importLegacyFile(options.legacyFilePath);
     this.db.exec("BEGIN IMMEDIATE");

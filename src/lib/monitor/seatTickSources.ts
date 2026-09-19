@@ -16,6 +16,7 @@ import {
 } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
+import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -521,11 +522,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
     retirementReport: () => {
-      try {
-        return JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8")) as StructuredHostRetirementReport;
-      } catch {
-        return null;
-      }
+      const report = readJsonCache(statePath("host-retirement-report.json"));
+      return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     settings: (project) => readSeatTickSettings(project),
     openPullRequests: (options) => openPullRequestsForRepo(options),

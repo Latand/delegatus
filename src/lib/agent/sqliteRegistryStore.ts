@@ -189,7 +189,7 @@ export class SqliteAgentRegistryStore {
     this.onRowPayloadParse = options.onRowPayloadParse;
     this.onRevisionQuery = options.onRevisionQuery;
     this.mcpGrantPolicy = options.mcpGrantPolicy;
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS registry_meta (
         key TEXT PRIMARY KEY,
