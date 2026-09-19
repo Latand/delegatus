@@ -30,7 +30,9 @@
  * removal answers (#1857) on the same seeded accounts, with every DELETE
  * answered by a stub at the network layer so no account is removed anywhere:
  * the armed row, the row in flight, the longest refusal, `archive_unavailable`
- * with its path, the summary with all six lines, the summary with a sign-in
+ * with its path, a refusal on the last row after the list was scrolled by hand
+ * (the block and its buttons must sit inside the list), the summary with all
+ * six lines, the summary with a sign-in
  * file left behind, and the clean-up result with names that need a look — at
  * 1440 and 1280 in en and uk, light and dark — and the phone at 390 × 844 for
  * the refusal and the summary. Nothing is clamped or clipped, the path keeps

@@ -1,5 +1,5 @@
 {
-  "commit": "cce8119b3720fd48d07ddcc5a461f9f05849b857",
+  "commit": "378ac0223a0dec537b082dd57113fcf47f86b36c",
   "1440-en-light": {
     "readings": {
       "armed": {
@@ -47,7 +47,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:11Refresh5h88%left· reset in 3h · 01:11Week72%left· reset in 4d · Sep 23 16:11Copy CLIRemoving…",
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:33Refresh5h88%left· reset in 3h · 01:33Week72%left· reset in 4d · Sep 23 16:33Copy CLIRemoving…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -128,6 +128,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -229,7 +324,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1440-en-dark": {
     "readings": {
@@ -278,7 +373,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:11Refresh5h88%left· reset in 3h · 01:11Week72%left· reset in 4d · Sep 23 16:11Copy CLIRemoving…",
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:33Refresh5h88%left· reset in 3h · 01:33Week72%left· reset in 4d · Sep 23 16:33Copy CLIRemoving…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -359,6 +454,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -460,7 +650,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1440-uk-light": {
     "readings": {
@@ -509,7 +699,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:11Оновити5 год88%лишилось· скид через 3 год · 01:11Тиждень72%лишилось· скид через 4 д · 23 вер. 16:11Копіювати CLIВидалення…",
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:33Оновити5 год88%лишилось· скид через 3 год · 01:33Тиждень72%лишилось· скид через 4 д · 23 вер. 16:33Копіювати CLIВидалення…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -590,6 +780,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -691,7 +976,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1440-uk-dark": {
     "readings": {
@@ -740,7 +1025,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:11Оновити5 год88%лишилось· скид через 3 год · 01:11Тиждень72%лишилось· скид через 4 д · 23 вер. 16:11Копіювати CLIВидалення…",
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:33Оновити5 год88%лишилось· скид через 3 год · 01:33Тиждень72%лишилось· скид через 4 д · 23 вер. 16:33Копіювати CLIВидалення…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -821,6 +1106,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -922,7 +1302,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1280-en-light": {
     "readings": {
@@ -971,7 +1351,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:11Refresh5h88%left· reset in 3h · 01:11Week72%left· reset in 4d · Sep 23 16:11Copy CLIRemoving…",
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:33Refresh5h88%left· reset in 3h · 01:33Week72%left· reset in 4d · Sep 23 16:33Copy CLIRemoving…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -1052,6 +1432,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -1153,7 +1628,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1280-en-dark": {
     "readings": {
@@ -1202,7 +1677,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:11Refresh5h88%left· reset in 3h · 01:11Week72%left· reset in 4d · Sep 23 16:11Copy CLIRemoving…",
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:33Refresh5h88%left· reset in 3h · 01:33Week72%left· reset in 4d · Sep 23 16:33Copy CLIRemoving…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -1283,6 +1758,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -1384,7 +1954,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1280-uk-light": {
     "readings": {
@@ -1433,7 +2003,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:11Оновити5 год88%лишилось· скид через 3 год · 01:11Тиждень72%лишилось· скид через 4 д · 23 вер. 16:11Копіювати CLIВидалення…",
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:33Оновити5 год88%лишилось· скид через 3 год · 01:33Тиждень72%лишилось· скид через 4 д · 23 вер. 16:33Копіювати CLIВидалення…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -1514,6 +2084,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -1615,7 +2280,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "1280-uk-dark": {
     "readings": {
@@ -1664,7 +2329,7 @@
           "w": 400,
           "h": 633.15625
         },
-        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:11Оновити5 год88%лишилось· скид через 3 год · 01:11Тиждень72%лишилось· скид через 4 д · 23 вер. 16:11Копіювати CLIВидалення…",
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:33Оновити5 год88%лишилось· скид через 3 год · 01:33Тиждень72%лишилось· скид через 4 д · 23 вер. 16:33Копіювати CLIВидалення…",
         "clipped": [],
         "pathId": null,
         "pathShown": null,
@@ -1745,6 +2410,101 @@
             "h": 20
           }
         ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
       },
       "summary": {
         "found": true,
@@ -1846,7 +2606,7 @@
         ]
       }
     },
-    "deletes": 6
+    "deletes": 8
   },
   "390-en-light-refusal": {
     "found": true,
