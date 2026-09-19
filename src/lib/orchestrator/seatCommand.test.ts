@@ -5,7 +5,10 @@ import path from "node:path";
 
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
+import { saveRoleOverrides } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
@@ -914,6 +917,77 @@ test("a same-key retry after a TERMINAL spawn rejection recomposes instead of re
   expect(active?.conversationId).toBe(NEW_ID);
   expect(pending).toBeNull();
   expect(history).toMatchObject([{ reason: "terminal_error", seat: { intent: { clientRequestId: "req_00000001", error: "transient" } } }]);
+});
+
+test("a pending replay sends its first attempt's role table after a role was edited in between (#1880)", async () => {
+  /* The spawn admission fence answers a clientAttemptId by its request digest,
+     so this stub keeps that contract: a changed body under a known attempt id
+     is a conflict. The first attempt never answers, as when the process that
+     sent it died, which leaves its intent pending for the same key to finish. */
+  const admitted = new Map<string, string>();
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      calls += 1;
+      const attempt = String(body.clientAttemptId);
+      const digest = spawnAdmissionBodyDigest(body);
+      const known = admitted.get(attempt);
+      if (known && known !== digest) return { status: 409, body: { error: "request digest conflict", code: "conflict" } };
+      admitted.set(attempt, digest);
+      if (calls === 1) return new Promise<never>(() => {});
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+
+  void executeOrchestratorSeatRequest(spawnRequest(), deps);
+  await Bun.sleep(0);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(orchestratorSeatFor("proj-a").pending?.intent.error).toBeNull();
+
+  const builder = ROLE_DEFAULTS.find((role) => role.id === "builder")!;
+  const effort = builder.config.effort === "low" ? "high" : "low";
+  saveRoleOverrides({ builder: { config: { ...builder.config, effort } } });
+
+  const replay = await executeOrchestratorSeatRequest(spawnRequest(), deps);
+
+  expect(replay.status).toBe(200);
+  const prompts = recorded.spawns.map((body) => String(body.prompt));
+  expect(prompts).toHaveLength(2);
+  expect(prompts[1]).toBe(prompts[0]!);
+  expect(prompts[1]).toContain(`| builder | ${builder.config.engine} | ${builder.config.model} | ${builder.config.effort} |`);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+
+  /* A fresh designation still reads the registry as it is now. */
+  const fresh = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000002"), replaceIncumbent: true }, deps);
+  expect(fresh.status).toBe(200);
+  expect(String(recorded.spawns[2]?.prompt)).toContain(`| builder | ${builder.config.engine} | ${builder.config.model} | ${effort} |`);
+});
+
+test("a pending adoption replay delivers its first attempt's role table under the same message id (#1880)", async () => {
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    deliver: async (input) => {
+      recorded.deliveries.push({ conversationId: input.conversationId, clientMessageId: input.clientMessageId, text: input.text });
+      calls += 1;
+      if (calls === 1) return new Promise<never>(() => {});
+      return { ok: true, outcome: "delivered" };
+    },
+  });
+  const request = { project: "proj-a", mandate: "own the board", clientRequestId: "req_00000001", conversationId: OLD_ID };
+
+  void executeOrchestratorSeatRequest(request, deps);
+  await Bun.sleep(0);
+  expect(recorded.deliveries).toHaveLength(1);
+  const reviewer = ROLE_DEFAULTS.find((role) => role.id === "reviewer")!;
+  const effort = reviewer.config.effort === "low" ? "high" : "low";
+  saveRoleOverrides({ reviewer: { config: { ...reviewer.config, effort } } });
+
+  const replay = await executeOrchestratorSeatRequest(request, deps);
+
+  expect(replay.status).toBe(200);
+  expect(recorded.deliveries).toHaveLength(2);
+  expect(recorded.deliveries[1]).toEqual(recorded.deliveries[0]!);
 });
 
 test("a STILL-LIVE pending pre-spawn replay keeps the ORIGINAL engine and model", async () => {

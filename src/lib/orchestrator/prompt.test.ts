@@ -5,10 +5,14 @@ import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import type { RoleDefinition } from "@/lib/roles/types";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
+  ORCHESTRATOR_ROLE_TABLE_HEADING,
   ORCHESTRATOR_SPAWN_CONFIG,
   ORCHESTRATOR_SYSTEM_PROMPT,
   ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
@@ -17,6 +21,7 @@ import {
   ORCHESTRATOR_VIEWER_CLOCK_HEADING,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
+  orchestratorRoleTable,
 } from "./prompt";
 
 test("the manager draft defaults to Claude Opus 5 on low effort through the role preset", () => {
@@ -62,16 +67,17 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 19, and a v18 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(19);
+test("the default mandate is at version 20, and a v19 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(20);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
      v18 carries (#1834): the card's text is the human's and agent context goes
      in the task's separate details field. v19 (#1843) adds the human-in-the-loop
-     section. */
-  expect(orchestratorMandateStale(18)).toBe(true);
-  expect(orchestratorMandateStale(19)).toBe(false);
+     section. v20 (#1880) points "role per the role table" at the table
+     delivery renders. */
+  expect(orchestratorMandateStale(19)).toBe(true);
+  expect(orchestratorMandateStale(20)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("AGENT CONTEXT GOES IN details");
 });
@@ -123,7 +129,7 @@ test("mandate delivery keys off directive content and appends it exactly once", 
   expect(delivered).toStartWith(custom);
   expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${orchestratorRoleTable(ROLE_DEFAULTS)}`);
 });
 
 /* #1245 — the handover has to reach the seat that is actually holding a
@@ -270,9 +276,9 @@ test("the task-ownership section reaches a bespoke or older mandate, exactly onc
 
 /* The current default carries all three inline, so a fresh seat reads each in
    place and delivery has nothing to append. */
-test("the delivered default carries each directive exactly once and is unchanged by delivery", () => {
+test("the delivered default carries each directive exactly once, and delivery adds only the role table", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE);
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${orchestratorRoleTable(ROLE_DEFAULTS)}`);
   for (const directive of [
     ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
     ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
@@ -312,4 +318,55 @@ test("delivery removes the deploy section a stored mandate carries from the old 
 test("a seat's own deploy section survives delivery", () => {
   const stored = "## Deploys\nPush the tag and let the pipeline build it.\n\n## Fences\n- Report, never ask.";
   expect(orchestratorMandateForDelivery(stored)).toStartWith(stored);
+});
+
+/* #1880 — a manager launched a routine read-only audit with no runtime and it
+   ran at the preset's xhigh: the mandate said "role per the role table" and
+   carried no table. Delivery now renders it from the registry it is handed, so
+   a changed preset shows up in the next mandate a seat receives. */
+function roleTableLines(mandate: string): string[] {
+  const start = mandate.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING);
+  expect(start).toBeGreaterThanOrEqual(0);
+  return mandate.slice(start).split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| role ") && !line.startsWith("| ---"));
+}
+
+test("the delivered mandate renders the role table from the registry it is handed", () => {
+  const registry: RoleDefinition[] = ROLE_DEFAULTS.map((role) => role.id === "prod-auditor"
+    ? { ...role, config: { engine: "claude", model: "sonnet", effort: "low" } }
+    : role);
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT, registry);
+  const rows = roleTableLines(delivered);
+
+  expect(rows).toHaveLength(ROLE_DEFAULTS.length);
+  expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
+  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | xhigh | read-only |");
+});
+
+test("the role table carries the runtime guidance beside it", () => {
+  const delivered = orchestratorMandateForDelivery("Bespoke mandate");
+  const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
+  expect(section).toContain("omits engine, model and effort");
+  expect(section).toContain("on the stage");
+  expect(section).toMatch(/low or medium/);
+  expect(section).toContain("NEXT attempt");
+  expect(section).toContain("create_pipeline");
+});
+
+test("delivery replaces a role table the mandate already carries, so it is always the live one", () => {
+  const stale = orchestratorMandateForDelivery("Bespoke mandate", ROLE_DEFAULTS.map((role) => ({ ...role, config: { ...role.config, effort: "max" } })));
+  const fresh = orchestratorMandateForDelivery(stale);
+
+  expect(fresh.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
+  expect(fresh).not.toContain("| max |");
+  expect(fresh).toBe(orchestratorMandateForDelivery("Bespoke mandate"));
+  expect(orchestratorMandateForDelivery(fresh)).toBe(fresh);
+});
+
+test("the role table keeps the delivered default inside the structured envelope", () => {
+  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
+  const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
+  expect(Buffer.byteLength(section)).toBeLessThan(3_000);
+  /* Leave the orchestrator scaffold and a rotation's history room beside it. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 8_000);
 });
