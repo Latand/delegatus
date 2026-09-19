@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
-import { AccountHistoryInventoryBlockedError, accountRemovalBlockers } from "@/lib/accounts/removal";
+import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -81,34 +80,23 @@ export async function DELETE(req: NextRequest) {
       if (blockers.length > 0) {
         return NextResponse.json({ error: "Codex account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers }, { status: 409 });
       }
-      const registry = agentRegistry();
-      const beforeRetirement = registry.readOnlySnapshot();
       try {
         if (login.attemptState === "pending") await managedCodexRuntime().cancelLogin(account.id);
         if (account.loginPane !== null) setCodexAccountLoginPane(account.id, null);
-        registry.retireAccount("codex", account.id, "default");
-        const retired = registry.readOnlySnapshot();
-        try {
-          const removal = removeManagedCodexAccount(account.id);
-          requestAccountMigrationTick();
-          return NextResponse.json({ removed: { id: account.id }, cleanupPending: removal.cleanupPending });
-        } catch (error) {
-          registry.restoreSnapshot(retired, beforeRetirement);
-          throw error;
-        }
+        const removal = removeManagedCodexAccount(account.id);
+        requestAccountMigrationTick();
+        return NextResponse.json(removalResponse(account.id, removal));
       } catch (error) {
-        if (error instanceof AccountHistoryInventoryBlockedError) {
-          return NextResponse.json({
-            error: "Codex account history inventory blocked removal",
-            code: "account_removal_blocked",
-            blockers: ["filesystem_history"],
-            history: error.report,
-          }, { status: 409 });
+        if (error instanceof AccountRemovalBlockedError) {
+          return NextResponse.json({ error: "Codex account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers }, { status: 409 });
+        }
+        if (error instanceof AccountArchiveUnavailableError) {
+          return NextResponse.json({ error: error.message, code: "archive_unavailable", archive: error.archive }, { status: 409 });
         }
         if (error instanceof UnknownAccountError) return NextResponse.json({ error: "Codex account is unavailable", code: "unknown_account" }, { status: 404 });
         if (error instanceof CorruptCodexAccountsError) return NextResponse.json({ error: "Codex accounts require registry repair", code: "accounts_locked" }, { status: 409 });
         if (error instanceof UnsafeCodexHomeError) return NextResponse.json({ error: "Codex account home failed safety checks", code: "unsafe_home" }, { status: 409 });
-        return NextResponse.json({ error: "Codex account could not be removed", code: "removal_failed" }, { status: 500 });
+        return NextResponse.json({ error: "Codex account could not be removed", code: "removal_failed", ...removalErrno(error) }, { status: 500 });
       }
     });
   } catch {
