@@ -15,7 +15,6 @@ const SCALE_MODULE = path.join(COMPONENTS, "layers.ts");
  * shrink.
  */
 const LEGACY_RAW_Z: Record<string, readonly string[]> = {
-  "ProjectDashboard.tsx": ["z-30"],
   "SoundToggle.tsx": ["z-50"],
   "Viewer.tsx": ["z-50", "z-50", "z-40", "z-40"],
   "AccountBadge.tsx": ["z-[95]"],
