@@ -357,6 +357,19 @@ export type PipelineStageAttempt = {
     resumedAt?: string;
     clientMessageId?: string;
   };
+  /** The one verdict the controller asked this attempt for (#1756). Written
+      when a completed turn carried no verdict the reader could accept:
+      `messageTs` is the turn it was asked about, and a later completed turn
+      still without one is the second silence that parks. `requestedAt` is set
+      only once the delivery surface accepted the request, and `firstMissAt`
+      bounds the whole wait, so a queue that never drains still parks the lane
+      through the ordinary recovery checks. */
+  verdictRequest?: {
+    firstMissAt: string;
+    messageTs: number;
+    requestedAt?: string;
+    clientMessageId?: string;
+  };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
