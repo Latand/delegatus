@@ -1,9 +1,10 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
+import type { FileEntry } from "@/lib/types";
 
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
@@ -14,12 +15,14 @@ const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { flowTurn } = await import("@/lib/flows/decisions");
+const { tickFlow } = await import("@/lib/flows/engine");
 type PipelinePorts = import("./engine").PipelinePorts;
 
 /* A tick this suite did not ask for must never reach the real ports. */
 registerPipelineTick(async () => {});
 
 afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
+afterEach(() => setSystemTime());
 
 const STAGE_CONVERSATION = "conversation_stage_bg";
 const BASE_SHA = "9".repeat(40);
@@ -537,4 +540,86 @@ test("a review flow's implementer turn reads as busy while it holds a background
 
   append(records.notification(start + 3_000, TASK_ID, "completed"), records.endTurn(start + 4_000, "REVIEW_READY: fixed"));
   expect((await flowTurn(flow))?.state).toBe("terminal");
+});
+
+/** A review flow waiting on its implementer, driven by the production flow
+    tick over this suite's transcript. Manual mode, so a READY marker only
+    queues a round and launches nothing. */
+function waitingFlow(createdAt: number): Flow {
+  return {
+    id: "flow-bg",
+    template: "implement-review",
+    project: "invented-project",
+    cwd: ROOT,
+    implementerPath: transcript,
+    implementerConversationId: null,
+    roles: { implementer: { engine: "claude" }, reviewer: { engine: "codex" } },
+    baseRef: BASE_SHA,
+    baseMode: "head",
+    mode: "manual",
+    reviewerMode: "headless",
+    roundLimit: 5,
+    state: "waiting_ready",
+    stateDetail: null,
+    rounds: [],
+    createdAt: iso(createdAt),
+    closedAt: null,
+  } as unknown as Flow;
+}
+
+async function tickFlowAt(flow: Flow, at: number): Promise<void> {
+  setSystemTime(new Date(at));
+  const entries = new Map([[transcript, { path: transcript } as unknown as FileEntry]]);
+  await tickFlow(flow, [], entries, () => {});
+}
+
+test("a review flow whose implementer holds a background command that never reports shows the wait, then parks naming it", async () => {
+  const start = Date.parse("2026-09-19T12:00:00.000Z");
+  const flow = waitingFlow(start - 60_000);
+  append(
+    records.prompt(start, "Fix the findings"),
+    records.backgroundStart(start + 1_000),
+    records.endTurn(start + 2_000, "The suite is running in the background; I'll decide when it completes."),
+  );
+  const transcriptBefore = fs.readFileSync(transcript, "utf8");
+
+  await tickFlowAt(flow, start + 5_000);
+  expect(flow.state).toBe("waiting_ready");
+  expect(flow.stateDetail).toStartWith("waiting: ");
+  expect(flow.stateDetail).toContain(`background task ${TASK_ID}`);
+
+  await tickFlowAt(flow, start + 5_000 + 59 * 60_000);
+  expect(flow.state).toBe("waiting_ready");
+  expect(flow.stateDetail).toContain(`background task ${TASK_ID}`);
+
+  await tickFlowAt(flow, start + 5_000 + 60 * 60_000);
+  expect(flow.state).toBe("needs_decision");
+  expect(flow.stateDetail).toContain(`background task ${TASK_ID}`);
+  expect(flow.stateDetail).toContain("exceeded 60 min");
+  expect(flow.stateDetail).toContain("left running");
+  expect(flow.decisionRequired).toBe(true);
+  /* Parking stops nothing: no round, no relay, and the transcript untouched. */
+  expect(flow.rounds).toEqual([]);
+  expect(fs.readFileSync(transcript, "utf8")).toBe(transcriptBefore);
+});
+
+test("a review flow reads the implementer's READY marker on the turn after its background command reports", async () => {
+  const start = Date.parse("2026-09-19T12:00:00.000Z");
+  const flow = waitingFlow(start - 60_000);
+  append(
+    records.prompt(start, "Fix the findings"),
+    records.backgroundStart(start + 1_000),
+    records.endTurn(start + 2_000, "REVIEW_READY: fixed, pending the suite"),
+  );
+  await tickFlowAt(flow, start + 5_000);
+  expect(flow.state).toBe("waiting_ready");
+  expect(flow.rounds).toEqual([]);
+  expect(flow.backgroundWait?.tasks).toEqual([{ id: TASK_ID, kind: "command" }]);
+
+  append(records.notification(start + 30 * 60_000, TASK_ID, "completed"), records.endTurn(start + 30 * 60_000 + 20, "REVIEW_READY: fixed, suite green"));
+  await tickFlowAt(flow, start + 31 * 60_000);
+  expect(flow.state).toBe("spawn_pending");
+  expect(flow.rounds.map((round) => round.readyNote)).toEqual(["fixed, suite green"]);
+  expect(flow.backgroundWait ?? null).toBeNull();
+  expect(flow.stateDetail).toBeNull();
 });

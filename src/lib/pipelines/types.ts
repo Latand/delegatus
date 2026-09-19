@@ -1,5 +1,6 @@
 import type { FlowEngine, RoleConfig } from "@/lib/flows/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
 export type PipelineSandbox = "full" | "restricted";
@@ -359,19 +360,9 @@ export type PipelineStageAttempt = {
     clientMessageId?: string;
   };
   /** Why a turn that ended did not settle this attempt (#1441): its agent
-      still held harness-tracked background work, named in `tasks`. `openedAt`
-      is when the wait began and bounds it as a whole; `since` is when the
-      controller first saw the transcript silent at `silentSince` (its newest
-      record) with that work out. `until` is when the lane parks if the work
-      never reports: the earlier of the silence bound and the whole-wait
-      bound. Cleared once the work has reported. */
-  backgroundWait?: {
-    openedAt: string;
-    since: string;
-    until: string;
-    silentSince: number | null;
-    tasks: Array<{ id: string; kind: "command" | "monitor" | "wakeup" }>;
-  };
+      still held harness-tracked background work, named in `tasks`. Cleared
+      once the work has reported. */
+  backgroundWait?: BackgroundWait;
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn

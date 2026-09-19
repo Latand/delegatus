@@ -1,6 +1,6 @@
 import { agentRegistry } from "@/lib/agent/registry";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
-import { pendingBackgroundTasks, readBackgroundTaskLedger } from "@/lib/pipelines/backgroundTasks";
+import { pendingBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTask } from "@/lib/pipelines/backgroundTasks";
 import { loadPipelines, withPipelineMutation } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { readStableTailRecords } from "@/lib/scanner/activity";
@@ -61,15 +61,25 @@ export async function flowTurn(flow: Flow) {
   /* A Claude turn that ended while the implementer still holds background work
      is not its last (#1441): the harness re-invokes it when the work reports.
      Reading it as busy keeps the READY marker, a pending decision and the
-     "turn ended without a decision" park all waiting for that later turn. */
-  const ledger = engine === "claude" && turn.state === "terminal" ? await readBackgroundTaskLedger(flow.implementerPath) : null;
-  const holdsBackgroundWork = ledger !== null && pendingBackgroundTasks(ledger, Date.now()).length > 0;
+     "turn ended without a decision" park all waiting for that later turn; the
+     flow tick bounds that wait with `backgroundTasks` (null: the ledger could
+     not be read, so a wait already under way holds to its own bound). */
+  let backgroundTasks: RunningBackgroundTask[] | null | undefined;
+  if (turn.state === "terminal") {
+    const ledger = engine === "claude" ? await readBackgroundTaskLedger(flow.implementerPath) : null;
+    backgroundTasks = engine === "claude" ? ledger && pendingBackgroundTasks(ledger, Date.now()) : [];
+  }
+  const holdsBackgroundWork = backgroundTasks === null
+    ? Boolean(flow.backgroundWait && Date.now() < Date.parse(flow.backgroundWait.until))
+    : Boolean(backgroundTasks?.length);
+  const newestTs = Date.parse(String(read.records.at(-1)?.timestamp ?? ""));
   return {
     turnId,
     state: holdsBackgroundWork ? "busy" as const : turn.state,
     successful,
     terminalAt: turn.terminalAt,
     message: lastAssistantMessageFromRecords(read.records.slice(start), engine === "codex" ? "codex-sessions" : "claude-projects", 0),
+    ...(backgroundTasks !== undefined ? { backgroundTasks, lastRecordAt: Number.isFinite(newestTs) ? newestTs : null } : {}),
   };
 }
 

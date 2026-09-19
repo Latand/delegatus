@@ -180,6 +180,65 @@ export function describeBackgroundTasks(tasks: readonly RunningBackgroundTask[])
     : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`).join(", ");
 }
 
+/** How long a stage or a review flow waits, silent, on background work its
+    agent started before it parks naming it (#1441). An hour covers the longest
+    re-invocation the harness schedules itself (a wakeup clamps at 3600 s) and a
+    long bench or CI wait; parking earlier would lose the work the task is doing.
+    A host that died writes nothing more, so this bound covers it too. */
+export const BACKGROUND_TASK_WAIT_CEILING_MS = 60 * 60_000;
+/** The bound on the whole wait, however often the agent answers in between:
+    a persistent monitor over a source that keeps emitting, or a wakeup the
+    agent keeps re-arming, never lets the silence bound run out. */
+export const BACKGROUND_TASK_WAIT_LIMIT_MS = 4 * 60 * 60_000;
+export const BACKGROUND_TASK_WAIT_DETAIL_PREFIX = "waiting: ";
+
+/** A wait on background work, as the stage attempt or the flow records it.
+    `openedAt` is when the wait began and bounds it as a whole; `since` is when
+    the reader first saw the transcript silent at `silentSince` (its newest
+    record) with the work out. `until` is when the wait parks if the work never
+    reports: the earlier of the silence bound and the whole-wait bound. */
+export type BackgroundWait = {
+  openedAt: string;
+  since: string;
+  until: string;
+  silentSince: number | null;
+  tasks: Array<{ id: string; kind: RunningBackgroundTask["kind"] }>;
+};
+
+/**
+ * One step of a bounded wait on live background work, shared by the pipeline
+ * controller and review flows. Any new record (a monitor event the agent
+ * answered, a new task) restarts the silence bound; nothing restarts the
+ * whole-wait bound. `expired` names the bound that ran out, and `reason` is
+ * the park reason naming the work; otherwise `detail` is the visible state
+ * detail for the wait.
+ */
+export function stepBackgroundWait(
+  prior: BackgroundWait | undefined | null,
+  live: readonly RunningBackgroundTask[],
+  silentSince: number | null,
+  now: string,
+  settlesOn: string,
+): { wait: BackgroundWait; expired: false; detail: string } | { wait: BackgroundWait; expired: true; reason: string } {
+  const since = prior && prior.silentSince === silentSince ? prior.since : now;
+  const openedAt = prior?.openedAt ?? now;
+  const silenceBound = Date.parse(since) + BACKGROUND_TASK_WAIT_CEILING_MS;
+  const wholeBound = Date.parse(openedAt) + BACKGROUND_TASK_WAIT_LIMIT_MS;
+  const until = new Date(Math.min(silenceBound, wholeBound)).toISOString();
+  const named = describeBackgroundTasks(live);
+  const wait: BackgroundWait = { openedAt, since, until, silentSince, tasks: live.map((task) => ({ id: task.id, kind: task.kind })) };
+  if (Date.parse(now) >= Date.parse(until)) {
+    return {
+      wait,
+      expired: true,
+      reason: silenceBound <= wholeBound
+        ? `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_CEILING_MS / 60_000} min without a notification; the agent and its work were left running`
+        : `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_LIMIT_MS / 3_600_000} h in all without the work reporting; the agent and its work were left running`,
+    };
+  }
+  return { wait, expired: false, detail: `${BACKGROUND_TASK_WAIT_DETAIL_PREFIX}${named}; ${settlesOn}, and parks at ${until} if it never does` };
+}
+
 /**
  * Does this conversation hold a running background task? The one predicate the
  * pipeline controller, `stage_report` and review flows share: the harness-

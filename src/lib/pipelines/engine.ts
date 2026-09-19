@@ -47,7 +47,7 @@ import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 import { requestPipelineTick } from "./controllerSignal";
-import { describeBackgroundTasks, liveBackgroundTasks } from "./backgroundTasks";
+import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
@@ -1214,16 +1214,6 @@ const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, 
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
 const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
-/** How long a stage waits, silent, on background work its agent started before
-    the lane parks naming it (#1441). An hour covers the longest re-invocation
-    the harness schedules itself (a wakeup clamps at 3600 s) and a long bench
-    or CI wait; parking earlier would lose the work the task is doing. */
-const BACKGROUND_TASK_WAIT_CEILING_MS = 60 * 60_000;
-/** The bound on the whole wait, however often the agent answers in between:
-    a persistent monitor over a source that keeps emitting, or a wakeup the
-    agent keeps re-arming, never lets the silence bound run out. */
-const BACKGROUND_TASK_WAIT_LIMIT_MS = 4 * 60 * 60_000;
-const BACKGROUND_TASK_WAIT_DETAIL_PREFIX = "waiting: ";
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
     fresh attempt on the next tick (tickRunStage/tickReviewStage). */
@@ -2619,9 +2609,9 @@ async function requestStageVerdictOnce(
 /**
  * Holds a stage attempt open while its conversation has live background work
  * (#1441), and says so on the lane. The wait is bounded twice: once the
- * transcript has been silent for {@link BACKGROUND_TASK_WAIT_CEILING_MS} with
- * the work still out, or once the wait as a whole has lasted
- * {@link BACKGROUND_TASK_WAIT_LIMIT_MS}, the lane parks naming the work.
+ * transcript has been silent for an hour with the work still out, or once the
+ * wait as a whole has lasted four hours, the lane parks naming the work
+ * ({@link stepBackgroundWait}).
  * Neither outcome stamps `completedAt`,
  * so the terminal-host reaper leaves the agent and its task running.
  */
@@ -2647,40 +2637,16 @@ function holdForBackgroundTasks(
     }
     return "none";
   }
-  const silentSince = durable.lastRecordAt ?? null;
   const prior = attempt.backgroundWait;
-  /* Any new record — a monitor event the agent answered, a new task — is the
-     agent at work, so the silence and its bound start again from there. */
-  const since = prior && prior.silentSince === silentSince ? prior.since : now;
-  const openedAt = prior?.openedAt ?? now;
-  const silenceBound = unixMs(since) + BACKGROUND_TASK_WAIT_CEILING_MS;
-  const wholeBound = unixMs(openedAt) + BACKGROUND_TASK_WAIT_LIMIT_MS;
-  const until = new Date(Math.min(silenceBound, wholeBound)).toISOString();
-  const named = describeBackgroundTasks(live);
-  const tasks = live.map((task) => ({ id: task.id, kind: task.kind }));
-  if (unixMs(now) >= unixMs(until)) {
-    attempt.backgroundWait = { openedAt, since, until, silentSince, tasks };
-    park(
-      pipeline,
-      silenceBound <= wholeBound
-        ? `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_CEILING_MS / 60_000} min without a notification; the stage agent and its work were left running`
-        : `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_LIMIT_MS / 3_600_000} h in all without the work reporting; the stage agent and its work were left running`,
-      attempt,
-    );
+  const step = stepBackgroundWait(prior, live, durable.lastRecordAt ?? null, now, "the stage settles on the turn after it reports");
+  attempt.backgroundWait = step.wait;
+  if (step.expired) {
+    park(pipeline, step.reason, attempt);
     persist();
     return "parked";
   }
-  const detail = `${BACKGROUND_TASK_WAIT_DETAIL_PREFIX}${named}; the stage settles on the turn after it reports, and parks at ${until} if it never does`;
-  if (
-    !prior
-    || prior.openedAt !== openedAt
-    || prior.since !== since
-    || prior.silentSince !== silentSince
-    || JSON.stringify(prior.tasks) !== JSON.stringify(tasks)
-    || pipeline.stateDetail !== detail
-  ) {
-    attempt.backgroundWait = { openedAt, since, until, silentSince, tasks };
-    pipeline.stateDetail = detail;
+  if (JSON.stringify(prior) !== JSON.stringify(step.wait) || pipeline.stateDetail !== step.detail) {
+    pipeline.stateDetail = step.detail;
     persist();
   }
   return "waiting";

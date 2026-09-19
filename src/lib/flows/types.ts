@@ -2,6 +2,8 @@
 // This file is the seam between the server engine (src/lib/flows/*) and the
 // UI (src/components/*). Extend it only when the spec changes.
 
+import type { BackgroundWait } from "@/lib/pipelines/backgroundTasks";
+
 export type FlowEngine = "claude" | "codex";
 
 export type RoleConfig = {
@@ -217,6 +219,10 @@ export type Flow = {
   pausedState?: FlowState | null;
   /** Human-readable reason shown on the strip for needs_decision/paused. */
   stateDetail: string | null;
+  /** The implementer's turn ended while it still held harness-tracked
+      background work (#1441); the flow waits for the turn after the work
+      reports, to this bound. Cleared once the work has reported. */
+  backgroundWait?: BackgroundWait | null;
   /** Ephemeral read-model block derived from the attached implementer. */
   block?: FlowBlock | null;
   /** Durable positive merge evidence and the repository identity needed to
