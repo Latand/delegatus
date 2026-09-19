@@ -15,6 +15,8 @@ import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { FolderPlus, Search } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
+import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
+import { openOnboarding } from "./onboarding/useOnboarding";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban } from "./OverviewKanban";
@@ -153,6 +155,15 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
             <FolderPlus className="h-4 w-4" aria-hidden /> {t("overview.firstRunCreate")}
           </button>
           <span className="max-w-[440px] text-[11.5px] text-muted">{t("overview.firstRunElsewhere")}</span>
+          {/* #1876: the setup guide, for someone who closed it on the way in. */}
+          <button
+            type="button"
+            data-testid="overview-setup-guide"
+            className="inline-flex min-h-11 items-center text-[12px] font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => openOnboarding("guide")}
+          >
+            {t("onboarding.overviewEntry")}
+          </button>
         </div>
       )}
     </div>
@@ -176,6 +187,8 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
             ),
           },
           { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
+          { kind: "divider", key: "d-setup" },
+          ...onboardingMobileMenuEntries(t, close),
         ];
         return <MobileMenuSheet title={t("rail.overview")} entries={entries} onClose={close} />;
       }

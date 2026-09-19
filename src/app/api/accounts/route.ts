@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
+import { engineCliPresence } from "@/lib/accounts/engineConnection";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { accountProjectRows } from "@/lib/accounts/projectAccountsView";
 import {
@@ -70,8 +71,13 @@ function autoBalanceProjection(engine: MigrationEngine, snapshot: ReturnType<Ret
   };
 }
 
-/** Pure durable projection. Live auth/quota/login reconciliation runs in the controller. */
-export async function GET() {
+/** Pure durable projection. Live auth/quota/login reconciliation runs in the controller.
+    `?recheck=cli` re-probes the two CLIs instead of answering the cached probe. */
+export async function GET(req?: NextRequest) {
+  const fresh = req?.nextUrl.searchParams.get("recheck") === "cli";
+  /* Whether each engine's command resolves (#1876): a bounded `--version`,
+     cached for a minute, started before the durable reads so it overlaps them. */
+  const cliProbe = Promise.all([engineCliPresence("claude", { fresh }), engineCliPresence("codex", { fresh })]);
   const registry = agentRegistry();
   const snapshot = registry.readOnlySnapshot();
   const now = Date.now();
@@ -143,15 +149,18 @@ export async function GET() {
   const claudeMigration = migrationProjection("claude", snapshot);
   const codexAuto = autoBalanceProjection("codex", snapshot, now);
   const claudeAuto = autoBalanceProjection("claude", snapshot, now);
+  const [claudeCli, codexCli] = await cliProbe;
   return NextResponse.json({
     codex: {
       active: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
+      cli: codexCli,
       accounts: codexAccounts,
       migration: codexMigration,
       autoBalance: codexAuto,
     },
     claude: {
       active: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
+      cli: claudeCli,
       accounts: claudeAccounts,
       mutationLocked: claudeAccountsMutationLocked(),
       migration: claudeMigration,
