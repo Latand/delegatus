@@ -1,0 +1,6137 @@
+{
+  "commit": "09bb2a17556a5c49b8e58bed1f8025a4356aadfe",
+  "case": "seat-placement",
+  "seeded": {
+    "productTasks": 5,
+    "seats": [
+      "Orchestrator seat, board batch",
+      "Manager seat, release week",
+      "Orchestrator seat, launch week"
+    ]
+  },
+  "seat-placement-1440-en-light": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1192,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1192,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1192,
+        "h": 852
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "finished",
+          "rect": {
+            "x": 496.5,
+            "y": 75.5,
+            "w": 50.5,
+            "h": 16
+          }
+        },
+        {
+          "name": "Previous seats, 2",
+          "rect": {
+            "x": 555,
+            "y": 69.5,
+            "w": 124.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Seat tick settings. Tick: every 60 min · state unknown",
+          "rect": {
+            "x": 1070.5,
+            "y": 71.5,
+            "w": 73,
+            "h": 24
+          }
+        },
+        {
+          "name": "Rotate",
+          "rect": {
+            "x": 1152,
+            "y": 71.5,
+            "w": 63.5,
+            "h": 24
+          }
+        },
+        {
+          "name": "Replaced an earlier orchestrator",
+          "rect": {
+            "x": 1223.5,
+            "y": 71.5,
+            "w": 12,
+            "h": 12
+          }
+        },
+        {
+          "name": "Dock at the side",
+          "rect": {
+            "x": 1251.5,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "rect": {
+            "x": 1287.5,
+            "y": 69.5,
+            "w": 67.5,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Previous seats2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 496.5,
+              "y": 75.5,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 555,
+              "y": 69.5,
+              "w": 124.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 1070.5,
+              "y": 71.5,
+              "w": 73,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 1152,
+              "y": 71.5,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Replaced an earlier orchestrator",
+            "rect": {
+              "x": 1223.5,
+              "y": 71.5,
+              "w": 12,
+              "h": 12
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1251.5,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 1287.5,
+              "y": 69.5,
+              "w": 67.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Previous seats2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 456,
+              "y": 73,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 514.5,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1239,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Expand the orchestrator chat (O)",
+            "rect": {
+              "x": 1275,
+              "y": 67,
+              "w": 80,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 379,
+              "y": 60,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 437.5,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 499.5,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 547.5,
+              "y": 88,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the top",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1440-en-dark": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1192,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1192,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1192,
+        "h": 852
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "finished",
+          "rect": {
+            "x": 496.5,
+            "y": 75.5,
+            "w": 50.5,
+            "h": 16
+          }
+        },
+        {
+          "name": "Previous seats, 2",
+          "rect": {
+            "x": 555,
+            "y": 69.5,
+            "w": 124.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Seat tick settings. Tick: every 60 min · state unknown",
+          "rect": {
+            "x": 1070.5,
+            "y": 71.5,
+            "w": 73,
+            "h": 24
+          }
+        },
+        {
+          "name": "Rotate",
+          "rect": {
+            "x": 1152,
+            "y": 71.5,
+            "w": 63.5,
+            "h": 24
+          }
+        },
+        {
+          "name": "Replaced an earlier orchestrator",
+          "rect": {
+            "x": 1223.5,
+            "y": 71.5,
+            "w": 12,
+            "h": 12
+          }
+        },
+        {
+          "name": "Dock at the side",
+          "rect": {
+            "x": 1251.5,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "rect": {
+            "x": 1287.5,
+            "y": 69.5,
+            "w": 67.5,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Previous seats2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 496.5,
+              "y": 75.5,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 555,
+              "y": 69.5,
+              "w": 124.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 1070.5,
+              "y": 71.5,
+              "w": 73,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 1152,
+              "y": 71.5,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Replaced an earlier orchestrator",
+            "rect": {
+              "x": 1223.5,
+              "y": 71.5,
+              "w": 12,
+              "h": 12
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1251.5,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 1287.5,
+              "y": 69.5,
+              "w": 67.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Previous seats2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 456,
+              "y": 73,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 514.5,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1239,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Expand the orchestrator chat (O)",
+            "rect": {
+              "x": 1275,
+              "y": 67,
+              "w": 80,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 379,
+              "y": 60,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 437.5,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 499.5,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 547.5,
+              "y": 88,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the top",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1440-uk-light": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1192,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1192,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1192,
+        "h": 852
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "завершив",
+          "rect": {
+            "x": 500,
+            "y": 75.5,
+            "w": 62,
+            "h": 16
+          }
+        },
+        {
+          "name": "Попередні оркестратори: 2",
+          "rect": {
+            "x": 570.5,
+            "y": 69.5,
+            "w": 183.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+          "rect": {
+            "x": 1085,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Замінити",
+          "rect": {
+            "x": 1133,
+            "y": 71.5,
+            "w": 77,
+            "h": 24
+          }
+        },
+        {
+          "name": "Закріпити збоку",
+          "rect": {
+            "x": 1226,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "rect": {
+            "x": 1262,
+            "y": 69.5,
+            "w": 93,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Попередні оркестратори2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 500,
+              "y": 75.5,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 570.5,
+              "y": 69.5,
+              "w": 183.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 1085,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 1133,
+              "y": 71.5,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1226,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1262,
+              "y": 69.5,
+              "w": 93,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Попередні оркестратори2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 460,
+              "y": 73,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 530,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1214.5,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Розгорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1250.5,
+              "y": 67,
+              "w": 104.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 383,
+              "y": 60,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 453,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 486,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 534,
+              "y": 88,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити зверху",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1440-uk-dark": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1192,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1192,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1192,
+        "h": 852
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "завершив",
+          "rect": {
+            "x": 500,
+            "y": 75.5,
+            "w": 62,
+            "h": 16
+          }
+        },
+        {
+          "name": "Попередні оркестратори: 2",
+          "rect": {
+            "x": 570.5,
+            "y": 69.5,
+            "w": 183.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+          "rect": {
+            "x": 1085,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Замінити",
+          "rect": {
+            "x": 1133,
+            "y": 71.5,
+            "w": 77,
+            "h": 24
+          }
+        },
+        {
+          "name": "Закріпити збоку",
+          "rect": {
+            "x": 1226,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "rect": {
+            "x": 1262,
+            "y": 69.5,
+            "w": 93,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Попередні оркестратори2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 500,
+              "y": 75.5,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 570.5,
+              "y": 69.5,
+              "w": 183.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 1085,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 1133,
+              "y": 71.5,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1226,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1262,
+              "y": 69.5,
+              "w": 93,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Попередні оркестратори2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1192,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1192,
+          "h": 852
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 460,
+              "y": 73,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 530,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1214.5,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Розгорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1250.5,
+              "y": 67,
+              "w": 104.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 812,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 383,
+              "y": 60,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 453,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 486,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 534,
+              "y": 88,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити зверху",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 628,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 920,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1412,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1704,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1192,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 1148,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1280-en-light": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1032,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1032,
+        "h": 852
+      },
+      "seat": {
+        "x": 268,
+        "y": 60,
+        "w": 992,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 269,
+        "y": 61,
+        "w": 990,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "finished",
+          "rect": {
+            "x": 440.5,
+            "y": 75.5,
+            "w": 50.5,
+            "h": 16
+          }
+        },
+        {
+          "name": "Previous seats, 2",
+          "rect": {
+            "x": 499,
+            "y": 69.5,
+            "w": 124.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Seat tick settings. Tick: every 60 min · state unknown",
+          "rect": {
+            "x": 1020,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Rotate",
+          "rect": {
+            "x": 1068,
+            "y": 71.5,
+            "w": 63.5,
+            "h": 24
+          }
+        },
+        {
+          "name": "Dock at the side",
+          "rect": {
+            "x": 1147.5,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "rect": {
+            "x": 1183.5,
+            "y": 69.5,
+            "w": 67.5,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Previous seats2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 440.5,
+              "y": 75.5,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 499,
+              "y": 69.5,
+              "w": 124.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 1020,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 1068,
+              "y": 71.5,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1147.5,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 1183.5,
+              "y": 69.5,
+              "w": 67.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Previous seats2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 400,
+              "y": 73,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 458.5,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1135,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Expand the orchestrator chat (O)",
+            "rect": {
+              "x": 1171,
+              "y": 67,
+              "w": 80,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 379,
+              "y": 60,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 437.5,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 499.5,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 547.5,
+              "y": 88,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the top",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": null,
+            "rect": {
+              "x": 640,
+              "y": 104,
+              "w": 628,
+              "h": 784
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "tabs",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1280-en-dark": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1032,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1032,
+        "h": 852
+      },
+      "seat": {
+        "x": 268,
+        "y": 60,
+        "w": 992,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 269,
+        "y": 61,
+        "w": 990,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "finished",
+          "rect": {
+            "x": 440.5,
+            "y": 75.5,
+            "w": 50.5,
+            "h": 16
+          }
+        },
+        {
+          "name": "Previous seats, 2",
+          "rect": {
+            "x": 499,
+            "y": 69.5,
+            "w": 124.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Seat tick settings. Tick: every 60 min · state unknown",
+          "rect": {
+            "x": 1020,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Rotate",
+          "rect": {
+            "x": 1068,
+            "y": 71.5,
+            "w": 63.5,
+            "h": 24
+          }
+        },
+        {
+          "name": "Dock at the side",
+          "rect": {
+            "x": 1147.5,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Collapse the orchestrator chat (O)",
+          "rect": {
+            "x": 1183.5,
+            "y": 69.5,
+            "w": 67.5,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Previous seats2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 440.5,
+              "y": 75.5,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 499,
+              "y": 69.5,
+              "w": 124.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 1020,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 1068,
+              "y": 71.5,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1147.5,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 1183.5,
+              "y": 69.5,
+              "w": 67.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Previous seats2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 400,
+              "y": 73,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 458.5,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Dock at the side",
+            "rect": {
+              "x": 1135,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Expand the orchestrator chat (O)",
+            "rect": {
+              "x": 1171,
+              "y": 67,
+              "w": 80,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "finished",
+            "rect": {
+              "x": 379,
+              "y": 60,
+              "w": 50.5,
+              "h": 16
+            }
+          },
+          {
+            "name": "Previous seats, 2",
+            "rect": {
+              "x": 437.5,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Seat tick settings. Tick: every 60 min · state unknown",
+            "rect": {
+              "x": 499.5,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Rotate",
+            "rect": {
+              "x": 547.5,
+              "y": 88,
+              "w": 63.5,
+              "h": 24
+            }
+          },
+          {
+            "name": "Dock at the top",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Collapse the orchestrator chat (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": null,
+            "rect": {
+              "x": 640,
+              "y": 104,
+              "w": 628,
+              "h": 784
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "tabs",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1280-uk-light": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1032,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1032,
+        "h": 852
+      },
+      "seat": {
+        "x": 268,
+        "y": 60,
+        "w": 992,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 269,
+        "y": 61,
+        "w": 990,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "завершив",
+          "rect": {
+            "x": 444,
+            "y": 75.5,
+            "w": 62,
+            "h": 16
+          }
+        },
+        {
+          "name": "Попередні оркестратори: 2",
+          "rect": {
+            "x": 514.5,
+            "y": 69.5,
+            "w": 183.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+          "rect": {
+            "x": 981,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Замінити",
+          "rect": {
+            "x": 1029,
+            "y": 71.5,
+            "w": 77,
+            "h": 24
+          }
+        },
+        {
+          "name": "Закріпити збоку",
+          "rect": {
+            "x": 1122,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "rect": {
+            "x": 1158,
+            "y": 69.5,
+            "w": 93,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Попередні оркестратори2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 444,
+              "y": 75.5,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 514.5,
+              "y": 69.5,
+              "w": 183.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 981,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 1029,
+              "y": 71.5,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1122,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1158,
+              "y": 69.5,
+              "w": 93,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Попередні оркестратори2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 404,
+              "y": 73,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 474,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1110.5,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Розгорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1146.5,
+              "y": 67,
+              "w": 104.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 383,
+              "y": 60,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 453,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 486,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 534,
+              "y": 88,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити зверху",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": null,
+            "rect": {
+              "x": 640,
+              "y": 104,
+              "w": 628,
+              "h": 784
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "tabs",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      }
+    }
+  },
+  "seat-placement-1280-uk-dark": {
+    "base": {
+      "bar": {
+        "x": 248,
+        "y": 0,
+        "w": 1032,
+        "h": 48
+      },
+      "page": {
+        "x": 248,
+        "y": 48,
+        "w": 1032,
+        "h": 852
+      },
+      "frame": {
+        "x": 248,
+        "y": 330,
+        "w": 1032,
+        "h": 852
+      },
+      "seat": {
+        "x": 268,
+        "y": 60,
+        "w": 992,
+        "h": 270
+      },
+      "seatPlacement": "top",
+      "seatCollapsed": "0",
+      "head": {
+        "x": 269,
+        "y": 61,
+        "w": 990,
+        "h": 46
+      },
+      "headKind": "full",
+      "headControls": [
+        {
+          "name": "завершив",
+          "rect": {
+            "x": 444,
+            "y": 75.5,
+            "w": 62,
+            "h": 16
+          }
+        },
+        {
+          "name": "Попередні оркестратори: 2",
+          "rect": {
+            "x": 514.5,
+            "y": 69.5,
+            "w": 183.5,
+            "h": 28
+          }
+        },
+        {
+          "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+          "rect": {
+            "x": 981,
+            "y": 71.5,
+            "w": 40,
+            "h": 24
+          }
+        },
+        {
+          "name": "Замінити",
+          "rect": {
+            "x": 1029,
+            "y": 71.5,
+            "w": 77,
+            "h": 24
+          }
+        },
+        {
+          "name": "Закріпити збоку",
+          "rect": {
+            "x": 1122,
+            "y": 69.5,
+            "w": 28,
+            "h": 28
+          }
+        },
+        {
+          "name": "Згорнути чат оркестратора (O)",
+          "rect": {
+            "x": 1158,
+            "y": 69.5,
+            "w": 93,
+            "h": 28
+          }
+        }
+      ],
+      "rail": null,
+      "railTone": null,
+      "stateWord": "state quiet",
+      "previousCount": "2",
+      "previousText": "Попередні оркестратори2",
+      "toggleDot": null,
+      "togglePressed": "true",
+      "columns": [
+        {
+          "status": "inbox",
+          "wide": "0",
+          "rect": {
+            "x": 248,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Repair board zoom and connector geometry"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "assigned",
+          "wide": "1",
+          "rect": {
+            "x": 540,
+            "y": 388,
+            "w": 480,
+            "h": 778
+          },
+          "cards": [
+            "Docs for the runtime host succession",
+            "Fix delivery recovery after a lost acknowledgement"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "blocked",
+          "wide": "0",
+          "rect": {
+            "x": 1032,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Release notes for the September train"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        },
+        {
+          "status": "done",
+          "wide": "0",
+          "rect": {
+            "x": 1324,
+            "y": 388,
+            "w": 280,
+            "h": 778
+          },
+          "cards": [
+            "Voice boundary refuses to guess"
+          ],
+          "clippedTitles": 0,
+          "seatCards": 0
+        }
+      ],
+      "board": "scroll",
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      }
+    },
+    "states": {
+      "topExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 330,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 270
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 46
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 444,
+              "y": 75.5,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 514.5,
+              "y": 69.5,
+              "w": 183.5,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 981,
+              "y": 71.5,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 1029,
+              "y": 71.5,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1122,
+              "y": 69.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1158,
+              "y": 69.5,
+              "w": 93,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "Попередні оркестратори2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 388,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 388,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "topCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 248,
+          "y": 48,
+          "w": 1032,
+          "h": 852
+        },
+        "frame": {
+          "x": 248,
+          "y": 102,
+          "w": 1032,
+          "h": 852
+        },
+        "seat": {
+          "x": 268,
+          "y": 60,
+          "w": 992,
+          "h": 42
+        },
+        "seatPlacement": "top",
+        "seatCollapsed": "1",
+        "head": {
+          "x": 269,
+          "y": 61,
+          "w": 990,
+          "h": 40
+        },
+        "headKind": "strip",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 404,
+              "y": 73,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 474,
+              "y": 67,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Закріпити збоку",
+            "rect": {
+              "x": 1110.5,
+              "y": 67,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Розгорнути чат оркестратора (O)",
+            "rect": {
+              "x": 1146.5,
+              "y": 67,
+              "w": 104.5,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 248,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 540,
+              "y": 160,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1032,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1324,
+              "y": 160,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideExpanded": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "frame": {
+          "x": 628,
+          "y": 48,
+          "w": 652,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 380,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "0",
+        "head": {
+          "x": 248,
+          "y": 48,
+          "w": 379,
+          "h": 71
+        },
+        "headKind": "full",
+        "headControls": [
+          {
+            "name": "завершив",
+            "rect": {
+              "x": 383,
+              "y": 60,
+              "w": 62,
+              "h": 16
+            }
+          },
+          {
+            "name": "Попередні оркестратори: 2",
+            "rect": {
+              "x": 453,
+              "y": 54,
+              "w": 48,
+              "h": 28
+            }
+          },
+          {
+            "name": "Налаштування тікера. Тікер: кожні 60 хв · стан невідомий",
+            "rect": {
+              "x": 486,
+              "y": 88,
+              "w": 40,
+              "h": 24
+            }
+          },
+          {
+            "name": "Замінити",
+            "rect": {
+              "x": 534,
+              "y": 88,
+              "w": 77,
+              "h": 24
+            }
+          },
+          {
+            "name": "Закріпити зверху",
+            "rect": {
+              "x": 555,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "name": "Згорнути чат оркестратора (O)",
+            "rect": {
+              "x": 591,
+              "y": 54,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ],
+        "rail": null,
+        "railTone": null,
+        "stateWord": "state quiet",
+        "previousCount": "2",
+        "previousText": "2",
+        "toggleDot": null,
+        "togglePressed": "true",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": null,
+            "rect": {
+              "x": 640,
+              "y": 104,
+              "w": 628,
+              "h": 784
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "tabs",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      },
+      "sideCollapsed": {
+        "bar": {
+          "x": 248,
+          "y": 0,
+          "w": 1032,
+          "h": 48
+        },
+        "page": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "frame": {
+          "x": 292,
+          "y": 48,
+          "w": 988,
+          "h": 852
+        },
+        "seat": {
+          "x": 248,
+          "y": 48,
+          "w": 44,
+          "h": 852
+        },
+        "seatPlacement": "side",
+        "seatCollapsed": "1",
+        "head": null,
+        "headKind": null,
+        "headControls": [],
+        "rail": {
+          "x": 248,
+          "y": 48,
+          "w": 43,
+          "h": 852
+        },
+        "railTone": "quiet",
+        "stateWord": null,
+        "previousCount": null,
+        "previousText": null,
+        "toggleDot": "quiet",
+        "togglePressed": "false",
+        "columns": [
+          {
+            "status": "inbox",
+            "wide": "0",
+            "rect": {
+              "x": 292,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Repair board zoom and connector geometry"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "assigned",
+            "wide": "1",
+            "rect": {
+              "x": 584,
+              "y": 106,
+              "w": 480,
+              "h": 778
+            },
+            "cards": [
+              "Docs for the runtime host succession",
+              "Fix delivery recovery after a lost acknowledgement"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "blocked",
+            "wide": "0",
+            "rect": {
+              "x": 1076,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Release notes for the September train"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          },
+          {
+            "status": "done",
+            "wide": "0",
+            "rect": {
+              "x": 1368,
+              "y": 106,
+              "w": 280,
+              "h": 778
+            },
+            "cards": [
+              "Voice boundary refuses to guess"
+            ],
+            "clippedTitles": 0,
+            "seatCards": 0
+          }
+        ],
+        "board": "scroll",
+        "viewport": {
+          "w": 1280,
+          "h": 900
+        }
+      }
+    }
+  },
+  "failures": []
+}
