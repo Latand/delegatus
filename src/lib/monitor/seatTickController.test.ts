@@ -99,7 +99,9 @@ type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: 
   src?: string | null;
   /** The newest attempt's state, when the case is a stage that stopped rather
       than a lane that completed. */
-  attemptState?: string };
+  attemptState?: string;
+  /** What the lane parked on, for the cases that read it (#1799). */
+  stateDetail?: string | null };
 
 function pipelineRecord(entry: PipelineFixture) {
   return {
@@ -118,7 +120,7 @@ function pipelineRecord(entry: PipelineFixture) {
     cursor: null,
     state: entry.state,
     pausedState: null,
-    stateDetail: null,
+    stateDetail: entry.stateDetail ?? null,
     srcPath: null,
     srcConversationId: entry.src ?? null,
     createdAt: entry.createdAt,
@@ -5212,4 +5214,58 @@ test("one eligible child beside the ineligible ones still raises the interval wa
   expect(agenda).toEqual([`- [child] ${live.id} — build the exporter — spawned child running`]);
   expect(agenda.join("\n")).not.toContain(aged.id);
   expect(agenda.join("\n")).not.toContain(unreadable.id);
+});
+
+/* ---------------------------------------------------------------------------
+ * The seat's create call is answered before the base is resolved (#1799), so
+ * the outcome reaches the creator here — on the wake the tick already sends.
+ * ------------------------------------------------------------------------- */
+
+test("a lane the seat created reaches it as provisioned, on the wake and once (#1799)", async () => {
+  const provisioned = [{
+    id: "pipeline_p1799",
+    state: "running",
+    createdAt: new Date(NOW - 10 * MINUTE).toISOString(),
+    movedAt: new Date(NOW - 2 * MINUTE).toISOString(),
+    attemptState: "running",
+    src: CONVERSATION,
+  }];
+  const rig = harness({ pipelines: provisioned, state: OVERDUE });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"] });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("[provisioning] pipeline_p1799");
+  expect(rig.sent[0]!.text).toContain("provisioned, first stage running");
+  /* The landing is what records it, and the row the check wrote carries it. */
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(["pipeline_p1799"]);
+
+  /* An hour later, with the lane still running, nothing is owed on it: there
+     was never an obligation, only something to know, and the seat knows it. */
+  const later = harness({
+    pipelines: provisioned,
+    state: { ...rig.written.at(-1)!, ...OVERDUE },
+  });
+  const second = await runSeatTickCheck(PROJECT, later.deps);
+  expect(second!.reasons ?? []).not.toContain("own-lane-settled");
+  expect(later.sent.map((message) => message.text).join("\n")).not.toContain("[provisioning]");
+});
+
+test("a lane that never ran a stage tells its creator the provisioning failed, and why (#1799)", async () => {
+  const parked = [{
+    id: "pipeline_p1799",
+    state: "needs_decision",
+    createdAt: new Date(NOW - 10 * MINUTE).toISOString(),
+    movedAt: null,
+    stateDetail: "fetching origin/main: git fetch timed out after 60s",
+    src: CONVERSATION,
+  }];
+  const rig = harness({ pipelines: parked, state: OVERDUE });
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"] });
+  expect(rig.sent[0]!.text).toContain("provisioning failed, it never ran a stage: fetching origin/main: git fetch timed out after 60s");
+  /* A park is an obligation the seat has to discharge, so nothing announces it
+     away: it is offered until the seat closes the lane out. */
+  expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
 });

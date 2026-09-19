@@ -99,6 +99,10 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
          safe reading: a seat remembered as having been shown nothing is
          offered its children again rather than held back from them. */
       if (state.childrenShown !== undefined && (!Array.isArray(state.childrenShown) || !state.childrenShown.every(string))) return null;
+      /* Absent on every row written before #1799, and absent is the safe
+         reading for the same reason: a seat remembered as having been told
+         nothing is told, rather than silently left unanswered. */
+      if (state.announcedLanes !== undefined && (!Array.isArray(state.announcedLanes) || !state.announcedLanes.every(string))) return null;
       const validWake = (wake: SeatTickOutstandingWake | null | undefined): boolean => {
         if (!wake || !string(wake.clientMessageId) || !string(wake.conversationId)
           || !integer(wake.seatEpoch) || !nullableString(wake.operationId) || !wake.commit
@@ -107,6 +111,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || !Array.isArray(wake.commit.children) || !wake.commit.children.every(string)
           || (wake.commit.shownChildren !== undefined
             && (!Array.isArray(wake.commit.shownChildren) || !wake.commit.shownChildren.every(string)))
+          || (wake.commit.announcedLanes !== undefined
+            && (!Array.isArray(wake.commit.announcedLanes) || !wake.commit.announcedLanes.every(string)))
           || (wake.preparedAt !== undefined && !string(wake.preparedAt))) return false;
         return wake.dispatch === undefined || (!!wake.dispatch && string(wake.dispatch.token)
           && ["active", "refused", "returned"].includes(wake.dispatch.state));
