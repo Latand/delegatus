@@ -11,6 +11,7 @@ import type {
   SeatTickItem,
   SeatTickSignalInput,
   SeatTickSkippedChildren,
+  SeatTickUnreadableChild,
   SeatTickWakeReason,
 } from "./types";
 
@@ -165,7 +166,9 @@ export const SEAT_TICK_CONTRACT = [
 ];
 
 function seatTickBullet(item: SeatTickItem): string {
-  return `- [${item.kind}] ${item.id} — ${item.label}`;
+  const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
+  /* A settled child's own last words (#1881), attached by the controller. */
+  return item.finalMessage ? `${bullet}\n  final message: ${item.finalMessage}` : bullet;
 }
 
 /**
@@ -215,6 +218,8 @@ export function seatTickWakeMessage(input: {
       wakes with work that had been harvested a fortnight earlier, or that no
       seat can harvest at all. */
   skippedChildren?: SeatTickSkippedChildren;
+  /** Children skipped as unreadable, named with the reason (#1881). */
+  unreadableChildren?: readonly SeatTickUnreadableChild[];
   signals: readonly SeatTickSignalInput[];
   /** Evidence this check could not read (#1298). The reasons above stand
       without it, and the seat is told what is missing from the picture rather
@@ -249,8 +254,14 @@ export function seatTickWakeMessage(input: {
   if (input.skippedChildren && input.skippedChildren.stale > 0) {
     lines.push(`(${input.skippedChildren.stale} spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)`);
   }
+  /* Named, each once, with the reason (#1881): which child and why is what
+     makes an unreadable transcript something anyone can fix. */
+  if (input.unreadableChildren && input.unreadableChildren.length > 0) {
+    lines.push("", "Spawned children whose transcript the Viewer cannot read (not work, named once):",
+      ...input.unreadableChildren.map((child) => `- ${child.conversationId} — ${child.title}: ${child.reason}`));
+  }
   if (input.skippedChildren && input.skippedChildren.unreadable > 0) {
-    lines.push(`(${input.skippedChildren.unreadable} spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)`);
+    lines.push(`(${input.skippedChildren.unreadable} more spawned child(ren) whose transcript the Viewer cannot resolve, named by a later wake.)`);
   }
   if (input.skippedChildren && input.skippedChildren.unchanged > 0) {
     lines.push(`(${input.skippedChildren.unchanged} spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)`);

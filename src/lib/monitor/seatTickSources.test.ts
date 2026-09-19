@@ -38,7 +38,7 @@ const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";
 import type { SeatTickJournalReceipt } from "./seatTickSources";
 import type { SeatTickSources } from "./seatTickSources";
-const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit } = await import("./seatTick");
+const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import type { OpenPullRequest, OpenPullRequestsUnavailable } from "./githubEvidence";
@@ -1490,7 +1490,7 @@ interface ChildRegistry {
   project: string;
   seatId: string;
   now: number;
-  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string }): { id: string; launchId: string; path: string };
+  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string; transcriptPath?: string; ledger?: boolean }): { id: string; launchId: string; path: string };
 }
 
 function childRegistry(name: string): ChildRegistry {
@@ -1512,7 +1512,7 @@ function childRegistry(name: string): ChildRegistry {
     now,
     spawn(options) {
       const childCwd = options.cwd ?? cwd;
-      const childPath = path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
+      const childPath = options.transcriptPath ?? path.join(SESSIONS, `${crypto.randomUUID()}.jsonl`);
       fs.writeFileSync(childPath, "");
       const observed = options.unobserved ? null : registry.ensureConversation("claude", childPath, null);
       const begun = registry.beginSpawnRequest({
@@ -1538,7 +1538,7 @@ function childRegistry(name: string): ChildRegistry {
       if (options.host) {
         registry.upsert({ key: sessionKeyFromTranscript("claude", childPath)!, artifactPath: childPath, cwd: childCwd, accountId: null, status: options.host, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
       }
-      if (observed && (options.turn === "terminal" || (options.turn === "idle" && options.host !== "idle"))) {
+      if (observed && (options.ledger ?? (options.turn === "terminal" || (options.turn === "idle" && options.host !== "idle")))) {
         const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
         ledger.append(observed.generations[0]!.id, { kind: "turn-started", turnId: "turn-one", seq: 1 });
         ledger.append(observed.generations[0]!.id, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
@@ -1774,4 +1774,83 @@ test("a lane that parked before it ran a stage carries why it never started (#17
      the settlement it always had. */
   const afterAStage = lane({ srcConversationId: CONVERSATION, state: "needs_decision", stateDetail: "the reviewer asked" });
   expect((await gather({ pipelines: [afterAStage] })).ownLanes).toMatchObject([{ settled: "needs_decision" }]);
+});
+
+/* ---------------------------------------------------------------------------
+ * A seat is woken when an agent it spawned finishes (#1881)
+ *
+ * Fresh state, a designated seat, one child spawned outside any pipeline with
+ * the seat as its lineage source, and the child ending its turn — read by the
+ * production gather and decided by the production pre-check.
+ * ------------------------------------------------------------------------- */
+
+/** The check the controller runs: gather, decide, and land the wake if one is
+    raised, so the next check sees the state a delivered wake leaves. */
+async function childCheck(fixture: ChildRegistry, now: number, state: SeatTickProjectState) {
+  const input = await childGather(fixture, { now }, state);
+  const decision = seatTickDecision(input);
+  const plan = seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: input.changeFingerprint,
+    eventsThrough: decision.state.eventsThrough ?? 0,
+    terminalChildren: input.children.filter((child) => child.status === "terminal").flatMap((child) => [child.outcomeId ?? child.conversationId]),
+  });
+  const landed = plan ? seatTickWakeCommit(decision.state, plan, now) : decision.state;
+  return { input, decision, state: landed };
+}
+
+function settleChild(fixture: ChildRegistry, child: { id: string; path: string }, title: string, at: number): void {
+  fixture.registry.reconcileConversations([{
+    engine: "claude",
+    path: child.path,
+    accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: fixture.cwd, title }),
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: new Date(at).toISOString(),
+  }]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  ledger.append(generation, { kind: "turn-started", turnId: "turn-one", seq: 1 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
+}
+
+test("a child settling its turn wakes the seat at the next check, not an hour after the last wake (#1881)", async () => {
+  const fixture = childRegistry("settles-1881");
+  /* The structured host stays up after the turn ends, as it does in
+     production: the registry's turn state is what says the child finished. */
+  const child = fixture.spawn({ title: "reviewer one", turn: "busy", host: "idle" });
+  const first = await childCheck(fixture, fixture.now, emptySeatTickState());
+  expect(first.input.children).toMatchObject([{ conversationId: child.id, status: "running" }]);
+  /* Whatever the first check did, the next one comes one check interval later
+     and the child has ended its turn in between. */
+  const later = fixture.now + DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
+  settleChild(fixture, child, "reviewer one", later - MINUTE_MS);
+  const second = await childCheck(fixture, later, first.state);
+  expect(second.input.children).toMatchObject([{ conversationId: child.id, status: "terminal", outcome: "finished", transcript: "readable" }]);
+  expect(second.decision.verdict.kind).toBe("wake");
+  if (second.decision.verdict.kind !== "wake") return;
+  expect(second.decision.verdict.reasons.map((reason) => reason.kind)).toContain("child-terminal");
+  expect(second.decision.verdict.items).toContainEqual(expect.objectContaining({ kind: "child", id: child.id }));
+});
+
+test("a child recorded through a symlink into a scanner root is readable (#1881)", async () => {
+  const fixture = childRegistry("symlinked-1881");
+  const alias = path.join(SANDBOX, `sessions-alias-${crypto.randomUUID()}`);
+  fs.symlinkSync(SESSIONS, alias);
+  const child = fixture.spawn({ title: "linked worker", turn: "idle", host: "dead", transcriptPath: path.join(alias, `${crypto.randomUUID()}.jsonl`) });
+  const input = await childGather(fixture);
+  expect(input.children).toMatchObject([{ conversationId: child.id, status: "terminal", transcript: "readable" }]);
+});
+
+test("a finished child whose transcript is gone still wakes the seat, with the reason named once (#1881)", async () => {
+  const fixture = childRegistry("unreadable-1881");
+  const child = fixture.spawn({ title: "reviewer two", turn: "idle", host: "dead" });
+  fs.rmSync(child.path);
+  const check = await childCheck(fixture, fixture.now, emptySeatTickState());
+  expect(check.input.children).toMatchObject([{ conversationId: child.id, status: "terminal", transcript: "unresolvable", transcriptReason: "missing" }]);
+  expect(check.decision.verdict.kind).toBe("wake");
+  if (check.decision.verdict.kind !== "wake") return;
+  expect(check.decision.verdict.reasons.map((reason) => reason.kind)).toContain("child-terminal");
+  const line = check.decision.verdict.items.find((item) => item.id === child.id);
+  expect(line?.label).toContain("reviewer two — spawned child finished, transcript not readable: the transcript file is no longer on disk");
+  expect(check.decision.verdict.skippedChildren.unreadable).toBe(0);
 });
