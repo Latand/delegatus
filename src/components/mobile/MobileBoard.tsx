@@ -244,7 +244,7 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
   const { t } = useLocale();
   /* The stage in the operator's words — its name and, once it ran twice, the
      attempt (#1865) — lowercased inside the sentence the way the prototype
-     writes it: «stage 3/5 · critique · 2 failed · 2 findings». */
+     writes it: «stage 3/5 · critique · 2 · failed · 2 findings». */
   const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
   const meta = [
     /* `stage k/n · <stage> · <state>` (README §4.1, §4.7). The state word is
@@ -270,13 +270,16 @@ export function MobilePipelineQueueRow({ row, onOpen }: { row: MobileBoardPipeli
         <span className="flex items-center gap-1.5 text-body font-semibold leading-[1.25] text-primary">
           <span className="min-w-0 line-clamp-2">{row.task}</span>
         </span>
-        <span className="flex items-center gap-[5px] overflow-hidden text-label tabular-nums text-muted">
-          <span className="shrink-0">{meta}</span>
+        {/* The sentence flows as text: a long stage label wraps it onto a
+            second line rather than clipping its end, and the age, which never
+            breaks, follows it (#1865). */}
+        <span data-mobile2-row-meta className="text-label tabular-nums text-muted">
+          {meta}
           {row.seconds === null ? null : (
-            <>
-              <span aria-hidden className="shrink-0 opacity-60">·</span>
-              <span className="min-w-0 truncate">{humanizeDuration(row.seconds)}</span>
-            </>
+            <span data-mobile2-row-age className="whitespace-nowrap">
+              <span aria-hidden className="opacity-60">{" · "}</span>
+              {humanizeDuration(row.seconds)}
+            </span>
           )}
         </span>
       </span>

@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
-import { stageAttemptPlace, stageCardLabel, stageLabelTitle } from "@/components/pipelines/pipelineModel";
+import { stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
 import { CtxChip } from "@/components/PlanChip";
@@ -221,6 +221,9 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
   const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
   const role = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : null;
   const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  /* The attempt number is set apart the way the tile sets it: a muted
+     tabular suffix of the stage's name, never a third bold word. */
+  const labelParts = owner?.stage && place ? stageCardLabelParts(t, owner.stage.stage, place) : null;
   const titleHint = owner?.stage && place ? `${stageLabelTitle(t, owner.stage.stage, place, engine ? engineWord(engine) : null)} · ${owner.cardTitle}` : title;
   const needs = row.dot === "warning";
   const identity = (
@@ -308,7 +311,11 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       <div className="conv-head">
         <div className="ch-row">
           <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
-          <span className="ch-title" title={titleHint}>{title}</span>
+          <span className="ch-title" title={titleHint}>
+            {labelParts && labelParts.attempt !== null && owner
+              ? <>{labelParts.name}<span className="attempt"> · {labelParts.attempt}</span> · {owner.cardTitle}</>
+              : title}
+          </span>
           <span className="spacer" />
           <button
             type="button"

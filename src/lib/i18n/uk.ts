@@ -2687,7 +2687,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.pipeline.review": "цикл рев'ю",
   "mobile2.pipeline.reviewRound": "цикл рев'ю · раунд {round}",
   "mobile2.pipeline.findingsHeading": "{stage} · раунд {round} · {findings}",
-  "mobile2.pipeline.findingsHeadingRunless": "{stage} · {findings}",
+  "mobile2.pipeline.findingsHeadingRunless": "{stage}: {findings}",
   "mobile2.pipeline.skip": "Пропустити етап",
   "mobile2.pipeline.retry": "Повторити етап",
   "mobile2.pipeline.pause": "Пауза",

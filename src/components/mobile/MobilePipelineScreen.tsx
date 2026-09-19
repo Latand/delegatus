@@ -304,21 +304,29 @@ export function stageRowTitle(t: TFunction, pipeline: Pipeline, stage: PipelineS
   return t("mobile2.pipeline.stageTitle", { stage: stageCardLabel(t, stage, stageLatestAttemptPlace(pipeline, stage.id)) });
 }
 
-/** The stage's meta line: the role preset the title gave up, what kind of
-    stage it is, where its round stands and what it returned — every word from
-    the product's own dictionary. */
-export function stageMetaLine(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+/** The stage's meta line in its two parts: the role preset the title gave up,
+    and what follows it — what kind of stage it is, where its round stands and
+    what it returned, every word from the product's own dictionary. Where the
+    preset is named, a plain run says no more than the preset does, so the
+    «run» word gives its room to the verdict and the findings count (#1865). */
+export function stageMetaParts(t: TFunction, pipeline: Pipeline, stage: PipelineStage): { role: string | null; rest: string } {
   const attempt = latestAttempt(pipeline, stage.id);
   const findings = attempt?.verdict?.findings?.length ?? 0;
-  const role = stageRoleAside(t, stage);
-  return [
-    role ? t("mobile2.pipeline.stageMetaRole", { role }) : null,
+  const aside = stageRoleAside(t, stage);
+  const role = aside ? t("mobile2.pipeline.stageMetaRole", { role: aside }) : null;
+  const rest = [
     stage.kind === "review-loop"
       ? attempt ? t("mobile2.pipeline.reviewRound", { round: attempt.n }) : t("mobile2.pipeline.review")
-      : t("mobile2.pipeline.run"),
+      : role ? null : t("mobile2.pipeline.run"),
     t(`pipelineChipState.${stageChipState(pipeline, stage)}`),
     findings ? t("pipelineVerdict.findings", { count: findings }) : null,
   ].filter(Boolean).join(" · ");
+  return { role, rest };
+}
+
+export function stageMetaLine(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+  const { role, rest } = stageMetaParts(t, pipeline, stage);
+  return role ? `${role} · ${rest}` : rest;
 }
 
 /** The stage's earlier attempts, in their own order: every persisted attempt
@@ -643,6 +651,7 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   /* Configurable by the one rule the desktop's pane and strip read too. */
   const configurable = !file && stageConfigurable(pipeline, stage.id);
   const title = stageRowTitle(t, pipeline, stage);
+  const meta = stageMetaParts(t, pipeline, stage);
   /* Who runs it, and how often work came back to it: the same mark, ladder and
      circled count the desktop's graph draws (#1743). */
   const identity = stageIdentity(pipeline, stage);
@@ -677,8 +686,13 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
             ))}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
-            <StageIdentity identity={identity} density="line" />
-            <span data-mobile2-stage-meta className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
+            {/* The identity keeps its width; on a long line the preset
+                truncates first, so the verdict and the count stay whole. */}
+            <StageIdentity identity={identity} density="line" className="shrink-0" />
+            <span data-mobile2-stage-meta className="flex min-w-0">
+              {meta.role ? <span data-mobile2-stage-role className="min-w-[3ch] shrink-[100] truncate">{meta.role}</span> : null}
+              <span className="min-w-0 truncate whitespace-pre">{meta.role ? ` · ${meta.rest}` : meta.rest}</span>
+            </span>
           </span>
         </span>
         {file ? (

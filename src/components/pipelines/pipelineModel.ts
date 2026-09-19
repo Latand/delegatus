@@ -834,8 +834,16 @@ export function stageLatestAttemptPlace(pipeline: Pipeline, stageId: string): St
  * longer lists, reads as the name alone.
  */
 export function stageCardLabel(t: TFunction, stage: PipelineStage, place: StageAttemptPlace): string {
+  const { name, attempt } = stageCardLabelParts(t, stage, place);
+  return attempt !== null ? t("kanban.stageAttempt", { stage: name, n: attempt }) : name;
+}
+
+/** The same label in its two parts, for a surface that sets the attempt number
+    apart from the name (a muted suffix that survives the name's truncation):
+    `attempt` is null where the label is the name alone. */
+export function stageCardLabelParts(t: TFunction, stage: PipelineStage, place: StageAttemptPlace): { name: string; attempt: number | null } {
   const name = stageDisplayName(t, stage);
-  return place.attempt !== null && place.attempts > 1 ? t("kanban.stageAttempt", { stage: name, n: place.attempt }) : name;
+  return { name, attempt: place.attempt !== null && place.attempts > 1 ? place.attempt : null };
 }
 
 /**

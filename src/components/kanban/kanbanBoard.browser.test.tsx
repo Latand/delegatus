@@ -3690,27 +3690,52 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
   const TASK = "Build the board header lane";
   const LABELS = ["Design", "Critique · 1", "Critique · 2"];
 
-  interface Header { text: string; hint: string; label: string; labelWhole: boolean; width: number }
+  interface Header { text: string; hint: string; label: string; labelWhole: boolean; width: number; attempt: { text: string; muted: boolean; tabular: boolean } | null }
+  interface Tile { name: string; attempt: string; hint: string; nameWhole: boolean; attemptMuted: boolean }
 
-  /** Each reader header on the card, and whether its leading stage label is painted whole. */
+  /** Each reader header on the card, whether its leading stage label is painted
+      whole, and how its attempt suffix is set apart from the bold name. */
   const measureHeaders = (page: Page) => page.evaluate(({ selector, labels }): Header[] => {
     const cardEl = document.querySelector(selector);
     return [...(cardEl?.querySelectorAll<HTMLElement>(".conv-head .ch-title") ?? [])].map((title) => {
       const text = title.textContent ?? "";
       const label = labels.filter((candidate) => text.startsWith(`${candidate} · `)).sort((a, b) => b.length - a.length)[0] ?? "";
       const box = title.getBoundingClientRect();
-      let labelWhole = false;
-      const node = title.firstChild;
-      if (label && node && node.nodeType === Node.TEXT_NODE) {
+      const suffix = title.querySelector<HTMLElement>(".attempt");
+      /* The label ends where the attempt suffix ends, or with the name. */
+      let end: DOMRect | null = null;
+      if (suffix) end = suffix.getBoundingClientRect();
+      else if (label && title.firstChild?.nodeType === Node.TEXT_NODE) {
         const range = document.createRange();
-        range.setStart(node, 0);
-        range.setEnd(node, label.length);
-        const need = range.getBoundingClientRect();
-        labelWhole = box.width > 0 && need.right <= box.right + 0.5;
+        range.setStart(title.firstChild, 0);
+        range.setEnd(title.firstChild, label.length);
+        end = range.getBoundingClientRect();
       }
-      return { text, hint: title.getAttribute("title") ?? "", label, labelWhole, width: Math.round(box.width * 10) / 10 };
+      const labelWhole = !!label && !!end && box.width > 0 && end.right <= box.right + 0.5;
+      const attempt = suffix ? (() => {
+        const style = getComputedStyle(suffix);
+        return { text: suffix.textContent ?? "", muted: style.color !== getComputedStyle(title).color, tabular: style.fontVariantNumeric.includes("tabular-nums") };
+      })() : null;
+      return { text, hint: title.getAttribute("title") ?? "", label, labelWhole, width: Math.round(box.width * 10) / 10, attempt };
     });
   }, { selector: CARD, labels: LABELS });
+
+  /** Each stage tile on the card: its name, its attempt suffix, and whether the
+      name is drawn whole. */
+  const measureTiles = (page: Page) => page.evaluate((selector): Tile[] => {
+    const cardEl = document.querySelector(selector);
+    return [...(cardEl?.querySelectorAll<HTMLElement>(".tile") ?? [])].map((tile) => {
+      const role = tile.querySelector<HTMLElement>(".role");
+      const suffix = tile.querySelector<HTMLElement>(".attempt");
+      return {
+        name: role?.textContent ?? "",
+        attempt: suffix?.textContent ?? "",
+        hint: role?.getAttribute("title") ?? "",
+        nameWhole: !!role && role.scrollWidth <= role.clientWidth + 0.5,
+        attemptMuted: !!suffix && !!role && getComputedStyle(suffix).color !== getComputedStyle(role).color,
+      };
+    });
+  }, CARD);
 
   /** A pointer click at the centre of the first match: the board's chips and
       Past attempts' buttons are real targets under the mouse. */
@@ -3768,6 +3793,9 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
                 if (!header.hint.includes(` · ${preset} · `)) fail(`the preset is missing from the tooltip: ${JSON.stringify(header.hint)}`);
                 if (!header.labelWhole) fail(`the stage label is cut: ${JSON.stringify(header)}`);
               }
+              for (const header of headers.filter((entry) => entry.label.includes(" · "))) {
+                if (!header.attempt?.muted || !header.attempt.tabular) fail(`the attempt in ${JSON.stringify(header.label)} is not a muted tabular suffix: ${JSON.stringify(header.attempt)}`);
+              }
               const critique2 = headers.find((header) => header.label === "Critique · 2");
               const attemptOf = translate(lang, "kanban.stageAttemptOf" as never, { stage: "Critique", n: 2, total: 2 } as never);
               if (!critique2?.hint.startsWith(attemptOf)) fail(`the latest critique's tooltip reads ${JSON.stringify(critique2?.hint)}`);
@@ -3782,7 +3810,15 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
                 const name = header.label.split(" · ")[0];
                 if (!stageList.some((entry) => entry.endsWith(`. ${name}`))) fail(`${JSON.stringify(header.label)} names no stage of the list`);
               }
-              frames.push({ label, viewport, lang, scheme, headers, stageList });
+              /* The member tiles the card draws for stage conversations, where
+                 it draws them: the same label, the suffix muted, the name whole. */
+              const tiles = await measureTiles(opened.page);
+              for (const tile of tiles.filter((entry) => entry.hint)) {
+                if (tile.hint.startsWith(tile.name) === false) fail(`a tile's tooltip does not lead with its stage: ${JSON.stringify(tile)}`);
+                if (!tile.nameWhole) fail(`a tile's stage name is cut: ${JSON.stringify(tile)}`);
+                if (tile.attempt && !tile.attemptMuted) fail(`a tile's attempt is not muted: ${JSON.stringify(tile)}`);
+              }
+              frames.push({ label, viewport, lang, scheme, headers, tiles, stageList });
               if (opened.pageErrors.length) fail(`page errors ${opened.pageErrors.join(" | ")}`);
             } catch (error) {
               fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));

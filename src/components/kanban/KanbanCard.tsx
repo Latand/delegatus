@@ -10,10 +10,11 @@ import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
-import { latestAttempt, stageAttemptPlace, stageCardLabel } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
+import { engineWord } from "./identityMarks";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
 import { PastAttempts, PipelineSection, stageNames } from "./PipelineSection";
@@ -105,6 +106,12 @@ function memberRole(t: TFunction, member: KanbanMember): string {
 const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { member: KanbanMember; workspace: boolean; onOpen: (file: FileEntry) => void }) {
   const { t } = useLocale();
   const role = memberRole(t, member);
+  /* A stage's tile sets its attempt apart as a muted suffix that survives the
+     name's truncation, and names the role preset only in its tooltip (#1865). */
+  const place = member.stage ? stageAttemptPlace(member.stage.pipeline, member.stage.stage.id, member.file) : null;
+  const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
+  const engine = member.file.engine === "claude" || member.file.engine === "codex" ? engineWord(member.file.engine) : null;
+  const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
   const state = t(`kanban.memberState.${member.state}`);
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
@@ -119,7 +126,8 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
     >
       <span className="row">
         <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
-        <span className="role">{role}</span>
+        <span className="role" title={hint}>{parts ? parts.name : role}</span>
+        {parts && parts.attempt !== null ? <span className="attempt"> · {parts.attempt}</span> : null}
         <span className={`state ${stateClass}`}>{state}</span>
       </span>
       {member.latest ? <span className="latest">{member.latest}</span> : null}

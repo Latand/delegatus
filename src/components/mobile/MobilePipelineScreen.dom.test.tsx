@@ -234,7 +234,8 @@ test("every reviewed stage opens its own conversation; a stage with none is a st
   expect(stages[3]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }));
   expect(stages[4]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Merge" }));
   /* The role preset the title gave up leads the meta line (#1865). */
-  expect(stages[3]!.textContent).toContain(`${translate("en", "roleCopy.builder.name")} · ${translate("en", "mobile2.pipeline.run")}`);
+  expect(stages[3]!.querySelector("[data-mobile2-stage-role]")!.textContent).toBe(translate("en", "roleCopy.builder.name"));
+  expect(stages[3]!.querySelector("[data-mobile2-stage-meta]")!.textContent).toBe(`${translate("en", "roleCopy.builder.name")} · ${translate("en", "pipelineChipState.pending")}`);
   expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.reviewRound", { round: 3 }));
   expect(stages[2]!.textContent).toContain(translate("en", "pipelineChipState.failed"));
   expect(stages[2]!.textContent).toContain(translate("en", "pipelineVerdict.findings", { count: 2 }));
@@ -396,11 +397,13 @@ test("the stage meta line reads the kind, the round and the verdict count from t
   const locale = getLocale();
   const tt = ((key: string, params?: Record<string, unknown>) => t(locale, key as never, params as never)) as never;
   const builder = translate("en", "roleCopy.builder.name");
+  /* Beside the preset a plain run needs no «run» word: its room goes to the
+     verdict and the findings count (#1865). */
   expect(stageMetaLine(tt, pipeline, pipeline.stages[1]!)).toBe(
-    `${builder} · ${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.passed")}`,
+    `${builder} · ${translate("en", "pipelineChipState.passed")}`,
   );
   expect(stageMetaLine(tt, pipeline, pipeline.stages[4]!)).toBe(
-    `${builder} · ${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.pending")}`,
+    `${builder} · ${translate("en", "pipelineChipState.pending")}`,
   );
   /* A stage named after its role says the role once, in the title. */
   const named = { ...pipeline.stages[4]!, id: "builder" };

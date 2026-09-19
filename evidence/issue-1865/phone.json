@@ -8,12 +8,24 @@
         "width": 390,
         "height": 844
       },
-      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 failed · 2 findings·15m 1sneeds a decision",
+      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 · failed · 2 findings · 15mneeds a decision",
+      "queueMeta": {
+        "text": "stage 2/2 · critique · 2 · failed · 2 findings · 15m",
+        "age": " · 15m",
+        "lines": 1,
+        "columnRight": 269.1,
+        "inkRight": 267.5,
+        "ageRight": 267.5,
+        "clipped": false
+      },
       "rows": [
         {
           "stage": "design",
           "title": "Design · 2",
-          "meta": "Architect · run · passed",
+          "meta": "Architect · passed",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 58.2,
           "need": 58.2,
           "cut": false
@@ -21,7 +33,10 @@
         {
           "stage": "critique",
           "title": "Critique · 2",
-          "meta": "Architect · run · failed · 2 findings",
+          "meta": "Architect · failed · 2 findings",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 64.2,
           "need": 64.2,
           "cut": false
@@ -37,12 +52,24 @@
         "width": 390,
         "height": 844
       },
-      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 failed · 2 findings·15m 1sneeds a decision",
+      "queueRow": "Header lane reads which stage is whichstage 2/2 · critique · 2 · failed · 2 findings · 15m 1sneeds a decision",
+      "queueMeta": {
+        "text": "stage 2/2 · critique · 2 · failed · 2 findings · 15m 1s",
+        "age": " · 15m 1s",
+        "lines": 2,
+        "columnRight": 269.1,
+        "inkRight": 195.9,
+        "ageRight": 124.2,
+        "clipped": false
+      },
       "rows": [
         {
           "stage": "design",
           "title": "Design · 2",
-          "meta": "Architect · run · passed",
+          "meta": "Architect · passed",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 58.2,
           "need": 58.2,
           "cut": false
@@ -50,7 +77,10 @@
         {
           "stage": "critique",
           "title": "Critique · 2",
-          "meta": "Architect · run · failed · 2 findings",
+          "meta": "Architect · failed · 2 findings",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 64.2,
           "need": 64.2,
           "cut": false
@@ -66,12 +96,24 @@
         "width": 390,
         "height": 844
       },
-      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження·15 хв 1 спотрібне рішення",
+      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження · 15 хв 1 спотрібне рішення",
+      "queueMeta": {
+        "text": "етап 2/2 · critique · 2 — збій · 2 зауваження · 15 хв 1 с",
+        "age": " · 15 хв 1 с",
+        "lines": 2,
+        "columnRight": 260,
+        "inkRight": 194.2,
+        "ageRight": 152.7,
+        "clipped": false
+      },
       "rows": [
         {
           "stage": "design",
           "title": "Design · 2",
-          "meta": "Архітектор · запуск · пройдено",
+          "meta": "Архітектор · пройдено",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 58.2,
           "need": 58.2,
           "cut": false
@@ -79,7 +121,10 @@
         {
           "stage": "critique",
           "title": "Critique · 2",
-          "meta": "Архітектор · запуск · провалено · 2 зауваження",
+          "meta": "Архітектор · провалено · 2 зауваження",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 64.2,
           "need": 64.2,
           "cut": false
@@ -95,12 +140,24 @@
         "width": 390,
         "height": 844
       },
-      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження·15 хв 1 спотрібне рішення",
+      "queueRow": "Header lane reads which stage is whichетап 2/2 · critique · 2 — збій · 2 зауваження · 15 хв 1 спотрібне рішення",
+      "queueMeta": {
+        "text": "етап 2/2 · critique · 2 — збій · 2 зауваження · 15 хв 1 с",
+        "age": " · 15 хв 1 с",
+        "lines": 2,
+        "columnRight": 260,
+        "inkRight": 194.2,
+        "ageRight": 152.7,
+        "clipped": false
+      },
       "rows": [
         {
           "stage": "design",
           "title": "Design · 2",
-          "meta": "Архітектор · запуск · пройдено",
+          "meta": "Архітектор · пройдено",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 58.2,
           "need": 58.2,
           "cut": false
@@ -108,7 +165,10 @@
         {
           "stage": "critique",
           "title": "Critique · 2",
-          "meta": "Архітектор · запуск · провалено · 2 зауваження",
+          "meta": "Архітектор · провалено · 2 зауваження",
+          "metaRestWhole": true,
+          "identityWidth": 83,
+          "identityGap": 6,
           "width": 64.2,
           "need": 64.2,
           "cut": false
