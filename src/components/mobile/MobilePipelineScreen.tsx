@@ -27,9 +27,12 @@ import {
   pipelineStagePosition,
   resolveStageNavFile,
   stageAttempts,
-  stageChipLabel,
+  stageCardLabel,
   stageChipState,
   stageConfigurable,
+  stageDisplayName,
+  stageLatestAttemptPlace,
+  stageRoleAside,
   verdictStatusLabel,
 } from "../pipelines/pipelineModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
@@ -292,29 +295,38 @@ function StageMark({ state, index }: { state: string; index: number }) {
 }
 
 /**
- * A stage row's title: the product's own stage identity, minus the position
- * that the row's own mark already gives (`stagePaneTitle`, #658). The role
- * alone is not an identity — a five-stage chain has three Builder stages, and
- * three rows reading «Builder» name nothing; the pipeline's own id for the
- * stage is what tells `fix` from `merge`.
+ * A stage row's title: the stage's name as its tiles on the board carry it
+ * (#1865) — «Critique», and «Critique · 2» once it ran twice. The position is
+ * the row's own mark; the role preset, which is no identity (a five-stage chain
+ * has three Builder stages), moves into the meta line.
  */
-export function stageRowTitle(t: TFunction, stage: PipelineStage): string {
-  const role = stageChipLabel(t, stage);
-  return role === stage.id ? role : t("mobile2.pipeline.stageTitle", { role, stage: stage.id });
+export function stageRowTitle(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+  return t("mobile2.pipeline.stageTitle", { stage: stageCardLabel(t, stage, stageLatestAttemptPlace(pipeline, stage.id)) });
 }
 
-/** The stage's meta line: what kind of stage it is, where its round stands and
-    what it returned — every word from the product's own dictionary. */
-export function stageMetaLine(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+/** The stage's meta line in its two parts: the role preset the title gave up,
+    and what follows it — what kind of stage it is, where its round stands and
+    what it returned, every word from the product's own dictionary. Where the
+    preset is named, a plain run says no more than the preset does, so the
+    «run» word gives its room to the verdict and the findings count (#1865). */
+export function stageMetaParts(t: TFunction, pipeline: Pipeline, stage: PipelineStage): { role: string | null; rest: string } {
   const attempt = latestAttempt(pipeline, stage.id);
   const findings = attempt?.verdict?.findings?.length ?? 0;
-  return [
+  const aside = stageRoleAside(t, stage);
+  const role = aside ? t("mobile2.pipeline.stageMetaRole", { role: aside }) : null;
+  const rest = [
     stage.kind === "review-loop"
       ? attempt ? t("mobile2.pipeline.reviewRound", { round: attempt.n }) : t("mobile2.pipeline.review")
-      : t("mobile2.pipeline.run"),
+      : role ? null : t("mobile2.pipeline.run"),
     t(`pipelineChipState.${stageChipState(pipeline, stage)}`),
     findings ? t("pipelineVerdict.findings", { count: findings }) : null,
   ].filter(Boolean).join(" · ");
+  return { role, rest };
+}
+
+export function stageMetaLine(t: TFunction, pipeline: Pipeline, stage: PipelineStage): string {
+  const { role, rest } = stageMetaParts(t, pipeline, stage);
+  return role ? `${role} · ${rest}` : rest;
 }
 
 /** The stage's earlier attempts, in their own order: every persisted attempt
@@ -404,7 +416,7 @@ export function MobilePipelineScreen({
       h: 0,
     };
     return (
-      <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: stageRowTitle(t, configStage) })} onClose={close}>
+      <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: stageRowTitle(t, pipeline, configStage) })} onClose={close}>
         <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
           <StagePlaceholderPane slot={slot} interactive />
         </div>
@@ -483,17 +495,18 @@ export function MobilePipelineScreen({
               findings={findings}
               numbered
               mobile
-              /* The heading in the product's own words: the stage as the board
-                 names it, the round it is on, and the count the verdict
-                 carries — never a hand-written «Review · round 3». */
+              /* The heading in the product's own words: the stage's name, the
+                 round it is on, and the count the verdict carries — never a
+                 hand-written «Review · round 3». The attempt number stays on
+                 the stage row, where it cannot read as a count (#1865). */
               heading={cursorStage.kind === "review-loop" && cursorAttempt
                 ? t("mobile2.pipeline.findingsHeading", {
-                  stage: stageRowTitle(t, cursorStage),
+                  stage: stageDisplayName(t, cursorStage),
                   round: cursorAttempt.n,
                   findings: t("pipelineVerdict.findings", { count: findings.length }),
                 })
                 : t("mobile2.pipeline.findingsHeadingRunless", {
-                  stage: stageRowTitle(t, cursorStage),
+                  stage: stageDisplayName(t, cursorStage),
                   findings: t("pipelineVerdict.findings", { count: findings.length }),
                 })}
             />
@@ -637,7 +650,8 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
   const file = resolveStageNavFile(attemptNavTarget(attempt), files);
   /* Configurable by the one rule the desktop's pane and strip read too. */
   const configurable = !file && stageConfigurable(pipeline, stage.id);
-  const title = stageRowTitle(t, stage);
+  const title = stageRowTitle(t, pipeline, stage);
+  const meta = stageMetaParts(t, pipeline, stage);
   /* Who runs it, and how often work came back to it: the same mark, ladder and
      circled count the desktop's graph draws (#1743). */
   const identity = stageIdentity(pipeline, stage);
@@ -666,14 +680,19 @@ function StageRow({ pipeline, stage, index, current, files, flows, onOpenConvers
         <StageMark state={state} index={index} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
+            <span data-mobile2-stage-title className="truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
             {returns.map((count, at) => (
               <ReturnMark key={at} count={count} />
             ))}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label tabular-nums text-muted">
-            <StageIdentity identity={identity} density="line" />
-            <span className="truncate">{stageMetaLine(t, pipeline, stage)}</span>
+            {/* The identity keeps its width; on a long line the preset
+                truncates first, so the verdict and the count stay whole. */}
+            <StageIdentity identity={identity} density="line" className="shrink-0" />
+            <span data-mobile2-stage-meta className="flex min-w-0">
+              {meta.role ? <span data-mobile2-stage-role className="min-w-[3ch] shrink-[100] truncate">{meta.role}</span> : null}
+              <span className="min-w-0 truncate whitespace-pre">{meta.role ? ` · ${meta.rest}` : meta.rest}</span>
+            </span>
           </span>
         </span>
         {file ? (

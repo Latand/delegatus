@@ -1,0 +1,397 @@
+{
+  "frames": [
+    {
+      "label": "1440-en-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "light",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Architect · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, attempt 2 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, attempt 1 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1280-en-light",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "light",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Architect · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, attempt 2 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, attempt 1 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1440-en-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Architect · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, attempt 2 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, attempt 1 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1280-en-dark",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Architect · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, attempt 2 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, attempt 1 of 2 · Architect · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1440-uk-light",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Архітектор · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, спроба 2 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, спроба 1 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1280-uk-light",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Архітектор · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, спроба 2 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, спроба 1 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1440-uk-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Архітектор · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, спроба 2 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, спроба 1 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    },
+    {
+      "label": "1280-uk-dark",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "headers": [
+        {
+          "text": "Design · Build the board header lane",
+          "hint": "Design · Архітектор · Claude · Build the board header lane",
+          "label": "Design",
+          "labelWhole": true,
+          "width": 205.2,
+          "attempt": null
+        },
+        {
+          "text": "Critique · 2 · Build the board header lane",
+          "hint": "Critique, спроба 2 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 2",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 2",
+            "muted": true,
+            "tabular": true
+          }
+        },
+        {
+          "text": "Critique · 1 · Build the board header lane",
+          "hint": "Critique, спроба 1 з 2 · Архітектор · Claude · Build the board header lane",
+          "label": "Critique · 1",
+          "labelWhole": true,
+          "width": 227.6,
+          "attempt": {
+            "text": " · 1",
+            "muted": true,
+            "tabular": true
+          }
+        }
+      ],
+      "tiles": [],
+      "stageList": [
+        "1. Design",
+        "2. Build",
+        "3. Critique"
+      ]
+    }
+  ],
+  "failures": []
+}
