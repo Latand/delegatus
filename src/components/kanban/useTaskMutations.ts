@@ -25,15 +25,15 @@ import type { BoardTask, TaskColor, TaskStatus } from "@/lib/tasks/types";
  * its status) or shows a newer write, so a card never blinks back to its old
  * column between the response and the next poll.
  *
- * Field edits (#1695 K4b) — the colour label, the group hide and the task's
- * text — ride the same per-task queue and the same revision memory, so an edit
+ * Field edits (#1695 K4b) — the colour label, the group hide, the task's text
+ * and its agent-facing details (#1834) — ride the same per-task queue and the same revision memory, so an edit
  * and a status move of one task never race each other's guard. Their 409 is
  * read the same way:
  * - the server already holds the value: settled;
  * - a colour or a hide: sent once more with the stored guard, since the label
  *   and the hide say nothing about what else changed;
- * - text: sent again while the stored text is still the text the edit started
- *   from. When only another part of the text moved (an agent rewrote the
+ * - text and details: sent again while the stored field is still the value the
+ *   edit started from. When only another part of the text moved (an agent rewrote the
  *   description under a new title), the caller's `rebase` puts the edit onto
  *   the stored text and that is sent once instead. Only a change to the part
  *   being edited is a conflict, and the caller shows both.
@@ -60,7 +60,12 @@ export type TaskFieldChange =
   | { field: "hide"; value: boolean; replaces?: string | null }
   /* `rebase` receives stored text that moved since the edit began and returns
      the edit applied to it, or null when the edited part itself moved. */
-  | { field: "text"; value: string; rebase?: (stored: string) => string | null };
+  | { field: "text"; value: string; rebase?: (stored: string) => string | null }
+  /* Agent-facing details (#1834), stored beside the text: this write carries
+     only `details`, so a text edit racing it cannot be overwritten by it. An
+     empty string clears the field. There is nothing to rebase — the field has
+     no parts — so details that moved under an edit is a conflict. */
+  | { field: "details"; value: string };
 
 export type TaskField = TaskFieldChange["field"];
 
@@ -73,7 +78,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { hide: boolean } | { text: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus } | { color: TaskColor | "none" } | { hide: boolean } | { text: string } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -106,6 +111,7 @@ interface FieldOverride {
 export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "color") return task.color ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
+  if (field === "details") return task.details ?? "";
   return task.text;
 }
 
@@ -113,6 +119,7 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
 function changeOf(field: TaskField, value: unknown): TaskFieldChange {
   if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
   if (field === "hide") return { field, value: Boolean(value) };
+  if (field === "details") return { field, value: String(value ?? "") };
   return { field, value: String(value ?? "") };
 }
 
@@ -120,12 +127,13 @@ function changeOf(field: TaskField, value: unknown): TaskFieldChange {
 export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
   if (change.field === "color") return (task.color ?? null) === change.value;
   if (change.field === "text") return task.text === change.value;
+  if (change.field === "details") return (task.details ?? "") === change.value;
   if (!change.value) return !task.groupHidden;
   return Boolean(task.groupHidden) && task.groupHidden!.at !== (change.replaces ?? null);
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; hide?: boolean; text?: string }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; hide?: boolean; text?: string; details?: string }>;
 
 export function revisionOf(task: BoardTask): string | null {
   const revision = (task as BoardTask & { revision?: unknown }).revision;
@@ -255,6 +263,7 @@ export class TaskStatusMutations {
         override.value = value;
         if (change) override.change = change;
         else if (override.change.field === "text" && typeof value === "string") override.change = { field: "text", value };
+        else if (override.change.field === "details" && typeof value === "string") override.change = { field: "details", value };
         override.confirmedRevision = confirmed;
       } else {
         fields.delete(field);
@@ -268,6 +277,7 @@ export class TaskStatusMutations {
     const fence = { expectedProject: guard.project, expectedRevision: guard.revision };
     if (change.field === "color") return { ...fence, color: change.value ?? "none" };
     if (change.field === "hide") return { ...fence, hide: change.value };
+    if (change.field === "details") return { ...fence, details: change.value };
     return { ...fence, text: change.value };
   }
 
@@ -312,7 +322,9 @@ export class TaskStatusMutations {
       return { kind: "settled", field, task: stored };
     }
     const storedGuard = { project: stored.project, revision: revisionOf(stored) ?? "" };
-    if (field !== "text" || storedValue === from) {
+    /* Text and details are content: a second writer's value is the operator's
+       to reconcile, so only these two read a stale store as a conflict. */
+    if ((field !== "text" && field !== "details") || storedValue === from) {
       const retry = await this.patchSafely(id, this.bodyFor(change, storedGuard));
       if (retry.ok) return savedField(retry.task, revisionOf(stored));
       return failed(retry.status, retry.error, retry.code);

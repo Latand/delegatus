@@ -12,7 +12,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { latestAttempt, stageChipLabel } from "@/components/pipelines/pipelineModel";
 
-import { CardInlineText, withinEdit } from "./CardInlineText";
+import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline } from "./kanbanModel";
@@ -25,9 +25,10 @@ import type { StageDrafts } from "./stageDrafts";
 import type { PipelineActionKind } from "./stagesModel";
 
 /* One card of the kanban board, in the approved prototype's anatomy
-   (`renderCard`): colour label, saving bar, title and tools, description,
-   activity line, the compact pipeline summary, conversation tiles, and the
-   footer whose status pill is the one place status changes. */
+   (`renderCard`): colour label, saving bar, title and tools, description, the
+   collapsed Details row carrying the agent's context (#1834), activity line,
+   the compact pipeline summary, conversation tiles, and the footer whose status
+   pill is the one place status changes. */
 
 /** Pipelines that have ended: the rows a card folds away once it holds many. */
 const ENDED_PIPELINE_STATES: ReadonlySet<string> = new Set(["completed", "closed"]);
@@ -142,13 +143,13 @@ export interface KanbanCardProps {
   onOpenStage: (pipeline: Pipeline, stage: PipelineStage, cardId: string) => void;
   onFocusCard: (cardId: string) => void;
   onOpenConversations: () => void;
-  /** The title or description being edited on this card, with its draft. */
-  editing: { field: "title" | "description"; draft: string } | null;
+  /** The title, description or details being edited on this card, with its draft. */
+  editing: { field: CardEditField; draft: string } | null;
   /** A save the server refused: the draft is kept for Retry. */
-  failedEdit: { field: "title" | "description"; draft: string; message: string } | null;
+  failedEdit: { field: CardEditField; draft: string; message: string } | null;
   /** Text an agent wrote to the field being edited, offered beside the draft. */
-  incomingEdit: { field: "title" | "description"; value: string } | null;
-  onStartEdit: (card: KanbanCardModel, field: "title" | "description") => void;
+  incomingEdit: { field: CardEditField; value: string } | null;
+  onStartEdit: (card: KanbanCardModel, field: CardEditField) => void;
   onEditDraft: (cardId: string, draft: string) => void;
   onCommitEdit: (cardId: string) => void;
   onCancelEdit: (cardId: string) => void;
@@ -224,6 +225,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      card holds more than three rows the finished ones fold behind one count,
      newest first (#1765). */
   const [completedOpen, setCompletedOpen] = useState(false);
+  /* Agent-facing details (#1834): one row, closed on every fresh render of the
+     board, which is what makes a reload show it closed again. Editing it opens
+     the row, so a save that leaves the field still shows the text. */
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const editingDetails = editing?.field === "details";
+  const detailsShown = detailsOpen || editingDetails;
   const livePipelines = card.pipelines.filter((summary) => !ENDED_PIPELINE_STATES.has(summary.pipeline.state));
   const endedPipelines = card.pipelines
     .filter((summary) => ENDED_PIPELINE_STATES.has(summary.pipeline.state))
@@ -352,6 +359,44 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </button>
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
+      ) : null}
+
+      {/* The agent's context, folded away: one row while closed, the whole text
+          scrolling inside itself while open, and nothing at all when the task
+          has no details (#1834). */}
+      {!collapsed && (card.details || editingDetails) ? (
+        <div className="details" data-details={card.id}>
+          <button
+            type="button"
+            className="btn quiet details-toggle"
+            aria-expanded={detailsShown}
+            aria-label={t(detailsShown ? "kanban.detailsHide" : "kanban.detailsShow", { title })}
+            data-details-toggle={card.id}
+            onClick={() => setDetailsOpen((open) => (editingDetails ? open : !open))}
+          >
+            {detailsShown ? <ChevronDown /> : <ChevronRight />}
+            <span>{t("kanban.details")}</span>
+          </button>
+          {editingDetails ? (
+            <CardInlineText
+              field="details"
+              draft={editing.draft}
+              onDraft={(draft) => props.onEditDraft(card.id, draft)}
+              onCommit={() => props.onCommitEdit(card.id)}
+              onCancel={() => props.onCancelEdit(card.id)}
+            />
+          ) : detailsShown ? (
+            <button
+              type="button"
+              className="details-text"
+              data-details-text={card.id}
+              aria-label={t("kanban.editDetails")}
+              onClick={() => props.onStartEdit(card, "details")}
+            >
+              {card.details}
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {!collapsed && failedEdit ? (

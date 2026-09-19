@@ -682,6 +682,19 @@
 .kb .card button.desc { cursor: text; border-radius: 4px; }
 .kb .card button.desc:hover { background: var(--surface-well); }
 .kb .card .desc.placeholder { color: var(--color-muted); font-style: italic; }
+/* Agent context, folded away (#1834): the closed row costs one line, and the
+   open text scrolls inside itself instead of stretching the card. */
+.kb .card .details { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kb .card .details-toggle { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
+.kb .card .details-toggle:hover { color: var(--color-secondary); }
+.kb .card .details-toggle svg { width: 12px; height: 12px; }
+.kb .card .details-text {
+  display: block; width: 100%; max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; text-align: left;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--text-caption); line-height: 16px;
+  color: var(--color-secondary); background: var(--surface-well); border-radius: 6px; padding: 6px 8px; cursor: text;
+}
+.kb .card .details-text:hover { background: var(--surface-sunken, var(--surface-well)); }
+.kb .card .edit.details-edit { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--text-caption); line-height: 16px; max-height: 320px; overflow-y: auto; }
 .kb .icon-btn.lock { color: var(--color-muted); cursor: default; }
 .kb .icon-btn.lock:hover { background: none; }
 @media (hover: hover) and (pointer: fine) {

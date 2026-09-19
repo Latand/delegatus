@@ -1,5 +1,18 @@
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
+/** How long a task's human `text` may be, server-enforced. */
+export const TASK_TEXT_LIMIT = 6000;
+/**
+ * How long a task's agent-facing `details` may be (#1834), server-enforced.
+ *
+ * Its own cap, larger than `text` because that is the point of the split: a
+ * prompt, a working context or a state dump that used to be pasted into the
+ * description now has somewhere to live, while `text` stays a human title and
+ * a few sentences. `list_tasks` truncates what it returns, so this cap does not
+ * decide how large that answer can get.
+ */
+export const TASK_DETAILS_LIMIT = 20000;
+
 /** Board membership of a task's band. Absent on a row is `shown`; the value is
     written explicitly so a restore is durable and readable in the state file. */
 export type TaskBoardVisibility = "shown" | "hidden";
@@ -108,8 +121,18 @@ export interface BoardTask {
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
   /** Plain text, ≤ 6000 chars (server-enforced). First line acts as the
-      title everywhere a compact label is needed. */
+      title everywhere a compact label is needed. Written for the HUMAN who
+      reviews the board: a short title, then a few sentences about the outcome.
+      Agent-facing context belongs in `details`. */
   text: string;
+  /** Agent-facing context (#1834): the prompt, the working notes, the ids, the
+      rules and the state an agent needs and the operator does not. Plain text
+      with its own cap ({@link TASK_DETAILS_LIMIT}), persisted and revisioned
+      exactly like `text`, and absent on every task nobody wrote it for — no
+      task's stored content is migrated into it. The card and the task's opened
+      view show it behind one collapsed «Details» row, never as the
+      description. */
+  details?: string;
   /** Placement state (issue #17 owns `auto`): `pinned` ⇔ a human chose this exact
       spot (`pos` present), and the board's collision pass treats it as law —
       never nudged, even atop a pane. `auto` cards (curator/inbox lattice) also

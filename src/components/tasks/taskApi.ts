@@ -137,6 +137,9 @@ export function updateTask(
   id: string,
   patch: {
     text?: string;
+    /** Agent-facing context (#1834); `null` or an empty string clears it, and
+        it is written on its own — `text` is left exactly as stored. */
+    details?: string | null;
     status?: TaskStatus;
     placement?: "pinned" | "unplaced";
     pos?: { x: number; y: number };

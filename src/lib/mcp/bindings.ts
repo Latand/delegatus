@@ -86,7 +86,7 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { createPipelineFromRequest, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
+import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, projectPipelineListRows } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
@@ -3101,6 +3101,20 @@ function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
   return projectTaskPipelineIds(dependencies.loadTasks(), dependencies.getPipelines().pipelines);
 }
 
+/** How much agent-facing `details` one `list_tasks` row carries (#1834). The
+    list already answers with up to 200 whole tasks, and details has a far
+    larger cap than text, so a page of full details would be the biggest answer
+    the server gives. A cut row says so and names `get_task` as where the whole
+    field is read. */
+export const LIST_TASKS_DETAILS_CHARS = 400;
+
+/** A list row with its details bounded; every other field is untouched. */
+function listTaskRow(task: TaskPipelineReadModel): TaskPipelineReadModel | (TaskPipelineReadModel & { detailsTruncated: true }) {
+  const details = task.details;
+  if (typeof details !== "string" || details.length <= LIST_TASKS_DETAILS_CHARS) return task;
+  return { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true };
+}
+
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const project = text(args.project);
   const status = text(args.status);
@@ -3110,7 +3124,8 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
     .filter((task) => !project || task.project === project)
     .filter((task) => !status || task.status === status)
     .filter((task) => !placement || task.placement === placement)
-    .slice(0, limit);
+    .slice(0, limit)
+    .map(listTaskRow);
   return redactPayload({ count: tasks.length, tasks });
 }
 

@@ -88,6 +88,9 @@ export interface KanbanCard {
   /** A placeholder task still waiting for its first real title. */
   titlePending: boolean;
   description: string;
+  /** Agent-facing context the card keeps behind one collapsed Details row
+      (#1834); empty when the task has none, and the row is then absent. */
+  details: string;
   members: KanbanMember[];
   mirrors: KanbanMirror[];
   /** Distinct conversations, counted from members, mirrors and durable rows. */
@@ -415,6 +418,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       title,
       titlePending: Boolean(task?.origin && task.origin.refinement === "pending") || (task ? !taskTitle(task.text) : false),
       description,
+      details: task?.details ?? "",
       members,
       mirrors,
       conversations: identities.size,
