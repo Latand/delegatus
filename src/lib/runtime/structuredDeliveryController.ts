@@ -8,6 +8,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeSettingsCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -16,7 +17,12 @@ import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
-import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
+import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
+import {
+  interruptionObligationDirectory,
+  interruptionObligationStore,
+  type InterruptionObligationStore,
+} from "./interruptionObligations";
 import { reapSeveredStructuredHost } from "./registry";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
@@ -648,6 +654,14 @@ export async function bindStructuredDeliveryQueue(
     {
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
+      switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
+      holdForFailedSwitch: (effect, reason) => {
+        registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
+          operationId: effect.operationId,
+          accountId: effect.accountId!,
+          reason,
+        });
+      },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
@@ -1416,30 +1430,132 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
   return await state.releaseActiveHost?.(key) ?? false;
 }
 
+export interface DemotionInterruptionOptions {
+  /** The deployment boundary this release belongs to; part of each
+      obligation's identity. */
+  boundary?: string;
+  store?: InterruptionObligationStore;
+  /** The active orchestrator seats. Defaults to the durable seat file. */
+  seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
+}
+
+/** The seat holding `conversationId`. A seat may still name an alias of the
+    conversation after a migration or rebind, so both sides are compared
+    canonically, as the successor's discharge check compares them. */
+async function orchestratorSeatFor(
+  registry: AgentRegistry,
+  conversationId: ViewerConversationId,
+  seats: DemotionInterruptionOptions["seats"],
+): Promise<{ project: string; seatEpoch: number } | null> {
+  const active = seats ? seats() : (await import("@/lib/orchestrator/seats")).activeOrchestratorSeats();
+  const seat = active.find((candidate) => candidate.conversationId?.startsWith("conversation_")
+    && registry.canonicalConversationId(candidate.conversationId as ViewerConversationId) === conversationId);
+  return seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null;
+}
+
+/**
+ * Writes the continuation this release owes a host whose turn is in flight
+ * (#1835), before anything releases it. The host's own active turn is the
+ * evidence; the registry's turn word only backs it up, so a host that finished
+ * its turn before the release is owed nothing. Every demotion path that
+ * releases a host calls this first: the published hosts below, and the ones
+ * startup adopted but had not yet published.
+ */
+export async function recordDemotionInterruption(
+  registry: AgentRegistry,
+  key: SessionKey,
+  current: HostState,
+  options: DemotionInterruptionOptions,
+): Promise<void> {
+  const snapshot = registry.readOnlySnapshot();
+  const hostKey = sessionKeyId(key);
+  const entry = snapshot.entries[hostKey];
+  const conversation = Object.values(snapshot.conversations).find((candidate) =>
+    candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+  if (!entry || !conversation || conversation.supersededBy) return;
+  const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
+  if (turnRef === null && conversation.turn.state !== "busy") return;
+  const conversationId = registry.canonicalConversationId(conversation.id);
+  const generation = conversation.generations.at(-1)!;
+  const transcript = await readTranscriptEvidence(conversation.engine, generation.path).catch(() => null);
+  let seat: { project: string; seatEpoch: number } | null = null;
+  try {
+    seat = await orchestratorSeatFor(registry, conversationId, options.seats);
+  } catch (error) {
+    console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
+  }
+  const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const { obligation, created } = store.record({
+    conversationId,
+    engine: conversation.engine,
+    hostKey,
+    path: generation.path,
+    owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
+    claimEpoch: entry.claimEpoch,
+    turnRef,
+    boundary: options.boundary ?? "viewer-release",
+    reason: "viewer-release",
+    checkpoint: { lastEventKind: transcript?.kind ?? null, lastEventAt: transcript?.lastEventAt ?? null },
+    seat,
+  });
+  if (created) {
+    console.error("[viewer release] recorded an interrupted turn owed one continuation", {
+      conversationId, hostKey, turnRef, obligation: obligation.id,
+    });
+  }
+}
+
 /** Releases every engine host owned by this Viewer before release demotion.
  *
  * Structured engines run outside the Viewer container namespace, so exiting
  * the Viewer does not end them. Release the process-scoped registrations while
  * their transports and writer fences still exist; the promoted Viewer can then
  * claim each durable row on its bounded startup retry. All releases begin in
- * one turn so several slow engine shutdowns consume one grace window. */
-export async function releaseStructuredDeliveryHostsForDemotion(): Promise<void> {
+ * one turn so several slow engine shutdowns consume one grace window.
+ *
+ * A host whose turn is in flight is cut by this release, so the continuation
+ * it is owed is recorded first (#1835); the store retries the record and falls
+ * back to its pending journal. A host whose obligation still could not be
+ * written anywhere is not released: cutting its turn would leave no trace that
+ * a continuation is owed, so its engine keeps the turn and the failure is
+ * reported with the rest. */
+export async function releaseStructuredDeliveryHostsForDemotion(
+  options: DemotionInterruptionOptions = {},
+): Promise<void> {
   const registrations = state.activeRegistrations?.() ?? [];
   const release = state.releaseActiveHost;
   if (!release || registrations.length === 0) return;
   const registry = state.activeRegistry;
-  await Promise.all(registrations.map(async ({ key, host }) => {
-    const current = await host.health();
-    if ((current.status !== "active" && current.status !== "attention")
-      || current.pid === null
-      || current.processStartIdentity === null) return;
-    if (!registry?.markStructuredHostHandoff(
-      key,
-      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+  const recordFailures: unknown[] = [];
+  const unrecorded = new Set<string>();
+  /* Settled, not raced: one host whose health, handoff or record fails must
+     not end the demotion while the others' records are still being written. */
+  await Promise.allSettled(registrations.map(async ({ key, host }) => {
+    try {
+      const current = await host.health();
+      if ((current.status !== "active" && current.status !== "attention")
+        || current.pid === null
+        || current.processStartIdentity === null) return;
+      if (!registry?.markStructuredHostHandoff(
+        key,
+        captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+      )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+      await recordDemotionInterruption(registry, key, current, options);
+    } catch (error) {
+      unrecorded.add(sessionKeyId(key));
+      console.error("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
+        hostKey: sessionKeyId(key), error,
+      });
+      recordFailures.push(error);
+    }
   }));
-  const outcomes = await Promise.allSettled(registrations.map(({ key }) => release(key)));
-  const failures = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
+  const outcomes = await Promise.allSettled(registrations
+    .filter(({ key }) => !unrecorded.has(sessionKeyId(key)))
+    .map(({ key }) => release(key)));
+  const failures = [
+    ...recordFailures,
+    ...outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []),
+  ];
   if (failures.length > 0) {
     throw new AggregateError(failures, `failed to release ${failures.length} structured host(s) during Viewer demotion`);
   }
