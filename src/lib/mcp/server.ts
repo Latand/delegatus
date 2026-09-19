@@ -2803,8 +2803,16 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`resend` says what is safe to do next: `not-needed` (it arrived), `safe` (the record proves it never executed and it is fenced, so the same instruction may be sent again), or `verify-first` (`duplicateRisk` is true — delivery began, or nothing proves it did not, so check the recipient before sending again).",
     "A resend is a NEW `send_message` under a NEW `clientRequestId`: the settled operation is fenced, so repeating the original `clientRequestId` replays that settled answer instead of delivering anything.",
   ].join(" "),
-  create_task: "Create a durable board task.",
-  update_task: "Update a durable board task.",
+  create_task: [
+    "Create a durable board task.",
+    "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
+    "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
+  ].join(" "),
+  update_task: [
+    "Update a durable board task.",
+    "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
+    "`refine` writes only the human part, as it always has.",
+  ].join(" "),
   create_pipeline: [
     "Create a Viewer pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
@@ -2846,8 +2854,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_pipelines: "List durable pipelines as bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated.",
   conversation_action: "Control or archive Viewer conversations. interrupt, kill, resume, compact, and dialog-key accept one conversation by id, transcript path, or selected-card reference. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Viewer state currently visible to the operator.",
-  list_tasks: "List durable board tasks.",
-  get_task: "Read one durable board task.",
+  list_tasks: "List durable board tasks. Agent-facing `details` is truncated on this answer (`detailsTruncated: true` marks a cut row), since its answers are already large: read the whole field with get_task, and never write a truncated value back.",
+  get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments.",
   resources: "Read system and Viewer-owned agent resource usage.",
   conversation_migration: "Reseat, retry, roll back or cancel a conversation account migration, or withdraw an account switch the queue has not claimed yet.",
@@ -3096,7 +3104,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   create_task: z.object({
     clientRequestId: clientRequestIdSchema,
     project: z.string().min(1),
-    text: z.string().min(1),
+    text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    details: z.string().optional()
+      .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
     dueAt: z.string().optional(),
@@ -3112,7 +3122,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("First-action task naming: title the placeholder task your conversation is linked to, once. Replaying the same text returns the prior result; a task already named by the operator or an earlier refinement answers already-named and keeps its title."),
     expectedProject: z.string().min(1).optional().describe("Required for pos or placement updates: copy the current task project exactly."),
     expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
-    text: z.string().optional(),
+    text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
+    details: z.string().nullable().optional()
+      .describe("Agent-facing context (#1834): a string sets or replaces it, null or an empty string clears it. Its own field, so an update carrying only details leaves text byte for byte and the reverse. Read the current value with get_task first, since list_tasks truncates it and a write replaces the whole field rather than appending."),
     status: z.enum(["inbox", "assigned", "blocked", "done"]).optional(),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Pinned retains existing pos when omitted; unplaced removes pos. Placement updates require expectedProject and expectedRevision."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
@@ -3451,7 +3463,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
 
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
-    instructions: "Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Viewer action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry.",
+    instructions: "Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Viewer action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row.",
   });
   for (const toolName of MCP_TOOL_NAMES) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
