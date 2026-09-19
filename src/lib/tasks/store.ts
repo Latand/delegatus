@@ -292,10 +292,23 @@ function openTaskCollection(database: string): SqliteStateCollection<TaskStateRo
   return collection;
 }
 
-function parseLegacyBody(raw: unknown): TasksFile {
+/* A rollback mirror names the SQLite revision it was written from in this
+   migration marker. Older releases carry `migrations` through every write, so
+   a file that still holds the marker of the recorded mirror descends from it
+   and its missing rows are deletions. A file without it (an old writer that
+   found the path empty while an import or a mirror was mid-retire) proves
+   nothing about the rows it lacks. The marker never becomes a SQLite row. */
+const MIRROR_MARKER = "sqlite-mirror-revision";
+
+type LegacyTasksBody = TasksFile & { mirrorOf: number | null };
+
+function parseLegacyBody(raw: unknown): LegacyTasksBody {
   const body = raw as TasksFile;
   stateFromBody(body);
-  return body;
+  if (!body.migrations || !Object.hasOwn(body.migrations as object, MIRROR_MARKER)) return { ...body, mirrorOf: null };
+  const { [MIRROR_MARKER]: marker, ...migrations } = body.migrations as TaskMigrations;
+  const mirrorOf = /^\d+$/.test(marker!) ? Number(marker) : null;
+  return { ...body, migrations, mirrorOf };
 }
 
 /** Merge a `tasks.json` that changed after the import (a rollback release wrote
@@ -306,11 +319,13 @@ function parseLegacyBody(raw: unknown): TasksFile {
     task strictly newer by `updatedAt`; either way it is listed as a conflict.
     A row only the file holds is added. Receipts and migration markers are
     unioned: one the file lacks is never deleted, since a replay or a one-time
-    transition must not run twice. */
-function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+    transition must not run twice. A file that does not carry the recorded
+    mirror's marker deletes nothing: its missing rows are listed as spared. */
+function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
   const collection = openTaskCollection(legacyDatabasePath(filePath));
   const since = legacyBaselineRevision(baseline);
-  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [] };
+  const descends = baseline.mirrorRevision !== null && body.mirrorOf === baseline.mirrorRevision;
+  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {
     const current = new Map(collection.snapshot().map((row) => [taskRowKey(row), row] as const));
     const revisions = collection.rowRevisions();
@@ -343,6 +358,10 @@ function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImpo
     const deleteKeys: string[] = [];
     for (const key of current.keys()) {
       if (incomingKeys.has(key) || !key.startsWith("t:")) continue;
+      if (!descends) {
+        summary.spared.push(key);
+        continue;
+      }
       if ((revisions.get(key) ?? 0) > since) {
         summary.conflicts.push(key);
         summary.kept += 1;
@@ -358,7 +377,7 @@ function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImpo
 }
 
 /** The task store's legacy import spec, for the import driver and its tests. */
-export function taskLegacyCollection(filePath = TASKS_FILE): LegacyCollectionSpec<TasksFile> {
+export function taskLegacyCollection(filePath = TASKS_FILE): LegacyCollectionSpec<LegacyTasksBody> {
   return {
     collection: TASK_COLLECTION,
     schemaVersion: 1,
@@ -381,7 +400,8 @@ export function taskLegacyCollection(filePath = TASKS_FILE): LegacyCollectionSpe
       let mirror: { body: unknown; revision: number } | null = null;
       collection.checkpointMirror((rows, revision) => {
         const body = bodyFromRows(rows);
-        mirror = { body: fileBody(body.tasks as unknown[], body.recentCreates as RecentCreate[], body.migrations as TaskMigrations), revision };
+        const migrations = { ...(body.migrations as TaskMigrations), [MIRROR_MARKER]: String(revision) };
+        mirror = { body: fileBody(body.tasks as unknown[], body.recentCreates as RecentCreate[], migrations), revision };
       });
       return mirror!;
     },
@@ -475,7 +495,10 @@ function writeTaskState<R>(
       const held = byKey.get(taskRowKey(row));
       return !held || JSON.stringify(held) !== JSON.stringify(row);
     });
-    return { records: changed, deleteKeys };
+    /* A create that refreshes a receipt appends it as the newest; its row
+       moves to the end too, so the receipt cap evicts it last after a reload. */
+    const appendKeys = changed.map(taskRowKey).filter((key) => key.startsWith("r:") && byKey.has(key));
+    return { records: changed, deleteKeys, appendKeys };
   });
   return result!;
 }

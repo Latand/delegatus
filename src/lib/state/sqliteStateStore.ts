@@ -986,9 +986,11 @@ export class SqliteStateCollection<T> {
   }
 
   /** `fenceOwner` also admits the release that owns an active rollback fence,
-      for the legacy reconcile its own demotion checkpoint runs (#1870). */
+      for the legacy reconcile its own demotion checkpoint runs (#1870).
+      `appendKeys` names changed rows that move to the end of the collection
+      order instead of keeping their held position. */
   patchSync(
-    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[] },
+    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[] },
     options: { fenceOwner?: boolean } = {},
   ): void {
     const authorize = options.fenceOwner
@@ -998,7 +1000,7 @@ export class SqliteStateCollection<T> {
     const lease = this.acquireLeaseSync();
     try {
       const patch = prepare();
-      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? [], authorize);
+      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []));
     } finally {
       this.releaseLeaseSync(lease);
     }
@@ -1324,6 +1326,7 @@ export class SqliteStateCollection<T> {
     mergeOmitted: boolean,
     deleteKeys: readonly string[] = [],
     authorize: () => void = () => assertSqliteWriteAuthority(this.filename),
+    appendKeys: ReadonlySet<string> = new Set(),
   ): void {
     for (const record of records) this.validate(record);
     const seen = new Set<string>();
@@ -1383,7 +1386,7 @@ export class SqliteStateCollection<T> {
         `);
         for (const entry of changed) {
           const held = current.get(entry.key);
-          const order = mergeOmitted ? held?.row_order ?? appended++ : entry.order;
+          const order = mergeOmitted ? (appendKeys.has(entry.key) ? undefined : held?.row_order) ?? appended++ : entry.order;
           upsert.run(this.options.collection, entry.key, entry.valueJson, order, nextRevision, entry.controllerActive);
           change.run(this.options.collection, nextRevision, entry.key, "upsert");
         }

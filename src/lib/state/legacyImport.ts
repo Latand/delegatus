@@ -51,6 +51,9 @@ export interface LegacyReconcileSummary {
   /** Rows SQLite changed after the mirror that the file holds differently or
       dropped: SQLite kept them unless the file's row is strictly newer. */
   conflicts: string[];
+  /** Rows the file lacks that stayed because the file does not carry the
+      recorded mirror's marker, so its lack of them proves no deletion. */
+  spared: string[];
 }
 
 export interface StateIncident {
@@ -198,6 +201,24 @@ function retire<P>(spec: LegacyCollectionSpec<P>, mode: "keep" | "delete", hooks
   return preservedAs;
 }
 
+/** The most recently written `<file>.imported-*` copy beside the legacy path. */
+function newestKeptCopy(legacyPath: string): string | null {
+  const prefix = `${path.basename(legacyPath)}.imported-`;
+  const directory = path.dirname(legacyPath);
+  let newest: { file: string; mtimeMs: number } | null = null;
+  for (const name of fs.readdirSync(directory)) {
+    if (!name.startsWith(prefix)) continue;
+    const file = path.join(directory, name);
+    try {
+      const { mtimeMs } = fs.statSync(file);
+      if (!newest || mtimeMs > newest.mtimeMs) newest = { file, mtimeMs };
+    } catch {
+      continue;
+    }
+  }
+  return newest?.file ?? null;
+}
+
 function preserveUnreadable<P>(spec: LegacyCollectionSpec<P>): string {
   const preservedAs = freeName(`${spec.legacyPath}.unreadable-${stamp()}`);
   fs.renameSync(spec.legacyPath, preservedAs);
@@ -229,10 +250,13 @@ export function importLegacyCollection<P>(
     let repaired: string | null = null;
     if (legacy.kind === "tombstone") {
       gap = "tombstone-without-import";
+      const kept = newestKeptCopy(spec.legacyPath);
       incident = raise({
         kind: "tombstone-without-import",
         collection: spec.collection,
-        message: `${spec.legacyPath} is a tombstone but ${database} has no import record; starting empty`,
+        ...(kept ? { preservedAs: kept } : {}),
+        message: `${spec.legacyPath} is a tombstone but ${database} has no import record; starting empty`
+          + (kept ? `. The newest kept copy of the legacy file is ${path.basename(kept)}; restore the newest backup or re-import that copy.` : ""),
       });
     } else if (legacy.kind === "file") {
       const parsed = parseJsonBytes(legacy.bytes);
@@ -348,6 +372,9 @@ function reconcileChangedLegacy<P>(
     message: `${path.basename(spec.legacyPath)} changed after the import (a rollback release or an older writer); `
       + `merged ${summary.added} added, ${summary.replaced} replaced and ${summary.removed} removed rows, `
       + `kept ${summary.kept} SQLite rows changed since the mirror`
+      + (summary.spared.length
+        ? `; the file does not carry the recorded mirror's marker, so no row was deleted (${summary.spared.length} rows it lacks were kept)`
+        : "")
       + (repaired ? `; ${repaired}` : ""),
   });
 }

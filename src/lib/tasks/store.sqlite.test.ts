@@ -222,6 +222,22 @@ describe("first-boot import of tasks.json", () => {
     expect(loadTasks(file).map((row) => row.id)).toEqual(["a"]);
   });
 
+  test("a tombstone without an import record names the newest kept copy in its incident", () => {
+    const { dir, file, db } = sandbox();
+    writeLegacy(file, { tasks: [task("a")] });
+    loadTasks(file);
+    // The database is replaced by a copy from before the import.
+    for (const name of fs.readdirSync(dir)) if (name.startsWith("state.sqlite")) fs.rmSync(path.join(dir, name));
+    expect(readStateImport(db, "tasks")).toBeNull();
+    const kept = siblings(dir, "tasks.json.imported-")[0]!;
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(outcome.incident?.kind).toBe("tombstone-without-import");
+    expect(outcome.incident?.preservedAs).toBe(path.join(dir, kept));
+    expect(outcome.incident?.message).toContain(kept);
+  });
+
   test("(g) an injected digest mismatch leaves the database unmarked and the legacy file untouched", () => {
     const { file, db } = sandbox();
     const text = writeLegacy(file, { tasks: [task("a"), task("b")] });
@@ -284,6 +300,24 @@ describe("writes after the import", () => {
     expect(replay).toBe(first);
     expect(loadTasks(file)).toHaveLength(1);
     expect(loadTasksFile(file).recentCreates).toEqual([{ clientRequestId: "same-request", taskId: first }]);
+  });
+
+  test("a create that refreshes its receipt moves the receipt to the newest position", () => {
+    const { file } = sandbox();
+    writeLegacy(file, {
+      tasks: [],
+      recentCreates: [{ clientRequestId: "retried", taskId: "gone" }, { clientRequestId: "later", taskId: "gone-too" }],
+    });
+    const created = mutateTasksFile((state) => {
+      const outcome = createTask(state.tasks, { project: "proj", text: "Again", placement: "unplaced", clientRequestId: "retried" }, state.recentCreates);
+      if (!outcome.ok) throw new Error(outcome.error);
+      return { state: { tasks: outcome.tasks, recentCreates: outcome.recentCreates }, result: outcome.task.id };
+    }, file);
+
+    expect(loadTasksFile(file).recentCreates).toEqual([
+      { clientRequestId: "later", taskId: "gone-too" },
+      { clientRequestId: "retried", taskId: created },
+    ]);
   });
 
   test("migration markers survive a tasks-only write", () => {
@@ -581,6 +615,55 @@ describe("(f) rollback mirror and roll-forward", () => {
     expect(state.tasks.map((row) => row.id)).toEqual(["a", "b"]);
     expect(state.recentCreates).toEqual([{ clientRequestId: "req", taskId: "a" }]);
     expect(state.migrations).toEqual({ once: "2026-09-01T00:00:00.000Z" });
+  });
+
+  test("a fresh file an old writer made after the import retired tasks.json never deletes the board", () => {
+    const { dir, file } = sandbox();
+    writeLegacy(file, { tasks: [task("a"), task("b"), task("c")] });
+    expect(() => importLegacyTasks(file, { reconcile: true, hooks: { afterRename: () => { throw new Error("crash"); } } }))
+      .toThrow("crash");
+    // The lock is reclaimable; an old writer reads ENOENT as an empty board and creates one task.
+    writeLegacy(file, { tasks: [task("fresh")] });
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(loadTasks(file).map((row) => row.id)).toEqual(["a", "b", "c", "fresh"]);
+    expect(outcome.incident?.kind).toBe("legacy-reconciled");
+    expect(outcome.incident?.summary).toMatchObject({ added: 1, removed: 0 });
+    expect(outcome.incident?.message).toContain("no row was deleted");
+    expect(fs.statSync(file).isDirectory()).toBe(true);
+    expect(siblings(dir, "tasks.json.imported-")).toHaveLength(2);
+  });
+
+  test("a fresh file an old writer made after roll-forward dropped the mirror never deletes the board", () => {
+    const { file } = sandbox();
+    writeLegacy(file, { tasks: [task("a"), task("b"), task("c")] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    expect(() => importLegacyTasks(file, { reconcile: true, hooks: { afterRename: () => { throw new Error("crash"); } } }))
+      .toThrow("crash");
+    expect(fs.existsSync(file)).toBe(false);
+    writeLegacy(file, { tasks: [task("fresh")] });
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(loadTasks(file).map((row) => row.id)).toEqual(["a", "b", "c", "fresh"]);
+    expect(outcome.incident?.summary).toMatchObject({ added: 1, removed: 0 });
+  });
+
+  test("the mirror's marker never lands in SQLite as a migration", () => {
+    const { file } = sandbox();
+    writeLegacy(file, { tasks: [task("a")], migrations: { once: "2026-09-01T00:00:00.000Z" } });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[]; migrations: Record<string, string> };
+    expect(Object.keys(mirror.migrations).length).toBe(2);
+    mirror.tasks.push(task("b"));
+    writeLegacy(file, mirror);
+
+    importLegacyTasks(file, { reconcile: true });
+
+    expect(loadTasksFile(file).migrations).toEqual({ once: "2026-09-01T00:00:00.000Z" });
   });
 
   test("a lazy open never reconciles while a release target exists", () => {
