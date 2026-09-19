@@ -5,6 +5,7 @@ import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipe
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -15,7 +16,10 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode;
+  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy";
+  /** #1766: set when the registry lock refused before the action was admitted,
+      so the identical request may be repeated. */
+  retryable?: true;
   field?: "repoDir" | PipelineGuardField;
   path?: string;
   /** Present when a close was refused: the hosts it stopped and the one it could not. */
@@ -73,6 +77,10 @@ export async function PATCH(
     if (CONTROLLER_ACTIONS.has(body.action)) requestPipelineTick();
     return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}) });
   } catch (error) {
+    /* #1766: nothing was admitted, so the same action may be repeated. */
+    if (error instanceof StoreBusyBeforeAdmissionError) {
+      return NextResponse.json({ error: error.message, code: "store_busy", retryable: true }, { status: 503 });
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : "could not update pipeline" }, { status: 500 });
   }
 }
