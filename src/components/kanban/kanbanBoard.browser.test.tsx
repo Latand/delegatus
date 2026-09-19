@@ -4244,9 +4244,10 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
    *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
    *
-   * One task carries the four lanes the arc has to tell apart: a fail edge at
-   * rest, one that fired once and is carrying the work back right now, one
-   * whose budget is spent, and a lane with two fail edges into the same stage.
+   * One task carries the lanes the arc has to tell apart: a fail edge at rest,
+   * one that fired once and is carrying the work back right now, one whose
+   * budget is spent with the last return still in flight, one the spent budget
+   * already stopped, and a lane with two fail edges into the same stage.
    *
    * What only a browser settles, and is gated here:
    *   - the collapsed row holds stage pills and nothing else — the fail-edge
@@ -4259,8 +4260,15 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
    *     once fired it prints `n/max` and takes the warning colour; a spent
    *     budget takes the danger colour, which is a different colour, not a
    *     lighter one;
-   *   - two edges into one target hang at two different depths and their boxes
-   *     do not meet;
+   *   - two edges into one target hang at two different depths, their curves
+   *     never cross, and their two tips keep clear air between them;
+   *   - the sentence is reachable: every point sampled along a drawn arc, and
+   *     every point 4 px beside it, opens that arc's own explanation — at rest
+   *     the sentence is the only place the budget lives;
+   *   - a lane that parked on a spent edge does not say what a lane still
+   *     running says;
+   *   - the counter's halo is cut out of the ground the section paints, and a
+   *     lane whose edges all rest reserves no room for a counter it has not;
    *   - a row that wrapped drops the arcs altogether and puts the same count on
    *     the failing stage's own pill, and only once the edge has fired.
    *
@@ -4293,6 +4301,20 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     strokeWidth: string;
     dash: string;
     countFill: string;
+    /** The colour the counter's halo is cut out of: it has to be the ground the
+        section actually paints, or the count carries a blot of another colour. */
+    countHalo: string;
+    /** The arrowhead's own box, so two heads on one pill can be told apart. */
+    head: { x: number; right: number } | null;
+    /** What a pointer aimed at the arc actually meets, over `samples` points
+        taken along the drawn curve. `answered` of them open SOME arc's
+        sentence, which is the whole point — a tooltip that opens only on 1.5 px
+        of dashes opens nowhere. `onPath` open this arc's own, and where two
+        nested arcs converge into their shared pill the shallower one answers
+        for both, so that number is a share rather than all of them. `offPath`
+        and `offAnswered` are the same two readings 4 px off the curve, and
+        `ownsHead` is whether the arc answers at its own arrowhead. */
+    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean };
     /** The arc's painted box, relative to the row's own box. */
     box: { x: number; y: number; right: number; bottom: number } | null;
     /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
@@ -4319,6 +4341,14 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     pillsBottom: number;
     /** The height the row reserved under the pills for the arcs. */
     band: number;
+    /** Reserved room under the deepest arc's ink: a lane whose edges all rest
+        has no counter to put there, so it should be near zero. */
+    deadBelowArcs: number;
+    /** The ground the section paints, which the counter's halo has to match. */
+    sectionSurface: string;
+    /** Every pair of arcs in this row: do the curves cross, how close do they
+        come, and how much clear air is between their two arrowheads. */
+    pairs: Array<{ a: string; b: string; crosses: boolean; minGap: number; headGap: number }>;
     arcs: ArcMeasure[];
     suffixes: Array<{ edge: string; state: string | null; text: string; title: string }>;
     /** The gap between the row's bottom and the next thing the card draws. */
@@ -4336,7 +4366,8 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         return {
           pipeline: section.dataset.pipeline ?? "", mode: null, chips: [], loopChips: 0,
           columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: 0, rowHeight: 0,
-          pillsBottom: 0, band: 0, arcs: [], suffixes: [], gapBelow: 0,
+          pillsBottom: 0, band: 0, deadBelowArcs: 0, sectionSurface: getComputedStyle(section).backgroundColor,
+          pairs: [], arcs: [], suffixes: [], gapBelow: 0,
         };
       }
       const rowBox = row.getBoundingClientRect();
@@ -4348,6 +4379,20 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
       const next = (slot.nextElementSibling ?? section.nextElementSibling)?.getBoundingClientRect()
         ?? { top: section.getBoundingClientRect().bottom };
       const round = (value: number) => Math.round(value * 100) / 100;
+      /* A curve in client pixels, sampled along its own length: the one way to
+         ask whether two arcs meet, and where a pointer aimed at one lands. */
+      const trace = (path: SVGPathElement) => {
+        const matrix = path.getScreenCTM();
+        const total = path.getTotalLength();
+        const points: Array<{ x: number; y: number }> = [];
+        for (let step = 0; step <= 32; step += 1) {
+          const at = path.getPointAtLength((total * step) / 32);
+          const screen = matrix ? new DOMPoint(at.x, at.y).matrixTransform(matrix) : at;
+          points.push({ x: screen.x, y: screen.y });
+        }
+        return points;
+      };
+      const traces = new Map<string, Array<{ x: number; y: number }>>();
       const arcs = [...row.querySelectorAll<SVGGElement>("[data-loop-arc]")].map((group): ArcMeasure => {
         const path = group.querySelector<SVGPathElement>(".parc");
         const head = group.querySelector<SVGPolygonElement>(".parc-head");
@@ -4363,6 +4408,16 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
             bottom: round(Math.max(...parts.map((part) => part.bottom)) - rowBox.top),
           }
           : null;
+        /* Where a pointer aimed at the drawing actually lands. The sentence is
+           the only home of the budget at rest, so an arc nothing can be aimed
+           at explains nothing. */
+        const owner = (x: number, y: number) =>
+          (document.elementFromPoint(x, y) as Element | null)?.closest<SVGElement>("[data-arc-hit]")?.dataset.arcHit ?? null;
+        const mine = (x: number, y: number) => owner(x, y) === group.dataset.loopArc;
+        const samples = path ? trace(path) : [];
+        if (path) traces.set(group.dataset.loopArc ?? "", samples);
+        const inside = samples.filter((point) => point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight);
+        const hitPath = group.querySelector<SVGPathElement>(".parc-hit");
         const style = path ? getComputedStyle(path) : null;
         /* A stroke is painted half outside the geometry the box reports, so the
            half-width is added on every side before anything is called a clash. */
@@ -4382,12 +4437,60 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
           strokeWidth: style?.strokeWidth ?? "",
           dash: style?.strokeDasharray ?? "",
           countFill: count ? getComputedStyle(count).fill : "",
+          countHalo: count ? getComputedStyle(count).stroke : "",
+          head: head ? { x: round(head.getBoundingClientRect().left - rowBox.left), right: round(head.getBoundingClientRect().right - rowBox.left) } : null,
+          hit: {
+            strokeWidth: hitPath ? getComputedStyle(hitPath).strokeWidth : "",
+            samples: inside.length,
+            answered: inside.filter((point) => owner(point.x, point.y) !== null).length,
+            onPath: inside.filter((point) => mine(point.x, point.y)).length,
+            offAnswered: inside.filter((point) => owner(point.x, point.y + 4) !== null).length,
+            offPath: inside.filter((point) => mine(point.x, point.y + 4)).length,
+            /* The curve is drawn from its arrowhead back to the failing pill. */
+            ownsHead: samples.length ? mine(samples[0]!.x, samples[0]!.y) : false,
+          },
           box,
           intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
           pastCard: absolute ? round(Math.max(0, cardBox.left - absolute.left, absolute.right - cardBox.right)) : 0,
           pastRow: absolute ? round(Math.max(0, absolute.bottom - rowBox.bottom)) : 0,
         };
       });
+      /* Two arcs into one pill have to nest. They cross when the sign of the
+         vertical distance between them flips anywhere over the stretch of x
+         they share — which is exactly what the reader sees as a tangle. */
+      const pairs: RowMeasure["pairs"] = [];
+      const traced = [...traces.entries()];
+      for (let i = 0; i < traced.length; i += 1) {
+        for (let j = i + 1; j < traced.length; j += 1) {
+          const [aId, a] = traced[i]!;
+          const [bId, b] = traced[j]!;
+          const yAt = (points: Array<{ x: number; y: number }>, x: number) => {
+            const sorted = [...points].sort((one, two) => one.x - two.x);
+            if (x < sorted[0]!.x || x > sorted[sorted.length - 1]!.x) return null;
+            for (let k = 1; k < sorted.length; k += 1) {
+              if (sorted[k]!.x >= x) {
+                const span = sorted[k]!.x - sorted[k - 1]!.x;
+                const ratio = span ? (x - sorted[k - 1]!.x) / span : 0;
+                return sorted[k - 1]!.y + ratio * (sorted[k]!.y - sorted[k - 1]!.y);
+              }
+            }
+            return sorted[sorted.length - 1]!.y;
+          };
+          const shared = a.map((point) => point.x).concat(b.map((point) => point.x))
+            .filter((x) => yAt(a, x) !== null && yAt(b, x) !== null);
+          const gaps = shared.map((x) => yAt(a, x)! - yAt(b, x)!);
+          const headA = arcs.find((arc) => arc.edge === aId)?.head ?? null;
+          const headB = arcs.find((arc) => arc.edge === bId)?.head ?? null;
+          pairs.push({
+            a: aId,
+            b: bId,
+            crosses: gaps.some((gap) => gap > 0.5) && gaps.some((gap) => gap < -0.5),
+            minGap: gaps.length ? round(Math.min(...gaps.map((gap) => Math.abs(gap)))) : 0,
+            headGap: headA && headB ? round(Math.max(headA.x, headB.x) - Math.min(headA.right, headB.right)) : 0,
+          });
+        }
+      }
+      const inkBottom = arcs.reduce((deepest, arc) => Math.max(deepest, arc.box?.bottom ?? 0), 0);
       return {
         pipeline: section.dataset.pipeline ?? "",
         mode: row.dataset.arcs ?? null,
@@ -4398,6 +4501,9 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         rowHeight: round(rowBox.height),
         pillsBottom: round(pillsBottom),
         band: round(rowBox.height - pillsBottom),
+        deadBelowArcs: inkBottom ? round(rowBox.height - inkBottom) : 0,
+        sectionSurface: getComputedStyle(section).backgroundColor,
+        pairs,
         arcs,
         suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
           edge: mark.dataset.stageReturn ?? "",
@@ -4421,7 +4527,7 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
 
     const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
       const by = (id: string) => rows.find((row) => row.pipeline === id);
-      if (rows.length !== 4) {
+      if (rows.length !== 5) {
         failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
         return;
       }
@@ -4434,6 +4540,39 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
           if (arc.pastCard > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastCard} px outside the card`);
           if (arc.pastRow > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastRow} px below the row, onto the line under it`);
           if (!arc.title || arc.title.length < 12) failures.push(`${label}: ${row.pipeline} ${arc.edge} carries no sentence (${JSON.stringify(arc.title)})`);
+          /* The sentence is the only home of the budget at rest, so the arc has
+             to be something a pointer can be aimed at: every point ON the drawn
+             curve opens it, and so does a point beside it. */
+          if (arc.hit.samples < 8) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} put only ${arc.hit.samples} sample(s) on screen`);
+          } else {
+            /* Nothing drawn is dead: every point of the curve, and every point
+               beside it, opens an explanation. */
+            if (arc.hit.answered < arc.hit.samples) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.answered} of ${arc.hit.samples} points on the drawn arc explaining nothing`);
+            if (arc.hit.offAnswered < arc.hit.samples - 1) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.offAnswered} of ${arc.hit.samples} points beside the arc explaining nothing`);
+            /* And an arrow you can see is an arrow you can ask about: it owns
+               its own head and the clear majority of its own length. Where two
+               nested arcs converge into one pill the shallower one answers for
+               both, which is the only reading a reader could have given them. */
+            if (!arc.hit.ownsHead) failures.push(`${label}: ${row.pipeline} ${arc.edge} does not answer at its own arrowhead`);
+            if (arc.hit.onPath * 3 < arc.hit.samples * 2) failures.push(`${label}: ${row.pipeline} ${arc.edge} answers for only ${arc.hit.onPath} of its own ${arc.hit.samples} points`);
+          }
+          /* The halo is cut out of the ground the section paints, or every
+             count carries a blot of the card's colour on a tinted row. */
+          if (arc.count && arc.countHalo !== row.sectionSurface) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count with ${arc.countHalo} over a ${row.sectionSurface} ground`);
+          }
+        }
+        /* Two arcs into one pill nest; they never tangle and their tips never
+           touch — that is the point at which a reader stops being able to say
+           which count belongs to which arrow. */
+        for (const pair of row.pairs) {
+          if (pair.crosses) failures.push(`${label}: ${row.pipeline} ${pair.a} and ${pair.b} cross each other`);
+          if (pair.headGap < 1) failures.push(`${label}: ${row.pipeline} the tips of ${pair.a} and ${pair.b} are ${pair.headGap} px apart`);
+        }
+        /* Room for a counter is reserved only where a counter goes. */
+        if (row.arcs.length && row.arcs.every((arc) => !arc.count) && row.deadBelowArcs > 4) {
+          failures.push(`${label}: ${row.pipeline} rests and still reserves ${row.deadBelowArcs} px of empty band under its arc`);
         }
         if (row.mode === "arcs" && !row.arcs.length) failures.push(`${label}: ${row.pipeline} says it draws arcs and drew none`);
         /* The band exists only for the arcs: a wrapped row reserves nothing. */
@@ -4456,6 +4595,7 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
       const rest = by("p-arc-rest")!;
       const fired = by("p-arc-fired")!;
       const spent = by("p-arc-spent")!;
+      const parked = by("p-arc-parked")!;
       const two = by("p-arc-two")!;
       const edgeOf = (row: RowMeasure, edge: string) => row.arcs.find((arc) => arc.edge === edge) ?? null;
       const markOf = (row: RowMeasure, edge: string) => row.suffixes.find((mark) => mark.edge === edge) ?? null;
@@ -4501,6 +4641,20 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         }
       } else if (spentMark?.state !== "exhausted") {
         failures.push(`${label}: the wrapped spent lane marks its pill ${JSON.stringify(spentMark)}`);
+      }
+
+      /* A lane the spent budget already stopped: the same red arc, and a
+         sentence about what happened rather than about a failure that can no
+         longer happen. */
+      const parkedEdge = edgeOf(parked, "review:fail:fix");
+      const parkedMark = markOf(parked, "review:fail:fix");
+      if (parked.mode === "arcs") {
+        if (parkedEdge?.state !== "exhausted") failures.push(`${label}: the parked lane's edge reads ${JSON.stringify(parkedEdge?.state)}`);
+        if (parkedEdge && spentEdge && parkedEdge.title === spentEdge.title) {
+          failures.push(`${label}: a lane that parked on the edge says what a lane still running says (${JSON.stringify(parkedEdge.title)})`);
+        }
+      } else if (parkedMark?.state !== "exhausted") {
+        failures.push(`${label}: the wrapped parked lane marks its pill ${JSON.stringify(parkedMark)}`);
       }
 
       /* Two edges into one target: two arcs, two depths, no meeting. */
@@ -4575,7 +4729,10 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
              the failing pill while the two-stage ones keep their arcs. */
           await desktop(1680, 950, scheme, lang);
           await desktop(1280, 900, scheme, lang);
-          await desktop(640, 900, scheme, lang);
+          /* Tall enough that the whole card fits one frame: the wrapped row's
+             pill suffix is the only drawing of the edge there, and a frame
+             that clips it away shows nothing of what it replaced. */
+          await desktop(640, 1240, scheme, lang);
         }
         await phone(scheme);
       }

@@ -236,9 +236,13 @@
 
 /* ── Pipeline summary ─────────────────────────────────────────────────────── */
 .kb .stage-section {
+  /* The tinted ground the section paints on, named so that anything drawn over
+     it — the arc's counter halo (#1798) — can be cut out of the same colour
+     rather than out of the card's white. */
+  --section-surface: color-mix(in srgb, var(--label-strong, var(--color-accent)) 3%, var(--surface-well));
   position: relative; margin-top: 4px; padding: 8px 10px 10px; border-radius: var(--radius-control);
   border: 1px solid color-mix(in srgb, var(--label-strong, var(--color-accent)) 26%, var(--border-default));
-  background: color-mix(in srgb, var(--label-strong, var(--color-accent)) 3%, var(--surface-well));
+  background: var(--section-surface);
 }
 .kb .stage-section .sec-head { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-secondary); min-height: 28px; }
 .kb .stage-section .sec-head .kind { flex-shrink: 0; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--surface-card); border: 1px solid var(--border-default); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
@@ -359,8 +363,13 @@
    and puts the count on the arc itself; a spent budget turns it danger and
    thickens it, so exhaustion is never the lighter drawing. */
 .kb .parcs { position: absolute; left: 0; width: 100%; overflow: visible; pointer-events: none; }
-.kb .parc { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 45%, transparent); stroke-dasharray: 4 3; pointer-events: stroke; }
+.kb .parc { fill: none; stroke-width: 1.5; stroke: color-mix(in srgb, var(--color-muted) 45%, transparent); stroke-dasharray: 4 3; pointer-events: none; }
 .kb .parc-head { fill: color-mix(in srgb, var(--color-muted) 45%, transparent); }
+/* What the pointer actually meets. The drawn arc is 1.5 px of dashes, and the
+   dash gaps are not the arc at all, so aiming at the drawing means aiming at
+   nothing: a stroke wide enough to hit opens the sentence anywhere along the
+   curve, and a tap on it writes the sentence out where a title cannot. */
+.kb .parc-hit { fill: none; stroke: transparent; stroke-width: 11; stroke-linecap: round; pointer-events: stroke; cursor: help; }
 .kb [data-arc-state="fired"] .parc { stroke: var(--color-warning); stroke-dasharray: none; }
 .kb [data-arc-state="fired"] .parc-head { fill: var(--color-warning); }
 .kb [data-arc-state="exhausted"] .parc { stroke: var(--color-danger); stroke-width: 2; stroke-dasharray: none; }
@@ -373,14 +382,21 @@
 .kb .parc-count {
   font: 700 var(--text-caption)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums; text-anchor: middle; dominant-baseline: middle;
-  paint-order: stroke; stroke: var(--surface-card); stroke-width: 3px; stroke-linejoin: round;
-  fill: var(--color-warning); pointer-events: all;
+  paint-order: stroke; stroke: var(--section-surface, var(--surface-card)); stroke-width: 3px; stroke-linejoin: round;
+  fill: var(--color-warning); pointer-events: none;
 }
 .kb [data-arc-state="exhausted"] .parc-count { fill: var(--color-danger); }
 /* The wrapped row has no line to hang an arc under, so the failing pill carries
    the count instead — and only once the edge has fired. */
 .kb .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
 .kb .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
+/* The tapped arc's sentence, for the surface a tooltip never reaches. */
+.kb .parc-note {
+  position: absolute; left: 0; right: 0; z-index: 4; padding: 3px 7px;
+  border-radius: var(--radius-control); border: 1px solid var(--border-default);
+  background: var(--surface-card); box-shadow: var(--shadow-1);
+  font-size: var(--text-caption); font-weight: 600; color: var(--color-secondary);
+}
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
 .kb .tone-active .pdot { background: var(--color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent); }
 .kb .tone-review .pdot { background: var(--color-info); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-info) 22%, transparent); }

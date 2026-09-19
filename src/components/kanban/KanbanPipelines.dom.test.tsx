@@ -463,7 +463,7 @@ test("three rows or fewer stay unfolded, whatever their state (#1765)", async ()
    each of the states the arc has to tell apart. A round is counted from the
    target's activations, so a round is one further Fix attempt naming the source
    attempt that sent the work back. */
-function arcPipeline(over: { max: number; fired: number; running?: boolean; fromCritique?: boolean }): Pipeline {
+function arcPipeline(over: { max: number; fired: number; running?: boolean; fromCritique?: boolean; parked?: boolean }): Pipeline {
   const attempts: unknown[] = [attempt(1, "passed", implement1, 7200)];
   for (let round = 1; round <= over.fired; round += 1) {
     const last = round === over.fired;
@@ -479,7 +479,12 @@ function arcPipeline(over: { max: number; fired: number; running?: boolean; from
       stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: over.max } }),
     ],
     runs: [{ stageId: "fix", attempts }],
-    cursor: { stageId: "fix", state: over.running ? "running" : "passed", input: null, activatedBy: null },
+    /* A lane the engine parked on a spent edge stands on the FAILING stage and
+       waits for a decision; one that is still running stands on the target. */
+    ...(over.parked ? { state: "needs_decision" } : {}),
+    cursor: over.parked
+      ? { stageId: "review", state: "running", input: null, activatedBy: null }
+      : { stageId: "fix", state: over.running ? "running" : "passed", input: null, activatedBy: null },
     worktreeDir: "/fixture/worktree", createdAt: iso(9000),
   } as unknown as Pipeline;
 }
@@ -520,6 +525,17 @@ test("a fail edge takes no slot in the collapsed row: it is a return arc, silent
   expect(gone.dataset.arcLive).toBe("0");
   expect(gone.querySelector(".parc-count")?.textContent).toBe("2/2");
   expect(gone.querySelector("title")?.textContent).toContain("No rounds left");
+  /* Spent but still alive: the sentence is about what a FURTHER failure costs. */
+  expect(gone.querySelector("title")?.textContent).toContain("another failure");
+
+  /* The same budget after the lane actually stopped on it: the sentence says
+     what happened, not what a failure that can no longer happen would cost. */
+  const parked = mount([arcPipeline({ max: 2, fired: 2, parked: true })]);
+  await tick();
+  const stopped = arc(parked.host, "review:fail:fix")!;
+  expect(stopped.dataset.arcState).toBe("exhausted");
+  expect(stopped.querySelector("title")?.textContent).toContain("parked here");
+  expect(stopped.querySelector("title")?.textContent).not.toContain("another failure");
 
   /* Two edges into one target are two arcs, each with its own count. */
   const both = mount([arcPipeline({ max: 3, fired: 2, fromCritique: true })]);
@@ -527,4 +543,67 @@ test("a fail edge takes no slot in the collapsed row: it is a return arc, silent
   expect([...card(both.host).querySelectorAll<HTMLElement>(".psummary [data-loop-arc]")].map((node) => [node.dataset.loopArc, node.dataset.arcFired]))
     .toEqual([["critique:fail:fix", "1"], ["review:fail:fix", "1"]]);
   expect(card(both.host).querySelectorAll(".psummary .pchip")).toHaveLength(3);
+});
+
+/* happy-dom lays nothing out and the arcs are drawn from the pills' own boxes,
+   so a case about the drawing has to hand the row a layout: three pills of
+   70 px on one line, which is the shape of a real collapsed row. */
+const PILL_BOX: Record<string, [number, number]> = { fix: [0, 60], critique: [70, 140], review: [150, 220] };
+const box = (left: number, right: number) => ({
+  left, right, top: 10, bottom: 34, width: right - left, height: 24, x: left, y: 10, toJSON() { return this; },
+});
+function withRowLayout(): () => void {
+  const original = dom.HTMLElement.prototype.getBoundingClientRect;
+  Object.defineProperty(dom.HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: HTMLElement) {
+      const stage = this.getAttribute?.("data-stage");
+      if (stage && PILL_BOX[stage]) return box(...PILL_BOX[stage]!);
+      if (this.classList?.contains("psummary")) return box(0, 240);
+      return original.call(this);
+    },
+  });
+  return () => Object.defineProperty(dom.HTMLElement.prototype, "getBoundingClientRect", { configurable: true, value: original });
+}
+/* The arrowhead's tip, which is where the polygon starts. */
+const headX = (group: Element) => Number.parseFloat((group.querySelector(".parc-head")!.getAttribute("points") ?? "").split(",")[0]!);
+const tap = (element: Element) => flushSync(() => { element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as MouseEvent); });
+
+test("two arcs into one pill nest instead of crossing, and every arc carries a hit stroke a pointer can meet (#1798)", async () => {
+  const restore = withRowLayout();
+  try {
+    const { host } = mount([arcPipeline({ max: 3, fired: 2, fromCritique: true })]);
+    await tick();
+    const near = arc(host, "critique:fail:fix")!;
+    const far = arc(host, "review:fail:fix")!;
+    /* Both land on Fix, and both sources are to its right. The shallow arc
+       takes the pill's centre; the deeper one steps AWAY from the sources, so
+       the two nest. Fanned the other way the deep arc's rising leg cuts through
+       the shallow one just under the tips and the heads smudge into one. */
+    expect(headX(far)).toBeLessThan(headX(near));
+    /* 7 px heads, so the step leaves clear air between the two tips. */
+    expect(headX(near) - headX(far)).toBeGreaterThanOrEqual(9);
+    /* And they hang at different depths, or one hides under the other. */
+    const depth = (group: Element) => Number.parseFloat(group.querySelector(".parc")!.getAttribute("d")!.split(/[ C]+/)[4]!);
+    expect(depth(far)).toBeGreaterThan(depth(near));
+
+    /* The drawn arc is 1.5 px of dashes, so what the pointer meets is a wide
+       transparent stroke on the same path — the same path, or the sentence
+       opens somewhere the arc is not. */
+    const hit = far.querySelector<SVGPathElement>(".parc-hit")!;
+    expect(hit.getAttribute("data-arc-hit")).toBe("review:fail:fix");
+    expect(hit.getAttribute("d")).toBe(far.querySelector(".parc")!.getAttribute("d"));
+    /* A tooltip has no long-press, so a tap is the touch surface's answer. */
+    expect(card(host).querySelector("[data-arc-note]")).toBeNull();
+    tap(hit);
+    await tick();
+    const note = card(host).querySelector<HTMLElement>("[data-arc-note]")!;
+    expect(note.dataset.arcNote).toBe("review:fail:fix");
+    expect(note.textContent).toBe(far.querySelector("title")!.textContent);
+    tap(hit);
+    await tick();
+    expect(card(host).querySelector("[data-arc-note]")).toBeNull();
+  } finally {
+    restore();
+  }
 });

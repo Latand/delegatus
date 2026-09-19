@@ -2870,6 +2870,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.loopTitle": "Ребро невдачі: коли {from} не проходить, знову запускається {to}. Спрацювало {fired} з {max} разів.",
   "kanban.loopRest": "Якщо {from} не проходить, робота повертається до {to} · до {max} раундів",
   "kanban.loopParked": "Раундів не лишилося · ще одна невдача {from} зупиняє пайплайн",
+  "kanban.loopParkedHere": "Раундів не лишилося · {from} знову не пройшов, і пайплайн зупинився тут",
   "kanban.loopLive": "{to} виконується зараз, бо {from} не пройшов",
   "kanban.moved": "«{title}» перенесено до «{status}»",
   "kanban.movedBack": "«{title}» знову в «{status}»",

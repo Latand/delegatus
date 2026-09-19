@@ -2957,6 +2957,7 @@ export const en = {
   "kanban.loopTitle": "Fail edge: when {from} fails, {to} runs again. Fired {fired} of {max} times.",
   "kanban.loopRest": "If {from} fails, work returns to {to} · up to {max} rounds",
   "kanban.loopParked": "No rounds left · another failure of {from} parks the pipeline",
+  "kanban.loopParkedHere": "No rounds left · {from} failed again and the lane parked here",
   "kanban.loopLive": "{to} is running now because {from} failed",
   "kanban.moved": "Moved «{title}» to {status}",
   "kanban.movedBack": "«{title}» is back in {status}",

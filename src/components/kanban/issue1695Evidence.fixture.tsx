@@ -50,10 +50,11 @@ const MANY = SCENARIO === "issue1765";
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
-/* #1798: one task carrying the four lanes a return arc has to tell apart — a
-   fail edge at rest, one that fired once and is carrying the work back right
-   now, one whose budget is spent, and a lane with two fail edges into the same
-   stage. */
+/* #1798: one task carrying the lanes a return arc has to tell apart — a fail
+   edge at rest, one that fired once and is carrying the work back right now,
+   one whose budget is spent with the last return still in flight, one where
+   the spent budget already stopped the lane, and a lane with two fail edges
+   into the same stage. */
 const ARCS = SCENARIO === "issue1798";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
@@ -254,8 +255,10 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
   const restCrit = conv("arc-rest-crit", "Reading the draft", working({ plan: { current: "Reading the draft" } }));
   const firedFix = conv("arc-fired-fix", "Second pass after the review sent it back", working({ plan: { current: "Rewriting the summary row" } }));
   const firedRev = conv("arc-fired-rev", "Sent it back: the summary row still lies", { mtime: now - 55 * MIN, engine: "codex", model: "gpt-6-astra" });
-  const spentFix = conv("arc-spent-fix", "Third pass on the limit notice", { mtime: now - 40 * MIN });
-  const spentRev = conv("arc-spent-rev", "Out of returns", { mtime: now - 20 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const spentFix = conv("arc-spent-fix", "Last return: the limit notice again", working({ plan: { current: "Rewriting the limit notice" } }));
+  const spentRev = conv("arc-spent-rev", "Sent it back: the notice still rounds the reset", { mtime: now - 40 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const parkFix = conv("arc-park-fix", "Third pass on the reset time", { mtime: now - 50 * MIN });
+  const parkRev = conv("arc-park-rev", "Out of returns: the reset time is still wrong", { mtime: now - 15 * MIN, engine: "codex", model: "gpt-6-astra" });
   const twoFix = conv("arc-two-fix", "Third pass on the picker", working({ plan: { current: "Reworking the picker" } }));
   const twoCrit = conv("arc-two-crit", "Sent it back: the picker hides the default", { mtime: now - 140 * MIN });
   const twoRev = conv("arc-two-rev", "Sent it back: the default is still not marked", { mtime: now - 90 * MIN, engine: "codex", model: "gpt-6-astra" });
@@ -282,7 +285,9 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
       ] },
       { stageId: "review", attempts: [attempt(1, "failed", firedRev, { startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
-    /* Two of two used: the arc and its counter turn danger. */
+    /* Two of two used, and the lane is still alive: the last return is in
+       flight, so the arc and its counter are danger while the work runs. The
+       sentence is about what a FURTHER failure would cost. */
     pipeline("p-arc-spent", "Show the account limit reset on the card", "t-arcs", "running", [
       stage("fix", "builder", "review"),
       stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
@@ -290,11 +295,30 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
       { stageId: "fix", attempts: [
         attempt(1, "passed", spentFix, { startedAt: iso(150 * MIN) }),
         attempt(2, "passed", spentFix, { startedAt: iso(110 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
-        attempt(3, "passed", spentFix, { startedAt: iso(60 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+        attempt(3, "running", spentFix, { startedAt: iso(30 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
       ] },
       { stageId: "review", attempts: [
         attempt(1, "failed", spentRev, { startedAt: iso(130 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
         attempt(2, "failed", spentRev, { startedAt: iso(80 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* The same budget, spent, with the source failed once more: the engine had
+       nothing left to return and parked the lane on the failing stage. This is
+       the state a red arc is most often read in, and the one whose sentence
+       says what happened rather than what a further failure would cost. */
+    pipeline("p-arc-parked", "Say when the account limit resets", "t-arcs", "needs_decision", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", parkFix, { startedAt: iso(220 * MIN) }),
+        attempt(2, "passed", parkFix, { startedAt: iso(180 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(3, "passed", parkFix, { startedAt: iso(120 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", parkRev, { startedAt: iso(200 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", parkRev, { startedAt: iso(150 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+        attempt(3, "needs_decision", parkRev, { startedAt: iso(90 * MIN), activatedBy: { stageId: "fix", attempt: 3, edge: "pass" } }),
       ] },
     ], { stageId: "review", state: "running", input: null, activatedBy: null }),
     /* Two fail edges into one target: two arcs at two depths, neither crossing
@@ -492,7 +516,7 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
-  ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "Four lanes: an edge at rest, one fired once, a spent budget, and two edges into one stage.", 3 * MIN)] : []),
+  ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
