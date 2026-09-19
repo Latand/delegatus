@@ -150,6 +150,7 @@ function coerceTask(value: unknown): BoardTask | null {
     typeof raw.project === "string" &&
     isTaskStatus(raw.status) &&
     typeof raw.text === "string" &&
+    (raw.details === undefined || typeof raw.details === "string") &&
     (raw.placement === undefined || isPlacement(raw.placement)) &&
     (raw.pos === undefined || isFinitePos(raw.pos)) &&
     validDue(raw) &&
@@ -172,6 +173,7 @@ function coerceTask(value: unknown): BoardTask | null {
     project: canonicalProject(raw.project!),
     status: raw.status!,
     text: raw.text!,
+    ...(raw.details !== undefined ? { details: raw.details } : {}),
     placement: placement === "pinned" && !hasPos ? "unplaced" : placement,
     ...(pinned ? { pos: raw.pos } : {}),
     ...(raw.dueAt !== undefined ? { dueAt: raw.dueAt, dueTz: raw.dueTz } : {}),

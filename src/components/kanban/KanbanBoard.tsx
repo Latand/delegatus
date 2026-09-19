@@ -27,6 +27,7 @@ import { canHandoff } from "@/components/HandoffHandle";
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
+import type { CardEditField } from "./CardInlineText";
 import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./KanbanCard";
 import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, KANBAN_STATUSES, type KanbanCard as KanbanCardModel, type KanbanModel } from "./kanbanModel";
@@ -204,17 +205,18 @@ function cardMatchesShown(model: KanbanModel, card: KanbanCardModel): boolean {
   return model.columns[card.status].shown.some((shown) => shown.id === card.id) || model.unlinkedShown.some((shown) => shown.id === card.id);
 }
 
-type EditField = "title" | "description";
+type EditField = CardEditField;
 
-/** The title (first line) or description (the rest) of a task's text. */
-function textField(text: string, field: EditField): string {
+/** The title (first line) or description (the rest) of a task's text. `details`
+    is its own stored field and never reaches these two (#1834). */
+function textField(text: string, field: "title" | "description"): string {
   const newline = text.search(/\r?\n/);
   if (field === "title") return (newline < 0 ? text : text.slice(0, newline)).trim();
   return newline < 0 ? "" : text.slice(newline).trim();
 }
 
 /** The task's text with one of its fields replaced, the other kept byte for byte. */
-function withField(text: string, field: EditField, value: string): string {
+function withField(text: string, field: "title" | "description", value: string): string {
   const newline = text.search(/\r?\n/);
   if (field === "title") return newline < 0 ? value : value + text.slice(newline);
   const first = newline < 0 ? text : text.slice(0, newline);
@@ -361,6 +363,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (typeof edit.text === "string") {
         next.text = edit.text;
         if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
+      }
+      if (typeof edit.details === "string") {
+        if (edit.details) next.details = edit.details;
+        else delete next.details;
       }
       return next;
     });
@@ -720,7 +726,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const startEdit = useCallback((card: KanbanCardModel, field: EditField) => {
     const task = card.task ? effectiveById.current.get(card.task.id) : undefined;
     if (!task) return;
-    const base = textField(task.text, field);
+    const base = field === "details" ? (task.details ?? "") : textField(task.text, field);
     /* A draft a refused save kept is what the field reopens with. */
     const kept = failedRef.current.get(card.id);
     const retained = kept?.field === field ? kept : null;
@@ -729,7 +735,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
       : { field, draft: field === "title" && card.titlePending ? "" : base, base }));
-    if (field === "description") {
+    if (field === "description" || field === "details") {
       setCollapsed((current) => {
         if (!current.has(card.id)) return current;
         const next = new Set(current);
@@ -745,6 +751,31 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const raw = card?.task ? tasksById.current.get(card.task.id) : undefined;
     if (!card || !raw) return;
     const value = draft.trim();
+    if (field === "details") {
+      /* Its own field: this write carries `details` and nothing else, so the
+         task's text is left exactly as stored (#1834). An empty draft clears
+         it, and the card's row then disappears. */
+      const stored = effectiveById.current.get(raw.id)?.details ?? raw.details ?? "";
+      const found = base ?? stored;
+      if (stored === value) {
+        setFailedEdits((current) => withEntry(current, cardId, undefined));
+        return;
+      }
+      setFailedEdits((current) => withEntry(current, cardId, undefined));
+      const outcome: FieldEditOutcome = await controller.edit(raw, { field: "details", value });
+      if (outcome.kind === "failed") {
+        flash(cardId);
+        setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: /[.!?…]$/.test(outcome.error.trim()) ? outcome.error.trim() : `${outcome.error.trim()}.` }));
+      } else if (outcome.kind === "conflict") {
+        const theirs = typeof outcome.serverValue === "string" ? outcome.serverValue : "";
+        if (theirs === value) return;
+        setEditing((current) => withEntry(current, cardId, { field, draft, base: theirs }));
+        setIncomingEdits((current) => withEntry(current, cardId, { field, value: theirs }));
+      } else {
+        setIncomingEdits((current) => withEntry(current, cardId, undefined));
+      }
+      return;
+    }
     const currentText = effectiveById.current.get(raw.id)?.text ?? raw.text;
     const found = base ?? textField(currentText, field);
     if (field === "title" && !value) {
@@ -831,8 +862,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const card = cardsByIdRef.current.get(cardId);
       const raw = card?.task ? allTasks.find((task) => task.id === card.task!.id) : undefined;
       /* A write of this device still ahead of the poll is not an agent's text. */
-      if (!raw || controller.pending(raw.id) || controller.edits().get(raw.id)?.text !== undefined) continue;
-      const theirs = textField(raw.text, entry.field);
+      if (!raw || controller.pending(raw.id)) continue;
+      const shown = controller.edits().get(raw.id);
+      if (entry.field === "details" ? shown?.details !== undefined : shown?.text !== undefined) continue;
+      const theirs = entry.field === "details" ? (raw.details ?? "") : textField(raw.text, entry.field);
       if (theirs === entry.base) continue;
       nextEditing.set(cardId, { ...entry, base: theirs });
       changed = true;

@@ -37,7 +37,11 @@ const PROJECT = "atlas";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const EDITING = SCENARIO === "editing";
 /* K5a: the pipelines' review stages are bound to review flows with rounds. K5b's Stages build on them. */
-const TIER_LIMITS = SCENARIO === "tier-limits";
+/* #1839: the same tier scenario, with the windows arriving the way the provider
+   actually files them — under codenamed buckets, one of them carrying the
+   provider's own human label and one carrying none. */
+const CODENAME_TIERS = SCENARIO === "tier-codename";
+const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
 const STAGES = SCENARIO === "stages" || ACCOUNTS;
 const PIPELINES = SCENARIO === "pipelines" || STAGES;
@@ -486,7 +490,13 @@ const resetIn = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 6
 const tierLimits = {
   session: { usedPercent: 12, resetsAt: resetIn(120), windowMinutes: 300 },
   weekly: { usedPercent: 30, resetsAt: resetIn(6000), windowMinutes: 10080 },
-  tiers: [
+  tiers: CODENAME_TIERS ? [
+    // The bucket key is a codename; the label is the provider's own, and the
+    // label is what the operator must read (#1839).
+    { tier: "nimbus_quill", label: "Fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
+    // No label came with this one, so its bucket key is spelled out as words.
+    { tier: "cedar_ember", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
+  ] : [
     { tier: "fable", usedPercent: 88, resetsAt: resetIn(6000), windowMinutes: 10080 },
     { tier: "opus", usedPercent: 63, resetsAt: resetIn(6000), windowMinutes: 10080 },
   ],
@@ -549,7 +559,23 @@ function task(id: string, status: TaskStatus, title: string, description: string
 }
 
 const tasks: BoardTask[] = [
-  task("t-search", "assigned", "Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", 4 * MIN),
+  /* The one task carrying agent-facing details (#1834): the long context an
+     agent needs, which the card folds behind its Details row instead of
+     printing where the human description belongs. */
+  task("t-search", "assigned", "Restore search results after the index rebuild", "Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.", 4 * MIN, [], {
+    details: [
+      "Stage: implement. Worktree /repo/atlas, branch lane/search-index-swap.",
+      "Read the swap path in src/search/indexSwap.ts before changing anything: the old index must answer every read until the new one reports ready, and the swap is one atomic rename.",
+      "Files another lane holds, do not edit: src/search/query.ts, src/search/ranking.ts, src/search/analyzers/*.",
+      "Rules: no new dependency; no schema change; the rebuild stays resumable; every refusal names its field.",
+      "Gates: the typecheck, the touched tests by path, the build.",
+      "Known state: rebuild-12 left a half-written segment under var/index/next; the reader already skips it, the writer does not.",
+      "Reads that reproduce it: GET /search?q=atlas during a rebuild, then again after the swap.",
+      "Prior attempt: lane/search-index-lock held the whole index for the rebuild and timed out the reads; do not take that path again.",
+      "Answer the operator with what the reads returned, never with what the code intends.",
+      "Report through the stage tool; the verdict is the only completion channel.",
+    ].join("\n"),
+  } as Partial<BoardTask>),
   task("t-upload", "assigned", "Redesign attachment upload for large files", "Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.", 2 * MIN),
   task("t-export", "assigned", "Simplify the export settings sheet", "Fold the eleven toggles into three sensible presets and one advanced disclosure.", 9 * MIN, [exportImpl, exportExplore]),
   task("t-links", "assigned", "Repair old links in the release notes", "", 17 * MIN),
@@ -909,6 +935,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body.color !== undefined) {
       if (body.color === "none") delete next.color;
       else next.color = body.color as BoardTask["color"];
+    }
+    /* Agent-facing details (#1834), on the route's own terms: a string sets it,
+       null or an empty string clears the field rather than leaving it empty. */
+    if (body.details !== undefined) {
+      const details = typeof body.details === "string" ? body.details.trim() : "";
+      if (details) next.details = details;
+      else delete next.details;
     }
     if (body.hide === true) {
       if (current.assignments.some((row) => row.conversationId === orchestrator.conversationId)) {

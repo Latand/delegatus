@@ -62,15 +62,18 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 17, and a v16 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(17);
+test("the default mandate is at version 19, and a v18 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(19);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
-     v17 carries: the clock paragraph no longer fences a wake to its items. */
-  expect(orchestratorMandateStale(16)).toBe(true);
-  expect(orchestratorMandateStale(17)).toBe(false);
+     v18 carries (#1834): the card's text is the human's and agent context goes
+     in the task's separate details field. v19 (#1843) adds the human-in-the-loop
+     section. */
+  expect(orchestratorMandateStale(18)).toBe(true);
+  expect(orchestratorMandateStale(19)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("AGENT CONTEXT GOES IN details");
 });
 
 /* #1428 v13 — the index over every message of every transcript existed, and no

@@ -56,6 +56,13 @@ function accountQuota(account: AccountOption, now: number) {
   return reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
 }
 
+/** The provider's own label for one reported tier, when it sent one. A window
+    key carries only the bucket key, so the label is looked back up here rather
+    than shown as the codename the key spells (#1839). */
+function tierLabel(quota: ReconciledQuota, tier: string): string | null {
+  return quota.tiers.find((window) => window.value.tier === tier)?.value.label ?? null;
+}
+
 type LimitRowKey = "session" | "weekly" | TierWindowKey;
 
 /** The windows an account reports, in the order every surface lists them:
@@ -70,7 +77,7 @@ export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
     { key: "weekly", label: windowLabel(t, "weekly", quota.weekly?.value.windowMinutes), window: quota.weekly },
     ...quota.tiers.map((tier) => ({
       key: tierWindowKey(tier.value.tier),
-      label: t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) }),
+      label: t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) }),
       window: tier as ReconciledQuotaWindow,
     })),
   ];
@@ -84,7 +91,7 @@ function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "clau
   const tint = engineTintOf(engine);
   const effectiveTier = tierOfWindowKey(effective.window);
   const window = effectiveTier
-    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier) })
+    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
   const stale = effective.stale;
   const color = capacityColor(effective.percent, tint.color);
@@ -930,7 +937,7 @@ export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { lef
   if (!effective) return null;
   const effectiveTier = tierOfWindowKey(effective.window);
   const window = effectiveTier
-    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier) })
+    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : windowLabel(t, effective.window === "weekly" ? "weekly" : "session", effective.value.windowMinutes);
   const left = Math.round(effective.percent);
   return { left, window, tone: meterTone(left) };

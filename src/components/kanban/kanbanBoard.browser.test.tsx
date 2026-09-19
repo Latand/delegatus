@@ -4504,6 +4504,63 @@ describe("#1796 per-model limits", () => {
   }, 90_000);
 });
 
+describe("#1839 a tier the provider files under a codename", () => {
+  browserTest("the provider's label names the row, on desktop and phone, and the codename never reaches the operator", async () => {
+    const out = path.resolve(".artifacts/issue-1839/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-codename",
+      values: "invented",
+    };
+    const readRows = (page: Page, selector: string) => page.locator(selector).evaluate((root) => ({
+      rows: [...root.querySelectorAll<HTMLElement>("[data-limit-row]")].map((row) => ({
+        key: row.dataset.limitRow, text: row.textContent?.replace(/\s+/g, " ").trim(),
+        width: Math.round(row.getBoundingClientRect().width),
+      })),
+      overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    }));
+    try {
+      for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["phone", { width: 390, height: 844 }]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?scenario=tier-codename", viewport, "light", "en");
+        try {
+          let selector: string;
+          if (name === "desktop") {
+            await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText).toContain("Cedar Ember · Week");
+            expect(footerText).not.toContain("Nimbus");
+            evidence.footer = { text: footerText };
+            await page.screenshot({ path: path.join(out, "desktop-footer.png") });
+            await page.click('button[aria-label="Claude accounts — switch or add"]');
+            selector = '[role="dialog"][aria-label="Claude accounts"]';
+          } else {
+            await page.waitForSelector('[data-mobile2-screen="board"]');
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            selector = '[data-mobile2-screen="accounts"]';
+          }
+          await page.waitForSelector(selector + ' [data-limit-row="tier:nimbus_quill"]');
+          const facts = await readRows(page, selector);
+          /* The row is still keyed by the bucket the window arrived in — that is
+             what the gate matches on — while what it reads is the label. */
+          expect(facts.rows.some((row) => row.key === "tier:nimbus_quill" && row.text?.includes("Fable · Week") && row.text.includes("12%"))).toBe(true);
+          expect(facts.rows.some((row) => row.key === "tier:cedar_ember" && row.text?.includes("Cedar Ember · Week") && row.text.includes("37%"))).toBe(true);
+          expect(facts.rows.every((row) => !row.text?.includes("nimbus"))).toBe(true);
+          expect(facts.overflow).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${name}-accounts.png`), fullPage: true });
+          evidence[name] = { viewport, ...facts, pageErrors };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1839", { recursive: true });
+      fs.writeFileSync("evidence/issue-1839/limits.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 describe("#1819 putting the whole project sidebar away, and the header that stays", () => {
   /*
    * Rendered evidence for the operator's correction before a stream (#1819),
@@ -5344,4 +5401,243 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+describe("#1834 the card's collapsed Details row", () => {
+  /*
+   * Rendered evidence for the agent-context split (#1834), in the real Viewer
+   * over `issue1695Evidence.fixture.tsx`, in Chromium at a desktop viewport
+   * (light and dark) and on the phone at 390×844:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * Gated here, because only a laid-out page settles it:
+   *   - closed, the card carries ONE row saying «Details» and nothing of the
+   *     agent's text is readable anywhere on it, while the title and the
+   *     description are exactly what they were;
+   *   - opened, the whole text is in place inside the card and scrolls INSIDE
+   *     itself — the element overflows and the card's own height barely moves,
+   *     which is the claim a DOM test cannot make;
+   *   - a task without details carries no row at all;
+   *   - clicking the opened text opens the editor in its place;
+   *   - the phone's opened task shows the same one closed row and opens the
+   *     same text.
+   *
+   * Measurements go to `evidence/issue-1834/details.json`; no frame is
+   * committed — the PNGs stay in the run's own temp directory.
+   */
+
+  const EVIDENCE = path.resolve("evidence/issue-1834");
+  const DETAILED = "t-search";
+  const PLAIN = "t-upload";
+
+  interface Row {
+    present: boolean;
+    label: string;
+    expanded: boolean;
+    /** The opened text, its box and whether it scrolls inside itself. */
+    text: { chars: number; firstLine: string; clientHeight: number; scrollHeight: number; overflowY: string; fontFamily: string } | null;
+    editorField: string | null;
+  }
+  interface Measured {
+    board: string;
+    detailed: { cardHeight: number; title: string; description: string; row: Row; textOnCard: boolean };
+    plain: { row: Row; description: string };
+  }
+
+  const readRow = (page: Page, id: string) => page.evaluate((selector: string): Row => {
+    const card = document.querySelector<HTMLElement>(selector);
+    const block = card?.querySelector<HTMLElement>("[data-details]") ?? null;
+    const toggle = block?.querySelector<HTMLElement>("[data-details-toggle]") ?? null;
+    const text = block?.querySelector<HTMLElement>("[data-details-text]") ?? null;
+    const style = text ? getComputedStyle(text) : null;
+    return {
+      present: Boolean(block),
+      label: (toggle?.textContent ?? "").replace(/\s+/g, " ").trim(),
+      expanded: toggle?.getAttribute("aria-expanded") === "true",
+      text: text
+        ? {
+          chars: (text.textContent ?? "").length,
+          firstLine: (text.textContent ?? "").split("\n")[0]!.slice(0, 60),
+          clientHeight: Math.round(text.clientHeight),
+          scrollHeight: Math.round(text.scrollHeight),
+          overflowY: style!.overflowY,
+          fontFamily: style!.fontFamily,
+        }
+        : null,
+      editorField: block?.querySelector<HTMLElement>("[data-card-editor]")?.getAttribute("data-card-editor") ?? null,
+    };
+  }, `${card(id)}`);
+
+  /** One reading of both cards: the shared shape above plus each card's row. */
+  const measure = async (page: Page): Promise<Measured> => {
+    const shell = await page.evaluate((selectors: { detailed: string; plain: string }) => {
+      const words = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+      const detailed = document.querySelector<HTMLElement>(selectors.detailed);
+      const plain = document.querySelector<HTMLElement>(selectors.plain);
+      return {
+        board: document.querySelector("[data-kanban-board]") ? "kanban" : document.querySelector("[data-mobile2-board]") ? "mobile2" : "none",
+        cardHeight: Math.round(detailed?.getBoundingClientRect().height ?? 0),
+        title: words(detailed?.querySelector(".title")),
+        description: words(detailed?.querySelector(".desc")),
+        textOnCard: words(detailed).includes("Files another lane holds"),
+        plainDescription: words(plain?.querySelector(".desc")),
+      };
+    }, { detailed: card(DETAILED), plain: card(PLAIN) });
+    return {
+      board: shell.board,
+      detailed: { cardHeight: shell.cardHeight, title: shell.title, description: shell.description, row: await readRow(page, DETAILED), textOnCard: shell.textOnCard },
+      plain: { row: await readRow(page, PLAIN), description: shell.plainDescription },
+    };
+  };
+
+  browserTest("the agent's context is one closed row on the card, and opens in place scrolling inside itself", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const OUT = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-1834-"));
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk") => {
+      const label = `${scheme}-${lang}`;
+      const { context, page, pageErrors } = await openFixture(browser, server.base, VIEWPORT, scheme, lang);
+      try {
+        await page.waitForSelector(card(DETAILED), { timeout: 20_000 });
+        await page.waitForTimeout(500);
+
+        /* ---- Closed: one row, and none of the agent's text on the card. */
+        const closed = await measure(page);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-closed.png`) });
+        if (!closed.detailed.row.present) failures.push(`${label}: the card carries no Details row`);
+        if (closed.detailed.row.expanded) failures.push(`${label}: the row is open before anything was clicked`);
+        if (closed.detailed.row.text) failures.push(`${label}: the agent's text is on the card while the row is shut`);
+        if (closed.detailed.textOnCard) failures.push(`${label}: the agent's own words are readable on the closed card`);
+        if (closed.detailed.row.label !== (lang === "uk" ? "Деталі" : "Details")) failures.push(`${label}: the row says ${JSON.stringify(closed.detailed.row.label)}`);
+        if (!closed.detailed.description.startsWith("Results vanish")) failures.push(`${label}: the human description moved: ${JSON.stringify(closed.detailed.description)}`);
+        /* A task nobody wrote details for carries no row at all. */
+        if (closed.plain.row.present) failures.push(`${label}: a task without details drew a Details row`);
+        if (!closed.plain.description.startsWith("Resumable uploads")) failures.push(`${label}: the plain card's description moved`);
+
+        /* ---- Opened: the whole text, in place, scrolling inside itself. */
+        await page.click(`${card(DETAILED)} [data-details-toggle]`);
+        await page.waitForTimeout(300);
+        const open = await measure(page);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-open.png`) });
+        if (!open.detailed.row.expanded) failures.push(`${label}: the row did not open`);
+        if (!open.detailed.row.text) failures.push(`${label}: opening the row showed no text`);
+        if ((open.detailed.row.text?.chars ?? 0) < 200) failures.push(`${label}: the opened text is only ${open.detailed.row.text?.chars} characters`);
+        if (open.detailed.row.text && open.detailed.row.text.scrollHeight <= open.detailed.row.text.clientHeight) {
+          failures.push(`${label}: the opened text does not overflow its own box (${open.detailed.row.text.clientHeight} ≥ ${open.detailed.row.text.scrollHeight}), so nothing proves it scrolls inside itself`);
+        }
+        if (open.detailed.row.text && !/auto|scroll/.test(open.detailed.row.text.overflowY)) {
+          failures.push(`${label}: the opened text has overflow-y ${open.detailed.row.text.overflowY}, so it cannot scroll inside itself`);
+        }
+        if (open.detailed.cardHeight - closed.detailed.cardHeight > 320) {
+          failures.push(`${label}: opening the row grew the card by ${open.detailed.cardHeight - closed.detailed.cardHeight}px, so the text is not bounded`);
+        }
+        if (open.detailed.title !== closed.detailed.title || open.detailed.description !== closed.detailed.description) {
+          failures.push(`${label}: opening the row changed the human title or description`);
+        }
+
+        /* ---- The opened text is edited in its place. */
+        await page.click(`${card(DETAILED)} [data-details-text]`);
+        await page.waitForTimeout(300);
+        const editing = await readRow(page, DETAILED);
+        await page.screenshot({ path: path.join(OUT, `${label}-details-editing.png`) });
+        if (editing.editorField !== "details") failures.push(`${label}: clicking the opened text opened ${JSON.stringify(editing.editorField)} instead of the details editor`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+
+        /* ---- Shut again: one row, and the text gone from the card. */
+        await page.click(`${card(DETAILED)} [data-details-toggle]`);
+        await page.waitForTimeout(300);
+        const shut = await readRow(page, DETAILED);
+        if (shut.expanded || shut.text) failures.push(`${label}: the row did not shut again`);
+
+        frames[label] = { viewport: VIEWPORT, closed, open, editing, shut };
+        if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+    };
+
+    /* The phone draws its own board, and a task is opened from its menu. */
+    const phone = async () => {
+      const label = "390";
+      const viewport = { width: 390, height: 844 };
+      const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, "light", "en");
+      try {
+        await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 20_000 });
+        await page.waitForTimeout(500);
+        await page.click('[data-mobile2-open="menu"]');
+        await page.click('[data-mobile2-menu-row="tasks"]');
+        await page.waitForTimeout(400);
+        await page.getByText("Restore search results after the index rebuild").first().click();
+        await page.waitForSelector("[data-task-details-toggle]", { timeout: 10_000 });
+        await page.waitForTimeout(300);
+
+        const read = () => page.evaluate(() => {
+          const block = document.querySelector<HTMLElement>("[data-task-details]");
+          const toggle = document.querySelector<HTMLElement>("[data-task-details-toggle]");
+          const field = block?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+          const text = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task text"]');
+          const style = field ? getComputedStyle(field) : null;
+          return {
+            rows: document.querySelectorAll("[data-task-details-toggle]").length,
+            label: (toggle?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            expanded: toggle?.getAttribute("aria-expanded") === "true",
+            details: field
+              ? { chars: field.value.length, clientHeight: Math.round(field.clientHeight), scrollHeight: Math.round(field.scrollHeight), overflowY: style!.overflowY }
+              : null,
+            taskText: (text?.value ?? "").split("\n")[0] ?? "",
+            contextReadable: (document.getElementById("root")?.textContent ?? "").includes("Files another lane holds"),
+          };
+        });
+
+        const closed = await read();
+        await page.screenshot({ path: path.join(OUT, "phone-390x844-details-closed.png") });
+        if (closed.rows !== 1) failures.push(`${label}: the opened task carries ${closed.rows} details rows, not one`);
+        if (closed.expanded) failures.push(`${label}: the row is open before anything was tapped`);
+        if (closed.details) failures.push(`${label}: the agent's text is on screen while the row is shut`);
+        if (closed.contextReadable) failures.push(`${label}: the agent's own words are readable with the row shut`);
+        if (closed.label !== "Details") failures.push(`${label}: the row says ${JSON.stringify(closed.label)}`);
+        if (!closed.taskText.startsWith("Restore search results")) failures.push(`${label}: the task's own text is not the text field's first line`);
+
+        await page.click("[data-task-details-toggle]");
+        await page.waitForTimeout(300);
+        const open = await read();
+        await page.screenshot({ path: path.join(OUT, "phone-390x844-details-open.png") });
+        if (!open.expanded || !open.details) failures.push(`${label}: tapping the row showed no text`);
+        if ((open.details?.chars ?? 0) < 200) failures.push(`${label}: the opened text is only ${open.details?.chars} characters`);
+        if (open.details && open.details.scrollHeight <= open.details.clientHeight) {
+          failures.push(`${label}: the opened text does not overflow its own box, so nothing proves it scrolls inside itself`);
+        }
+        if (open.taskText !== closed.taskText) failures.push(`${label}: opening the row changed the task's text`);
+
+        frames[label] = { viewport, closed, open };
+        if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+    };
+
+    try {
+      await desktop("light", "en");
+      await desktop("dark", "uk");
+      await phone();
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "details.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
 });

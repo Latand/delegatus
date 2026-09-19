@@ -6,9 +6,11 @@ import { isoNow } from "./helpers";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
-import { TASK_COLORS, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
-export const TASK_TEXT_LIMIT = 6000;
+/* The caps live beside the type, which a client component can import without
+   pulling this module's node dependencies into the browser bundle. */
+export { TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT } from "./types";
 /**
  * How many bands one project's board may carry (#1627).
  *
@@ -48,6 +50,9 @@ export type CreateTaskResult =
 export interface CreateTaskInput {
   project?: unknown;
   text?: unknown;
+  /** Agent-facing context, kept out of the human description (#1834). An
+      absent or blank value creates a task with no details at all. */
+  details?: unknown;
   placement?: unknown;
   pos?: unknown;
   dueAt?: unknown;
@@ -65,6 +70,10 @@ export interface PatchTaskInput {
   expectedProject?: unknown;
   expectedRevision?: unknown;
   text?: unknown;
+  /** Agent-facing context (#1834). A string sets or replaces it; `null` or an
+      empty string clears it. Omitted leaves it exactly as stored, so an update
+      carrying only `details` never touches `text` and the reverse. */
+  details?: unknown;
   status?: unknown;
   placement?: unknown;
   pos?: unknown;
@@ -227,6 +236,23 @@ function textLimitError(): { ok: false; error: string; status: number } {
   return { ok: false, error: `Task text must be no longer than ${TASK_TEXT_LIMIT} characters`, status: 400 };
 }
 
+type DetailsResult = { ok: true; details?: string } | TaskRefusal;
+
+/** Agent-facing `details` (#1834): a string is trimmed and capped, and a blank
+    one is no details at all — the same value an absent field leaves. */
+function normalizeDetails(value: unknown): DetailsResult {
+  if (value === undefined || value === null) return { ok: true };
+  if (typeof value !== "string") {
+    return { ok: false, error: "details must be a string", status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+  }
+  const details = value.trim();
+  if (!details) return { ok: true };
+  if (details.length > TASK_DETAILS_LIMIT) {
+    return { ok: false, error: `Task details must be no longer than ${TASK_DETAILS_LIMIT} characters`, status: 400, code: "TASK_INVALID_FIELD", field: "details" };
+  }
+  return { ok: true, details };
+}
+
 export function createTask(
   existing: BoardTask[],
   input: CreateTaskInput,
@@ -238,6 +264,8 @@ export function createTask(
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
   if (text.length > TASK_TEXT_LIMIT) return textLimitError();
+  const details = normalizeDetails(input.details);
+  if (!details.ok) return details;
 
   /* Idempotency: a replayed create (double-tap, retry after a lost response)
      returns the task the first attempt made instead of minting a twin. */
@@ -288,6 +316,7 @@ export function createTask(
     project,
     status: "inbox",
     text,
+    ...(details.details ? { details: details.details } : {}),
     placement,
     ...(placement === "pinned" && pos ? { pos } : {}),
     ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz } : {}),
@@ -337,6 +366,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (existing[index]!.origin?.refinement === "pending" && text !== existing[index]!.text) {
       patch.origin = { ...existing[index]!.origin!, refinement: "titled" };
     }
+  }
+  /* Its own field, so it is set, replaced and cleared on its own: a patch
+     carrying only `details` leaves `text` byte for byte, and a patch carrying
+     only `text` leaves `details` (#1834). */
+  if (Object.hasOwn(input, "details")) {
+    const details = normalizeDetails(input.details);
+    if (!details.ok) return details;
+    patch.details = details.details;
   }
   if (Object.hasOwn(input, "status")) {
     const status = normalizeStatus(input.status);
@@ -432,6 +469,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueTz;
   }
   if (updated.placement === "unplaced") delete updated.pos;
+  if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;
   if (Object.hasOwn(patch, "groupHidden") && patch.groupHidden === undefined) delete updated.groupHidden;
   const tasks = existing.slice();

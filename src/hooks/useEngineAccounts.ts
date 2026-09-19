@@ -104,10 +104,11 @@ export type AccountLimitWindow = { usedPercent: number; resetsAt: number | null;
 /** Per-account quota detail surfaced in the Accounts panel (issue #40): the
     session and weekly windows with reset times, plus how fresh the read is.
     Every capacity chip is reconciled from these windows. */
-/** A model tier's weekly window (issues #1358, #1796): a weekly window that
-    also names the tier the provider meters it for (`opus` for
-    `seven_day_opus`). */
-export type AccountTierLimitWindow = AccountLimitWindow & { tier: string };
+/** A model tier's weekly window (issues #1358, #1796, #1839): a weekly window
+    that also names the bucket the provider meters it under (`opus` for
+    `seven_day_opus`), plus the provider's own human label for it when one was
+    sent — the label is what the row shows, never a codenamed bucket key. */
+export type AccountTierLimitWindow = AccountLimitWindow & { tier: string; label?: string | null };
 
 export type AccountLimits = {
   freshness: "fresh" | "stale";
@@ -207,7 +208,8 @@ function parseTierLimitWindow(raw: unknown): AccountTierLimitWindow | null {
   if (!window) return null;
   const tier = (raw as { tier?: unknown }).tier;
   if (typeof tier !== "string" || !tier.trim()) return null;
-  return { ...window, tier };
+  const label = (raw as { label?: unknown }).label;
+  return { ...window, tier, ...(typeof label === "string" && label.trim() ? { label } : {}) };
 }
 
 /** Crash-safe read of the route's `resetCredits` block; null means the count
