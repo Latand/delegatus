@@ -2261,6 +2261,10 @@ function routeFailedAttempt(
       own detail rather than a budget message about a fail it never reported.
       A spent edge under the default `advance` still hands it on once (#1868). */
   parkOnExhaustedBudget = true,
+  /** False for a failure that carries no verdict (a host that died before it
+      answered): nothing was reviewed, so there are no findings to hand past a
+      spent budget and the edge loops and parks as it always did. */
+  reviewed = true,
 ): boolean {
   if (!stage.onFail) return false;
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
@@ -2269,7 +2273,7 @@ function routeFailedAttempt(
      the source gets: the fail of its last one is the handoff below, so the
      reviewer runs N times and the fix stage N+1. `park` keeps today's count,
      which reviews once more and then stops. */
-  const advancesWhenSpent = failEdgeExhaustion(stage.onFail) === "advance";
+  const advancesWhenSpent = reviewed && failEdgeExhaustion(stage.onFail) === "advance";
   const loopRounds = advancesWhenSpent ? stage.onFail.maxRounds - 1 : stage.onFail.maxRounds;
   if (targetStage && used < loopRounds) {
     pipeline.cursor = {
@@ -3228,7 +3232,7 @@ async function tickRunStage(
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     attempt.error = HISTORICAL_MISSING_STAGE_VERDICT;
-    if (routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT)) return;
+    if (routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT, true, false)) return;
     park(pipeline, HISTORICAL_MISSING_STAGE_VERDICT, attempt);
     return;
   }

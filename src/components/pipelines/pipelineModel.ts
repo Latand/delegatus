@@ -15,6 +15,7 @@ import type {
   PipelineAction,
   PipelineAttemptState,
   PipelineEdgeKind,
+  PipelineFailEdgeExhaustion,
   PipelineRepoPreflight,
   PipelineRepoPreflightErrorCode,
   PipelineStage,
@@ -1647,13 +1648,14 @@ export function optimisticSetEdge(
   edge: PipelineEdgeKind,
   to: string | null,
   maxRounds?: number,
+  onExhausted?: PipelineFailEdgeExhaustion,
 ): Pipeline {
   return {
     ...pipeline,
     stages: pipeline.stages.map((stage) => {
       if (stage.id !== stageId) return stage;
       if (edge === "pass") return { ...stage, next: to };
-      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? 5 } };
+      return { ...stage, onFail: to === null ? null : { to, maxRounds: maxRounds ?? 5, ...(onExhausted ? { onExhausted } : {}) } };
     }),
   };
 }
@@ -1665,12 +1667,13 @@ export async function setPipelineEdge(
   edge: PipelineEdgeKind,
   to: string | null,
   maxRounds?: number,
+  onExhausted?: PipelineFailEdgeExhaustion,
 ): Promise<string | null> {
   return patchPipeline(
     pipeline.id,
     "set-edge",
-    { stageId, edge, to, ...(maxRounds !== undefined ? { maxRounds } : {}) },
-    optimisticSetEdge(pipeline, stageId, edge, to, maxRounds),
+    { stageId, edge, to, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(onExhausted !== undefined ? { onExhausted } : {}) },
+    optimisticSetEdge(pipeline, stageId, edge, to, maxRounds, onExhausted),
   );
 }
 

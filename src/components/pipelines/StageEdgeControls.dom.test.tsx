@@ -102,3 +102,32 @@ test("a one-stage pipeline offers a self-targeting fail edge and configures it (
   flushSync(() => root.unmount());
   host.remove();
 });
+
+test("a fail edge offers what a spent budget does, defaulting to advance, and keeps its rounds when it changes (#1868)", async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: string, init?: { method?: string; body?: string }) => {
+    if (init?.method === "PATCH") patches.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
+    return { ok: true, json: async () => ({}) };
+  }) as unknown as typeof fetch;
+
+  const { pipeline, stage } = oneStagePipeline();
+  stage.onFail = { to: "implement", maxRounds: 3 };
+  const { host, root } = mount(<StageEdgeControls pipeline={pipeline} stage={stage} />);
+
+  const selects = [...host.querySelectorAll("select")] as HTMLSelectElement[];
+  expect(selects).toHaveLength(3);
+  const exhausted = selects[2]!;
+  expect([...exhausted.options].map((option) => option.value)).toEqual(["advance", "park"]);
+  expect(exhausted.value).toBe("advance");
+
+  flushSync(() => {
+    Object.getOwnPropertyDescriptor(dom.HTMLSelectElement.prototype, "value")!.set!.call(exhausted, "park");
+    exhausted.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+  });
+  await Bun.sleep(0);
+
+  expect(patches).toEqual([{ action: "set-edge", stageId: "implement", edge: "fail", to: "implement", maxRounds: 3, onExhausted: "park" }]);
+
+  flushSync(() => root.unmount());
+  host.remove();
+});
