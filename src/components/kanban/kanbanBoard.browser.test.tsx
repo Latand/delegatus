@@ -3689,21 +3689,16 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         scaleWidth: Math.round((chip.querySelector("[data-effort-pills]")?.getBoundingClientRect().width ?? 0) * 100) / 100,
         nextDiffers: Boolean(chip.querySelector("[data-next-differs]")),
       })),
-      loops: [...scope.querySelectorAll<HTMLElement>(".ploop")].map((loop) => ({
-        count: loop.querySelector(".ccircle")?.textContent?.trim() ?? null,
-        spent: loop.className.includes("spent"),
-        text: loop.textContent?.trim() ?? "",
-        /* The chip is a fixed 22 px pill: text that wraps inside it paints above
-           and below the pill, which is what a 256 px card did (#1743). */
-        clientHeight: loop.clientHeight,
-        scrollHeight: loop.scrollHeight,
-        clientWidth: loop.clientWidth,
-        scrollWidth: loop.scrollWidth,
-        budget: loop.querySelector(".lbudget")?.textContent?.trim() ?? "",
-        budgetTruncated: (() => {
-          const part = loop.querySelector<HTMLElement>(".lbudget");
-          return Boolean(part && part.scrollWidth > part.clientWidth + 1);
-        })(),
+      /* The collapsed row draws a fail edge as an arc under the pills now, or,
+         on a row that wrapped, as a count on the failing pill (#1798). Either
+         way the budget it carries is the same one the chip used to print. */
+      loops: [...scope.querySelectorAll<HTMLElement>("[data-loop-arc], .pret")].map((mark) => ({
+        count: mark.querySelector(".parc-count")?.textContent?.trim() ?? (mark.classList.contains("pret") ? mark.textContent?.trim().replace(/^\u21ba/, "") ?? null : null),
+        spent: mark.dataset.arcState === "exhausted",
+        fired: mark.dataset.arcFired ?? null,
+        max: mark.dataset.arcMax ?? null,
+        /* The sentence the chip printed survives in the mark's own title. */
+        text: mark.querySelector("title")?.textContent ?? mark.getAttribute("title") ?? "",
       })),
     };
   }, scopeSelector);
@@ -3891,20 +3886,15 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
           if (chip.markWidth <= 0) failures.push(`${label}: chip ${chip.stage} mark is ${chip.markWidth} px wide`);
           if (chip.scaleWidth <= 0) failures.push(`${label}: chip ${chip.stage} effort scale is ${chip.scaleWidth} px wide`);
         }
-        if (chips?.loops[0]?.count !== "2") failures.push(`${label}: the loop chip counts ${JSON.stringify(chips?.loops[0]?.count)}`);
+        if (chips?.loops[0]?.fired !== "2") failures.push(`${label}: the return mark counts ${JSON.stringify(chips?.loops[0]?.fired)}`);
         const spentChips = await readChips(opened.page, `${CARD} ${SPENT}`);
-        if (!spentChips?.loops[0]?.spent) failures.push(`${label}: the spent loop chip is not drawn as spent`);
-        /* The loop chip is one 22 px line and the budget is the fact it exists
-           for: it may neither wrap out of its pill nor be the part cut off. */
+        if (!spentChips?.loops[0]?.spent) failures.push(`${label}: the spent return mark is not drawn as spent`);
+        /* Whatever form the mark took, the budget the chip used to print is
+           still reachable: the count on it, and the sentence in its title. */
         for (const loop of [...(chips?.loops ?? []), ...(spentChips?.loops ?? [])]) {
-          if (loop.scrollHeight > loop.clientHeight + 1) {
-            failures.push(`${label}: a loop chip wraps out of its pill (${loop.scrollHeight} in ${loop.clientHeight}) ${JSON.stringify(loop.text)}`);
-          }
-          if (loop.scrollWidth > loop.clientWidth + 1) {
-            failures.push(`${label}: a loop chip overflows its pill (${loop.scrollWidth} in ${loop.clientWidth}) ${JSON.stringify(loop.text)}`);
-          }
-          if (!loop.budget) failures.push(`${label}: a loop chip prints no budget ${JSON.stringify(loop.text)}`);
-          if (loop.budgetTruncated) failures.push(`${label}: a loop chip's budget is cut ${JSON.stringify(loop.budget)}`);
+          if (!loop.count) failures.push(`${label}: a fired return mark prints no count ${JSON.stringify(loop)}`);
+          if (!loop.max) failures.push(`${label}: a return mark carries no budget ${JSON.stringify(loop)}`);
+          if (!loop.text) failures.push(`${label}: a return mark carries no sentence ${JSON.stringify(loop)}`);
         }
 
         /* Then the card graph itself. */
@@ -4110,7 +4100,7 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
         const uk = frames[`${width}-uk-${scheme}`] as { chips?: { loops: Array<{ text: string }> } } | undefined;
         const enText = en?.chips?.loops[0]?.text ?? "";
         const ukText = uk?.chips?.loops[0]?.text ?? "";
-        if (!enText || !ukText) failures.push(`${width}-${scheme}: a loop chip printed nothing to compare languages on`);
+        if (!enText || !ukText) failures.push(`${width}-${scheme}: a return mark printed nothing to compare languages on`);
         else if (enText === ukText) failures.push(`${width}-${scheme}: the Ukrainian frame drew the English string ${JSON.stringify(enText)}`);
       }
     }
@@ -4451,4 +4441,696 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 300_000);
+});
+
+describe("#1798 a fail edge is a return arc under the collapsed row", () => {
+  /*
+   * Rendered evidence for #1798, on the harness every kanban case uses: the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=issue1798`, with the
+   * production stylesheet, in Chromium.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * One task carries the lanes the arc has to tell apart: a fail edge at rest,
+   * one that fired once and is carrying the work back right now, one whose
+   * budget is spent with the last return still in flight, one the spent budget
+   * already stopped, and a lane with two fail edges into the same stage. A
+   * sixth lane has four stages, the length a real lane usually has, and wraps
+   * in every column this board has — which is what puts the pill suffix, not
+   * the arc, on most of the rows an operator sees.
+   *
+   * What only a browser settles, and is gated here:
+   *   - the collapsed row holds stage pills and nothing else — the fail-edge
+   *     chip is gone from it, at every width;
+   *   - an arc is drawn entirely BELOW the line the pills sit on, so it crosses
+   *     no pill, and stays inside the card, so it touches no card edge;
+   *   - the row reserves the arcs' depth, so nothing the arc paints lands on the
+   *     line under the row — and a lane with no fail edge reserves nothing;
+   *   - at rest the arc prints no count and keeps the sentence in its title;
+   *     once fired it prints `n/max` and takes the warning colour; a spent
+   *     budget takes the danger colour, which is a different colour, not a
+   *     lighter one;
+   *   - two edges into one target hang at two different depths, their curves
+   *     never cross, and their two tips keep clear air between them;
+   *   - the sentence is reachable: every point sampled along a drawn arc, and
+   *     every point 4 px beside it, opens that arc's own explanation — at rest
+   *     the sentence is the only place the budget lives;
+   *   - a lane that parked on a spent edge does not say what a lane still
+   *     running says;
+   *   - the counter's halo is cut out of the ground the section paints, and is
+   *     wide enough to be air: 2 px of ground on both sides of the digits
+   *     against the thickest stroke any state draws, and no gap between two
+   *     digits that the halo cannot close from both sides;
+   *   - the dashes of a live arc travel towards its own arrowhead, and a solid
+   *     piece under them keeps the head met by ink at every phase;
+   *   - a lane whose edges all rest reserves no room for a counter it has not;
+   *   - a row that wrapped drops the arcs altogether and puts the same count on
+   *     the failing stage's own pill, only once the edge has fired, and marks a
+   *     return still in flight apart from one that is over.
+   *
+   * The phone (390 px) is recorded rather than gated: under 640 px the Viewer
+   * hands the whole board to the mobile shell, so the collapsed kanban row has
+   * no phone surface at all. The wrapped row is therefore a desktop rendering
+   * — and not only a narrow one: a four-stage lane wraps in a 1680 px board's
+   * columns too, so the suffix is gated at every width here and the arcs are
+   * what the short lanes draw.
+   *
+   * Measurements go to `evidence/issue-1798/arcs.json`; frames to
+   * `.artifacts/issue-1798/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1798");
+  const EVIDENCE = path.resolve("evidence/issue-1798");
+  const CARD = card("t-arcs");
+  /* The lanes with no fail edge at all: they must reserve no band. */
+  const PLAIN = "[data-kanban-board]";
+
+  interface ArcMeasure {
+    edge: string;
+    state: string | null;
+    live: string | null;
+    fired: string | null;
+    max: string | null;
+    /** The count drawn on the arc itself, when one is. */
+    count: string | null;
+    /** The sentence the arc kept, which is where the budget lives at rest. */
+    title: string;
+    stroke: string;
+    strokeWidth: string;
+    dash: string;
+    countFill: string;
+    /** The colour the counter's halo is cut out of: it has to be the ground the
+        section actually paints, or the count carries a blot of another colour. */
+    countHalo: string;
+    /** How wide that halo is cut. Half of it is the air on each side of the
+        digits, and the arc runs at the digits' own vertical middle, so a halo
+        no wider than the stroke leaves the count read as a line struck into
+        dirty digits. */
+    countHaloWidth: number;
+    /** The widest gap between two digits' INK, measured in the font the counter
+        actually draws with. The halo closes over a gap from both sides, so a
+        gap wider than the whole halo keeps a speck of the arc inside the
+        count. Null when the browser cannot report glyph ink. */
+    countInkGap: number | null;
+    /** The live arc's dashes move; these are its `stroke-dashoffset` sampled
+        with the animation paused at three points of one cycle. The curve is
+        drawn from the head backwards, so an offset that GROWS is a dash
+        travelling towards the arrowhead — which is where the work goes. */
+    flow: number[] | null;
+    /** The solid piece drawn over the head end of a live arc, so no phase of
+        the motion leaves the arrowhead standing off its own line. */
+    lead: { length: number; dash: string } | null;
+    /** The arrowhead's own box, so two heads on one pill can be told apart. */
+    head: { x: number; right: number } | null;
+    /** What a pointer aimed at the arc actually meets, over `samples` points
+        taken along the drawn curve. `answered` of them open SOME arc's
+        sentence, which is the whole point — a tooltip that opens only on 1.5 px
+        of dashes opens nowhere. `onPath` open this arc's own, and where two
+        nested arcs converge into their shared pill the shallower one answers
+        for both, so that number is a share rather than all of them. `offPath`
+        and `offAnswered` are the same two readings 4 px off the curve, and
+        `ownsHead` is whether the arc answers at its own arrowhead, and
+        `clearsPills` whether the stroke stays out of the pill the arc leaves —
+        a hit target that reaches back up into a pill takes the last pixels of
+        a control the operator is aiming at. */
+    hit: { strokeWidth: string; samples: number; answered: number; onPath: number; offAnswered: number; offPath: number; ownsHead: boolean; clearsPills: boolean };
+    /** The arc's painted box, relative to the row's own box. */
+    box: { x: number; y: number; right: number; bottom: number } | null;
+    /** Pixels by which the arc reaches ABOVE the pills' bottom edge: anything
+        over zero is an arc drawn into the row of pills. */
+    intoPills: number;
+    /** Pixels by which the arc paints outside the card's content box. */
+    pastCard: number;
+    /** Pixels by which the arc paints below the row's own box — onto whatever
+        the card draws under it. */
+    pastRow: number;
+  }
+
+  interface RowMeasure {
+    pipeline: string;
+    /** `arcs` on a one-line row, `suffix` on a wrapped one, absent with no edge. */
+    mode: string | null;
+    chips: string[];
+    /** Fail-edge chips still in the row of steps. There must be none. */
+    loopChips: number;
+    columnWidth: number;
+    rowWidth: number;
+    rowHeight: number;
+    /** The bottom of the line the pills sit on, relative to the row. */
+    pillsBottom: number;
+    /** The height the row reserved under the pills for the arcs. */
+    band: number;
+    /** Reserved room under the deepest arc's ink: a lane whose edges all rest
+        has no counter to put there, so it should be near zero. */
+    deadBelowArcs: number;
+    /** The ground the section paints, which the counter's halo has to match. */
+    sectionSurface: string;
+    /** Every pair of arcs in this row: do the curves cross, how close do they
+        come, and how much clear air is between their two arrowheads. */
+    pairs: Array<{ a: string; b: string; crosses: boolean; minGap: number; headGap: number }>;
+    arcs: ArcMeasure[];
+    /** The wrapped row's stand-in for the arcs, on the failing stage's own
+        pill. `live` and `ground` are how a return still in flight is told
+        apart from one that is over on the surface that has no arc to make
+        live — and a four-stage lane wraps in every column the board has, so
+        this is the rendering most lanes get. */
+    suffixes: Array<{ edge: string; state: string | null; live: string | null; text: string; title: string; colour: string; ground: string }>;
+    /** The gap between the row's bottom and the next thing the card draws. */
+    gapBelow: number;
+  }
+
+  const readRows = (page: Page, scopeSelector: string) => page.evaluate((selector): RowMeasure[] => {
+    const scope = document.querySelector(selector);
+    if (!scope) return [];
+    return [...scope.querySelectorAll<HTMLElement>(".stage-section")].map((section) => {
+      const row = section.querySelector<HTMLElement>(".psummary");
+      const cardBox = section.closest<HTMLElement>(".card")!.getBoundingClientRect();
+      const column = section.closest<HTMLElement>(".column") ?? section.closest<HTMLElement>(".card")!;
+      if (!row) {
+        return {
+          pipeline: section.dataset.pipeline ?? "", mode: null, chips: [], loopChips: 0,
+          columnWidth: Math.round(column.getBoundingClientRect().width), rowWidth: 0, rowHeight: 0,
+          pillsBottom: 0, band: 0, deadBelowArcs: 0, sectionSurface: getComputedStyle(section).backgroundColor,
+          pairs: [], arcs: [], suffixes: [], gapBelow: 0,
+        };
+      }
+      const rowBox = row.getBoundingClientRect();
+      const pills = [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.getBoundingClientRect());
+      const pillsBottom = pills.length ? Math.max(...pills.map((pill) => pill.bottom)) - rowBox.top : 0;
+      /* The `.psummary` is alone inside its slot, so what follows the row is
+         what follows the slot — and failing that, the section's own bottom. */
+      const slot = row.closest<HTMLElement>(".graph-slot") ?? row;
+      const next = (slot.nextElementSibling ?? section.nextElementSibling)?.getBoundingClientRect()
+        ?? { top: section.getBoundingClientRect().bottom };
+      const round = (value: number) => Math.round(value * 100) / 100;
+      /* A curve in client pixels, sampled along its own length: the one way to
+         ask whether two arcs meet, and where a pointer aimed at one lands. */
+      const trace = (path: SVGPathElement) => {
+        const matrix = path.getScreenCTM();
+        const total = path.getTotalLength();
+        const points: Array<{ x: number; y: number }> = [];
+        for (let step = 0; step <= 32; step += 1) {
+          const at = path.getPointAtLength((total * step) / 32);
+          const screen = matrix ? new DOMPoint(at.x, at.y).matrixTransform(matrix) : at;
+          points.push({ x: screen.x, y: screen.y });
+        }
+        return points;
+      };
+      const traces = new Map<string, Array<{ x: number; y: number }>>();
+      const arcs = [...row.querySelectorAll<SVGGElement>("[data-loop-arc]")].map((group): ArcMeasure => {
+        const path = group.querySelector<SVGPathElement>(".parc");
+        const head = group.querySelector<SVGPolygonElement>(".parc-head");
+        const count = group.querySelector<SVGTextElement>(".parc-count");
+        /* The painted ink of the whole arc: the curve, its arrowhead and, when
+           it has one, its counter. */
+        const parts = [path, head, count].filter(Boolean).map((part) => part!.getBoundingClientRect());
+        const box = parts.length
+          ? {
+            x: round(Math.min(...parts.map((part) => part.left)) - rowBox.left),
+            y: round(Math.min(...parts.map((part) => part.top)) - rowBox.top),
+            right: round(Math.max(...parts.map((part) => part.right)) - rowBox.left),
+            bottom: round(Math.max(...parts.map((part) => part.bottom)) - rowBox.top),
+          }
+          : null;
+        /* Where a pointer aimed at the drawing actually lands. The sentence is
+           the only home of the budget at rest, so an arc nothing can be aimed
+           at explains nothing. */
+        const owner = (x: number, y: number) =>
+          (document.elementFromPoint(x, y) as Element | null)?.closest<SVGElement>("[data-arc-hit]")?.dataset.arcHit ?? null;
+        const mine = (x: number, y: number) => owner(x, y) === group.dataset.loopArc;
+        const samples = path ? trace(path) : [];
+        if (path) traces.set(group.dataset.loopArc ?? "", samples);
+        const inside = samples.filter((point) => point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight);
+        const hitPath = group.querySelector<SVGPathElement>(".parc-hit");
+        const style = path ? getComputedStyle(path) : null;
+        const countStyle = count ? getComputedStyle(count) : null;
+        /* The digits' own ink, in the font the counter draws with: the halo
+           dilates each glyph outline by half its width, so a gap between two
+           digits wider than the halo reaches from both sides keeps a speck of
+           the arc in it. Canvas is the one place a glyph's ink box can be
+           asked for; a browser that does not answer reports nothing rather
+           than a number nobody measured. */
+        const inkGap = (() => {
+          const text = count?.textContent ?? "";
+          const context = text.length > 1 ? document.createElement("canvas").getContext("2d") : null;
+          if (!context || !countStyle) return null;
+          context.font = `${countStyle.fontWeight} ${countStyle.fontSize} ${countStyle.fontFamily}`;
+          if (!Number.isFinite(context.measureText("1").actualBoundingBoxRight)) return null;
+          let widest = 0;
+          for (let index = 1; index < text.length; index += 1) {
+            const run = context.measureText(text.slice(0, index));
+            const next = context.measureText(text[index]!);
+            widest = Math.max(widest, (run.width - next.actualBoundingBoxLeft) - run.actualBoundingBoxRight);
+          }
+          return round(widest);
+        })();
+        /* Where the dashes of a live arc are going. The animation is paused at
+           three points of one cycle and its offset read off the same element
+           the eye watches; the curve starts at the arrowhead, so an offset
+           that grows is ink travelling towards the head. The motion is put
+           back as it was, so nothing after this reads a stopped board. */
+        const flow = (() => {
+          if (!path || group.dataset.arcLive !== "1") return null;
+          const animations = path.getAnimations();
+          if (!animations.length) return null;
+          const samples = [0, 175, 350].map((at) => {
+            for (const animation of animations) { animation.pause(); animation.currentTime = at; }
+            return round(Number.parseFloat(getComputedStyle(path).strokeDashoffset) || 0);
+          });
+          for (const animation of animations) animation.play();
+          return samples;
+        })();
+        const leadPath = group.querySelector<SVGPathElement>(".parc-lead");
+        /* A stroke is painted half outside the geometry the box reports, so the
+           half-width is added on every side before anything is called a clash. */
+        const half = style ? Number.parseFloat(style.strokeWidth) / 2 || 0 : 0;
+        const absolute = parts.length
+          ? { top: Math.min(...parts.map((part) => part.top)) - half, left: Math.min(...parts.map((part) => part.left)) - half, right: Math.max(...parts.map((part) => part.right)) + half, bottom: Math.max(...parts.map((part) => part.bottom)) + half }
+          : null;
+        return {
+          edge: group.dataset.loopArc ?? "",
+          state: group.dataset.arcState ?? null,
+          live: group.dataset.arcLive ?? null,
+          fired: group.dataset.arcFired ?? null,
+          max: group.dataset.arcMax ?? null,
+          count: count?.textContent?.trim() ?? null,
+          title: group.querySelector("title")?.textContent ?? "",
+          stroke: style?.stroke ?? "",
+          strokeWidth: style?.strokeWidth ?? "",
+          dash: style?.strokeDasharray ?? "",
+          countFill: countStyle?.fill ?? "",
+          countHalo: countStyle?.stroke ?? "",
+          countHaloWidth: countStyle ? round(Number.parseFloat(countStyle.strokeWidth) || 0) : 0,
+          countInkGap: inkGap,
+          flow,
+          lead: leadPath ? { length: round(leadPath.getTotalLength()), dash: getComputedStyle(leadPath).strokeDasharray } : null,
+          head: head ? { x: round(head.getBoundingClientRect().left - rowBox.left), right: round(head.getBoundingClientRect().right - rowBox.left) } : null,
+          hit: {
+            strokeWidth: hitPath ? getComputedStyle(hitPath).strokeWidth : "",
+            samples: inside.length,
+            answered: inside.filter((point) => owner(point.x, point.y) !== null).length,
+            onPath: inside.filter((point) => mine(point.x, point.y)).length,
+            offAnswered: inside.filter((point) => owner(point.x, point.y + 4) !== null).length,
+            offPath: inside.filter((point) => mine(point.x, point.y + 4)).length,
+            /* The curve is drawn from its arrowhead back to the failing pill. */
+            ownsHead: samples.length ? mine(samples[0]!.x, samples[0]!.y) : false,
+            /* One pixel inside the bottom of the pill the arc leaves. */
+            clearsPills: samples.length
+              ? owner(samples[samples.length - 1]!.x, rowBox.top + pillsBottom - 1) === null
+              : true,
+          },
+          box,
+          intoPills: absolute ? round(Math.max(0, (rowBox.top + pillsBottom) - absolute.top)) : 0,
+          pastCard: absolute ? round(Math.max(0, cardBox.left - absolute.left, absolute.right - cardBox.right)) : 0,
+          pastRow: absolute ? round(Math.max(0, absolute.bottom - rowBox.bottom)) : 0,
+        };
+      });
+      /* Two arcs into one pill have to nest. They cross when the sign of the
+         vertical distance between them flips anywhere over the stretch of x
+         they share — which is exactly what the reader sees as a tangle. */
+      const pairs: RowMeasure["pairs"] = [];
+      const traced = [...traces.entries()];
+      for (let i = 0; i < traced.length; i += 1) {
+        for (let j = i + 1; j < traced.length; j += 1) {
+          const [aId, a] = traced[i]!;
+          const [bId, b] = traced[j]!;
+          const yAt = (points: Array<{ x: number; y: number }>, x: number) => {
+            const sorted = [...points].sort((one, two) => one.x - two.x);
+            if (x < sorted[0]!.x || x > sorted[sorted.length - 1]!.x) return null;
+            for (let k = 1; k < sorted.length; k += 1) {
+              if (sorted[k]!.x >= x) {
+                const span = sorted[k]!.x - sorted[k - 1]!.x;
+                const ratio = span ? (x - sorted[k - 1]!.x) / span : 0;
+                return sorted[k - 1]!.y + ratio * (sorted[k]!.y - sorted[k - 1]!.y);
+              }
+            }
+            return sorted[sorted.length - 1]!.y;
+          };
+          const shared = a.map((point) => point.x).concat(b.map((point) => point.x))
+            .filter((x) => yAt(a, x) !== null && yAt(b, x) !== null);
+          const gaps = shared.map((x) => yAt(a, x)! - yAt(b, x)!);
+          const headA = arcs.find((arc) => arc.edge === aId)?.head ?? null;
+          const headB = arcs.find((arc) => arc.edge === bId)?.head ?? null;
+          pairs.push({
+            a: aId,
+            b: bId,
+            crosses: gaps.some((gap) => gap > 0.5) && gaps.some((gap) => gap < -0.5),
+            minGap: gaps.length ? round(Math.min(...gaps.map((gap) => Math.abs(gap)))) : 0,
+            headGap: headA && headB ? round(Math.max(headA.x, headB.x) - Math.min(headA.right, headB.right)) : 0,
+          });
+        }
+      }
+      const inkBottom = arcs.reduce((deepest, arc) => Math.max(deepest, arc.box?.bottom ?? 0), 0);
+      return {
+        pipeline: section.dataset.pipeline ?? "",
+        mode: row.dataset.arcs ?? null,
+        chips: [...row.querySelectorAll<HTMLElement>(".pchip")].map((pill) => pill.dataset.stage ?? ""),
+        loopChips: row.querySelectorAll(".ploop").length,
+        columnWidth: Math.round(column.getBoundingClientRect().width),
+        rowWidth: round(rowBox.width),
+        rowHeight: round(rowBox.height),
+        pillsBottom: round(pillsBottom),
+        band: round(rowBox.height - pillsBottom),
+        deadBelowArcs: inkBottom ? round(rowBox.height - inkBottom) : 0,
+        sectionSurface: getComputedStyle(section).backgroundColor,
+        pairs,
+        arcs,
+        suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
+          edge: mark.dataset.stageReturn ?? "",
+          state: mark.dataset.arcState ?? null,
+          live: mark.dataset.arcLive ?? null,
+          text: mark.textContent?.trim() ?? "",
+          title: mark.getAttribute("title") ?? "",
+          colour: getComputedStyle(mark).color,
+          ground: getComputedStyle(mark).backgroundColor,
+        })),
+        gapBelow: round(next.top - rowBox.bottom),
+      };
+    });
+  }, scopeSelector);
+
+  browserTest("#1798: the fail-edge chip is gone, the arc hangs under the pills, and a wrapped row carries the count on the pill", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1798`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+
+    /* The thickest stroke any state of an arc draws: the live one with motion
+       switched off, which is the rendering the halo has the least room against. */
+    const ARC_INK = 3;
+
+    const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
+      const by = (id: string) => rows.find((row) => row.pipeline === id);
+      if (rows.length !== 6) {
+        failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
+        return;
+      }
+      for (const row of rows) {
+        /* The point of the issue: the row of steps holds steps only. */
+        if (row.loopChips) failures.push(`${label}: ${row.pipeline} still draws ${row.loopChips} fail-edge chip(s) in the row`);
+        if (!row.chips.length) failures.push(`${label}: ${row.pipeline} drew no stage pill`);
+        for (const arc of row.arcs) {
+          if (arc.intoPills > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.intoPills} px into the row of pills`);
+          if (arc.pastCard > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastCard} px outside the card`);
+          if (arc.pastRow > 0.5) failures.push(`${label}: ${row.pipeline} ${arc.edge} paints ${arc.pastRow} px below the row, onto the line under it`);
+          if (!arc.title || arc.title.length < 12) failures.push(`${label}: ${row.pipeline} ${arc.edge} carries no sentence (${JSON.stringify(arc.title)})`);
+          /* The sentence is the only home of the budget at rest, so the arc has
+             to be something a pointer can be aimed at: every point ON the drawn
+             curve opens it, and so does a point beside it. */
+          if (arc.hit.samples < 8) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} put only ${arc.hit.samples} sample(s) on screen`);
+          } else {
+            /* Nothing drawn is dead: every point of the curve, and every point
+               beside it, opens an explanation. */
+            if (arc.hit.answered < arc.hit.samples) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.answered} of ${arc.hit.samples} points on the drawn arc explaining nothing`);
+            if (arc.hit.offAnswered < arc.hit.samples - 1) failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves ${arc.hit.samples - arc.hit.offAnswered} of ${arc.hit.samples} points beside the arc explaining nothing`);
+            /* And an arrow you can see is an arrow you can ask about: it owns
+               its own head and the clear majority of its own length. Where two
+               nested arcs converge into one pill the shallower one answers for
+               both, which is the only reading a reader could have given them. */
+            if (!arc.hit.ownsHead) failures.push(`${label}: ${row.pipeline} ${arc.edge} does not answer at its own arrowhead`);
+            if (!arc.hit.clearsPills) failures.push(`${label}: ${row.pipeline} ${arc.edge} reaches back up into the pill it leaves`);
+            if (arc.hit.onPath * 3 < arc.hit.samples * 2) failures.push(`${label}: ${row.pipeline} ${arc.edge} answers for only ${arc.hit.onPath} of its own ${arc.hit.samples} points`);
+          }
+          /* The halo is cut out of the ground the section paints, or every
+             count carries a blot of the card's colour on a tinted row. */
+          if (arc.count && arc.countHalo !== row.sectionSurface) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count with ${arc.countHalo} over a ${row.sectionSurface} ground`);
+          }
+          /* And it is wide enough to BE air. The counter sits on the arc, at
+             the digits' own vertical middle, so a halo that only reaches the
+             edge of the first and last digit leaves the arc drawn through the
+             count: 2 px of ground on both sides of the digits is the target,
+             against the thickest stroke any state of the arc draws. */
+          if (arc.count && (arc.countHaloWidth - ARC_INK) / 2 < 2) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count ${arc.countHaloWidth} px wide, which leaves ${(arc.countHaloWidth - ARC_INK) / 2} px of air beside the digits`);
+          }
+          /* The halo closes over a gap between two digits from both sides. A
+             gap wider than the whole halo keeps a speck of arc inside the
+             count, which is what blinks as the dashes pass. */
+          if (arc.count && arc.countInkGap !== null && arc.countInkGap > arc.countHaloWidth) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves a ${arc.countInkGap} px gap between digits that a ${arc.countHaloWidth} px halo cannot close`);
+          }
+          /* A live arc says where the work goes twice: with its arrowhead, and
+             with the way its dashes move. They have to say the same thing. The
+             curve runs from the head backwards, so the offset has to GROW. */
+          if (arc.live === "1" && arc.flow) {
+            const [start, middle, end] = arc.flow;
+            if (!(start! < middle! && middle! < end!)) {
+              failures.push(`${label}: ${row.pipeline} ${arc.edge} runs its dashes ${JSON.stringify(arc.flow)}, away from its own arrowhead`);
+            }
+          }
+          /* And the head is met by ink at every phase of that motion: the first
+             px of the curve are drawn solid under the dashes. */
+          if (arc.live === "1" && arc.dash !== "none") {
+            if (!arc.lead) failures.push(`${label}: ${row.pipeline} ${arc.edge} moves dashes over its arrowhead with nothing solid under it`);
+            else if (arc.lead.dash !== "none" || arc.lead.length < 5) {
+              failures.push(`${label}: ${row.pipeline} ${arc.edge} draws a ${arc.lead.length} px lead dashed ${arc.lead.dash}, which cannot hold the head`);
+            }
+          }
+        }
+        /* Two arcs into one pill nest; they never tangle and their tips never
+           touch — that is the point at which a reader stops being able to say
+           which count belongs to which arrow. */
+        for (const pair of row.pairs) {
+          if (pair.crosses) failures.push(`${label}: ${row.pipeline} ${pair.a} and ${pair.b} cross each other`);
+          if (pair.headGap < 1) failures.push(`${label}: ${row.pipeline} the tips of ${pair.a} and ${pair.b} are ${pair.headGap} px apart`);
+        }
+        /* Room for a counter is reserved only where a counter goes. */
+        if (row.arcs.length && row.arcs.every((arc) => !arc.count) && row.deadBelowArcs > 4) {
+          failures.push(`${label}: ${row.pipeline} rests and still reserves ${row.deadBelowArcs} px of empty band under its arc`);
+        }
+        if (row.mode === "arcs" && !row.arcs.length) failures.push(`${label}: ${row.pipeline} says it draws arcs and drew none`);
+        /* The band exists only for the arcs: a wrapped row reserves nothing. */
+        if (row.mode === "suffix" && row.band > 1) failures.push(`${label}: ${row.pipeline} wrapped to suffixes and still reserves ${row.band} px`);
+        if (row.mode === "suffix" && row.arcs.length) failures.push(`${label}: ${row.pipeline} wrapped and still drew ${row.arcs.length} arc(s)`);
+        /* Whatever the mode, a fired edge says its count somewhere in the row. */
+        const marks = [...row.arcs.map((arc) => [arc.state, arc.count] as const), ...row.suffixes.map((mark) => [mark.state, mark.text] as const)];
+        for (const [state, text] of marks) {
+          if (state === "rest" && text) failures.push(`${label}: ${row.pipeline} prints ${JSON.stringify(text)} for an edge that never fired`);
+          if (state !== "rest" && !text) failures.push(`${label}: ${row.pipeline} prints nothing for an edge in state ${state}`);
+        }
+      }
+      /* A lane with no fail edge reserves no band and draws no layer. */
+      const edgeless = plain.filter((row) => row.mode === null && row.chips.length);
+      if (!edgeless.length) failures.push(`${label}: the board drew no lane without a fail edge to compare against`);
+      for (const row of edgeless) {
+        if (row.band > 1) failures.push(`${label}: ${row.pipeline} has no fail edge and still reserves ${row.band} px under its row`);
+      }
+
+      const rest = by("p-arc-rest")!;
+      const fired = by("p-arc-fired")!;
+      const spent = by("p-arc-spent")!;
+      const parked = by("p-arc-parked")!;
+      const two = by("p-arc-two")!;
+      const edgeOf = (row: RowMeasure, edge: string) => row.arcs.find((arc) => arc.edge === edge) ?? null;
+      const markOf = (row: RowMeasure, edge: string) => row.suffixes.find((mark) => mark.edge === edge) ?? null;
+
+      /* At rest: no number anywhere in the row, and the budget in the title. */
+      const restEdge = edgeOf(rest, "review:fail:fix");
+      if (rest.mode === "arcs") {
+        if (restEdge?.state !== "rest") failures.push(`${label}: the untouched edge reads ${JSON.stringify(restEdge?.state)}`);
+        if (restEdge?.count) failures.push(`${label}: the untouched edge prints ${JSON.stringify(restEdge.count)}`);
+        if (!/3/.test(restEdge?.title ?? "")) failures.push(`${label}: the untouched edge's title does not carry its budget (${JSON.stringify(restEdge?.title)})`);
+      } else if (rest.suffixes.length) {
+        failures.push(`${label}: the wrapped lane at rest still marks a pill ${JSON.stringify(rest.suffixes)}`);
+      }
+
+      /* Fired once of three, with the returned stage running because of it. */
+      const firedEdge = edgeOf(fired, "review:fail:fix");
+      const firedMark = markOf(fired, "review:fail:fix");
+      if (fired.mode === "arcs") {
+        if (firedEdge?.state !== "fired") failures.push(`${label}: the edge that fired once reads ${JSON.stringify(firedEdge?.state)}`);
+        if (firedEdge?.count !== "1/3") failures.push(`${label}: the edge that fired once counts ${JSON.stringify(firedEdge?.count)}`);
+        if (firedEdge?.live !== "1") failures.push(`${label}: the edge carrying the running work is not the live one`);
+      } else if (!/1.*3/.test(firedMark?.text ?? "")) {
+        failures.push(`${label}: the wrapped fired lane marks its pill ${JSON.stringify(firedMark?.text)}`);
+      }
+
+      /* A spent budget: a different colour, never a lighter version of the same. */
+      const spentEdge = edgeOf(spent, "review:fail:fix");
+      const spentMark = markOf(spent, "review:fail:fix");
+      if (spent.mode === "arcs") {
+        if (spentEdge?.state !== "exhausted") failures.push(`${label}: the spent edge reads ${JSON.stringify(spentEdge?.state)}`);
+        if (spentEdge?.count !== "2/2") failures.push(`${label}: the spent edge counts ${JSON.stringify(spentEdge?.count)}`);
+        if (firedEdge && spentEdge && firedEdge.stroke === spentEdge.stroke) {
+          failures.push(`${label}: the spent arc is painted the same colour as the live one (${spentEdge.stroke})`);
+        }
+        /* Exhaustion is never the lighter drawing: the spent arc carries at
+           least the ink of the untouched one. The live arc is not the subject
+           — liveness has its own width wherever it appears. */
+        if (restEdge && spentEdge && Number.parseFloat(spentEdge.strokeWidth) < Number.parseFloat(restEdge.strokeWidth) - 0.01) {
+          failures.push(`${label}: the spent arc is thinner than the untouched one`);
+        }
+        if (restEdge && spentEdge && restEdge.stroke === spentEdge.stroke) {
+          failures.push(`${label}: the spent arc is painted the colour of an untouched one (${spentEdge.stroke})`);
+        }
+      } else if (spentMark?.state !== "exhausted") {
+        failures.push(`${label}: the wrapped spent lane marks its pill ${JSON.stringify(spentMark)}`);
+      }
+
+      /* A lane the spent budget already stopped: the same red arc, and a
+         sentence about what happened rather than about a failure that can no
+         longer happen. */
+      const parkedEdge = edgeOf(parked, "review:fail:fix");
+      const parkedMark = markOf(parked, "review:fail:fix");
+      if (parked.mode === "arcs") {
+        if (parkedEdge?.state !== "exhausted") failures.push(`${label}: the parked lane's edge reads ${JSON.stringify(parkedEdge?.state)}`);
+        if (parkedEdge && spentEdge && parkedEdge.title === spentEdge.title) {
+          failures.push(`${label}: a lane that parked on the edge says what a lane still running says (${JSON.stringify(parkedEdge.title)})`);
+        }
+      } else if (parkedMark?.state !== "exhausted") {
+        failures.push(`${label}: the wrapped parked lane marks its pill ${JSON.stringify(parkedMark)}`);
+      }
+
+      /* Two edges into one target: two arcs, two depths, no meeting. */
+      if (two.mode === "arcs") {
+        if (two.arcs.length !== 2) failures.push(`${label}: the two-edge lane drew ${two.arcs.length} arc(s)`);
+        const [first, second] = [...two.arcs].sort((a, b) => (a.box?.bottom ?? 0) - (b.box?.bottom ?? 0));
+        if (first?.box && second?.box) {
+          /* Both arcs end on the same pill — that IS the shape. What has to
+             differ is how deep each hangs and where each head lands, or the
+             two read as one arrow. */
+          if (second.box.bottom - first.box.bottom < 4) {
+            failures.push(`${label}: the two arcs hang at the same depth (${first.box.bottom} and ${second.box.bottom})`);
+          }
+          if (Math.abs(first.box.x - second.box.x) < 3) {
+            failures.push(`${label}: the two arrowheads land on the same point (${first.box.x} and ${second.box.x})`);
+          }
+        }
+        if (two.arcs.some((arc) => arc.count === null)) {
+          failures.push(`${label}: an edge of the two-edge lane prints no count ${JSON.stringify(two.arcs.map((arc) => [arc.edge, arc.count]))}`);
+        }
+      } else if (two.suffixes.length !== 2) {
+        failures.push(`${label}: the wrapped two-edge lane marks ${two.suffixes.length} pill(s)`);
+      }
+
+      /* The four-stage lane: the length a real lane usually has. It wraps in
+         every column this board has, which makes the suffix the ORDINARY
+         rendering rather than a narrow-column fallback, so the wide frames
+         have to show it and it has to carry every reading the arc carries. */
+      const long = by("p-arc-long")!;
+      const longMark = markOf(long, "verify:fail:implement");
+      if (long.mode !== "suffix") {
+        failures.push(`${label}: the four-stage lane reads ${JSON.stringify(long.mode)}; the suffix is what a row of that length draws`);
+      } else {
+        if (long.arcs.length) failures.push(`${label}: the four-stage lane wrapped and still drew ${long.arcs.length} arc(s)`);
+        if (longMark?.state !== "fired") failures.push(`${label}: the four-stage lane's mark reads ${JSON.stringify(longMark?.state)}`);
+        if (!/1.*3/.test(longMark?.text ?? "")) failures.push(`${label}: the four-stage lane marks its pill ${JSON.stringify(longMark?.text)}`);
+        /* A return in flight is not a return that is over. With no arc to make
+           live, the mark itself has to carry it. */
+        if (longMark?.live !== "1") failures.push(`${label}: the four-stage lane's return is in flight and its mark says ${JSON.stringify(longMark?.live)}`);
+        const settled = [parked, spent, fired, rest].flatMap((row) => row.suffixes).find((mark) => mark.live === "0");
+        if (settled && longMark && settled.ground === longMark.ground && settled.colour === longMark.colour) {
+          failures.push(`${label}: a return in flight is drawn exactly like one that is over (${longMark.colour} on ${longMark.ground})`);
+        }
+      }
+    };
+
+    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce" = "no-preference") => {
+      const label = `${width}-${lang}-${scheme}${motion === "reduce" ? "-still" : ""}`;
+      const opened = await openFixture(browser, base, { width, height }, scheme, lang, motion);
+      try {
+        await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+        await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await opened.page.waitForTimeout(500);
+        const rows = await readRows(opened.page, CARD);
+        const plain = await readRows(opened.page, PLAIN);
+        await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `card-${label}.png`) });
+        await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+        /* One label also keeps the live arc still at three points of a cycle.
+           Which way the dashes go, and whether the arrowhead is left standing
+           off its own line while they go there, are questions about a moving
+           drawing: a single frame of it answers neither. */
+        if (label === "1680-en-light") {
+          for (const at of [0, 175, 350]) {
+            await opened.page.evaluate((ms) => {
+              for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = ms; }
+            }, at);
+            await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `phase-${at}.png`) });
+          }
+          await opened.page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+        }
+        check(label, rows, plain);
+        frames[label] = { viewport: { width, height }, lang, scheme, motion, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    /* The phone is recorded, not gated: the kanban board does not mount there. */
+    const phone = async (scheme: Scheme) => {
+      const label = `390-en-${scheme}`;
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en");
+      try {
+        await opened.page.waitForTimeout(800);
+        await opened.page.screenshot({ path: path.join(OUT, `phone-${label}.png`), fullPage: true });
+        frames[label] = {
+          viewport: { width: 390, height: 844 },
+          board: await opened.page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none")),
+          collapsedRows: await opened.page.evaluate(() => document.querySelectorAll(".psummary").length),
+          arcLayers: await opened.page.evaluate(() => document.querySelectorAll("[data-arc-layer]").length),
+        };
+        if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          /* A wide board and the scroller, where the short rows are one line
+             and their arcs are drawn while the four-stage lane already wraps;
+             then 640 px, the narrowest desktop the board supports, where the
+             three-stage rows wrap too and hand their count to the failing pill
+             while the two-stage ones keep their arcs. */
+          /* Tall enough that the whole card is inside the frame at every
+             width: the arcs are read off the drawing, and a curve scrolled
+             past the bottom of the window is a curve nothing can be asked
+             about. */
+          await desktop(1680, 1150, scheme, lang);
+          await desktop(1280, 1250, scheme, lang);
+          /* Motion off is the arc's second rendering, and the one the counter's
+             halo has the least room against: the live arc is a solid 3 px line
+             there rather than dashes with gaps in it. */
+          if (lang === "en") await desktop(1440, 1250, scheme, lang, "reduce");
+          /* Tall enough that the whole card fits one frame: the wrapped row's
+             pill suffix is the only drawing of the edge there, and a frame
+             that clips it away shows nothing of what it replaced. */
+          await desktop(640, 1240, scheme, lang);
+        }
+        await phone(scheme);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    /* Both modes have to appear across the widths, or the evidence only shows
+       half the design — and the suffix has to appear at a WIDE one, because
+       that is where it is the ordinary rendering rather than the fallback. */
+    const modesOf = (frame: unknown) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode);
+    const modes = new Set(Object.values(frames).flatMap(modesOf));
+    for (const wanted of ["arcs", "suffix"]) {
+      if (!modes.has(wanted)) failures.push(`no width produced a row in ${wanted} mode; modes seen: ${[...modes].join(", ")}`);
+    }
+    const wide = Object.entries(frames).filter(([, frame]) => ((frame as { viewport?: { width: number } }).viewport?.width ?? 0) >= 1280);
+    if (!wide.some(([, frame]) => modesOf(frame).includes("suffix"))) {
+      failures.push("no wide frame drew a row in suffix mode, so the common case is not on record");
+    }
+    if (!wide.some(([, frame]) => modesOf(frame).includes("arcs"))) {
+      failures.push("no wide frame drew a row in arcs mode");
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
 });
