@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -15,7 +15,7 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
-import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2 } from "./icons";
+import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2, MoreHorizontal } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
@@ -198,15 +198,13 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
             </div>
           </>
         ) : (
+          /* Six unexplained things in 240px was the complaint (issue #1819).
+             The desktop header keeps the title, the control that puts the rail
+             away, and ONE menu; the counts are gone from here, because the
+             rows below carry their own marks and the board header already says
+             how many agents work and how many need the operator. */
           <>
-            <span>{t("rail.title")}</span>
-            {totalLive ? (
-              <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold tabular-nums text-muted">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
-                {totalLive}
-              </span>
-            ) : null}
-            {totalAttention ? <Badge tone="warning">⏸ {totalAttention}</Badge> : null}
+            <span className="min-w-0 flex-1 truncate">{t("rail.title")}</span>
             {onHide ? (
               <button
                 type="button"
@@ -219,9 +217,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                 <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
               </button>
             ) : null}
-            <LanguageToggle />
-            <AccessQrButton />
-            <PushBell />
+            <RailHeaderMenu />
           </>
         )}
       </header>
@@ -351,6 +347,82 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
       </nav>
       <RailFooter />
     </aside>
+  );
+}
+
+/**
+ * The desktop rail header's one overflow menu (issue #1819).
+ *
+ * `EN`, a QR square and a bell said nothing about themselves, so they move
+ * behind one button and each gets a line of text saying what it is and, where
+ * it has one, what state it is in. The controls themselves are the existing
+ * ones — LanguageToggle, AccessQrButton and PushBell keep their own behaviour;
+ * this only gives them labels and a place to live.
+ */
+function RailHeaderMenu() {
+  const { t, locale } = useLocale();
+  const [open, setOpen] = useState(false);
+  const [push, setPush] = useState({ supported: false, enabled: false });
+  const ref = useRef<HTMLDivElement | null>(null);
+  const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    /* pointerdown, like the QR popover's own dismissal: the QR panel opens
+       INSIDE this menu, so a click on it is a click inside and the menu stays. */
+    const onDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onDown);
+    };
+  }, [open]);
+  const pushLabel = !push.supported
+    ? t("rail.menuNotificationsUnavailable")
+    : push.enabled
+      ? t("rail.menuNotificationsOn")
+      : t("rail.menuNotificationsOff");
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        data-rail-menu=""
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title={t("rail.menu")}
+        aria-label={t("rail.menu")}
+        className="flex h-[26px] w-[26px] items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+      </button>
+      {open ? (
+        <div
+          data-rail-menu-panel=""
+          className="absolute right-0 top-[30px] z-40 w-[232px] rounded-[10px] border border-border bg-card p-1 shadow-2"
+        >
+          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
+            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
+              {t("rail.menuLanguage")}: {locale === "en" ? "English" : "Українська"}
+            </span>
+            <LanguageToggle />
+          </div>
+          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
+            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{t("rail.menuQr")}</span>
+            <AccessQrButton />
+          </div>
+          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
+            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
+            <PushBell onStatus={onPushStatus} />
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
