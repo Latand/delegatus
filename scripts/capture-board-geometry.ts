@@ -2020,14 +2020,6 @@ async function headerMain(): Promise<void> {
 /* The account removal dialog's answers (#1857, docs/design/ui-batch-2026-09 §5) */
 /* ------------------------------------------------------------------------- */
 
-/** A free port: bound on 0 here, read back, released for the server. */
-function freePort(): number {
-  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });
-  const port = probe.port!;
-  probe.stop(true);
-  return port;
-}
-
 interface RemovalReading {
   found: boolean;
   rect: Rect | null;
@@ -2095,7 +2087,7 @@ async function accountRemovalMain(): Promise<void> {
   const { tasks, reviewers } = seedHome();
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
-  const port = freePort();
+  const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
