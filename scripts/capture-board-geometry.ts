@@ -504,7 +504,407 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
 
 /* ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- */
+/* Case: the first-run setup guide (#1876, slice 1)                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * BOARD_CAPTURE_CASE=onboarding runs this case instead of the geometry probes:
+ *
+ *   bun run build && TMPDIR=/var/tmp CHROME_BIN=google-chrome-stable \
+ *     BOARD_CAPTURE_CASE=onboarding bun scripts/capture-board-geometry.ts
+ *
+ * One production server on a port the OS assigned, over a seeded home with one
+ * invented Claude transcript and a Claude credential file, and no Codex at all.
+ * Every combination of 1440×900, 1280×900 and 390×844, light and dark, English
+ * and Ukrainian starts from a first run and walks the slice's states: the guide
+ * opening by itself, one engine connected and one not installed, the mapping
+ * with the refusal banner and the very-heavy nudge, the move to Claude and its
+ * undo, Codex installed and signed out with the sign-in open, neither engine
+ * connected, the menu rows, the mapping opened alone, and a dismissal that
+ * keeps the guide shut on reload. Each capture is measured in the live DOM:
+ * the dialog inside the viewport, no horizontal overflow, no clipped role
+ * label (the two longest Ukrainian ones by name) or footer button, and 44 px
+ * targets on the phone.
+ */
+
+type OnboardingViewport = { width: number; height: number; tag: string; phone: boolean };
+
+const ONBOARDING_VIEWPORTS: readonly OnboardingViewport[] = [
+  { width: 1440, height: 900, tag: "desktop-1440", phone: false },
+  { width: 1280, height: 900, tag: "desktop-1280", phone: false },
+  { width: 390, height: 844, tag: "phone-390", phone: true },
+];
+
+const BIN_DIR = path.join(HOME, ".bun", "bin");
+const CLAUDE_CREDENTIALS = path.join(HOME, ".claude", ".credentials.json");
+const CODEX_CREDENTIALS = path.join(HOME, ".codex", "auth.json");
+
+function fakeCli(name: "claude" | "codex", present: boolean): void {
+  const file = path.join(BIN_DIR, name);
+  if (!present) { fs.rmSync(file, { force: true }); return; }
+  fs.writeFileSync(file, `#!/bin/sh\necho "${name} 0.0.0 (capture stub)"\n`, { mode: 0o755 });
+}
+
+function claudeSignedIn(present: boolean): void {
+  if (present) fs.writeFileSync(CLAUDE_CREDENTIALS, "{}\n", { mode: 0o600 });
+  else fs.rmSync(CLAUDE_CREDENTIALS, { force: true });
+}
+
+function codexSignedIn(present: boolean): void {
+  if (present) fs.writeFileSync(CODEX_CREDENTIALS, "{}\n", { mode: 0o600 });
+  else fs.rmSync(CODEX_CREDENTIALS, { force: true });
+}
+
+/* Quota readings the seeded home cannot produce without a live account: the
+   accounts read is answered by the server and each account gains a fresh
+   session and weekly window before the page sees it. */
+const SEEDED_LIMITS = {
+  state: "fresh",
+  session: { usedPercent: 41, resetsAt: "2100-01-02T15:00:00.000Z", windowMinutes: 300, observedAt: "2100-01-02T10:00:00.000Z" },
+  weekly: { usedPercent: 78, resetsAt: "2100-01-06T10:00:00.000Z", windowMinutes: 10_080, observedAt: "2100-01-02T10:00:00.000Z" },
+  checkedAt: "2100-01-02T10:00:00.000Z",
+};
+
+async function freePort(): Promise<number> {
+  const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const port = probe.port;
+  probe.stop(true);
+  return port;
+}
+
+/** Everything the case asserts is read here, in the page. */
+function measureOnboarding(phone: boolean) {
+  const rect = (el: Element) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const dialog = document.querySelector<HTMLElement>("[data-onboarding-dialog]");
+  if (!dialog) return null;
+  const scroller = Array.from(dialog.querySelectorAll<HTMLElement>("div")).find((el) => getComputedStyle(el).overflowY === "auto") ?? null;
+  const clipped = (el: HTMLElement) => el.scrollWidth > el.clientWidth + 1;
+  const roleLabels = Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] span[title]")).map((el) => ({ text: el.textContent ?? "", clipped: clipped(el), w: Math.round(el.getBoundingClientRect().width) }));
+  const footer = dialog.querySelector("footer");
+  const footerButtons = footer ? Array.from(footer.querySelectorAll<HTMLElement>("button")).map((el) => ({ text: el.textContent ?? "", clipped: clipped(el), inside: el.getBoundingClientRect().right <= footer.getBoundingClientRect().right + 0.5 })) : [];
+  const rows = Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row]"));
+  /* The chip's top against the role name's top: a card whose chip floats
+     between two lines reads well above zero. */
+  const chipOffsets = rows.map((row) => {
+    const chip = row.querySelector("[data-cost-class]");
+    const name = row.querySelector("span[title]");
+    return chip && name ? Math.round(chip.getBoundingClientRect().top - name.getBoundingClientRect().top) : 0;
+  });
+  const legend = dialog.querySelector("[data-mapping-legend]");
+  const segments = Array.from(dialog.querySelectorAll<HTMLElement>("[role=radiogroup]")).map((el) => {
+    const cell = el.parentElement!.getBoundingClientRect();
+    return { overflow: Math.round(el.getBoundingClientRect().right - cell.right) };
+  });
+  const smallTargets = phone
+    ? Array.from(dialog.querySelectorAll<HTMLElement>("button, select")).filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.height < 43.5;
+    }).map((el) => `${el.tagName.toLowerCase()} "${(el.textContent ?? el.getAttribute("aria-label") ?? "").trim().slice(0, 40)}" ${Math.round(el.getBoundingClientRect().height)}px`)
+    : [];
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    dialog: rect(dialog),
+    scroller: scroller ? { scrollWidth: scroller.scrollWidth, clientWidth: scroller.clientWidth } : null,
+    documentOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    roleLabels,
+    footerButtons,
+    segmentOverflow: Math.max(0, ...segments.map((segment) => segment.overflow)),
+    smallTargets,
+    engines: Object.fromEntries(Array.from(dialog.querySelectorAll<HTMLElement>("[data-onboarding-engine]")).map((el) => [el.dataset.onboardingEngine!, el.dataset.engineState!])),
+    blockedRows: dialog.querySelectorAll("[data-mapping-blocked]").length,
+    banner: dialog.querySelector("[data-mapping-banner]")?.textContent ?? null,
+    receipt: dialog.querySelector("[data-mapping-receipt]")?.textContent ?? null,
+    nudges: dialog.querySelectorAll("[data-mapping-nudge]").length,
+    costClasses: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row]")).map((row) => `${row.dataset.mappingRow}=${row.querySelector<HTMLElement>("[data-cost-class]")?.dataset.costClass}`),
+    heading: dialog.querySelector("h2")?.textContent ?? null,
+    /* Rows without a nudge line: the one-line rhythm the headroom must keep. */
+    plainRowHeights: rows.filter((row) => !row.querySelector("[data-mapping-nudge]")).map((row) => Math.round(row.getBoundingClientRect().height)),
+    chipOffsets,
+    headrooms: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-headroom]")).map((el) => ({ text: el.textContent ?? "", h: Math.round(el.getBoundingClientRect().height) })),
+    changedRows: dialog.querySelectorAll("[data-mapping-reset]").length,
+    legendFirst: legend && rows[0] ? legend.getBoundingClientRect().top < rows[0].getBoundingClientRect().top : false,
+    modelSelectWidths: Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] select")).filter((_, index) => index % 2 === 0).map((el) => Math.round(el.getBoundingClientRect().width)),
+    selectedSegmentRing: Array.from(dialog.querySelectorAll<HTMLElement>("[role=radio][aria-checked=true]")).slice(0, 1).map((el) => getComputedStyle(el).boxShadow)[0] ?? null,
+    enginesStepMark: dialog.querySelector<HTMLElement>('[data-onboarding-step="engines"] [data-step-mark]')?.dataset.stepMark ?? null,
+    signInHint: dialog.querySelector("[data-onboarding-sign-in-hint]")?.textContent ?? null,
+  };
+}
+
+async function captureOnboarding(): Promise<void> {
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  for (const dir of [REPO_DIR, OUT_DIR, BIN_DIR, path.join(HOME, ".claude"), path.join(BASE, "git-home"), path.join(BASE, "tmp", `claude-${process.getuid?.() ?? 1000}`), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
+  git(REPO_DIR, "init", "--initial-branch=main", ".");
+  fs.writeFileSync(path.join(REPO_DIR, "README.md"), "# harbor\n", "utf8");
+  git(REPO_DIR, "add", "README.md");
+  git(REPO_DIR, "commit", "-m", "harbor: first commit");
+  /* A transcript the user made before ever opening the Viewer: the guide must
+     still open, because transcripts are not Viewer state. */
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  fs.mkdirSync(folder, { recursive: true });
+  writeConversation(folder, `${"1".padStart(8, "0")}-1876-4000-8000-000000000000`, "Tidy the harbor README", "Done: the README now names the project.", false, "2100-01-02T10:00:05.000Z");
+
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim(), case: "onboarding" };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const resetInstall = async (codexInstalled: boolean) => {
+    fs.rmSync(path.join(STATE_DIR, "onboarding.json"), { force: true });
+    fs.rmSync(path.join(STATE_DIR, "role-presets.json"), { force: true });
+    claudeSignedIn(true);
+    /* Codex holds a credential while its command is missing: the card must
+       still read Not installed, and its roles stay blocked (#1876 P1). */
+    codexSignedIn(true);
+    fakeCli("claude", true);
+    fakeCli("codex", codexInstalled);
+    await fetch(`${baseUrl}/api/accounts/cli`);
+  };
+  try {
+    fakeCli("claude", true);
+    claudeSignedIn(true);
+    server = spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: repoRoot,
+      /* PATH without the operator's own bin directories: which CLI is
+         installed is decided by the stubs under the seeded home alone. */
+      env: { ...buildEnvironment(port), PATH: "/usr/bin:/bin" },
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const first = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: unknown };
+    must(first.marker === null, `a first run with only engine transcripts answered marker ${JSON.stringify(first.marker)}; the guide would not open`);
+    report.firstRunMarker = first.marker;
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+
+    for (const viewport of ONBOARDING_VIEWPORTS) {
+      for (const colorScheme of ["light", "dark"] as const) {
+        for (const locale of ["en", "uk"] as const) {
+          const tag = `${viewport.tag}-${colorScheme}-${locale}`;
+          const frames: Record<string, unknown> = {};
+          await resetInstall(false);
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme,
+            reducedMotion: "reduce",
+            ...(viewport.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+          });
+          await context.addInitScript((lang: string) => {
+            Object.defineProperty(globalThis, "EventSource", { configurable: true, value: undefined });
+            localStorage.clear();
+            sessionStorage.clear();
+            localStorage.setItem("llv_lang", lang);
+            localStorage.setItem("llvSound", "0");
+          }, locale);
+          const page = await context.newPage();
+          const shot = async (name: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
+            await page.waitForTimeout(350);
+            const reading = await page.evaluate(measureOnboarding, viewport.phone);
+            if (!reading) { must(false, `${tag} ${name}: the dialog is not on screen`); return; }
+            frames[name] = reading;
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-${name}.png`) });
+            const d = reading.dialog;
+            must(d.x >= 0 && d.y >= 0 && d.x + d.w <= reading.viewport.w && d.y + d.h <= reading.viewport.h, `${tag} ${name}: dialog ${JSON.stringify(d)} leaves the ${reading.viewport.w}×${reading.viewport.h} viewport`);
+            must(!reading.scroller || reading.scroller.scrollWidth <= reading.scroller.clientWidth + 1, `${tag} ${name}: the body overflows sideways (${reading.scroller?.scrollWidth} > ${reading.scroller?.clientWidth})`);
+            must(reading.documentOverflowX <= 0, `${tag} ${name}: the page scrolls sideways by ${reading.documentOverflowX}px`);
+            for (const label of reading.roleLabels) must(!label.clipped, `${tag} ${name}: role label "${label.text}" is clipped at ${label.w}px`);
+            for (const button of reading.footerButtons) must(!button.clipped && button.inside, `${tag} ${name}: footer button "${button.text}" is clipped or outside the footer`);
+            must(reading.segmentOverflow <= 0, `${tag} ${name}: an engine control overflows its cell by ${reading.segmentOverflow}px`);
+            must(reading.smallTargets.length === 0, `${tag} ${name}: targets under 44px: ${reading.smallTargets.join("; ")}`);
+            check(reading);
+          };
+
+          /* 1. First run: the guide opens by itself on the Engines step. */
+          await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+          await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="missing"]', { timeout: 60_000 });
+          await page.waitForSelector('[data-onboarding-engine="claude"][data-engine-state="connected"]', { timeout: 60_000 });
+          await shot("engines-one-connected", (r) => {
+            must(r.engines.claude === "connected" && r.engines.codex === "missing", `${tag}: with a Codex credential and no Codex command the engines read ${JSON.stringify(r.engines)}`);
+          });
+
+          /* 2. The mapping: five roles and one variant sit on Codex, which is not connected. */
+          await page.click("[data-onboarding-primary]");
+          await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
+          await page.click('[data-mapping-group="rare"] button[aria-expanded]');
+          await page.waitForSelector('[data-mapping-row="deployer"]');
+          await shot("agents-blocked", (r) => {
+            /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
+            must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
+            must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
+            must(r.legendFirst, `${tag}: the cost legend comes after the first row`);
+            must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
+            must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
+          });
+
+          /* 3. "Move them to Claude", then its receipt and every row changed. */
+          await page.click("[data-mapping-move]");
+          await page.waitForSelector("[data-mapping-receipt]", { timeout: 30_000 });
+          await shot("agents-moved", (r) => {
+            must(r.blockedRows === 0 && r.banner === null, `${tag}: after the move ${r.blockedRows} rows are still blocked`);
+          });
+          const moved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, { config?: { engine: string }; variants?: Record<string, { engine: string }> }> };
+          must(moved.overrides.reviewer?.config?.engine === "claude" && moved.overrides.builder?.variants?.["apply-fixes"]?.engine === "claude", `${tag}: the stored mapping after the move is ${JSON.stringify(moved.overrides)}`);
+          await page.click("[data-mapping-receipt] button");
+          await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
+          const undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
+          must(Object.keys(undone.overrides).length === 0, `${tag}: undo left ${JSON.stringify(undone.overrides)}`);
+
+          /* 3b. Both engines connected, with quota readings: the headroom sits
+             in the cost cell and the rows keep their rhythm. Then one changed
+             row, then its reset. */
+          fakeCli("codex", true);
+          await fetch(`${baseUrl}/api/accounts/cli`);
+          await page.route("**/api/accounts", async (route) => {
+            const response = await route.fetch();
+            const body = await response.json() as Record<string, { accounts?: Record<string, unknown>[] }>;
+            for (const engine of ["claude", "codex"]) for (const account of body[engine]?.accounts ?? []) account.limits = SEEDED_LIMITS;
+            await route.fulfill({ response, json: body });
+          });
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.waitForSelector("[data-mapping-headroom]", { timeout: 60_000 });
+          await page.click('[data-mapping-group="rare"] button[aria-expanded]');
+          await page.waitForSelector('[data-mapping-row="deployer"]');
+          await shot("agents-headroom", (r) => {
+            must(r.blockedRows === 0 && r.banner === null, `${tag}: both engines connected and ${r.blockedRows} rows still blocked`);
+            must(r.headrooms.length >= 7, `${tag}: ${r.headrooms.length} headroom lines with quota readings`);
+            for (const line of r.headrooms) must(line.h <= 17, `${tag}: headroom "${line.text}" wraps (${line.h}px)`);
+            if (!viewport.phone) {
+              const tallest = Math.max(...r.plainRowHeights);
+              must(tallest <= 52, `${tag}: a mapping row with a headroom line is ${tallest}px tall`);
+            }
+            must(Boolean(r.selectedSegmentRing && r.selectedSegmentRing !== "none"), `${tag}: the selected engine segment has no ring`);
+          });
+          await page.locator('[data-mapping-row="reviewer"] select').nth(1).selectOption("high");
+          await page.waitForSelector('[data-mapping-reset="reviewer"]');
+          await page.locator('[data-mapping-row="reviewer"]').scrollIntoViewIfNeeded();
+          await shot("agents-changed", (r) => {
+            must(r.changedRows === 1, `${tag}: ${r.changedRows} changed rows after one change`);
+            if (viewport.phone) for (const offset of r.chipOffsets) must(offset <= 6, `${tag}: a card's cost chip sits ${offset}px below its role name`);
+          });
+          await page.click('[data-mapping-reset="reviewer"]');
+          await page.waitForSelector('[data-mapping-reset="reviewer"]', { state: "detached" });
+          await page.unroute("**/api/accounts");
+          codexSignedIn(false);
+          fakeCli("codex", false);
+          await fetch(`${baseUrl}/api/accounts/cli`);
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.waitForSelector("[data-mapping-banner]", { timeout: 60_000 });
+
+          /* 4. Codex installed and signed out; its sign-in opens in place. */
+          fakeCli("codex", true);
+          if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
+          else await page.click('[data-onboarding-step="engines"]');
+          await page.click('[data-onboarding-engine="codex"] button');
+          await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
+          await page.click('[data-onboarding-sign-in="codex"]');
+          await page.waitForSelector('[data-onboarding-sign-in-body="codex"]');
+          await shot("engines-sign-in", (r) => {
+            must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
+            must(Boolean(r.signInHint), `${tag}: the open sign-in says nothing about which row continues`);
+          });
+
+          /* 5. Neither engine connected: both steps say so. A reload reopens
+             the unfinished guide by itself, on the step after the last done. */
+          claudeSignedIn(false);
+          fakeCli("codex", false);
+          await fetch(`${baseUrl}/api/accounts/cli`);
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
+          await shot("agents-neither", (r) => {
+            must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
+          });
+          if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
+          else await page.click('[data-onboarding-step="engines"]');
+          await page.waitForSelector("[data-onboarding-engines-note]");
+          await shot("engines-neither", (r) => {
+            must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
+          });
+          if (!viewport.phone) {
+            await page.click('[data-onboarding-step="agents"]');
+            await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
+            const mark = await page.$eval('[data-onboarding-step="engines"] [data-step-mark]', (el) => (el as HTMLElement).dataset.stepMark);
+            must(mark === "warn", `${tag}: with no engine the visited Engines step shows ${mark}, expected the warning mark`);
+          }
+          claudeSignedIn(true);
+
+          /* 6. Close, finish later: the marker says dismissed and a reload stays shut. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+          const marker = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { dismissedAt: string | null } | null };
+          must(Boolean(marker.marker?.dismissedAt), `${tag}: Escape did not record a dismissal`);
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(3_000);
+          must(await page.$("[data-onboarding-dialog]") === null, `${tag}: the dismissed guide reopened by itself`);
+
+          /* 7. The menu row opens the mapping alone. */
+          if (viewport.phone) {
+            await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
+            await page.click('[data-mobile2-open="menu"]');
+            await page.waitForSelector('[data-testid="menu-agent-mapping"]');
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
+            await page.click('[data-testid="menu-agent-mapping"]');
+          } else {
+            await page.click("[data-rail-menu]");
+            await page.waitForSelector("[data-rail-menu-agent-mapping]");
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
+            await page.click("[data-rail-menu-agent-mapping]");
+          }
+          await page.waitForSelector('[data-onboarding-dialog="mapping"] [data-mapping-row]', { timeout: 30_000 });
+          await shot("mapping-alone", (r) => {
+            must(r.heading === null && r.roleLabels.length >= 7, `${tag}: the mapping surface read heading=${r.heading}, ${r.roleLabels.length} rows`);
+            if (!viewport.phone) for (const width of r.modelSelectWidths) must(width <= 221, `${tag}: a model select stretches to ${width}px on the standalone mapping`);
+          });
+
+          /* 8. The guide from the menu, walked to its end: Open the board completes it. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+          if (viewport.phone) {
+            await page.click('[data-mobile2-open="menu"]');
+            await page.waitForSelector('[data-testid="menu-setup-guide"]');
+            await page.click('[data-testid="menu-setup-guide"]');
+          } else {
+            await page.click("[data-rail-menu]");
+            await page.waitForSelector("[data-rail-menu-setup-guide]");
+            await page.click("[data-rail-menu-setup-guide]");
+          }
+          await page.waitForSelector('[data-onboarding-dialog="guide"]');
+          /* The guide reopens on the first step not yet done; from Engines, Continue once. */
+          await page.waitForSelector("[data-onboarding-engine], [data-agent-mapping]");
+          if (await page.$("[data-onboarding-engine]") !== null) await page.click("[data-onboarding-primary]");
+          await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
+          await shot("finish", () => {});
+          await page.click("[data-onboarding-primary]");
+          await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
+          const finished = await (await fetch(`${baseUrl}/api/onboarding`)).json() as { marker: { completedAt: string | null } | null };
+          must(Boolean(finished.marker?.completedAt), `${tag}: Open the board did not record a completed guide`);
+
+          report[tag] = frames;
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "measurements.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`measurements: ${path.join(OUT_DIR, "measurements.json")}`);
+  console.log(`frames: ${OUT_DIR}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`onboarding acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
+  }
+}
+
 async function main(): Promise<void> {
+  if (process.env.BOARD_CAPTURE_CASE === "onboarding") {
+    await captureOnboarding();
+    return;
+  }
   const { tasks, reviewers } = seedHome();
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };

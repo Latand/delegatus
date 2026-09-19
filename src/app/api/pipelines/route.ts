@@ -11,6 +11,7 @@ import { selectPipelineListRecords } from "@/lib/pipelines/listProjection";
 import { loadArchivedPipelines } from "@/lib/pipelines/store";
 import type { PipelineValidationViolation } from "@/lib/pipelines/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
@@ -18,7 +19,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy";
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
+  details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before anything was admitted, so
       the caller may repeat the identical request without risking a duplicate. */
   retryable?: true;
@@ -126,10 +129,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     if (!result.pipeline) return NextResponse.json({
       error: result.error ?? "could not create pipeline",
       ...(result.code ? { code: result.code, field: result.field, path: result.path } : {}),
+      ...(result.details ? { details: result.details } : {}),
       ...(result.violations?.length ? { violations: result.violations } : {}),
     }, { status: result.status ?? 400 });
     if (result.pipeline.state !== "draft") requestPipelineTick();
-    return NextResponse.json({ ok: true, pipeline: result.pipeline }, { status: 201 });
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, ...(result.warnings?.length ? { warnings: result.warnings } : {}) }, { status: 201 });
   } catch (error) {
     /* #1766: the registry lock was never taken, so no pipeline was created.
        Say so, and say the same request may be repeated — a 500 leaves a caller
