@@ -137,6 +137,7 @@ import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, ty
 import { taskSeatHolding } from "@/lib/tasks/seatHolding";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
+import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -150,6 +151,7 @@ import {
   McpDispatchUncertainError,
   McpDispatchVerdictError,
   McpToolRefusal,
+  McpUnadmittedRefusal,
   type McpRecoverableTool,
   type McpRecoveryEvidence,
   type McpRequestBinding,
@@ -1374,6 +1376,28 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   return { taskId, task: result.task };
 }
 
+/**
+ * The pipeline mutations that share one idempotency receipt path (#1766).
+ *
+ * A registry lock that was never taken refused before anything was admitted:
+ * no pipeline row, no task assignment, nothing reserved downstream. That
+ * refusal is reported as unadmitted, so the receipt layer releases the claim
+ * and the caller's retry under the SAME clientRequestId runs the operation
+ * instead of replaying the refusal. Any other busy error keeps its ordinary
+ * meaning — releasing the lease raises the same message after the write has
+ * already committed, and such an answer must stay this request's answer.
+ */
+async function unadmittedOnStoreBusy<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof StoreBusyBeforeAdmissionError) {
+      throw new McpUnadmittedRefusal(error.message, { code: "store_busy" });
+    }
+    throw error;
+  }
+}
+
 async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const request = withoutKeys(args, ["clientRequestId"]);
   const result = await createPipelineFromRequest(request as CreatePipelineRequest);
@@ -1455,7 +1479,10 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
   const conversationId = member?.conversationId ?? pipeline.srcConversationId;
   if (!transcriptPath && !conversationId) throw new Error("pipeline has no conversation to link");
   const at = dependencies.isoNow();
-  const result = dependencies.mutateTasks((tasks) => {
+  /* The task lock is taken before the callback runs, so a busy refusal here
+     proves the assignment was never written (#1766). */
+  const result = await refuseBusyBeforeAdmission((admitted) => dependencies.mutateTasks((tasks) => {
+    admitted();
     const outcome = applyAssignmentPatches(tasks, taskId, [{
       path: transcriptPath,
       conversationId,
@@ -1465,7 +1492,7 @@ async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPip
       at,
     }], at);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
-  });
+  }));
   if (!result.ok) throw new Error(result.error);
   return { taskId, pipelineId, task: result.task, conversationId, transcriptPath };
 }
@@ -4494,10 +4521,10 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: createBoardTask,
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: createPipeline,
-    pipeline_action: (args) => pipelineAction(args, domainDependencies),
+    create_pipeline: (args) => unadmittedOnStoreBusy(() => createPipeline(args)),
+    pipeline_action: (args) => unadmittedOnStoreBusy(() => pipelineAction(args, domainDependencies)),
     stage_report: (args) => stageReport(args, domainDependencies),
-    link_task_to_pipeline: (args) => linkTaskToPipeline(args, linkTaskDependencies),
+    link_task_to_pipeline: (args) => unadmittedOnStoreBusy(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => listConversations(args, viewerControlForCall(controlDependencies, context)),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),

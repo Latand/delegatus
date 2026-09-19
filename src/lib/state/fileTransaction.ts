@@ -29,6 +29,51 @@ export class FileTransactionBusyError extends Error {
   }
 }
 
+/**
+ * A store lock refusal raised BEFORE the operation was admitted (#1766).
+ *
+ * The distinction is the whole point: an ordinary busy refusal says only that
+ * the lock was contended, and a writer that throws it can already have
+ * committed — releasing the lock raises the same message. This one is thrown
+ * only where the mutation body provably never ran, so nothing was read,
+ * written or reserved, and the caller may repeat the SAME logical request
+ * under the SAME idempotency key without risking a duplicate.
+ *
+ * Wrap a mutation with {@link refuseBusyBeforeAdmission} rather than
+ * constructing this from a bare busy error: only the code that can see whether
+ * the body ran may make the claim.
+ */
+export class StoreBusyBeforeAdmissionError extends FileTransactionBusyError {
+  /** The refusal the caller may retry under the same key. */
+  readonly retryable = true;
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "StoreBusyBeforeAdmissionError";
+    if (options && "cause" in options) this.cause = options.cause;
+  }
+}
+
+/**
+ * Run a store mutation and classify a busy refusal that arrived before the
+ * mutation body ran (#1766). `admitted` is called by the caller at the moment
+ * the body starts; a busy error after that keeps its ordinary meaning, because
+ * the write may have landed.
+ */
+export async function refuseBusyBeforeAdmission<T>(
+  run: (admitted: () => void) => Promise<T> | T,
+): Promise<T> {
+  let admitted = false;
+  try {
+    return await run(() => { admitted = true; });
+  } catch (error) {
+    if (!admitted && error instanceof FileTransactionBusyError && !(error instanceof StoreBusyBeforeAdmissionError)) {
+      throw new StoreBusyBeforeAdmissionError(error.message, { cause: error });
+    }
+    throw error;
+  }
+}
+
 function ownerIsStale(ownerPath: string): boolean {
   try {
     const previous = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };

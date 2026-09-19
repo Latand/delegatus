@@ -432,6 +432,29 @@ export class McpToolRefusal extends Error {
   }
 }
 
+/**
+ * A refusal that happened BEFORE the operation was admitted (#1766).
+ *
+ * The binding has proven that nothing was created, reserved or dispatched — a
+ * store lock that was never taken is the case this exists for. Such a refusal
+ * does not consume the `clientRequestId`: its claim is released instead of
+ * settled, so repeating the SAME logical call under the SAME key runs the
+ * operation again rather than replaying the refusal for ever. A refusal that
+ * IS meant to be remembered stays an ordinary `McpToolRefusal`, answers
+ * `retryable: false`, and keeps its receipt.
+ */
+export class McpUnadmittedRefusal extends McpToolRefusal {
+  constructor(message: string, details: McpToolPayload = {}) {
+    super(message, {
+      outcome: "not-executed",
+      evidence: "not-admitted",
+      nextAction: "retry-same-key",
+      ...details,
+    });
+    this.name = "McpUnadmittedRefusal";
+  }
+}
+
 export type McpToolResult = McpToolSuccess | McpToolFailure;
 
 /**
@@ -516,6 +539,12 @@ export type ReceiptClaim =
 export interface McpReceiptStore {
   claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim | Promise<ReceiptClaim>;
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
+  /** Drop an unsettled claim so its `clientRequestId` can be used again
+      (#1766). Only a claim this call still holds — same digest, no result
+      recorded — is released; anything already settled is left exactly as it
+      is. Optional so a minimal store keeps working: without it an unadmitted
+      refusal is settled as before rather than silently stranding a claim. */
+  release?(key: string, digest: string): boolean | Promise<boolean>;
 }
 
 /**
@@ -545,6 +574,12 @@ export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecover
     && typeof candidate.markDispatching === "function"
     && typeof candidate.fenceUndispatched === "function"
     && typeof candidate.settle === "function";
+}
+
+/** A claim whose tool was already dispatched is never released: absence would
+    then be read as "nothing ran", which is exactly what it is not (#1766). */
+function dispatchedReceipt(receipt: Receipt): boolean {
+  return receipt.stage === "dispatching";
 }
 
 function recordOf(receipt: Receipt): McpReceiptRecord {
@@ -599,6 +634,13 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
     const receipt = this.receipts.get(key);
     if (!receipt || receipt.digest !== digest) throw new Error("MCP receipt ownership changed");
     this.receipts.set(key, { ...receipt, digest, result, stage: "settled" });
+  }
+
+  release(key: string, digest: string): boolean {
+    const receipt = this.receipts.get(key);
+    if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+    this.receipts.delete(key);
+    return true;
   }
 
   lookup(key: string): McpReceiptRecord | null {
@@ -1359,6 +1401,18 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     });
   }
 
+  async release(key: string, digest: string): Promise<boolean> {
+    return withFileLock(this.filePath, () => {
+      const state = readReceiptFile(this.filePath);
+      const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
+      if (!receipt || receipt.digest !== digest || receipt.result || dispatchedReceipt(receipt)) return false;
+      delete state.mutationReceipts[key];
+      delete state.readReceipts[key];
+      writeReceiptFile(this.filePath, state);
+      return true;
+    });
+  }
+
   async lookup(key: string): Promise<McpReceiptRecord | null> {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
@@ -1518,6 +1572,26 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       `).run(effectiveRetention, resultJson, storageBytes, key);
       this.pruneBoundedReceipts(this.now());
       this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
+  }
+
+  release(key: string, digest: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const receipt = this.db.query<Pick<StoredSqliteReceipt, "digest" | "result_json" | "recovery_result_json" | "stage">, [string]>(`
+        SELECT digest, result_json, recovery_result_json, stage
+        FROM mcp_receipts
+        WHERE receipt_key = ?
+      `).get(key);
+      const releasable = Boolean(receipt) && receipt!.digest === digest
+        && receipt!.result_json === null && receipt!.recovery_result_json === null
+        && receipt!.stage !== "dispatching";
+      if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
+      this.db.exec("COMMIT");
+      return releasable;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
@@ -2607,6 +2681,7 @@ export function createMcpToolService(
           return replayed;
         }
         let settled: McpToolResult;
+        let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
           const payload = await bindings[typedTool](effectiveArgs, context);
@@ -2629,6 +2704,7 @@ export function createMcpToolService(
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
+          unadmitted = error instanceof McpUnadmittedRefusal;
           settled = failure(
             typedTool,
             requestId,
@@ -2660,6 +2736,20 @@ export function createMcpToolService(
            Every outcome that produced a real answer still writes, so idempotent
            replay of a completed call is untouched. */
         if (retention === "bounded" && (outcome === "deadline" || outcome === "cancelled")) return settled;
+        /* #1766: a refusal the binding proved happened before admission is not
+           this request's answer for ever. Nothing was created, reserved or
+           dispatched, so the claim is dropped rather than settled and the same
+           clientRequestId runs the operation again — which is what `retryable`
+           promised. A store that cannot release falls back to settling, the
+           behaviour every refusal had before. A release that finds the row
+           already settled (another process answered under this key) changes
+           nothing and this answer still stands for the caller. */
+        if (unadmitted && receipts.release) {
+          const releaseStartedAt = performance.now();
+          await receipts.release(key, digest);
+          phaseDurations.completion = performance.now() - releaseStartedAt;
+          return settled;
+        }
         const completionStartedAt = performance.now();
         await receipts.complete(key, digest, settled, retention);
         phaseDurations.completion = performance.now() - completionStartedAt;
@@ -2716,8 +2806,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`publication` defaults to internal: stages and reviews settle on the Viewer's own attempts, verdicts and exact local revisions, and nothing is pushed or read from GitHub while the pipeline runs. The one remote read is the time-bounded fetch of `origin/<baseBranch>` when a pipeline is created or started without `baseRef`; a pipeline pinned to `baseRef` never touches the network. Pass remote-branch only when the pipeline must publish its branch; reviews then launch and settle only on the published head.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
+    "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation.",
+  pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
@@ -2730,7 +2821,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A fenced JSON verdict in the final turn remains the second input of the same form; when both exist, this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
   ].join(" "),
-  link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline.",
+  link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Viewer conversations with durable ids and transcript paths.",
   search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns match snippets with speaker, timestamp, transcript path and byte offset. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",

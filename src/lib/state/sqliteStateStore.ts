@@ -824,9 +824,10 @@ export class SqliteStateCollection<T> {
     operation: (records: T[], persist: (records?: readonly T[]) => void) => Promise<R> | R,
     beforePersist?: (context: StateMutationContext<T>) => void,
     controllerOnly = false,
+    lockWaitMs?: number,
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
-    const lease = await this.acquireLease();
+    const lease = await this.acquireLease(lockWaitMs);
     try {
       const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
@@ -1266,12 +1267,18 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  private async acquireLease(): Promise<string> {
+  /** #1766: the wait for the lease is bounded in time, not only in attempts, so
+      a caller can give a request path a shorter cap than the default one and
+      know when the refusal will arrive. The refusal is the same either way:
+      nothing was read, written or reserved under the lease. */
+  private async acquireLease(waitMs?: number): Promise<string> {
     const db = connectDatabase(this.filename);
     const ownerToken = crypto.randomUUID();
+    const deadline = waitMs === undefined ? null : Date.now() + Math.max(0, waitMs);
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if (deadline !== null && Date.now() >= deadline) break;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
       }
       throw new FileTransactionBusyError(this.options.busyMessage);
