@@ -12,7 +12,7 @@ const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 type ViewerConversationId = import("@/lib/accounts/migration/contracts").ViewerConversationId;
 const { procBackend } = await import("@/lib/proc");
-const { AccountHistoryInventoryBlockedError, accountRemovalBlockers, cleanupAccountProviderSidecars, removeHistoryFreeAccountHome } = await import("./removal");
+const { AccountHistoryInventoryBlockedError, accountRemovalBlockers, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, removeHistoryFreeAccountHome, withAccountRemovalJournal } = await import("./removal");
 const { terminalizeStaleUndeliverableHeldDeliveries } = await import("@/lib/reaperRuntime");
 
 type Registry = InstanceType<typeof AgentRegistry>;
@@ -391,12 +391,44 @@ test("a live pid with unreadable start identity remains a deletion blocker", () 
   })).toEqual(["live_sessions", "current_conversations"]);
 });
 
-test("an undelivered held delivery keeps its conversation current", () => {
+test("an owed delivery on a conversation with no live host or receipt no longer blocks removal (issue #1857)", () => {
   const store = registry();
   const conversation = deadConversation(store, "/accounts/claude/work/projects/-repo/queued.jsonl", "work");
-  store.holdDelivery(conversation.id, "still queued");
+  const delivery = store.holdDelivery(conversation.id, "still queued");
+  expect(["held", "assigned"]).toContain(delivery.state);
 
-  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual(["current_conversations"]);
+  // Nothing can ever take this message: removal settles it instead of waiting for ever.
+  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
+});
+
+test("an owed delivery on a conversation with a live host still blocks removal", () => {
+  const store = registry();
+  const artifactPath = "/accounts/claude/work/projects/-repo/hosted.jsonl";
+  const conversation = deadConversation(store, artifactPath, "work");
+  store.holdDelivery(conversation.id, "queued behind a running turn");
+  store.upsert({
+    key: { engine: "claude", sessionId: "55555555-5555-5555-5555-555555555555" },
+    artifactPath,
+    cwd: "/repo", accountId: "work", status: "live", host: liveTmuxHost(),
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+
+  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toContain("current_conversations");
+});
+
+test("a failed-recoverable migration no longer counts as a current conversation (issue #1857)", () => {
+  const store = registry();
+  const conversation = deadConversation(store, "/accounts/claude/work/projects/-repo/parked.jsonl", "work");
+  store.setConversationMigration(conversation.id, {
+    intentId: "intent-parked",
+    phase: "failed-recoverable",
+    targetId: "default",
+    revision: 1,
+    error: "successor never verified",
+    updatedAt: new Date().toISOString(),
+  });
+
+  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
 });
 
 test("a delivered held delivery leaves its conversation removable", () => {
@@ -551,4 +583,17 @@ test("a committed migration leaves its conversation removable", () => {
   });
 
   expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
+});
+
+test("a retiring journal record keeps the path moves recovery redoes, and rejects malformed ones (issue #1857)", () => {
+  const moves = [{ from: "/accounts/work", to: "/shared/codex/retired/work" }];
+  const entries = withAccountRemovalJournal([], "work", "retiring", moves);
+  const valid = (id: string) => id === "work";
+
+  expect(normalizeAccountRemovalJournal(JSON.parse(JSON.stringify(entries)), valid)).toEqual([
+    { id: "work", phase: "retiring", startedAt: entries[0]!.startedAt, rewrites: moves },
+  ]);
+  expect(withAccountRemovalJournal(entries, "work", "scrubbing")).toEqual([{ id: "work", phase: "scrubbing", startedAt: entries[0]!.startedAt }]);
+  expect(normalizeAccountRemovalJournal([{ ...entries[0], rewrites: [{ from: "relative", to: "/shared" }] }], valid)).toBeNull();
+  expect(normalizeAccountRemovalJournal([{ ...entries[0], rewrites: "nope" }], valid)).toBeNull();
 });

@@ -796,11 +796,70 @@ describe("agent registry", () => {
 
     expect(() => store.retireAccount("codex", "work", "default", { now: () => Date.now() + 86_400_000 })).not.toThrow();
 
-    const live = store.ensureConversation("codex", "/sessions/live.jsonl", "work");
-    store.holdDelivery(live.id, "still owed to this conversation");
+    store.ensureConversation("codex", "/sessions/live.jsonl", "work");
+    store.upsert({ ...spawnEntry("/sessions/live.jsonl", "work"), status: "live", host: null });
 
-    expect(() => store.retireAccount("codex", "work", "default", { now: () => Date.now() + 86_400_000 }))
-      .toThrow("account has current conversations");
+    expect(() => store.retireAccount("codex", "work", "default"))
+      .toThrow("account has live sessions");
+  });
+
+  test("account retirement moves every path under the removed home and settles what can never run (#1857)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-retire-"));
+    const filename = path.join(dir, "agent-registry.json");
+    const open = () => withLegacySpawnFixtureTitles(new AgentRegistry(filename, () => true, undefined, { sqliteMode: "off" }));
+    const home = "/cfg/accounts/codex/work";
+    const archive = "/cfg/shared/codex/retired/work";
+    let store = open();
+    const onAccount = store.ensureConversation("codex", `${home}/sessions/a.jsonl`, "work");
+    const other = store.ensureConversation("codex", "/elsewhere/sessions/b.jsonl", "other");
+    store.upsert({ ...spawnEntry(`${home}/sessions/a.jsonl`, "work"), status: "unhosted", host: null });
+    store.upsert({ ...spawnEntry("/elsewhere/sessions/b.jsonl", "other"), key: { engine: "codex", sessionId: "other-session" }, status: "unhosted", host: null });
+    const owed = store.holdDelivery(onAccount.id, "owed on the removed account");
+    const kept = store.holdDelivery(other.id, "owed on another account");
+    store.setConversationMigration(onAccount.id, {
+      intentId: "intent-parked",
+      phase: "failed-recoverable",
+      targetId: "default",
+      revision: 1,
+      error: "successor never verified",
+      updatedAt: new Date().toISOString(),
+    });
+    const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
+    Object.assign(raw.conversations[onAccount.id], {
+      continuityPaths: [`${home}/sessions/a-continuity.jsonl`, `${home}/sessions/a-fork.jsonl`],
+      abandonedContinuityPaths: [`${home}/sessions/a-abandoned.jsonl`],
+      providerForkPaths: [`${home}/sessions/a-fork.jsonl`],
+      pinnedAccountId: "work",
+    });
+    raw.conversations[onAccount.id].migration.pendingContinuityPaths = [`${home}/sessions/a-pending.jsonl`];
+    raw.conversations[other.id].pinnedAccountId = "other";
+    fs.writeFileSync(filename, JSON.stringify(raw));
+    store = open();
+
+    const report = store.retireAccount("codex", "work", "default", { now: () => Date.now() + 86_400_000 }, {
+      rewrite: [{ from: home, to: archive }],
+    });
+
+    expect(report).toEqual({ conversationsRewritten: 1, pinsCleared: 1, deliveriesDropped: 1, migrationsSettled: 1 });
+    const after = store.snapshot();
+    const moved = after.conversations[onAccount.id]!;
+    expect(moved.generations.map((generation) => generation.path)).toEqual([`${archive}/sessions/a.jsonl`]);
+    expect(moved.continuityPaths).toEqual([`${archive}/sessions/a-continuity.jsonl`, `${archive}/sessions/a-fork.jsonl`]);
+    expect(moved.providerForkPaths).toEqual([`${archive}/sessions/a-fork.jsonl`]);
+    expect(moved.abandonedContinuityPaths).toEqual(expect.arrayContaining([
+      `${archive}/sessions/a-abandoned.jsonl`,
+      `${archive}/sessions/a-pending.jsonl`,
+    ]));
+    expect(moved.pinnedAccountId).toBeNull();
+    expect(moved.migration).toBeNull();
+    expect(Object.values(after.entries).find((entry) => entry.accountId === "work")?.artifactPath).toBe(`${archive}/sessions/a.jsonl`);
+    expect(after.heldDeliveries[owed.id]).toMatchObject({ state: "failed", error: expect.stringContaining("account was removed") });
+    // A conversation on another account is untouched.
+    const untouched = after.conversations[other.id]!;
+    expect(untouched.generations[0]!.path).toBe("/elsewhere/sessions/b.jsonl");
+    expect(untouched.pinnedAccountId).toBe("other");
+    expect(after.heldDeliveries[kept.id]!.state).not.toBe("failed");
+    expect(Object.values(after.entries).find((entry) => entry.accountId === "other")?.artifactPath).toBe("/elsewhere/sessions/b.jsonl");
   });
 
   test("account-retirement compensation preserves unrelated concurrent mutations", () => {
