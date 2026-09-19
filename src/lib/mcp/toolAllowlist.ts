@@ -185,7 +185,10 @@ export function permitAttentionHandoff(
   return {
     allowed: false,
     refusedAs: "cross-project",
-    error: "this orchestrator seat is designated for a different project than the target; re-designate or target your own project",
+    /* Both keys, so a refusal is diagnosable from its own text (#1874): the
+       one report that motivated this was a seat under a plain name and a
+       target under its repository identity. */
+    error: `this orchestrator seat is designated for ${[...new Set(held.map((seat) => seat.project))].join(", ")}, and the target belongs to ${targetProject}; re-designate or target your own project`,
   };
 }
 
