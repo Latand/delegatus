@@ -559,6 +559,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
         since: conversation.switchHold.at,
       };
     }
+    if (conversation.reconfigure?.status === "applying" && latest?.path === file.path) {
+      file.switchApplying = { operationId: conversation.reconfigure.operationId };
+    }
     if (conversation.migration && conversation.migration.phase !== "committed") {
       const intent = registrySnapshot.migrationIntents[conversation.migration.intentId];
       const source = conversation.generations.at(-1);

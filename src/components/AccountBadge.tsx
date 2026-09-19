@@ -103,7 +103,7 @@ export function AccountBadge({
   const { next } = useIntendedAccount(key, accountId, runtimeSession?.pendingReconfigure?.accountId);
   const moving = Boolean(file) && next !== accountId;
   /* A pick a message already engaged is moving the conversation: too late to take back (#1846 review). */
-  const switching = moving && pickApplying(runtimeSession);
+  const switching = moving && pickApplying(runtimeSession, file);
   const tint = accountTint(accountId);
   const health = healthOf(accounts.accounts.find((account) => account.id === accountId));
   /* The pick is named by the labels the menu rows use, as every other account surface names it (#1846). */

@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import type { RuntimeSession } from "@/lib/runtime/contracts";
+import type { FileEntry } from "@/lib/types";
 
 /*
  * #1846: the account an operator just picked for a conversation, shared by
@@ -64,10 +65,16 @@ export function useIntendedAccount(key: string, runsOn: string, projected: strin
  * The pick the runtime session projects has been engaged by a message and is moving the conversation now.
  * It can no longer be taken back from an account surface, so none of them offers «cancel switch» for it; the
  * reconfigure route refuses that too (the board cancels a claimed switch through the migration, #1705).
+ * The registry's claim counts as well as the receipt: a move waiting on its migration puts the receipt back
+ * to `queued` while the claim still holds it.
  */
-export function pickApplying(session: Pick<RuntimeSession, "pendingReconfigure" | "recentReceipts"> | null | undefined): boolean {
+export function pickApplying(
+  session: Pick<RuntimeSession, "pendingReconfigure" | "recentReceipts"> | null | undefined,
+  file?: Pick<FileEntry, "switchApplying"> | null,
+): boolean {
   const pending = session?.pendingReconfigure;
   if (!pending?.accountId) return false;
+  if (file?.switchApplying?.operationId === pending.operationId) return true;
   return (session?.recentReceipts ?? []).some((receipt) => receipt.operationId === pending.operationId && receipt.status === "applying");
 }
 

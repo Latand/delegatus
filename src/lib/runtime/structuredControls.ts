@@ -106,6 +106,12 @@ async function waitingSwitch(
       afterEventSeq = next;
     }
     if (!latest || registry.reconfigureCancelled(conversationId, latest.operationId)) return null;
+    /* The registry's claim outlives the receipt's phase: a move that returned `pending` puts its receipt back
+       to `queued` while the claim still holds it applying, so the claim decides first. */
+    const claim = registry.conversation(conversationId)?.reconfigure;
+    if (claim?.operationId === latest.operationId && claim.status === "applying") {
+      return { operationId: latest.operationId, accountId: latest.accountId, phase: "applying" };
+    }
     const status = (await client.operationStatus(latest.operationId))?.receipt.status;
     if (status === "queued" || status === "pending") return { operationId: latest.operationId, accountId: latest.accountId, phase: "waiting" };
     return status === "applying" ? { operationId: latest.operationId, accountId: latest.accountId, phase: "applying" } : null;
@@ -269,18 +275,19 @@ export async function dispatchStructuredControl(
       const named = reconfiguration.value.accountId;
       const unsettled = await waitingSwitch(client, registry, conversation.id);
       const waiting = unsettled?.phase === "waiting" ? unsettled : null;
+      /* A message already engaged the pick and the conversation is moving: taking it back here would answer
+         success while the move carries on. Too late for this route; a claimed switch is cancelled through
+         the conversation migration (#1705). */
+      const switchApplying = (pick: { operationId: string; accountId: string }): StructuredControlResult => ({
+        status: 409,
+        body: {
+          error: `the switch to ${pick.accountId} is already applying and can no longer be taken back here`,
+          code: "switch-applying",
+          applying: pick.operationId,
+        },
+      });
       if (named !== undefined && named === generation.accountId && unsettled?.phase === "applying") {
-        /* A message already engaged the pick and the conversation is moving: taking it back here would answer
-           success while the move carries on. Too late for this route; a claimed switch is cancelled through
-           the conversation migration (#1705). */
-        return {
-          status: 409,
-          body: {
-            error: `the switch to ${unsettled.accountId} is already applying and can no longer be taken back here`,
-            code: "switch-applying",
-            applying: unsettled.operationId,
-          },
-        };
+        return switchApplying(unsettled);
       }
       if (named !== undefined && named === generation.accountId) {
         /* Naming the account it runs on moves nothing (#1279), so it is no switch at all: it withdraws the
@@ -290,6 +297,9 @@ export async function dispatchStructuredControl(
         if (conversation.switchHold) registry.releaseSwitchHold(conversation.id);
         if (waiting) {
           const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
+          /* The claim won the race with this withdrawal: the move is under way, and a profile-only reconfigure
+             in its place would supersede it while answering success. */
+          if (withdrawal.kind === "claimed") return switchApplying(waiting);
           if ((withdrawal.kind === "withdrawn" || withdrawal.kind === "replayed")
             && sameProfile(profileOnly, generation.launchProfile)) {
             (dependencies.kick ?? kickStructuredDeliveryQueue)();

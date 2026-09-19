@@ -1155,6 +1155,45 @@ test("naming the account it runs on once the pick is applying is refused, and th
   journal.close();
 });
 
+test("naming the account it runs on is refused while the claim holds a move whose receipt went back to queued", async () => {
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient("b-claimed-queued");
+  const profile = { model: "gpt-5.6-sol", effort: "high", fast: true };
+  await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" });
+  /* A message engaged the pick and the registry claimed it; the move answered `pending` because its migration
+     has not committed, so the queue put the receipt back to `queued` while the claim still holds it applying. */
+  fixture.registry.claimConversationReconfigure(fixture.id, { operationId: "pick-b", revision: 1, accountId: "codex-b", profile });
+  journal.transitionOperation("pick-b", "applying");
+  journal.transitionOperation("pick-b", "queued", { reason: "turn-boundary" });
+
+  const back = await pickAccount(fixture, client, "pick-a", { ...profile, accountId: "codex-subscription" });
+  expect(back).toMatchObject({ status: 409, body: { code: "switch-applying", applying: "pick-b" } });
+  expect(commands.map((command) => command.operationId)).toEqual(["pick-b"]);
+  expect(fixture.registry.conversation(fixture.id)?.reconfigure).toMatchObject({ operationId: "pick-b", status: "applying" });
+  expect(fixture.registry.reconfigureCancelled(fixture.id, "pick-b")).toBe(false);
+  journal.close();
+});
+
+test("a claim that lands between the status read and the withdrawal is refused, never superseded", async () => {
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient("b-claim-race");
+  const profile = { model: "gpt-5.6-sol", effort: "high", fast: true };
+  await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" });
+  const readStatus = client.operationStatus.bind(client);
+  /* The queue claims the pick right after the route has read it as waiting. */
+  client.operationStatus = async (operationId: string) => {
+    const status = await readStatus(operationId);
+    fixture.registry.claimConversationReconfigure(fixture.id, { operationId: "pick-b", revision: 1, accountId: "codex-b", profile });
+    return status;
+  };
+
+  const back = await pickAccount(fixture, client, "pick-a", { ...profile, accountId: "codex-subscription" });
+  expect(back).toMatchObject({ status: 409, body: { code: "switch-applying", applying: "pick-b" } });
+  expect(commands.map((command) => command.operationId)).toEqual(["pick-b"]);
+  expect(fixture.registry.conversation(fixture.id)?.reconfigure).toMatchObject({ operationId: "pick-b", status: "applying" });
+  journal.close();
+});
+
 test("a settings change made while a pick waits keeps the picked account", async () => {
   const fixture = profiledConversation();
   const { journal, client, commands } = journalClient("carry-forward");

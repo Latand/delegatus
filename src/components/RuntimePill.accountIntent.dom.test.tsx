@@ -378,6 +378,23 @@ test("a pick a message already engaged offers no cancel on the sheet, and a tap 
   await act(async () => root.unmount());
 });
 
+/* #1846 review: the move waits on its migration, so the receipt went back to `queued`; the registry's claim
+   still holds it, and the files response projects that claim. */
+test("a claimed pick whose receipt went back to queued still offers no cancel on the sheet", async () => {
+  const queuedAgain: RuntimeSession = {
+    ...applyingSession(),
+    recentReceipts: [{ ...applyingSession().recentReceipts[0]!, status: "queued", reason: "turn-boundary" }],
+  };
+  const claimed: FileEntry = { ...file, switchApplying: { operationId: "pick-op" } };
+  const { root } = await openSheet(<RuntimePill file={claimed} surface="structured" runtimeSession={queuedAgain} />);
+  expect(row("acct-a").querySelector("[data-runtime-account-cancel]")).toBeNull();
+  expect(row("acct-a").querySelector("[data-runtime-account-switching]")!.textContent).toBe("switching now");
+  expect(row("acct-a").disabled).toBe(true);
+  act(() => { row("acct-a").click(); });
+  expect(calls.filter((call) => call.url === "/api/tmux")).toEqual([]);
+  await act(async () => root.unmount());
+});
+
 test("a pick a message already engaged offers no cancel in the desktop popover's Account panel", async () => {
   mobile = false;
   const { host, root } = await mount(<RuntimePill file={file} surface="structured" runtimeSession={applyingSession()} />);

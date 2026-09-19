@@ -188,7 +188,7 @@ export function RuntimePill({
   const nameOf = useAccountName(engine ?? "claude");
   const moving = nextAccount !== runsOnAccount;
   /* A pick a message already engaged is moving the conversation: too late to take back (#1846 review). */
-  const switchApplying = pillSurface === "structured" && pickApplying(runtimeSession);
+  const switchApplying = pillSurface === "structured" && pickApplying(runtimeSession, file);
 
   /* eslint-disable react-hooks/set-state-in-effect -- reloading the persisted
      draft/phase from localStorage when the conversation identity changes is a
