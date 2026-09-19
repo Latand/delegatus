@@ -82,6 +82,8 @@ export const en = {
   "rail.projects": "Projects",
   "rail.overview": "Overview",
   "rail.archive": "Archive",
+  "rail.hide": "Hide the project sidebar (B)",
+  "rail.show": "Show the project sidebar (B)",
   "rail.footerLabel": "System",
   "rail.footerHide": "Hide the system footer",
   "rail.footerShow": "Show the system footer",

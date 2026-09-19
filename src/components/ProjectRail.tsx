@@ -15,7 +15,7 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
-import { Archive, ChevronRight, Crown, FolderPlus, Loader2 } from "./icons";
+import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2 } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
@@ -53,6 +53,9 @@ interface Props {
   /** Attention clock owned by Viewer — advances when a stalled entry crosses
       its TTL, so the rail badges expire together with the queue. */
   now: number;
+  /** Desktop only: puts the whole rail away (issue #1819). The phone reaches
+      the rail through its drawer, which already has a way out. */
+  onHide?: () => void;
   onSelect: (project: string) => void;
   onToggleCrown?: (project: string, crowned: boolean) => void;
   onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
@@ -60,7 +63,7 @@ interface Props {
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, onSelect, onToggleCrown, onCreateProject }: Props) {
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, onHide, onSelect, onToggleCrown, onCreateProject }: Props) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
@@ -204,6 +207,18 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
               </span>
             ) : null}
             {totalAttention ? <Badge tone="warning">⏸ {totalAttention}</Badge> : null}
+            {onHide ? (
+              <button
+                type="button"
+                data-rail-hide=""
+                className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                title={t("rail.hide")}
+                aria-label={t("rail.hide")}
+                onClick={onHide}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            ) : null}
             <LanguageToggle />
             <AccessQrButton />
             <PushBell />
@@ -338,6 +353,14 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     </aside>
   );
 }
+
+/**
+ * Where this browser remembers whether the WHOLE rail is put away (issue
+ * #1819). The Viewer owns the state, because it is the Viewer that must not
+ * mount the rail at all while it is hidden; the key lives here beside the
+ * footer's so the two rail choices are read from one place.
+ */
+export const RAIL_HIDDEN_STORAGE_KEY = "llv:rail-hidden:v1";
 
 /** Where this browser remembers whether the rail's footer is folded away. */
 export const RAIL_FOOTER_STORAGE_KEY = "llv:rail-footer:v1";

@@ -77,6 +77,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "rail.projects": "Проєкти",
   "rail.overview": "Огляд",
   "rail.archive": "Архів",
+  "rail.hide": "Сховати бічну панель проєктів (B)",
+  "rail.show": "Показати бічну панель проєктів (B)",
   "rail.footerLabel": "Система",
   "rail.footerHide": "Сховати системний підвал",
   "rail.footerShow": "Показати системний підвал",
