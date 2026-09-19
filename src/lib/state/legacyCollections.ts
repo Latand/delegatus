@@ -21,6 +21,11 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/tasks/store")).importLegacyTasks(statePath("tasks.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/tasks/store")).checkpointTaskRollbackMirrorForDemotion(statePath("tasks.json")),
   },
+  {
+    collection: "board",
+    importAtActivation: async () => (await import("@/lib/board/store")).importLegacyBoard(statePath("board.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/board/store")).checkpointBoardRollbackMirrorForDemotion(statePath("board.json")),
+  },
 ];
 
 /** Import (or finish importing, or reconcile) every moved store. One store's

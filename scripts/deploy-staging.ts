@@ -60,7 +60,7 @@ export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
   "viewer-release.json",
   "agent-registry.sqlite",
   "runtime-events.sqlite",
-  "board.json",
+  "state.sqlite",
   "pipelines.json",
   "flows.json",
 ]);

@@ -1,10 +1,21 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { procBackend } from "@/lib/proc";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import {
+  importLegacyCollection,
+  lazyReconcileAllowed,
+  legacyBaselineRevision,
+  legacyDatabasePath,
+  legacyImportAllowed,
+  writeLegacyRollbackMirror,
+  type LegacyCollectionSpec,
+  type LegacyImportHooks,
+  type LegacyImportOutcome,
+  type LegacyReconcileSummary,
+} from "@/lib/state/legacyImport";
+import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
 import { type BoardCausalHistory, canonicalizeKeyRevisions, stampKeyRevisions } from "@/lib/board/keys";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
@@ -13,13 +24,10 @@ import type { BoardFileV1, BoardProjectStateV1 } from "@/lib/view/types";
 
 export const BOARD_FILE = statePath("board.json");
 const EMPTY_PREFS: BoardProjectStateV1["prefs"] = { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], seenAt: {}, idleCollapseMinutes: DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES, viewMode: null, taskPanelOpen: false };
-const BOARD_LOCK_ATTEMPTS = 1_000;
-const BOARD_LOCK_WAIT_MS = 5;
-const BOARD_LOCK_STALE_MS = 30_000;
 let boardFileForTests: string | null = null;
 
 export class BoardStoreError extends Error {
-  constructor(message = "board state unavailable") { super(message); }
+  constructor(message = "board state unavailable", options?: ErrorOptions) { super(message, options); }
 }
 
 export function setBoardFileForTests(filePath: string | null): void {
@@ -102,143 +110,316 @@ function sameCausalHistory(left: BoardProjectStateV1, right: BoardProjectStateV1
     === JSON.stringify({ keys: right.keyRevisions ?? {}, floor: right.keyRevisionFloor ?? 0 });
 }
 
-function read(filePath: string): BoardFileV1 {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<BoardFileV1>;
-    if (!parsed || typeof parsed.projects !== "object" || parsed.projects === null || Array.isArray(parsed.projects)) throw new BoardStoreError("invalid board state");
-    if (!Object.values(parsed.projects).every(projectState)) throw new BoardStoreError("invalid board project state");
-    return { projects: Object.fromEntries(Object.entries(parsed.projects).map(([project, state]) => [project, {
-      ...state,
-      pathAliases: state.pathAliases ?? {},
-      explicitManual: state.explicitManual ?? state.prefs.manual,
-      /* A board written before per-key causal revisions existed reads back with
-         an empty map: every key then looks never-written, which is exactly right
-         — no client can hold intent that predates a revision nobody recorded. */
-      /* Canonicalized on read: an alias source must never keep a clock of its
-         own, or two names for one conversation carry independent causal history
-         and a stale writer holding the old name looks unopposed. */
-      keyRevisions: canonicalizeKeyRevisions(state.keyRevisions ?? {}, state.pathAliases ?? {}),
-      keyRevisionFloor: state.keyRevisionFloor ?? 0,
-      /* Boards written before favorites / tray intent existed lack the fields;
-         default them so every GET response and reducer input carries the
-         durable-id lists (issue #185 favorites, issue #142 tray pins). */
-      prefs: {
-        ...state.prefs,
-        favorites: state.prefs.favorites ?? [],
-        foldedEngineChildIds: state.prefs.foldedEngineChildIds ?? [],
-        expandedEngineTrayParentIds: state.prefs.expandedEngineTrayParentIds ?? [],
-        seenAt: state.prefs.seenAt ?? {},
-        idleCollapseMinutes: state.prefs.idleCollapseMinutes === undefined
-          ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES
-          : state.prefs.idleCollapseMinutes,
-      },
-    }])) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { projects: {} };
-    if (error instanceof BoardStoreError) throw error;
-    throw new BoardStoreError();
-  }
-}
-function write(value: BoardFileV1, filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  let descriptor: number | null = null;
-  try {
-    descriptor = fs.openSync(temp, "wx", 0o600);
-    fs.writeFileSync(descriptor, JSON.stringify(value, null, 2) + "\n", "utf8");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = null;
-    fs.renameSync(temp, filePath);
-    const directory = fs.openSync(path.dirname(filePath), "r");
-    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-  } finally {
-    if (descriptor !== null) fs.closeSync(descriptor);
-    fs.rmSync(temp, { force: true });
-  }
+/** One stored project state as the board hands it out: fields later builds
+    added default here, and the causal map collapses onto its alias classes. */
+function normalizedProject(state: BoardProjectStateV1): BoardProjectStateV1 {
+  return {
+    ...state,
+    pathAliases: state.pathAliases ?? {},
+    explicitManual: state.explicitManual ?? state.prefs.manual,
+    /* A board written before per-key causal revisions existed reads back with
+       an empty map: every key then looks never-written, which is exactly right
+       — no client can hold intent that predates a revision nobody recorded. */
+    /* Canonicalized on read: an alias source must never keep a clock of its
+       own, or two names for one conversation carry independent causal history
+       and a stale writer holding the old name looks unopposed. */
+    keyRevisions: canonicalizeKeyRevisions(state.keyRevisions ?? {}, state.pathAliases ?? {}),
+    keyRevisionFloor: state.keyRevisionFloor ?? 0,
+    /* Boards written before favorites / tray intent existed lack the fields;
+       default them so every GET response and reducer input carries the
+       durable-id lists (issue #185 favorites, issue #142 tray pins). */
+    prefs: {
+      ...state.prefs,
+      favorites: state.prefs.favorites ?? [],
+      foldedEngineChildIds: state.prefs.foldedEngineChildIds ?? [],
+      expandedEngineTrayParentIds: state.prefs.expandedEngineTrayParentIds ?? [],
+      seenAt: state.prefs.seenAt ?? {},
+      idleCollapseMinutes: state.prefs.idleCollapseMinutes === undefined
+        ? DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES
+        : state.prefs.idleCollapseMinutes,
+    },
+  };
 }
 
-function sleep(milliseconds: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+/* ---- SQLite storage (#1870) -------------------------------------------------
+   The board is one `board` collection in the `state.sqlite` beside `filePath`,
+   with one row per project keyed `p:<project>`: an edit rewrites that project's
+   ~40 KB instead of the whole 2.5 MB file, and a project nobody touched keeps
+   the bytes it was stored with. `board.json` itself is imported once and then
+   replaced by a tombstone directory (src/lib/state/legacyImport.ts). */
+
+const BOARD_COLLECTION = "board";
+const BOARD_BUSY = "board state is busy";
+
+/** A stored row. The project name lives beside the document because the board
+    document itself never carried it, and the row key is derived from it. */
+type BoardRow = { project: string; state: BoardProjectStateV1 };
+
+function projectRowKey(project: string): string {
+  return project ? `p:${project}` : "";
 }
 
-function lockOwnerIsStale(lockPath: string): boolean {
-  try {
-    const previous = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };
-    if (typeof previous.pid === "number" && Number.isInteger(previous.pid) && previous.pid > 0) {
-      const identity = typeof previous.startIdentity === "string" ? previous.startIdentity : null;
-      return !procBackend.pidAlive(previous.pid)
-        || (identity !== null
-          ? (() => {
-              const currentIdentity = procBackend.processIdentity(previous.pid);
-              return currentIdentity !== null && currentIdentity !== identity;
-            })()
-          : Date.now() - fs.statSync(lockPath).mtimeMs > BOARD_LOCK_STALE_MS);
-    }
-    return Date.now() - fs.statSync(lockPath).mtimeMs > BOARD_LOCK_STALE_MS;
-  } catch {
-    try { return Date.now() - fs.statSync(lockPath).mtimeMs > BOARD_LOCK_STALE_MS; } catch { return false; }
-  }
+function boardRowKey(row: BoardRow): string {
+  return projectRowKey(row.project);
 }
 
-function removeBoardLockIfOwned(lockPath: string, token: string): void {
-  try {
-    const owner = JSON.parse(fs.readFileSync(lockPath, "utf8")) as { token?: unknown };
-    if (owner.token === token) fs.rmSync(lockPath, { force: true });
-  } catch { /* another owner already recovered the lock */ }
+function isBoardRow(value: unknown): value is BoardRow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Partial<BoardRow>;
+  return typeof row.project === "string" && row.project.length > 0 && projectState(row.state);
 }
 
-function withBoardWriteLock<T>(filePath: string, operation: () => T): T {
-  const lockPath = `${filePath}.write-lock`;
-  const queuePath = `${filePath}.write-locks`;
-  fs.mkdirSync(queuePath, { recursive: true, mode: 0o700 });
-  const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid), token: crypto.randomUUID() };
-  const ticketPath = path.join(
-    queuePath,
-    `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
-  );
-  fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
-  try {
-    for (let attempt = 0; attempt < BOARD_LOCK_ATTEMPTS; attempt += 1) {
-      const liveTickets: string[] = [];
-      for (const entry of fs.readdirSync(queuePath).filter((candidate) => candidate.endsWith(".json")).sort()) {
-        const candidate = path.join(queuePath, entry);
-        if (lockOwnerIsStale(candidate)) {
-          fs.rmSync(candidate, { force: true });
+const boardCollections = new Map<string, SqliteStateCollection<BoardRow>>();
+
+function openBoardCollection(database: string): SqliteStateCollection<BoardRow> {
+  const held = boardCollections.get(database);
+  if (held) return held;
+  const collection = new SqliteStateCollection<BoardRow>(database, {
+    collection: BOARD_COLLECTION,
+    schemaVersion: 1,
+    busyMessage: BOARD_BUSY,
+    key: boardRowKey,
+    decode: (value) => isBoardRow(value) ? value : null,
+    clone: (row) => structuredClone(row),
+    strictDecode: true,
+    decodeError: (error) => new BoardStoreError("invalid board project state", { cause: error }),
+  });
+  boardCollections.set(database, collection);
+  return collection;
+}
+
+/* A rollback mirror names the SQLite revision it was written from in a reserved
+   project entry. An older release reads the mirror into `{ projects }` and
+   writes every entry back, unknown ones included, so a file that still holds
+   the marker of the recorded mirror descends from it and its missing projects
+   are deletions. A file without it (an old writer that found the path empty
+   while an import or a mirror was mid-retire) proves nothing about what it
+   lacks. The key cannot collide with a project key, which is a path or a
+   remote id, and the marker never becomes a board row. */
+const MIRROR_MARKER_PROJECT = " sqlite-mirror-revision";
+
+function mirrorMarkerState(revision: number): BoardProjectStateV1 {
+  return {
+    schemaVersion: 1,
+    revision,
+    updatedAt: new Date(0).toISOString(),
+    pathAliases: {},
+    prefs: { manual: [], hidden: [], expanded: [], favorites: [], viewMode: null, taskPanelOpen: false },
+  };
+}
+
+type LegacyBoardBody = { projects: Record<string, BoardProjectStateV1>; mirrorOf: number | null };
+
+/** Validate a legacy-shaped body. Throwing refuses the import and leaves the
+    file untouched, which is what the JSON store did with an unusable board. */
+function parseLegacyBoard(raw: unknown): LegacyBoardBody {
+  if (raw === undefined) return { projects: {}, mirrorOf: null };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BoardStoreError("invalid board state");
+  const stored = (raw as Partial<BoardFileV1>).projects;
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) throw new BoardStoreError("invalid board state");
+  const { [MIRROR_MARKER_PROJECT]: marker, ...projects } = stored as Record<string, unknown>;
+  if (!Object.values(projects).every(projectState)) throw new BoardStoreError("invalid board project state");
+  return {
+    projects: projects as Record<string, BoardProjectStateV1>,
+    mirrorOf: projectState(marker) && Number.isInteger(marker.revision) ? marker.revision : null,
+  };
+}
+
+function boardRows(projects: Record<string, BoardProjectStateV1>): BoardRow[] {
+  return Object.entries(projects).map(([project, state]) => ({ project, state }));
+}
+
+function fileFromRows(rows: readonly BoardRow[]): BoardFileV1 {
+  return { projects: Object.fromEntries(rows.map((row) => [row.project, normalizedProject(row.state)])) };
+}
+
+/** Merge a `board.json` that changed after the import (a rollback release wrote
+    it, or an older writer raced a fence). Who changed a project is read from
+    row revisions: a SQLite row not rewritten since `baseline` is the one the
+    file was written from, so the file's project wins and its absence deletes
+    it. A row SQLite rewrote since then stays unless the file holds a strictly
+    higher board revision for it; either way it is listed as a conflict. A
+    project only the file holds is added. A file that does not carry the
+    recorded mirror's marker deletes nothing: its missing projects are spared. */
+function mergeLegacyBoard(filePath: string, body: LegacyBoardBody, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+  const collection = openBoardCollection(legacyDatabasePath(filePath));
+  const since = legacyBaselineRevision(baseline);
+  const descends = baseline.mirrorRevision !== null && body.mirrorOf === baseline.mirrorRevision;
+  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
+  collection.patchSync(() => {
+    const current = new Map(collection.snapshot().map((row) => [boardRowKey(row), row] as const));
+    const revisions = collection.rowRevisions();
+    const incoming = boardRows(body.projects);
+    const incomingKeys = new Set(incoming.map(boardRowKey));
+    const records: BoardRow[] = [];
+    for (const row of incoming) {
+      const key = boardRowKey(row);
+      const held = current.get(key);
+      if (!held) {
+        records.push(row);
+        summary.added += 1;
+        summary.keys.push(key);
+        continue;
+      }
+      if (JSON.stringify(held) === JSON.stringify(row)) continue;
+      if ((revisions.get(key) ?? 0) > since) {
+        summary.conflicts.push(key);
+        if (row.state.revision <= held.state.revision) {
+          summary.kept += 1;
           continue;
         }
-        if (fs.existsSync(candidate)) liveTickets.push(candidate);
       }
-      if (liveTickets[0] !== ticketPath) {
-        sleep(BOARD_LOCK_WAIT_MS);
-        continue;
-      }
-      let descriptor: number;
-      try {
-        descriptor = fs.openSync(lockPath, "wx", 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (lockOwnerIsStale(lockPath)) fs.rmSync(lockPath, { force: true });
-        sleep(BOARD_LOCK_WAIT_MS);
-        continue;
-      }
-      try {
-        fs.writeFileSync(descriptor, JSON.stringify(owner), "utf8");
-        fs.fsyncSync(descriptor);
-        return operation();
-      } finally {
-        fs.closeSync(descriptor);
-        removeBoardLockIfOwned(lockPath, owner.token);
-      }
+      records.push(row);
+      summary.replaced += 1;
+      summary.keys.push(key);
     }
-    throw new BoardStoreError("board state is busy");
-  } finally {
-    removeBoardLockIfOwned(ticketPath, owner.token);
+    const deleteKeys: string[] = [];
+    for (const key of current.keys()) {
+      if (incomingKeys.has(key)) continue;
+      if (!descends) {
+        summary.spared.push(key);
+        continue;
+      }
+      if ((revisions.get(key) ?? 0) > since) {
+        summary.conflicts.push(key);
+        summary.kept += 1;
+        continue;
+      }
+      deleteKeys.push(key);
+      summary.removed += 1;
+      summary.keys.push(key);
+    }
+    return { records, deleteKeys };
+  }, { fenceOwner: options.fenceOwner });
+  return summary;
+}
+
+/** The board store's legacy import spec, for the import driver and its tests. */
+export function boardLegacyCollection(filePath = boardFileForTests ?? BOARD_FILE): LegacyCollectionSpec<LegacyBoardBody> {
+  return {
+    collection: BOARD_COLLECTION,
+    schemaVersion: 1,
+    migrationId: "board-json-v1",
+    legacyPath: filePath,
+    parse: parseLegacyBoard,
+    toRows: (body): StateImportRow[] => boardRows(body.projects)
+      .map((row) => ({ key: boardRowKey(row), value: row, controllerActive: true })),
+    reconcile: (body, baseline, options) => mergeLegacyBoard(filePath, body, baseline, options),
+    mirrorBody: () => {
+      const collection = openBoardCollection(legacyDatabasePath(filePath));
+      let mirror: { body: unknown; revision: number } | null = null;
+      collection.checkpointMirror((rows, revision) => {
+        mirror = {
+          body: {
+            projects: {
+              ...Object.fromEntries(rows.map((row) => [row.project, row.state])),
+              [MIRROR_MARKER_PROJECT]: mirrorMarkerState(revision),
+            },
+          },
+          revision,
+        };
+      });
+      return mirror!;
+    },
+  };
+}
+
+/** Import `board.json` into SQLite now. The Viewer's activation calls this with
+    `reconcile: true`; tests drive the crash seams through `hooks`. */
+export function importLegacyBoard(
+  filePath = boardFileForTests ?? BOARD_FILE,
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return importLegacyCollection(boardLegacyCollection(filePath), options);
+}
+
+/** Write `board.json` from SQLite for a rollback release that predates #1870. */
+export function checkpointBoardRollbackMirrorForDemotion(filePath = boardFileForTests ?? BOARD_FILE): void {
+  writeLegacyRollbackMirror(boardLegacyCollection(filePath));
+}
+
+/* The store has always reported every failure as a `BoardStoreError`, and the
+   board route answers 500 for it and nothing else. A collection that is busy,
+   or a release that may not import yet, keeps that contract. */
+function asBoardStoreError<R>(operation: () => R): R {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof BoardStoreError) throw error;
+    if (error instanceof FileTransactionBusyError) throw new BoardStoreError(error.message, { cause: error });
+    throw error;
   }
+}
+
+/** The collection for `filePath`, importing the legacy file on first use. Null
+    only for a read before the import may run (an unpromoted release): the read
+    then parses the legacy file without writing anything. */
+function boardCollection(filePath: string, purpose: "read" | "write"): SqliteStateCollection<BoardRow> | null {
+  const database = legacyDatabasePath(filePath);
+  if (boardCollections.has(database)) return boardCollections.get(database)!;
+  if (!readStateImport(database, BOARD_COLLECTION)) {
+    if (!legacyImportAllowed(filePath)) {
+      if (purpose === "read") return null;
+      throw new BoardStoreError("board state is waiting for release promotion");
+    }
+    importLegacyBoard(filePath, { reconcile: lazyReconcileAllowed(filePath) });
+  }
+  return openBoardCollection(database);
+}
+
+/** The legacy file as the board, for a release that may not import yet. */
+function readLegacyBoardFile(filePath: string): BoardFileV1 {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { projects: {} };
+    throw new BoardStoreError();
+  }
+  return fileFromRows(boardRows(parseLegacyBoard(raw).projects));
+}
+
+/* Test seam around the two points a competing writer can arrive at: before the
+   collection lease is taken (a call that started against an older board), and
+   while it is held (a writer killed mid-write, #1870 failure matrix case (a)). */
+export type BoardWritePhase = "before-lease" | "in-lease";
+let writeHookForTests: ((phase: BoardWritePhase) => void) | null = null;
+export function setBoardWriteHookForTests(hook: ((phase: BoardWritePhase) => void) | null): void {
+  writeHookForTests = hook;
+}
+
+/** One serialized read-modify-write over the board. The prepare step reads the
+    committed projects under the collection lease and names the projects it
+    changed and the ones it folded away; only those rows are written. */
+function writeBoardState<R>(
+  filePath: string,
+  prepare: (file: BoardFileV1) => { changed?: Record<string, BoardProjectStateV1>; deleted?: readonly string[]; result: R },
+): R {
+  return asBoardStoreError(() => {
+    const collection = boardCollection(filePath, "write")!;
+    writeHookForTests?.("before-lease");
+    let result: R;
+    collection.patchSync(() => {
+      writeHookForTests?.("in-lease");
+      const outcome = prepare(fileFromRows(collection.snapshot()));
+      result = outcome.result;
+      return {
+        records: boardRows(outcome.changed ?? {}),
+        deleteKeys: (outcome.deleted ?? []).map(projectRowKey),
+      };
+    });
+    return result!;
+  });
 }
 
 export function boardFor(project: string, filePath = boardFileForTests ?? BOARD_FILE): BoardProjectStateV1 {
-  return read(filePath).projects[canonicalProject(project)] ?? emptyBoard();
+  return asBoardStoreError(() => {
+    const canonical = canonicalProject(project);
+    const collection = boardCollection(filePath, "read");
+    if (!collection) return readLegacyBoardFile(filePath).projects[canonical] ?? emptyBoard();
+    const row = collection.get(projectRowKey(canonical));
+    return row ? normalizedProject(row.state) : emptyBoard();
+  });
 }
 export type BoardPatch = Partial<BoardProjectStateV1["prefs"]>;
 /* `applied` distinguishes a write that committed from one the reducer turned
@@ -268,29 +449,23 @@ function sameReduced(left: BoardProjectStateV1, right: BoardProjectStateV1): boo
 }
 
 function writeReduced(project: string, baseRevision: number, reduce: (current: BoardProjectStateV1) => BoardProjectStateV1, filePath: string): BoardWriteResult {
-  return withBoardWriteLock(filePath, () => {
-    const value = read(filePath);
+  return writeBoardState<BoardWriteResult>(filePath, (value) => {
     const current = value.projects[project] ?? emptyBoard();
     const reduced = reduce(current);
-    if (sameReduced(current, reduced)) return { ok: true, applied: false, board: current };
-    if (current.revision !== baseRevision) return { ok: false, board: current };
+    if (sameReduced(current, reduced)) return { result: { ok: true, applied: false, board: current } };
+    if (current.revision !== baseRevision) return { result: { ok: false, board: current } };
     const next = committed(current, reduced, current.revision + 1);
-    value.projects[project] = next;
-    write(value, filePath);
-    return { ok: true, applied: true, board: next };
+    return { changed: { [project]: next }, result: { ok: true, applied: true, board: next } };
   });
 }
 
 function writeLatest(project: string, reduce: (current: BoardProjectStateV1) => BoardProjectStateV1, filePath: string): BoardProjectStateV1 {
-  return withBoardWriteLock(filePath, () => {
-    const value = read(filePath);
+  return writeBoardState(filePath, (value) => {
     const current = value.projects[project] ?? emptyBoard();
     const reduced = reduce(current);
-    if (sameReduced(current, reduced)) return current;
+    if (sameReduced(current, reduced)) return { result: current };
     const next = committed(current, reduced, current.revision + 1);
-    value.projects[project] = next;
-    write(value, filePath);
-    return next;
+    return { changed: { [project]: next }, result: next };
   });
 }
 
@@ -327,15 +502,15 @@ export function transferBoardPathPlacements(
   filePath = boardFileForTests ?? BOARD_FILE,
 ): void {
   if (transfers.length === 0) return;
-  withBoardWriteLock(filePath, () => {
-    const value = read(filePath);
-    let changed = false;
+  writeBoardState(filePath, (value) => {
+    const changed: Record<string, BoardProjectStateV1> = {};
     for (const transfer of transfers) {
       if (transfer.fromProject === transfer.toProject) continue;
-      const storedSource = value.projects[transfer.fromProject];
+      const storedSource = changed[transfer.fromProject] ?? value.projects[transfer.fromProject];
       if (!storedSource) continue;
       let source = applyBoardMutations(storedSource, []);
-      let target = applyBoardMutations(value.projects[transfer.toProject] ?? emptyBoard(), []);
+      const storedTarget = changed[transfer.toProject] ?? value.projects[transfer.toProject] ?? emptyBoard();
+      let target = applyBoardMutations(storedTarget, []);
       for (const pathname of [...new Set(transfer.paths)]) {
         const sourceAliasEntries = Object.entries(source.pathAliases ?? {}).filter(([, targetPath]) => targetPath === pathname);
         if (sourceAliasEntries.length > 0) {
@@ -406,16 +581,13 @@ export function transferBoardPathPlacements(
         };
       }
       if (!sameReduced(storedSource, source)) {
-        value.projects[transfer.fromProject] = committed(storedSource, source, storedSource.revision + 1);
-        changed = true;
+        changed[transfer.fromProject] = committed(storedSource, source, storedSource.revision + 1);
       }
-      const storedTarget = value.projects[transfer.toProject] ?? emptyBoard();
       if (!sameReduced(storedTarget, target)) {
-        value.projects[transfer.toProject] = committed(storedTarget, target, storedTarget.revision + 1);
-        changed = true;
+        changed[transfer.toProject] = committed(storedTarget, target, storedTarget.revision + 1);
       }
     }
-    if (changed) write(value, filePath);
+    return { changed, result: undefined };
   });
 }
 
@@ -481,12 +653,14 @@ function mergedBoards(states: readonly BoardProjectStateV1[]): BoardProjectState
     Sources remain intact whenever a merge cannot preserve board invariants. */
 export function migrateBoardProjects(
   migrations: ReadonlyMap<string, string>,
+  /* Resolved per call, not from {@link BOARD_FILE}: the scanner runs in
+     processes that settle their state directory after this module loads. */
   filePath = boardFileForTests ?? statePath("board.json"),
 ): boolean {
   if (migrations.size === 0) return true;
-  return withBoardWriteLock(filePath, () => {
-    const value = read(filePath);
-    let changed = false;
+  return writeBoardState(filePath, (value) => {
+    const changed: Record<string, BoardProjectStateV1> = {};
+    const deleted: string[] = [];
     let complete = true;
     const sourcesByTarget = new Map<string, string[]>();
     for (const [sourceProject, targetProject] of migrations) {
@@ -498,9 +672,8 @@ export function migrateBoardProjects(
       if (sources.length === 0) continue;
       const target = value.projects[targetProject];
       if (!target && sources.length === 1) {
-        value.projects[targetProject] = sources[0]!;
-        for (const sourceProject of sourceProjects) delete value.projects[sourceProject];
-        changed = true;
+        changed[targetProject] = sources[0]!;
+        deleted.push(...sourceProjects);
         continue;
       }
       try {
@@ -519,17 +692,13 @@ export function migrateBoardProjects(
           Math.max(...states.map((state) => state.revision)) + 1,
           sources,
         );
-        value.projects[targetProject] = target && sameReduced(target, next) && sameCausalHistory(target, next)
-          ? target
-          : next;
-        for (const sourceProject of sourceProjects) delete value.projects[sourceProject];
-        changed = true;
+        if (!(target && sameReduced(target, next) && sameCausalHistory(target, next))) changed[targetProject] = next;
+        deleted.push(...sourceProjects);
       } catch {
         complete = false;
         continue;
       }
     }
-    if (changed) write(value, filePath);
-    return complete;
+    return { changed, deleted, result: complete };
   });
 }

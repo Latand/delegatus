@@ -4,9 +4,19 @@ import os from "node:os";
 import path from "node:path";
 
 import { boardFor, BoardStoreError, migrateBoardProjects, mutateBoard, patchBoard, remapBoardPaths, transferBoardPathPlacements } from "./store";
+import { persistedBoardProjects } from "./storeFixture";
 import { validateBoardPatchRequest } from "./validation";
 
 function temporaryFile(): string { return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-board-")), "board.json"); }
+
+/* A board.json as an older release left it, in its own directory: the store
+   imports it on first use, so a legacy shape has to be seeded before the first
+   read rather than written over a store that is already on SQLite (#1870). */
+function legacyBoardFile(projects: Record<string, unknown>): string {
+  const file = temporaryFile();
+  fs.writeFileSync(file, JSON.stringify({ projects }), "utf8");
+  return file;
+}
 
 describe("board store", () => {
   test("increments revisions atomically and rejects stale concurrent writers", () => {
@@ -22,17 +32,17 @@ describe("board store", () => {
     const file = temporaryFile();
     const added = mutateBoard("viewer", 0, [{ kind: "set-favorite", id: "conv-1", favorite: true }], file);
     expect(added).toMatchObject({ ok: true, board: { revision: 1 } });
-    // Survives a fresh read of the persisted file (a reload/deploy).
+    // Survives a fresh read of the persisted store (a reload/deploy).
     expect(boardFor("viewer", file).prefs.favorites).toEqual(["conv-1"]);
     // A board written before favorites existed reads back with an empty list.
-    fs.writeFileSync(file, JSON.stringify({ projects: { viewer: {
+    const legacy = legacyBoardFile({ viewer: {
       schemaVersion: 1, revision: 5, updatedAt: "2026-07-10T00:00:00.000Z",
       prefs: { manual: [], hidden: [], expanded: [], viewMode: null, taskPanelOpen: false },
-    } } }), "utf8");
-    expect(boardFor("viewer", file).prefs.favorites).toEqual([]);
-    const seeded = mutateBoard("viewer", 5, [{ kind: "set-favorite", id: "conv-2", favorite: true }], file);
+    } });
+    expect(boardFor("viewer", legacy).prefs.favorites).toEqual([]);
+    const seeded = mutateBoard("viewer", 5, [{ kind: "set-favorite", id: "conv-2", favorite: true }], legacy);
     expect(seeded).toMatchObject({ ok: true, board: { revision: 6 } });
-    expect(boardFor("viewer", file).prefs.favorites).toEqual(["conv-2"]);
+    expect(boardFor("viewer", legacy).prefs.favorites).toEqual(["conv-2"]);
   });
 
   test("engine tray fold + disclosure pins persist across a reload and default on legacy boards", () => {
@@ -40,16 +50,15 @@ describe("board store", () => {
     mutateBoard("viewer", 0, [{ kind: "set-engine-child-fold", id: "conv-child", path: "/child", folded: true }], file);
     const expanded = mutateBoard("viewer", 1, [{ kind: "set-engine-tray-expanded", parentId: "conv-parent", expanded: true }], file);
     expect(expanded).toMatchObject({ ok: true, board: { revision: 2 } });
-    // Survive a fresh read of the persisted file (a reload/redeploy).
+    // Survive a fresh read of the persisted store (a reload/redeploy).
     const reloaded = boardFor("viewer", file);
     expect(reloaded.prefs.foldedEngineChildIds).toEqual(["conv-child"]);
     expect(reloaded.prefs.expandedEngineTrayParentIds).toEqual(["conv-parent"]);
     // A board written before the tray pins existed reads back with empty lists.
-    fs.writeFileSync(file, JSON.stringify({ projects: { viewer: {
+    const legacy = boardFor("viewer", legacyBoardFile({ viewer: {
       schemaVersion: 1, revision: 5, updatedAt: "2026-07-10T00:00:00.000Z",
       prefs: { manual: [], hidden: [], expanded: [], viewMode: null, taskPanelOpen: false },
-    } } }), "utf8");
-    const legacy = boardFor("viewer", file);
+    } }));
     expect(legacy.prefs.foldedEngineChildIds).toEqual([]);
     expect(legacy.prefs.expandedEngineTrayParentIds).toEqual([]);
   });
@@ -59,53 +68,59 @@ describe("board store", () => {
     mutateBoard("viewer", 0, [{ kind: "set-presentation", idleCollapseMinutes: null }], file);
     expect(boardFor("viewer", file).prefs.idleCollapseMinutes).toBeNull();
   });
-  test("durable writes fsync the board file and parent directory", async () => {
+  test("a write committed in one process is durable for the next one", async () => {
+    /* The board commits through SQLite with WAL and synchronous=FULL (#1870),
+       so durability is no longer this store's own fsync of a JSON file: what it
+       owes is that a committed write outlives the process that made it. */
     const file = temporaryFile();
     const modulePath = path.join(import.meta.dir, "store.ts");
     const child = Bun.spawn({
       cmd: [
         process.execPath,
         "-e",
-        `const fs = (await import("node:fs")).default; const sync = fs.fsyncSync.bind(fs); let calls = 0; fs.fsyncSync = (descriptor) => { calls += 1; return sync(descriptor); }; const m = await import(${JSON.stringify(modulePath)}); m.patchBoard("viewer", 0, { manual: ["/durable"] }, ${JSON.stringify(file)}); console.log(calls);`,
+        `const m = await import(${JSON.stringify(modulePath)}); const written = m.patchBoard("viewer", 0, { manual: ["/durable"] }, ${JSON.stringify(file)}); if (!written.ok) process.exit(2); console.log(written.board.revision);`,
       ],
       stdout: "pipe",
       stderr: "pipe",
     });
 
     expect(await child.exited).toBe(0);
-    expect(Number((await new Response(child.stdout).text()).trim())).toBeGreaterThanOrEqual(3);
+    expect((await new Response(child.stdout).text()).trim()).toBe("1");
+    expect(boardFor("viewer", file)).toMatchObject({ revision: 1, prefs: { manual: ["/durable"] } });
   });
-  test("fails closed on corrupt durable state and preserves its bytes", () => {
+  test("fails closed on an unusable board and preserves its bytes", () => {
+    /* Valid JSON the board cannot mean: the import refuses, every read says so,
+       and the file is left exactly as it was for a human to look at. Bytes that
+       are not JSON at all are the crash signature #1870 exists for — they are
+       kept aside as `.unreadable-*` and the board serves empty instead of 500s
+       (src/lib/board/store.legacyFile.test.ts). */
     const file = temporaryFile();
+    const text = JSON.stringify({ projects: { viewer: { schemaVersion: 2 } } });
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "{ corrupt", "utf8");
+    fs.writeFileSync(file, text, "utf8");
     expect(() => boardFor("viewer", file)).toThrow(BoardStoreError);
     expect(() => patchBoard("viewer", 0, { manual: ["/a"] }, file)).toThrow(BoardStoreError);
-    expect(fs.readFileSync(file, "utf8")).toBe("{ corrupt");
+    expect(fs.readFileSync(file, "utf8")).toBe(text);
   });
   test("accepts missing storage as revision-zero initialization", () => {
     expect(boardFor("viewer", temporaryFile())).toMatchObject({ revision: 0, prefs: { manual: [] } });
   });
   test("loads a legacy schema-one file with empty path aliases", () => {
-    const file = temporaryFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ projects: { viewer: {
+    const file = legacyBoardFile({ viewer: {
       schemaVersion: 1, revision: 3, updatedAt: "2026-07-10T00:00:00.000Z",
       prefs: { manual: ["/a"], hidden: [], expanded: [], viewMode: null, taskPanelOpen: false },
-    } } }), "utf8");
+    } });
     expect(boardFor("viewer", file).pathAliases).toEqual({});
     expect(boardFor("viewer", file).explicitManual).toEqual(["/a"]);
   });
-  test("a semantic no-op preserves revision and durable inode", () => {
+  test("a semantic no-op preserves the revision and rewrites no row", () => {
     const file = temporaryFile();
     const written = patchBoard("viewer", 0, { manual: ["/a"] }, file);
     expect(written.ok).toBe(true);
-    const before = fs.statSync(file);
+    const before = persistedBoardProjects(file);
     const result = mutateBoard("viewer", 1, [{ kind: "restore", path: "/a", placement: "manual" }], file);
     expect(result).toMatchObject({ ok: true, board: { revision: 1 } });
-    const after = fs.statSync(file);
-    expect(after.ino).toBe(before.ino);
-    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(persistedBoardProjects(file)).toEqual(before);
   });
   test("identical semantic intent from two writers advances once", () => {
     const file = temporaryFile();
@@ -128,55 +143,13 @@ describe("board store", () => {
     }));
 
     expect(await Promise.all(writers.map((writer) => writer.exited))).toEqual(Array(40).fill(0));
-    const projects = JSON.parse(fs.readFileSync(file, "utf8")).projects as Record<string, unknown>;
-    expect(Object.keys(projects)).toHaveLength(40);
+    expect(Object.keys(persistedBoardProjects(file))).toHaveLength(40);
   });
-  test("concurrent writers recover a crashed lock owner without lost mutations", async () => {
-    const file = temporaryFile();
-    const writerCount = 24;
-    const staleOwner = JSON.stringify({ pid: 999_999_999, startIdentity: null });
-    const legacyLock = `${file}.write-lock`;
-    const lockDirectory = `${file}.write-locks`;
-    const staleTicket = path.join(lockDirectory, "stale-owner.json");
-    const barrier = `${file}.stale-reapers`;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.mkdirSync(lockDirectory);
-    fs.mkdirSync(barrier);
-    fs.writeFileSync(legacyLock, staleOwner, "utf8");
-    fs.writeFileSync(staleTicket, staleOwner, "utf8");
-    const modulePath = path.join(import.meta.dir, "store.ts");
-    const writers = Array.from({ length: writerCount }, (_, index) => Bun.spawn({
-      cmd: [
-        process.execPath,
-        "-e",
-        `const fs = (await import("node:fs")).default; const path = (await import("node:path")).default; const remove = fs.rmSync.bind(fs); let gated = false; fs.rmSync = (pathname, options) => { if (!gated && (pathname === ${JSON.stringify(legacyLock)} || pathname === ${JSON.stringify(staleTicket)})) { gated = true; fs.writeFileSync(path.join(${JSON.stringify(barrier)}, String(process.pid)), ""); while (fs.readdirSync(${JSON.stringify(barrier)}).length < ${writerCount}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1); } return remove(pathname, options); }; const m = await import(${JSON.stringify(modulePath)}); const result = m.patchBoard(${JSON.stringify(`recovered-${index}`)}, 0, { manual: [${JSON.stringify(`/recovered-${index}`)}] }, ${JSON.stringify(file)}); if (!result.ok) process.exit(2);`,
-      ],
-      stdout: "ignore",
-      stderr: "pipe",
-    }));
-
-    expect(await Promise.all(writers.map((writer) => writer.exited))).toEqual(Array(writerCount).fill(0));
-    const projects = JSON.parse(fs.readFileSync(file, "utf8")).projects as Record<string, unknown>;
-    expect(Object.keys(projects)).toHaveLength(writerCount);
-  });
-  test("aged lock records recover when process birth identity is unavailable", () => {
-    const file = temporaryFile();
-    const lockDirectory = `${file}.write-locks`;
-    const ticket = path.join(lockDirectory, "0000-reused-pid.json");
-    const lock = `${file}.write-lock`;
-    const owner = JSON.stringify({ pid: process.pid, startIdentity: null });
-    fs.mkdirSync(lockDirectory, { recursive: true });
-    fs.writeFileSync(ticket, owner, "utf8");
-    fs.writeFileSync(lock, owner, "utf8");
-    const stale = new Date(Date.now() - 60_000);
-    fs.utimesSync(ticket, stale, stale);
-    fs.utimesSync(lock, stale, stale);
-
-    expect(patchBoard("viewer", 0, { manual: ["/recovered"] }, file)).toMatchObject({
-      ok: true,
-      board: { prefs: { manual: ["/recovered"] } },
-    });
-  });
+  /* The board's own `board.json.write-lock` queue is gone with the move to
+     SQLite (#1870): writers now serialize on the collection lease. A lease whose
+     owner was killed mid-write is reclaimed, and the write that killed process
+     never made is the only one lost — proved against a real SIGKILL in
+     store.sqlite.test.ts, case (a), with cross-process concurrency beside it. */
   test("path remap clears provisional continuity roots and replays idempotently", () => {
     const file = temporaryFile();
     const project = "viewer";
@@ -236,6 +209,9 @@ describe("board store", () => {
     expect(remapBoardPaths(project, [{ from: "/fork", to: "/root" }], { filePath: file })).toEqual(remapped);
   });
   test("path remap derives provisional cleanup after a concurrent alias write", async () => {
+    /* The remap starts against one board and commits against another: the
+       reduction runs under the collection lease, so the alias write that landed
+       while the call was in flight is what it derives the cleanup from. */
     const file = temporaryFile();
     const project = "viewer";
     const ready = `${file}.reader-ready`;
@@ -246,20 +222,13 @@ describe("board store", () => {
       cmd: [
         process.execPath,
         "-e",
-        `const fs = (await import("node:fs")).default; const open = fs.openSync.bind(fs); let gated = false; fs.openSync = (pathname, ...args) => { if (!gated && pathname === ${JSON.stringify(`${file}.write-lock`)}) { gated = true; fs.writeFileSync(${JSON.stringify(ready)}, ""); while (!fs.existsSync(${JSON.stringify(release)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1); } return open(pathname, ...args); }; const m = await import(${JSON.stringify(modulePath)}); m.remapBoardPaths(${JSON.stringify(project)}, [{ from: "/source", to: "/target" }, { from: "/fork", to: "/target" }], { provisionalManual: ["/fork"], filePath: ${JSON.stringify(file)} });`,
+        `const fs = (await import("node:fs")).default; const m = await import(${JSON.stringify(modulePath)}); m.setBoardWriteHookForTests((phase) => { if (phase !== "before-lease") return; m.setBoardWriteHookForTests(null); fs.writeFileSync(${JSON.stringify(ready)}, ""); while (!fs.existsSync(${JSON.stringify(release)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1); }); m.remapBoardPaths(${JSON.stringify(project)}, [{ from: "/source", to: "/target" }, { from: "/fork", to: "/target" }], { provisionalManual: ["/fork"], filePath: ${JSON.stringify(file)} });`,
       ],
       stdout: "ignore",
       stderr: "pipe",
     });
     while (!fs.existsSync(ready)) await Bun.sleep(1);
-    const interleaved = JSON.parse(fs.readFileSync(file, "utf8"));
-    interleaved.projects[project] = {
-      ...interleaved.projects[project],
-      revision: interleaved.projects[project].revision + 1,
-      pathAliases: { "/fork": "/target" },
-      prefs: { ...interleaved.projects[project].prefs, manual: ["/target"] },
-    };
-    fs.writeFileSync(file, JSON.stringify(interleaved, null, 2) + "\n", "utf8");
+    remapBoardPaths(project, [{ from: "/fork", to: "/target" }], { filePath: file });
     fs.writeFileSync(release, "", "utf8");
 
     expect(await writer.exited).toBe(0);
@@ -383,8 +352,9 @@ describe("board store", () => {
         older: state("2026-07-10T00:00:00.000Z", { hidden: ["/a"] }, { "/alias": "/old" }),
         newest: state("2026-07-10T00:02:00.000Z", { manual: ["/a"], expanded: ["/b"], viewMode: "list", taskPanelOpen: true }, { "/alias": "/new" }),
       } }), "utf8");
+      boardFor("canonical", file);
       expect(migrateBoardProjects(migrations, file)).toBe(true);
-      return JSON.parse(fs.readFileSync(file, "utf8")).projects;
+      return persistedBoardProjects(file) as Record<string, { prefs: Record<string, unknown>; pathAliases: Record<string, string> }>;
     };
 
     const forward = run(new Map([["older", "canonical"], ["newest", "canonical"]]));

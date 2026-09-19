@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "../accounts/migration/contracts";
+import { persistedBoardProjects } from "../board/storeFixture";
 import { AgentRegistry, setAgentRegistryForTests } from "../agent/registry";
 import type { FileEntry, RootKey } from "../types";
 import { conversationCatalogSnapshot } from "./conversationCatalog";
@@ -1877,7 +1878,10 @@ test("current-production catalog records converge two legacy buckets for one rep
         [staleProject]: boardState(["/stale"]),
         [staleAlternateProject]: boardState(["/alternate"]),
     } };
-    await writeFile(boardFile, "{ corrupt");
+    /* A board the store refuses: valid JSON whose project state it cannot mean.
+       Bytes that are not JSON at all are imported as a recorded gap now (#1870)
+       and no longer hold a migration back. */
+    await writeFile(boardFile, JSON.stringify({ projects: { [staleProject]: { schemaVersion: 2 } } }));
 
     const preview = await discoverFilesWithProjectCatalog(roots);
 
@@ -1901,10 +1905,10 @@ test("current-production catalog records converge two legacy buckets for one rep
     expect(persistedCatalog.files[sessionPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[taskPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[codexPath].project).toBe(canonicalProject);
-    const persistedBoard = JSON.parse(await readFile(path.join(stateDir, "board.json"), "utf8"));
-    expect(persistedBoard.projects[staleProject]).toBeUndefined();
-    expect(persistedBoard.projects[staleAlternateProject]).toBeUndefined();
-    expect(persistedBoard.projects[canonicalProject].prefs.manual).toEqual(["/canonical", "/alternate", "/stale"]);
+    const persistedBoard = persistedBoardProjects(boardFile);
+    expect(persistedBoard[staleProject]).toBeUndefined();
+    expect(persistedBoard[staleAlternateProject]).toBeUndefined();
+    expect(persistedBoard[canonicalProject]!.prefs.manual).toEqual(["/canonical", "/alternate", "/stale"]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
