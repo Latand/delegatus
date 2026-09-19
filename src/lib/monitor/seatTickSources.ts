@@ -1214,7 +1214,20 @@ function projectChild(
      never offered as harvestable work. */
   const record = generation ? transcriptRecordAt(generation.path, roots) : null;
   const settledAt = conversation?.turn.terminalAt ?? record;
-  const base = { conversationId: childId, title, activity: null, transcript: record === null ? "unresolvable" as const : "readable" as const };
+  /* `lastRecordAt` rides on EVERY branch below, terminal or not (#1783 round
+     two). A child whose host died over an open turn never gets a terminal
+     instant at all — the conversation row stays `busy` for ever — so the
+     branches that report it running were handing the age test a null, and a
+     null excludes nothing. The transcript's own last record is the instant
+     that child has. */
+  /* One line for the pair the same read produced, and the publication gate is
+     why: a line that begins `transcript:` reads as a quoted transcript key. */
+  const base = {
+    conversationId: childId,
+    title,
+    activity: null,
+    lastRecordAt: record, transcript: record === null ? "unresolvable" as const : "readable" as const,
+  };
   const createdAt = edge.createdAt;
   /* A launch that failed or conflicted before it ran: terminal, outcome
      failed. The receipt is the whole record of it. */
@@ -1501,10 +1514,11 @@ async function childWork(
          `terminalAt: null` then, and 130 of the 209 owed rows on the board
          this was filed from carry exactly that — a null the age test cannot
          test. The child as it stands now is what the test must read. */
-      const { terminalAt, transcript } = projected.input;
+      const { terminalAt, lastRecordAt, transcript } = projected.input;
       children.push({
         ...outcome.input,
         terminalAt,
+        lastRecordAt,
         transcript,
         ...(child.harvestedEpoch === undefined ? {} : { harvestedEpoch: child.harvestedEpoch }),
       });

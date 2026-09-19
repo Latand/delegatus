@@ -4846,7 +4846,7 @@ test("a child whose record is weeks old is skipped though a sweep refreshed its 
   expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
   const text = rig.sent[0]!.text;
   expect(text).not.toContain(child.id);
-  expect(text).toContain("(1 spawned child(ren) not listed: their outcomes predate this seat's designation");
+  expect(text).toContain("(1 spawned child(ren) not listed: their last activity predates this seat's designation");
   expect(fixture.acknowledged()).toEqual([]);
 });
 
@@ -4893,7 +4893,7 @@ test("a child whose transcript the Viewer cannot resolve is counted, never liste
   const text = rig.sent[0]!.text;
   expect(text).not.toContain(unscanned.id);
   expect(text).not.toContain(gone.id);
-  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript,");
+  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
   expect(fixture.acknowledged()).toEqual([]);
 });
 
@@ -4941,5 +4941,275 @@ test("a failure this seat's own worker just had is listed beside the history tha
   const text = rig.sent[0]!.text;
   expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome unharvested`);
   expect(text).not.toContain(historical.id);
-  expect(text).toContain("(1 spawned child(ren) not listed: their outcomes predate this seat's designation");
+  expect(text).toContain("(1 spawned child(ren) not listed: their last activity predates this seat's designation");
+});
+
+/* ------------------------------------------------------------------------- *
+ * The two paths that still reached the item list (#1783, round two).
+ *
+ * Read out of production state before anything was changed here. The wake of
+ * 2026-09-18 21:55Z, to a seat designated at 09:46 that morning, listed five
+ * children and held seventeen back. Three of them were architect runs whose
+ * ledgers hold ended turns and whose conversation rows still say `busy` with
+ * no host behind them: their accounting rows carry `terminalAt: null`, their
+ * transcripts were last written to on the 24th of August, and the age test —
+ * reading the terminal instant alone — found nothing to compare and listed
+ * them. The other two came through the stall path, which read neither clock
+ * nor transcript: one last written to four days before the designation, one
+ * whose transcript is not under any scanner root this Viewer has.
+ *
+ * Both are the same list of children asked the same question, so both cases
+ * below drive the production controller over its own registry, accounting row
+ * and state directory, once per path.
+ * ------------------------------------------------------------------------- */
+
+/** The agenda a wake carries: the bullets under `Items:` and no further —
+    the contract at the foot of every message is bulleted too. */
+function agendaOf(text: string): string[] {
+  const lines = text.split("\nItems:\n")[1]!.split("\n");
+  const end = lines.findIndex((line) => !line.startsWith("- "));
+  return end === -1 ? lines : lines.slice(0, end);
+}
+
+/** The shape all three cases are built from: a worker whose structured host
+    wrote an ended turn to its ledger and then died over the open turn, so the
+    accounting owes an outcome for it while the registry still reports it busy
+    with nothing running it. Every child in the evidence is one of these. */
+function endedTurnUnderADeadHost(fixture: ChildFixture, child: { id: string }, status: "completed" | "error", seq: number): void {
+  const generation = fixture.registry.conversation(child.id as never)!.generations[0]!.id;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(generation, { kind: "turn-started", turnId: `turn-${seq}`, seq });
+  ledger.append(generation, { kind: "turn-ended", turnId: `turn-${seq}`, status, seq: seq + 1 });
+}
+
+test("a child whose last record predates the seat by weeks is skipped on the harvest and on the stall path (#1783)", async () => {
+  const fixture = childFixture("aged-child-both-paths");
+  /* One of each, both in the August shape: an open turn on the registry, a
+     dead host, and a transcript nothing has appended to for twenty-five days.
+     The first also owes an outcome, which is what puts it on the harvest. */
+  const owed = fixture.spawn({ title: "august worker", turn: "busy", host: "dead" });
+  endedTurnUnderADeadHost(fixture, owed, "completed", 1);
+  const stalled = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  for (const child of [owed, stalled]) ageTranscript(fixture, child.path, 25 * 24 * 60);
+  fixture.seed();
+
+  /* The condition under test, on the rows themselves: neither child has a
+     terminal instant to test, and the seat was designated two hours ago. */
+  for (const child of [owed, stalled]) {
+    const conversation = fixture.registry.conversation(child.id as never)!;
+    expect(conversation.turn.state).toBe("busy");
+    expect(conversation.turn.terminalAt).toBeNull();
+  }
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
+  await runSeatTickCheck(fixture.project, first.deps);
+  /* The stall memory saw both of them, which is what makes the second check
+     the one where the stall path WOULD name them. */
+  expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  /* No child reason at all: not the harvest, not the stall. The wake carries
+     the lane the seat launched and nothing else. */
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = second.sent[0]!.text;
+  expect(text).not.toContain(owed.id);
+  expect(text).not.toContain(stalled.id);
+  expect(text).toContain("(2 spawned child(ren) not listed: their last activity predates this seat's designation");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("a child whose transcript the Viewer cannot resolve is skipped on the harvest and on the stall path (#1783)", async () => {
+  const fixture = childFixture("unresolvable-child-both-paths");
+  /* Spawned an hour ago — nothing about either of these is old — and neither
+     transcript is one this Viewer can read: one is outside every scanner root,
+     the other has gone from disk. No seat can harvest or read either, however
+     recently it ran. */
+  const owed = fixture.spawn({ title: "unscanned worker", turn: "busy", host: "dead", transcript: "outside-roots" });
+  endedTurnUnderADeadHost(fixture, owed, "error", 1);
+  const stalled = fixture.spawn({ title: "vanished worker", turn: "busy", host: "dead", transcript: "missing" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
+  await runSeatTickCheck(fixture.project, first.deps);
+  expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  const text = second.sent[0]!.text;
+  expect(text).not.toContain(owed.id);
+  expect(text).not.toContain(stalled.id);
+  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
+  expect(fixture.acknowledged()).toEqual([]);
+});
+
+test("a failure this seat's own worker had an hour ago is listed, once (#1783)", async () => {
+  const fixture = childFixture("new-failure-listed-once");
+  /* The same shape as the children above, and a different answer: this one is
+     this seat's and it is an hour old, not a month. */
+  const child = fixture.spawn({ title: "current worker", turn: "busy", host: "dead" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  /* The first check sees the stall; a stall is only reported once it has
+     survived a second one, so this wake carries the open worker and no more. */
+  const first = childRig(fixture, { seat });
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["interval"] });
+  expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
+
+  /* Then its host writes an ended turn to the ledger and dies over the open
+     turn — the production shape exactly. The check that follows holds the same
+     child on BOTH paths: an outcome nobody has harvested, and a stall that has
+     now persisted across two checks. */
+  endedTurnUnderADeadHost(fixture, child, "error", 1);
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  expect(record).toMatchObject({ verdict: "wake", items: 1 });
+  expect(record!.reasons).toContain("child-terminal");
+  expect(record!.reasons).toContain("stalled");
+  const text = second.sent[0]!.text;
+  /* One line on the agenda, and it is the one that says what to do: the
+     failure is the seat's to harvest, and the stall is the same conversation.
+     Both reasons are true and the wake says both; the item list names the
+     child once, which is the half a seat works from. */
+  const agenda = agendaOf(text);
+  expect(agenda.filter((line) => line.includes(child.id))).toEqual([
+    `- [child] ${child.id} — current worker — spawned child failed, outcome unharvested`,
+  ]);
+  expect(fixture.acknowledged()).toEqual([child.id]);
+
+  /* And it wakes nobody again while nothing about it moves. The outcome the
+     line stood for is acknowledged, so the harvest no longer offers it; the
+     stall it was shown in is the stall it is still in, so the stall path does
+     not raise it a second time. The child is still open work, so the interval
+     agenda still says so — once, and without the stall line under it. */
+  const third = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat });
+  const after = await runSeatTickCheck(fixture.project, third.deps);
+  expect(after).toMatchObject({ verdict: "wake", reasons: ["interval"], items: 1 });
+  const later = agendaOf(third.sent[0]!.text);
+  expect(later).toEqual([`- [child] ${child.id} — current worker — spawned child running`]);
+});
+
+test("a stall one seat was shown is shown again to the seat that succeeds it (#1783)", async () => {
+  const fixture = childFixture("stall-shown-across-rotation");
+  /* A stall and nothing else: an open turn on the registry with no host behind
+     it, spawned minutes ago, no ended turn in its ledger. It owes no outcome,
+     so there is nothing a landing could acknowledge for it and nothing that
+     will ever change its own record again — a dead host over an open turn
+     writes no more of them. That is the case the showings record exists for,
+     and therefore the case a rotation must not swallow. */
+  const child = fixture.spawn({ title: "stalled worker", turn: "busy", host: "dead" });
+  fixture.seed();
+  const stallLine = `- [child] ${child.id} — stalled worker — child ${child.id} runs a turn the registry reports gone (host_gone_turn_open)`;
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat });
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["interval"] });
+  expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
+
+  /* Epoch 7 is told, and the landing records the state it was shown in. */
+  const shown = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
+  expect((await runSeatTickCheck(fixture.project, shown.deps))!.reasons).toContain("stalled");
+  expect(agendaOf(shown.sent[0]!.text)).toEqual([stallLine]);
+  expect(fixture.row().childrenShown).toHaveLength(1);
+
+  /* Same seat, nothing moved: not told again. This is what the record buys and
+     what makes the question below a real one. */
+  const again = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat });
+  expect((await runSeatTickCheck(fixture.project, again.deps))!.reasons).not.toContain("stalled");
+  expect(agendaOf(again.sent[0]!.text)).toEqual([`- [child] ${child.id} — stalled worker — spawned child running`]);
+
+  /* The rotation. Epoch 8 was designated an hour ago, so the child's own clock
+     is inside its day of grace and its transcript resolves: the first two
+     clauses of the eligibility test pass for it. The third is the one at issue
+     — a successor must not be answered with what its predecessor was shown,
+     because for this child the token never changes again and the successor
+     would then never be told at all. The showings are the seat's judgement and
+     the row is projected per epoch, so the rotation drops them; the stall
+     memory goes with them, which is why the successor's first check re-observes
+     the stall and its second reports it, exactly as the first seat's did. */
+  const successor = { ...fixture.seat, seatEpoch: 8, designatedAt: ago(fixture, 60) };
+  const rotated = childRig(fixture, { now: fixture.now + 183 * MINUTE, seat: successor });
+  await runSeatTickCheck(fixture.project, rotated.deps);
+  expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
+
+  const told = childRig(fixture, { now: fixture.now + 244 * MINUTE, seat: successor });
+  const record = await runSeatTickCheck(fixture.project, told.deps);
+  expect(record!.reasons).toContain("stalled");
+  /* Once, and under the stall heading. */
+  expect(agendaOf(told.sent[0]!.text).filter((line) => line.includes(child.id))).toEqual([stallLine]);
+  /* And what the predecessor was shown is gone from the row rather than
+     accumulated beside it: one token per child, whoever was shown it. */
+  expect(fixture.row().childrenShown).toHaveLength(1);
+
+  /* And the successor is told once, the same as its predecessor was: the
+     record is per seat, not per wake. */
+  const settled = childRig(fixture, { now: fixture.now + 305 * MINUTE, seat: successor });
+  await runSeatTickCheck(fixture.project, settled.deps);
+  expect(agendaOf(settled.sent[0]!.text).filter((line) => line.includes("reports gone"))).toEqual([]);
+});
+
+/* ------------------------------------------------------------------------- *
+ * The third place the same list is read (#1783, round two review).
+ *
+ * The item list filters the running children; the two clauses that decide a
+ * wake is WARRANTED at all did not. So a board whose only children are the
+ * August workers and the unreadable one raised an interval wake every hour
+ * that named nothing — the empty hourly agenda this whole mechanism exists to
+ * stop sending, arriving under the reason that says work is open. One test
+ * per side of that: a board of nothing but ineligible children ends quiet, and
+ * a board with one eligible child beside them still wakes and names it.
+ * ------------------------------------------------------------------------- */
+
+test("a board whose only children are ineligible ends quiet rather than raising an interval wake (#1783)", async () => {
+  const fixture = childFixture("ineligible-children-quiet");
+  /* The production shape with the lane taken away: two workers whose hosts
+     died over an open turn, one last written to twenty-five days before the
+     designation and one whose transcript no scanner root holds. Nothing else
+     on the board — no lane, no task, no signal. */
+  const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  ageTranscript(fixture, aged.path, 25 * 24 * 60);
+  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const first = childRig(fixture, { seat });
+  /* The stall memory saw both, so the check below is the one on which the
+     stall path would speak — and the one the interval clause spoke on. */
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "quiet" });
+  expect(fixture.row().stalledSeen).toEqual([`child:${aged.id}`, `child:${unreadable.id}`]);
+  expect(first.sent).toEqual([]);
+
+  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
+  const record = await runSeatTickCheck(fixture.project, second.deps);
+  /* No wake at all. Neither child is work this seat can act on, so neither is
+     open work, and an hour elapsing over them is not an agenda. */
+  expect(record).toMatchObject({ verdict: "quiet" });
+  expect(second.sent).toEqual([]);
+});
+
+test("one eligible child beside the ineligible ones still raises the interval wake and is named (#1783)", async () => {
+  const fixture = childFixture("eligible-child-still-wakes");
+  /* The same two, and one worker this seat spawned minutes ago whose host is
+     alive: the clause the fix narrows must still let this one through. */
+  const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
+  ageTranscript(fixture, aged.path, 25 * 24 * 60);
+  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  const live = fixture.spawn({ title: "build the exporter", turn: "busy", host: "live" });
+  fixture.seed();
+
+  const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
+  const rig = childRig(fixture, {
+    seat,
+    childActivity: { [live.id]: { lifecycle: "running", reason: "host_alive_turn_active" } },
+  });
+  const record = await runSeatTickCheck(fixture.project, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"], items: 1 });
+  const agenda = agendaOf(rig.sent[0]!.text);
+  expect(agenda).toEqual([`- [child] ${live.id} — build the exporter — spawned child running`]);
+  expect(agenda.join("\n")).not.toContain(aged.id);
+  expect(agenda.join("\n")).not.toContain(unreadable.id);
 });
