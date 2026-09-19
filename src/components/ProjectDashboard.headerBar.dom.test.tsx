@@ -496,6 +496,69 @@ test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did 
   expect(css).not.toMatch(/\.kb \.bar \.bar-lead \{[^}]*min-width: 0/);
 });
 
+test("narrow, a long project name truncates to its floor instead of pushing the row under the island", async () => {
+  barWidth = 1032;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  const name = bar(host).querySelector("h1") as HTMLElement;
+  expect(name.className).toContain("truncate");
+  /* The lead's automatic minimum is the whole name (it does not wrap), so without an explicit
+     floor the name never shrank and the row ran 25-60 px into the island's reserve at 1280. */
+  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
+  expect(css).toMatch(/\.kb \.bar\[data-bar-tier="narrow"\] \.bar-lead \{[^}]*min-width: 48px/);
+  /* The other leaves' bar holds the same floor, and its status line gives way too. */
+  click(host.querySelector('button[data-view-tab="list"]'));
+  expect(await waitFor(() => host.querySelector("[data-project-bar]") !== null)).toBe(true);
+  await settle();
+  const lead = host.querySelector('[data-project-bar] [data-bar-group="where"]') as HTMLElement;
+  expect(lead.className).toContain("min-w-12");
+  const status = host.querySelector('[data-project-bar] [data-bar-group="status"]') as HTMLElement;
+  expect(status.className).not.toContain("shrink-0");
+  expect(status.className).toContain("truncate");
+});
+
+test("the Tasks panel opens under the Board's one bar, so the bar spans it and stays one row", async () => {
+  barWidth = 1032;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  click(bar(host).querySelector("[data-task-panel-toggle]"));
+  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) !== null)).toBe(true);
+  await settle();
+
+  const panel = host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) as HTMLElement;
+  expect(host.querySelectorAll(`aside[aria-label="${en["tasks.panelTitle"]}"]`)).toHaveLength(1);
+  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
+  /* The panel is inside the board, below the bar: the bar is the board's first row and the panel
+     sits in the row under it, beside the columns. */
+  expect(board.contains(panel)).toBe(true);
+  expect(board.firstElementChild).toBe(bar(host));
+  expect(bar(host).contains(panel)).toBe(false);
+  expect(panel.closest(".kb-body")?.previousElementSibling).toBe(bar(host));
+  expect(bar(host).querySelector("[data-task-panel-toggle]")!.getAttribute("aria-pressed")).toBe("true");
+  /* 1032 px of bar is one row whether the panel is open or not; only a bar under 768 px wraps. */
+  expect(bar(host).hasAttribute("data-bar-wrap")).toBe(false);
+  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
+  expect(css).not.toMatch(/data-mode="tabs"\] \.bar/);
+  expect(css).toMatch(/\.kb \.bar\[data-bar-wrap\] \{[^}]*flex-wrap: wrap/);
+  /* The board's button reset does not reach into the panel. */
+  const reset = css.split("\n").find((line) => /^\.kb button:not\(/.test(line)) ?? "";
+  expect(reset).toContain(".kb-aside *");
+
+  /* The toggle in the bar still closes it. */
+  click(bar(host).querySelector("[data-task-panel-toggle]"));
+  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) === null)).toBe(true);
+});
+
+test("a bar under 768 px, and only there, wraps", async () => {
+  barWidth = 700;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(bar(host).hasAttribute("data-bar-wrap")).toBe(true);
+});
+
 test("uk: the switch and the working count read in Ukrainian", () => {
   expect(uk["kanban.viewTab"]).toBe("Дошка");
   expect(uk["dash.viewList"]).toBe("Розмови");

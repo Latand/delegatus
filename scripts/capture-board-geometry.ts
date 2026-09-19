@@ -15,8 +15,11 @@
  * rhythm, nothing overlapping, the island inside the bar and non-zero, the
  * pressed view segment painted differently, the switch in the same place on
  * both views, hover that never takes the accent, no undo or redo anywhere, and
- * ⋯ rules only between groups that drew a row — at 2540, 1850 and 1280 px in
- * en and uk, light and dark — and the phone's 52 px bar in the same four.
+ * ⋯ rules only between groups that drew a row, the last control 16 px clear of
+ * the island, and the same bar spanning the Tasks panel when it is open, with
+ * the panel's header clear of the island — at 2540, 1850 and 1280 px in en and
+ * uk, light and dark, under a 21-character project name — and the phone's 52 px
+ * bar in the same four.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -45,7 +48,9 @@ const BASE = createCaptureDirectory({ envName: "BOARD_CAPTURE_DIR", prefix: "llv
 const HOME = path.join(BASE, "home");
 const OUT_DIR = path.join(BASE, "out");
 const STATE_DIR = path.join(HOME, ".config", "agent-log-viewer", "state");
-const PROJECT_NAME = "harbor";
+/* The header case names its project like a real one (21 characters): a 6-letter name hid a
+   1280 px row that ran under the attention island (#1801). */
+const PROJECT_NAME = process.env.BOARD_CAPTURE_CASE === "header" ? "harbor-ledger-service" : "harbor";
 const REPO_DIR = path.join(HOME, "Projects", PROJECT_NAME);
 
 const projectSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, "-");
@@ -1180,6 +1185,8 @@ interface HeaderReading {
   hidden: string | null;
   /** The project name's box, visible or not. */
   name: Rect | null;
+  /** Whether the bar is in its wrapping face (a bar under 768 px). */
+  wrap: boolean;
 }
 
 /** Runs inside the page: the header bar, its visible controls and the island, in viewport pixels. */
@@ -1231,7 +1238,34 @@ function readHeader(): HeaderReading {
     plus,
     hidden: hiddenPill && visible(hiddenPill) ? hiddenPill.textContent?.replace(/\s+/g, " ").trim() ?? "" : null,
     name: bar?.querySelector("h1") ? rect(bar.querySelector("h1")!) : null,
+    wrap: bar?.hasAttribute("data-bar-wrap") ?? false,
   };
+}
+
+/** Runs inside the page: the open Tasks panel's box and whether its header's controls take a click at their centres. */
+function readTaskPanel() {
+  const panel = document.querySelector("aside[data-task-panel]");
+  if (!panel) return null;
+  const r = panel.getBoundingClientRect();
+  const head = panel.firstElementChild;
+  const hit = [...(head?.querySelectorAll("button") ?? [])].map((button) => {
+    const box = button.getBoundingClientRect();
+    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return { label: (button.getAttribute("aria-label") || button.textContent || "").trim(), ok: Boolean(top && (top === button || button.contains(top))) };
+  });
+  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, hit };
+}
+
+/** The bar's last control ends before the island, with the 16 px between groups to spare. */
+function lastControlClear(tag: string, reading: HeaderReading, must: (ok: boolean, message: string) => void): number | null {
+  const last = reading.controls.reduce<{ name: string; rect: Rect } | null>((best, control) => (!best || control.rect.x + control.rect.w > best.rect.x + best.rect.w ? control : best), null);
+  if (!last || !reading.island) {
+    must(false, `${tag}: no last control or no island to measure against`);
+    return null;
+  }
+  const clearance = reading.island.x - (last.rect.x + last.rect.w);
+  must(clearance >= 16 - 0.5, `${tag}: «${last.name}» ends ${clearance.toFixed(1)}px before the island`);
+  return clearance;
 }
 
 /** Runs inside the page: the open ⋯ menu's rows, groups and rules. */
@@ -1309,6 +1343,7 @@ async function headerMain(): Promise<void> {
       must(reading.overflow <= 0.5, `${tag}: the bar's content runs ${reading.overflow}px past its box`);
       must(reading.name !== null && reading.name.w >= 40, `${tag}: the project name is ${reading.name?.w ?? 0}px wide`);
       must(reading.tier === (wide ? "wide" : "narrow"), `${tag}: the bar is in its ${reading.tier} tier`);
+      const islandClearance = lastControlClear(tag, reading, must);
       for (const control of reading.controls) {
         if (control.rect.h < 24) continue;
         must(near(control.rect.h, 32, 0.5), `${tag}: «${control.name}» is ${control.rect.h}px tall`);
@@ -1404,8 +1439,28 @@ async function headerMain(): Promise<void> {
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-conversations.png`), clip: { x: 0, y: 0, width, height: 120 } });
       must(list.bars === 1 && list.bar !== null && near(list.bar.h, 48, 0.5), `${tag}: the Conversations bar is ${list.bar?.h}px tall`);
       must(reading.switchRect !== null && list.switchRect !== null && near(reading.switchRect.x, list.switchRect.x, 0.5), `${tag}: the view switch moves from x ${reading.switchRect?.x} to ${list.switchRect?.x}`);
+      const listClearance = lastControlClear(`${tag} conversations`, list, must);
       await page.click('button[data-view-tab="kanban"]');
-      report[tag] = { ...reading, gaps, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts } };
+
+      /* The Tasks panel open on the Board: the bar spans it and stays one 48 px row, the island
+         lands on the bar, and the panel's own header takes clicks at every control. */
+      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 60_000 });
+      await page.click("[data-task-panel-toggle]");
+      await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
+      await page.waitForTimeout(1_000);
+      const open = await page.evaluate(readHeader);
+      const taskPanel = await page.evaluate(readTaskPanel);
+      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-tasks-open.png`), clip: { x: 0, y: 0, width, height: 160 } });
+      must(open.bars === 1 && open.bar !== null && near(open.bar.h, 48, 0.5) && !open.wrap, `${tag} tasks open: the bar is ${open.bar?.h}px tall${open.wrap ? ", wrapping" : ""}`);
+      must(open.bar !== null && near(open.bar.x + open.bar.w, width, 0.5), `${tag} tasks open: the bar ends at x ${open.bar ? open.bar.x + open.bar.w : null}, short of the panel's edge`);
+      must(open.overflow <= 0.5, `${tag} tasks open: the bar's content runs ${open.overflow}px past its box`);
+      const openClearance = lastControlClear(`${tag} tasks open`, open, must);
+      must(taskPanel !== null && open.bar !== null && taskPanel.rect.y >= open.bar.y + open.bar.h - 0.5, `${tag} tasks open: the panel starts at y ${taskPanel?.rect.y}, beside the bar`);
+      for (const item of taskPanel?.hit ?? []) must(item.ok, `${tag} tasks open: the panel's «${item.label}» is covered at its centre`);
+      must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
+      for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
+      await page.click("[data-task-panel-toggle]");
+      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, panel: taskPanel } };
       await context.close();
 
       /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */
@@ -1469,7 +1524,7 @@ async function headerMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`board header acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("board header acceptance passed at 2540, 1850 and 1280 (en, uk; light, dark) and 390 (en, uk; light, dark).");
+    console.log("board header acceptance passed at 2540, 1850 and 1280 (en, uk; light, dark; Tasks closed and open; a 21-character project name) and 390 (en, uk; light, dark).");
   }
 }
 

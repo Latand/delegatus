@@ -2004,6 +2004,22 @@ function ProjectDashboardView({
     </>
   );
 
+  /* The Tasks panel. The Board draws it under its bar, so the bar spans it and the attention
+     island sits over the bar, clear of the panel's header (#1801); the other leaves' bar already
+     spans the row the panel sits in. */
+  const taskPanel = taskPanelOpen ? (
+    <TaskPanel
+      tasks={tasks}
+      project={project}
+      boardMembers={boardMemberKeys}
+      favorites={favoriteRows}
+      onOpenFavorite={openSwitchboardFile}
+      onToggleFavorite={(id) => board.setFavorite(id, false)}
+      onOpenTask={openTask}
+      onClose={toggleTaskPanel}
+    />
+  ) : null;
+
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
     /* A board row's long-press (#1671): the same actions its swipe reveals. */
@@ -2048,7 +2064,7 @@ function ProjectDashboardView({
             /* Issue #696: the header borrows the affirmative idle line only
                when the catalog is actually known. Under a failing fetch it
                names the failure, exactly as the overview board does. */
-            <span data-bar-group="status" className={`shrink-0 truncate text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
+            <span data-bar-group="status" className={`min-w-16 shrink truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
               {catalogFailures > 0
                 ? t("catalog.unreachable")
                 : statusBits.length ? statusBits.join(" · ") : t("common.nothingRunning")}
@@ -2309,6 +2325,7 @@ function ProjectDashboardView({
                 viewSwitch={(wide) => <ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />}
                 barLead={barLead}
                 barTrail={(wide) => barTrail(wide, true)}
+                aside={taskPanel}
               />
             ) : listAvailable ? (
               <DesktopConversations project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
@@ -2321,18 +2338,7 @@ function ProjectDashboardView({
               />
             )}
           </div>
-          {taskPanelOpen ? (
-            <TaskPanel
-              tasks={tasks}
-              project={project}
-              boardMembers={boardMemberKeys}
-              favorites={favoriteRows}
-              onOpenFavorite={openSwitchboardFile}
-              onToggleFavorite={(id) => board.setFavorite(id, false)}
-              onOpenTask={openTask}
-              onClose={toggleTaskPanel}
-            />
-          ) : null}
+          {boardReady && kanbanLeaf ? null : taskPanel}
         </div>
       )}
 

@@ -24,7 +24,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
 | 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | |
 | 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1700 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
-| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px |
+| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px; the Tasks panel opens under the bar, which spans it |
 | 7 | more | `⋯` menu | §4 |
 | 8 | what needs me | attention island, in the 236 px reserve | far right, where it already lives |
 
@@ -114,3 +114,10 @@ Not rendered here: account pills, undo/redo and the non-zero island (the synthet
 ## Build correction: the tier threshold is 1700 px, not 1200
 
 Measured while building: labelled, with two account switches, the groups need about 1 300 px plus the bar's 16 px left padding and 236 px island reserve, so the first build put the wide tier at 1600 px of bar. The seeded capture of the fix round then showed 1602 px (a 1850 px viewport with the rail) is too tight in uk: the project name collapsed to nothing and the account switches ran into the status text. The uk labels need about 1 640 px, so the wide tier starts at 1700 px of bar (a 1948 px viewport), and the project name keeps at least 48 px before anything else gives. 2540 is wide; 1850 and 1280 are narrow. The evidence keeps the 1850 case and checks the name stays visible and the bar never overflows.
+
+## Build correction: the name gives way, and the bar spans the Tasks panel
+
+The render critique of the first fix round found two states the 6-letter fixture name and a closed Tasks panel had hidden:
+
+- **A real-length name ran the row under the island at 1280.** The lead group's automatic minimum is its whole unwrapped name, so it never shrank and the row ran 25 px (en) to 60 px (uk) past the reserve; in uk `⋯` lay fully under the island. Narrow, the lead now has an explicit 48 px floor (`.kb .bar[data-bar-tier="narrow"] .bar-lead`, `min-w-12` on the other leaves' bar), so after the search reaches 160 px the name truncates down to that floor. On Conversations the branches/trees line also truncates (64 px floor). The capture now uses a 21-character project name and measures the last control's right edge against the island's left edge (16 px clear).
+- **The Tasks panel pushed the bar back to two rows.** The panel sat beside the board, so the bar lost 280 px, the board's tabbed mode wrapped it, and the 236 px reserve guarded nothing because the island sat over the panel's own header. The Board now draws the panel itself, under its bar (`KanbanBoard`'s `aside` slot): the bar spans the board and the panel, keeps one 48 px row at every width, and the island lands on the bar, clear of the panel's scope switch and close button. The columns' mode follows the width the panel leaves them; the bar wraps only when the bar itself is under 768 px. Conversations already drew its bar across the panel's row.

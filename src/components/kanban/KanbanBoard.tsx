@@ -130,6 +130,9 @@ export interface KanbanBoardProps {
   barLead?: (wide: boolean) => ReactNode;
   /** The bar's last groups (the panel toggles and the ⋯ menu), given the bar's tier (#1801). */
   barTrail?: (wide: boolean) => ReactNode;
+  /** A panel beside the board and under the bar (the project's Tasks panel), so the bar spans it
+      and the attention island lands over the bar instead of the panel's own header (#1801). */
+  aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
   seat?: (boardId: string, seatRead: OrchestratorSeatRead | null) => ReactNode;
@@ -303,9 +306,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const assignments = props.assignmentPorts ?? browserAssignmentPorts;
   const boardId = `kb-board-${useId().replace(/:/g, "")}`;
   const rootRef = useRef<HTMLDivElement>(null);
+  const asideRef = useRef<HTMLDivElement>(null);
+  const hasAside = Boolean(props.aside);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
   /* The header bar's tier (#1801): labelled controls from BAR_WIDE_MIN of bar, icons below. */
   const [barWide, setBarWide] = useState(true);
+  const [barWrap, setBarWrap] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [linkQuery, setLinkQuery] = useState("");
@@ -594,17 +600,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const element = rootRef.current;
     if (!element) return;
+    /* The bar spans the board and its aside; the columns' mode follows what the aside leaves them. */
+    const aside = asideRef.current;
     const apply = () => {
-      const width = element.getBoundingClientRect().width;
-      setMode(kanbanLayoutMode(width));
-      setBarWide(width >= BAR_WIDE_MIN);
+      const barWidth = element.getBoundingClientRect().width;
+      setMode(kanbanLayoutMode(barWidth - (aside?.getBoundingClientRect().width ?? 0)));
+      setBarWide(barWidth >= BAR_WIDE_MIN);
+      setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
     };
     apply();
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(apply);
     observer.observe(element);
+    if (aside) observer.observe(aside);
     return () => observer.disconnect();
-  }, []);
+  }, [hasAside]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1452,7 +1462,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      const inBoard = Boolean(target && rootRef.current?.contains(target));
+      const inBoard = Boolean(target && rootRef.current?.contains(target) && !target.closest(".kb-aside"));
       if (event.key === "/") {
         /* Outside the board `/` stays the Viewer's global search. Inside it,
            it finds a task, and the Viewer's window listener must not open
@@ -2142,7 +2152,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
           happening, one spacer, find, view, create, panels, more. The two ends are the project's own
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
-      <header className="bar" data-bar-tier={barWide ? "wide" : "narrow"}>
+      <header className="bar" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined}>
         {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
         <span className="summary" data-bar-group="status">
           {catalogFailures > 0 ? <span className="bar-alert" role="alert">{t("kanban.filesFailed")}</span> : (
@@ -2197,6 +2207,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
       </header>
 
+      <div className="kb-body">
       <div className="kb-page">
       {props.seat ? props.seat(boardId, props.seatRefs === undefined ? seatRead : null) : null}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")}>
@@ -2249,6 +2260,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </div>
       )}
       </div>
+      </div>
+      {props.aside ? <div ref={asideRef} className="kb-aside">{props.aside}</div> : null}
       </div>
       <div ref={parkRef} className="reader-park" hidden aria-hidden="true" />
       {sheetView}
