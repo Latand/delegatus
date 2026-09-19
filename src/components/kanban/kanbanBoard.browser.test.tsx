@@ -3659,6 +3659,184 @@ describe("#1765 pipelines named on the card", () => {
   }, 600_000);
 });
 
+describe("#1865 stage conversations lead with the stage and its attempt", () => {
+  /*
+   * Rendered evidence for #1865: the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=issue1865`, with the production
+   * stylesheet, in Chromium, at 1440 and 1280, in English and Ukrainian, light
+   * and dark:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=$(which google-chrome-stable) \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#1865"
+   *
+   * The seeded task carries the header lane the operator read: design → build
+   * → critique, where design and critique share the architect preset and
+   * critique ran twice. Three of its stage conversations are opened on the
+   * card — design, critique's latest attempt from the lane's row, and
+   * critique's first from Past attempts — and each reader header is gated: it
+   * leads with the stage's name, with the attempt once the stage ran twice
+   * (`Design`, `Critique · 1`, `Critique · 2`), the three are distinct, none
+   * names the preset, the preset is in the header's tooltip, and the label
+   * itself is drawn whole. The Stages sheet is then opened and its panes must
+   * name the same stages letter for letter.
+   *
+   * Measurements go to `evidence/issue-1865/board.json`; frames to
+   * `.artifacts/issue-1865/`, which is not committed.
+   */
+
+  const OUT = path.resolve(".artifacts/issue-1865");
+  const EVIDENCE = path.resolve("evidence/issue-1865");
+  const CARD = card("t-labels");
+  const TASK = "Build the board header lane";
+  const LABELS = ["Design", "Critique · 1", "Critique · 2"];
+
+  interface Header { text: string; hint: string; label: string; labelWhole: boolean; width: number; attempt: { text: string; muted: boolean; tabular: boolean } | null }
+  interface Tile { name: string; attempt: string; hint: string; nameWhole: boolean; attemptMuted: boolean }
+
+  /** Each reader header on the card, whether its leading stage label is painted
+      whole, and how its attempt suffix is set apart from the bold name. */
+  const measureHeaders = (page: Page) => page.evaluate(({ selector, labels }): Header[] => {
+    const cardEl = document.querySelector(selector);
+    return [...(cardEl?.querySelectorAll<HTMLElement>(".conv-head .ch-title") ?? [])].map((title) => {
+      const text = title.textContent ?? "";
+      const label = labels.filter((candidate) => text.startsWith(`${candidate} · `)).sort((a, b) => b.length - a.length)[0] ?? "";
+      const box = title.getBoundingClientRect();
+      const suffix = title.querySelector<HTMLElement>(".attempt");
+      /* The label ends where the attempt suffix ends, or with the name. */
+      let end: DOMRect | null = null;
+      if (suffix) end = suffix.getBoundingClientRect();
+      else if (label && title.firstChild?.nodeType === Node.TEXT_NODE) {
+        const range = document.createRange();
+        range.setStart(title.firstChild, 0);
+        range.setEnd(title.firstChild, label.length);
+        end = range.getBoundingClientRect();
+      }
+      const labelWhole = !!label && !!end && box.width > 0 && end.right <= box.right + 0.5;
+      const attempt = suffix ? (() => {
+        const style = getComputedStyle(suffix);
+        return { text: suffix.textContent ?? "", muted: style.color !== getComputedStyle(title).color, tabular: style.fontVariantNumeric.includes("tabular-nums") };
+      })() : null;
+      return { text, hint: title.getAttribute("title") ?? "", label, labelWhole, width: Math.round(box.width * 10) / 10, attempt };
+    });
+  }, { selector: CARD, labels: LABELS });
+
+  /** Each stage tile on the card: its name, its attempt suffix, and whether the
+      name is drawn whole. */
+  const measureTiles = (page: Page) => page.evaluate((selector): Tile[] => {
+    const cardEl = document.querySelector(selector);
+    return [...(cardEl?.querySelectorAll<HTMLElement>(".tile") ?? [])].map((tile) => {
+      const role = tile.querySelector<HTMLElement>(".role");
+      const suffix = tile.querySelector<HTMLElement>(".attempt");
+      return {
+        name: role?.textContent ?? "",
+        attempt: suffix?.textContent ?? "",
+        hint: role?.getAttribute("title") ?? "",
+        nameWhole: !!role && role.scrollWidth <= role.clientWidth + 0.5,
+        attemptMuted: !!suffix && !!role && getComputedStyle(suffix).color !== getComputedStyle(role).color,
+      };
+    });
+  }, CARD);
+
+  /** A pointer click at the centre of the first match: the board's chips and
+      Past attempts' buttons are real targets under the mouse. */
+  const clickAt = async (page: Page, selector: string) => {
+    const target = page.locator(selector).first();
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    if (!box) throw new Error(`nothing drawn at ${selector}`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(350);
+  };
+
+  browserTest("#1865: each stage conversation on the card names its stage and attempt, as the stage list does", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const base = `${server.base}?scenario=issue1865`;
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const width of [1440, 1280]) {
+            const label = `${width}-${lang}-${scheme}`;
+            const viewport = { width, height: 900 };
+            const opened = await openFixture(browser, base, viewport, scheme, lang);
+            const fail = (text: string) => failures.push(`${label}: ${text}`);
+            try {
+              await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
+              await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+              await opened.page.waitForTimeout(500);
+              await clickAt(opened.page, `${CARD} .pchip[data-stage="design"]`);
+              await clickAt(opened.page, `${CARD} .pchip[data-stage="critique"]`);
+              /* Critique's first attempt opens from the card's Past attempts,
+                 which the card keeps folded. */
+              if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
+                await clickAt(opened.page, `${CARD} details.history > summary`);
+              }
+              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} details.history [data-past]`)]
+                .find((row) => /^Critique/.test(row.querySelector(".lbl")?.textContent ?? ""))?.dataset.past ?? null, CARD);
+              if (!pastKey) fail("Past attempts lists no earlier critique");
+              else await clickAt(opened.page, `${CARD} details.history [data-past=${JSON.stringify(pastKey)}] .hopen`);
+              const headers = await measureHeaders(opened.page);
+              await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
+              await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+
+              const texts = headers.map((header) => header.text).sort();
+              const expected = LABELS.map((stage) => `${stage} · ${TASK}`).sort();
+              if (JSON.stringify(texts) !== JSON.stringify(expected)) fail(`reader headers ${JSON.stringify(texts)}, expected ${JSON.stringify(expected)}`);
+              const preset = translate(lang, "roleCopy.architect.name" as never);
+              for (const header of headers) {
+                if (header.text.includes(preset)) fail(`a header names the preset: ${JSON.stringify(header.text)}`);
+                if (!header.hint.includes(` · ${preset} · `)) fail(`the preset is missing from the tooltip: ${JSON.stringify(header.hint)}`);
+                if (!header.labelWhole) fail(`the stage label is cut: ${JSON.stringify(header)}`);
+              }
+              for (const header of headers.filter((entry) => entry.label.includes(" · "))) {
+                if (!header.attempt?.muted || !header.attempt.tabular) fail(`the attempt in ${JSON.stringify(header.label)} is not a muted tabular suffix: ${JSON.stringify(header.attempt)}`);
+              }
+              const critique2 = headers.find((header) => header.label === "Critique · 2");
+              const attemptOf = translate(lang, "kanban.stageAttemptOf" as never, { stage: "Critique", n: 2, total: 2 } as never);
+              if (!critique2?.hint.startsWith(attemptOf)) fail(`the latest critique's tooltip reads ${JSON.stringify(critique2?.hint)}`);
+
+              await clickAt(opened.page, `${CARD} [data-open-stages]`);
+              await opened.page.waitForSelector("[data-stages-sheet] .pane .pname", { timeout: 10_000 });
+              await opened.page.waitForTimeout(400);
+              const stageList = await opened.page.evaluate(() => [...document.querySelectorAll("[data-stages-sheet] .pane .pname")].map((name) => name.textContent ?? ""));
+              await opened.page.screenshot({ path: path.join(OUT, `sheet-${label}.png`) });
+              if (JSON.stringify(stageList) !== JSON.stringify(["1. Design", "2. Build", "3. Critique"])) fail(`the stage list reads ${JSON.stringify(stageList)}`);
+              for (const header of headers) {
+                const name = header.label.split(" · ")[0];
+                if (!stageList.some((entry) => entry.endsWith(`. ${name}`))) fail(`${JSON.stringify(header.label)} names no stage of the list`);
+              }
+              /* The member tiles the card draws for stage conversations, where
+                 it draws them: the same label, the suffix muted, the name whole. */
+              const tiles = await measureTiles(opened.page);
+              for (const tile of tiles.filter((entry) => entry.hint)) {
+                if (tile.hint.startsWith(tile.name) === false) fail(`a tile's tooltip does not lead with its stage: ${JSON.stringify(tile)}`);
+                if (!tile.nameWhole) fail(`a tile's stage name is cut: ${JSON.stringify(tile)}`);
+                if (tile.attempt && !tile.attemptMuted) fail(`a tile's attempt is not muted: ${JSON.stringify(tile)}`);
+              }
+              frames.push({ label, viewport, lang, scheme, headers, tiles, stageList });
+              if (opened.pageErrors.length) fail(`page errors ${opened.pageErrors.join(" | ")}`);
+            } catch (error) {
+              fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            } finally {
+              await opened.context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("#1743 engine marks, effort scale and how often an edge fired", () => {
   /*
    * Rendered evidence for #1743, on the harness the #1695 cases already use: the

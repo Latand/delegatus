@@ -261,6 +261,10 @@
 .kb .tile .row { display: flex; align-items: center; gap: 6px; font-size: var(--text-label); min-width: 0; }
 .kb .tile .role { font-weight: 600; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kb .tile .engine { flex-shrink: 0; }
+/* The attempt a stage tile names (#1865): a muted tabular suffix that keeps
+   its place while the stage name truncates. The row's gap is taken back so
+   «Critique · 2» spaces like one phrase. */
+.kb .tile .attempt { flex-shrink: 0; margin-left: -6px; white-space: pre; font-weight: 600; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .kb .tile .state { margin-left: auto; font-weight: 600; color: var(--color-muted); white-space: nowrap; }
 .kb .tile .state.working { color: var(--color-success); }
 .kb .tile .state.needs { color: var(--color-warning); }
@@ -675,6 +679,7 @@
 .kb .reader .ch-continues { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent); background: var(--color-accent-soft); color: var(--color-accent); font-size: var(--text-caption); font-weight: 600; white-space: nowrap; }
 .kb .reader .ch-continues:hover { border-color: var(--color-accent); }
 .kb .reader .ch-title { min-width: 0; font-size: var(--text-ui); font-weight: 650; color: var(--color-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .reader .ch-title .attempt { color: var(--color-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
 .kb .reader .icon-btn.sm { width: 24px; height: 24px; }
 .kb .reader .icon-btn.sm svg { width: 14px; height: 14px; }
 .kb .reader .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }

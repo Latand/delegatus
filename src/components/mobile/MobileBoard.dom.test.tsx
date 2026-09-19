@@ -316,13 +316,13 @@ test("with no conversation focused the phone leaf is the board: the seat first, 
   expect(rows[0]!.textContent).toContain(translate("en", "mobile2.board.badgeQuestion"));
   expect(rows[1]!.textContent).toContain("Fast conversation switching");
   expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.badgeDecision"));
-  /* «stage 2/2 · review loop failed · 2 findings»: the stage in the product's
-     own word for it, never the raw stage id. */
+  /* «stage 2/2 · review failed · 2 findings»: the stage by the name the stage
+     list gives it, lowercased inside the sentence (#1865). */
   expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineStageFailed", {
-    stage: 2, total: 2, name: translate("en", "pipelineStrip.reviewStage"),
+    stage: 2, total: 2, name: "review",
   }));
   expect(rows[1]!.textContent).toContain(translate("en", "mobile2.board.pipelineFindings", { count: 2 }));
-  expect(rows[1]!.textContent).not.toContain("review failed");
+  expect(rows[1]!.textContent).not.toContain(translate("en", "pipelineStrip.reviewStage").toLocaleLowerCase());
   /* Every row keeps its 8 px dot column — hidden on an edged row rather than
      dropped — so an edged title and an unedged one start on the same line
      (the prototype's `.row.wait .dot { visibility: hidden }`). */

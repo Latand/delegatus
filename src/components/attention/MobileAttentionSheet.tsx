@@ -8,7 +8,7 @@ import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { useLocale } from "@/lib/i18n";
 
 import type { AttentionItem } from "../attention";
-import { stageChipLabel } from "../pipelines/pipelineModel";
+import { stageCardLabel, stageLatestAttemptPlace } from "../pipelines/pipelineModel";
 import { humanizeDuration } from "../turnDuration";
 import { cleanTitle } from "../utils";
 import { nextMobileAttention, type MobileAttentionEntry } from "./attentionQueue";
@@ -142,7 +142,7 @@ function ConversationRow({ item, now, current, onOpen }: { item: AttentionItem; 
 
 function PipelineRow({ row, current, onOpen }: { row: MobileBoardPipelineRow; current: boolean; onOpen?: () => void }) {
   const { t } = useLocale();
-  const stageName = row.stageRef ? stageChipLabel(t, row.stageRef).toLocaleLowerCase() : "";
+  const stageName = row.stageRef ? stageCardLabel(t, row.stageRef, stageLatestAttemptPlace(row.pipeline, row.stageRef.id)).toLocaleLowerCase() : "";
   const meta = [
     t("mobile2.attention.pipeline"),
     t(row.stageFailed ? "mobile2.board.pipelineStageFailed" : "mobile2.board.pipelineStage", { stage: row.stage, total: row.total, name: stageName }),

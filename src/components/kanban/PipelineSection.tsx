@@ -5,7 +5,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
-import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { attemptStateLabel, latestAttempt, pipelineStateLabel, stageChipLabel, stageNames, type StageChipState } from "@/components/pipelines/pipelineModel";
+
+/* The stage-name rule lives beside `stageChipLabel` so the phone reads it
+   without pulling a kanban component (#1865). */
+export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline } from "./kanbanModel";
@@ -120,32 +124,6 @@ function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
       {t("kanban.graph.edited", { who, age: Number.isFinite(at) ? fmtAge(at / 1000) : "", change })}
     </p>
   );
-}
-
-/** A stage id that names nothing the role does not already say. */
-const GENERIC_STAGE_ID = /^(?:stage|step|s|run|task)[-_ ]?\d*$/i;
-/** A stage id that is an identifier rather than a word: never drawn as a name. */
-const OPAQUE_STAGE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{8,}$|^\d+$/i;
-
-/**
- * A stage's name: its own id where the id says more than the role — `critique`,
- * `fix`, `diagnose` — and the role's name where the id only repeats the role or
- * names nothing (`stage-2`) (#1765). Stage ids are unique inside a pipeline, so
- * two stages of one pipeline never read alike.
- */
-export function stageDisplayName(t: TFunction, stage: PipelineStage): string {
-  const role = stageChipLabel(t, stage);
-  const words = stage.id.replace(/[-_]+/g, " ").trim();
-  if (!words || GENERIC_STAGE_ID.test(stage.id) || OPAQUE_STAGE_ID.test(stage.id)) return role;
-  const humanized = words[0]!.toUpperCase() + words.slice(1);
-  /* An id that IS the role (however it is cased) says nothing more; a role-less
-     stage falls back to its own id anyway, and reads better capitalized. */
-  if (stage.role?.roleId && stage.id.toLowerCase() === stage.role.roleId.toLowerCase()) return role;
-  return humanized;
-}
-
-export function stageNames(t: TFunction, pipeline: Pipeline): Map<string, string> {
-  return new Map(pipeline.stages.map((stage) => [stage.id, stageDisplayName(t, stage)] as const));
 }
 
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {

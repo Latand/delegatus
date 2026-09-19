@@ -124,8 +124,9 @@ const mergeStarted = () => searchPipeline({}, { stageId: "merge", attempts: [att
 
 const flows = [{ id: "flow-review", rounds: [{ n: 1, verdict: "REQUEST_CHANGES", reviewerPath: null, reviewerConversationId: null, startedAt: iso(3500) }, { n: 2, verdict: "APPROVE", reviewerPath: null, reviewerConversationId: null, startedAt: iso(3000) }] }] as unknown as Flow[];
 
-function task(id: string, status: TaskStatus, text: string): BoardTask {
-  return { id, project: "fixture", text, status, placement: "unplaced", assignments: [], createdAt: iso(9000), updatedAt: iso(600), revision: REV(1) } as BoardTask;
+function task(id: string, status: TaskStatus, text: string, assigned: readonly FileEntry[] = []): BoardTask {
+  const assignments = assigned.map((file) => ({ path: file.path, conversationId: file.conversationId, panePid: null, state: "handoff", error: null, at: iso(600) }));
+  return { id, project: "fixture", text, status, placement: "unplaced", assignments, createdAt: iso(9000), updatedAt: iso(600), revision: REV(1) } as BoardTask;
 }
 
 const idlePorts: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
@@ -184,7 +185,7 @@ function pipelineRoute(stored: () => Pipeline) {
   return { ports, patches, reads, state };
 }
 
-function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: TaskStatus } = {}) {
+function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: TaskStatus; assigned?: FileEntry[] } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -196,12 +197,12 @@ function mount(pipeline: Pipeline, options: { files?: FileEntry[]; status?: Task
     <KanbanBoard
       project="fixture"
       groups={[]}
-      manual={[]}
+      manual={options.assigned ?? []}
       files={currentFiles}
       flows={flows}
       pipelines={current ? [current] : []}
       tasks={[]}
-      allTasks={[task("t-search", options.status ?? "assigned", "Restore search results after the index rebuild")]}
+      allTasks={[task("t-search", options.status ?? "assigned", "Restore search results after the index rebuild", options.assigned)]}
       drafts={[]}
       now={NOW}
       loaded
@@ -823,4 +824,47 @@ test("a stage waiting before any attempt of its own is expected as attempt 0, an
   await tick();
   expect(route.patches.at(-1)?.body).toEqual({ action: "retry-stage", expectedStageId: "merge", expectedAttempt: 0 });
   expect(receiptTexts(host).at(-1)).toBe("Retrying Merge in «Restore search results after the index rebuild»");
+});
+
+/* Stage cards say which stage they are (#1865): a design stage and a critique
+   stage share the architect preset, and critique ran twice. A stage's reader
+   names the stage the way the stage list does, with the attempt once there are
+   two; the preset moves to the header's tooltip. */
+test("readers of stages that share a role preset carry the stage's name and attempt, as the stage list names them", async () => {
+  const design1 = conversation("design-1");
+  const critique1 = conversation("critique-1");
+  const critique2 = conversation("critique-2");
+  const record = {
+    ...searchPipeline(),
+    stages: [stage("design", "architect", "critique"), stage("critique", "architect", null, { onFail: { to: "design", maxRounds: 2 } })],
+    runs: [
+      { stageId: "design", attempts: [attempt(1, "passed", design1, 7200)] },
+      { stageId: "critique", attempts: [attempt(1, "failed", critique1, 5000), attempt(2, "running", critique2, 1200)] },
+    ],
+    cursor: { stageId: "critique", state: "running", input: null, activatedBy: null },
+  } as unknown as Pipeline;
+  const { host } = mount(record, { files: [design1, critique1, critique2] });
+  await tick();
+  const title = "Restore search results after the index rebuild";
+  const headers = () => [...card(host).querySelectorAll<HTMLElement>(".conv-head .ch-title")];
+
+  click(card(host).querySelector('.psummary [data-stage="design"]'));
+  await tick();
+  click(card(host).querySelector('.psummary [data-stage="critique"]'));
+  await tick();
+  /* The earlier critique opens from the card's past attempts. */
+  click([...card(host).querySelectorAll<HTMLElement>("[data-past] .hopen")].find((button) => button.closest("[data-past]")?.querySelector(".lbl")?.textContent?.startsWith("Critique")));
+  await tick();
+  expect(headers().map((header) => header.textContent).sort()).toEqual([`Critique · 1 · ${title}`, `Critique · 2 · ${title}`, `Design · ${title}`]);
+  /* The preset is secondary: in the tooltip only, and left out nowhere it adds. */
+  expect(headers().some((header) => header.textContent?.includes("Architect"))).toBe(false);
+  const hint = (label: string) => headers().find((header) => header.textContent === `${label} · ${title}`)?.getAttribute("title");
+  expect(hint("Critique · 2")).toBe(`Critique, attempt 2 of 2 · Architect · Claude · ${title}`);
+  expect(hint("Critique · 1")).toBe(`Critique, attempt 1 of 2 · Architect · Claude · ${title}`);
+  expect(hint("Design")).toBe(`Design · Architect · Claude · ${title}`);
+
+  /* The names are the stage list's, letter for letter. */
+  press(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  expect([...sheet(host)!.querySelectorAll<HTMLElement>(".pane .pname")].map((name) => name.textContent)).toEqual(["1. Design", "2. Critique"]);
 });
