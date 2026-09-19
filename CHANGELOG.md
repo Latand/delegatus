@@ -7,6 +7,8 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-09-19
+
 ### Changed
 - The task board is stored in SQLite (`state.sqlite`, collection `tasks`)
   instead of `tasks.json`. A write commits only the tasks it changed, in one
@@ -24,6 +26,26 @@ guarantees for the 1.x series.
   the directory with the `tasks.json.imported-*` copy also works, but loses
   task changes made since the upgrade. Deployed releases rolled back through
   the release fence get a fresh `tasks.json` written for them automatically.
+
+### Fixed
+- An orchestrator seat is woken when an agent it spawned outside a pipeline
+  finishes, within one check interval, and a child whose transcript cannot be
+  read is named with its reason instead of being counted silently (#1881).
+- The account removal dialog gives each refusal its own message and says what
+  was moved on success (#1857).
+
+### Added
+- First-run setup guide: connect engines, choose which engine, model and effort
+  each role runs on with cost hints, and a plain refusal when a stage names an
+  engine that has no signed-in account. Shipped defaults are unchanged (#1876).
+- The orchestrator mandate lists each role's engine, model, effort and access
+  from the live role registry (#1880).
+- Stage conversation cards lead with the stage and its attempt; the role preset
+  is secondary (#1865).
+
+### Upgrade and verification
+- Install with `npx agent-log-viewer@1.2.2 --no-open`, or
+  `bun install -g agent-log-viewer@1.2.2`.
 
 ## [1.2.1] — 2026-09-19
 
@@ -648,7 +670,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Latand/live-log-viewer-next/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Latand/live-log-viewer-next/compare/v1.0.3...v1.1.0
