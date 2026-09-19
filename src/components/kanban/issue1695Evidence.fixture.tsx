@@ -50,6 +50,15 @@ const MANY = SCENARIO === "issue1765";
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* #1820: the Overview draws the SAME board over every project, filtered to the
+   cards a worker is working on right now. Two invented projects join `atlas`
+   so the shared columns can be read across three, each bringing one card with
+   a worker on it and one with nobody. `issue1820-empty` answers every route
+   with nothing, which is the Overview's first run. */
+const OVERVIEW_SCOPE = SCENARIO === "issue1820";
+const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
+const LEDGER = "acme-ledger";
+const MESH = "river-mesh";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -144,6 +153,13 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
 /* K5a: a helper conversation the search builder brought in, and a review that took five rounds. */
+/* #1820's two other projects. Working evidence is the one the board's «N
+   working» counter reads: a live transcript whose turn never closed. */
+const ledgerBuild = OVERVIEW_SCOPE ? add(conversation("ledger-build", "Reconciling the ledger export", { project: LEDGER, ...working({ plan: { current: "Reconciling the ledger export" } }) })) : null;
+const ledgerQuiet = OVERVIEW_SCOPE ? add(conversation("ledger-quiet", "Archived last quarter", { project: LEDGER, mtime: now - 4 * 60 * MIN, lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 } })) : null;
+const meshAsk = OVERVIEW_SCOPE ? add(conversation("mesh-ask", "Which of the two meshes keeps the old ids?", { project: MESH, engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } })) : null;
+const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the migration notes", { project: MESH, mtime: now - 6 * 60 * MIN })) : null;
+
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
 const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
@@ -411,6 +427,14 @@ const tasks: BoardTask[] = [
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
 ];
+if (OVERVIEW_SCOPE) {
+  tasks.push(
+    task("t-ledger", "assigned", "Reconcile the ledger export against the bank file", "Two of the quarter's statements disagree by one day.", 3 * MIN, [ledgerBuild!], { project: LEDGER }),
+    task("t-ledger-quiet", "assigned", "Archive last quarter's statements", "", 4 * 60 * MIN, [ledgerQuiet!], { project: LEDGER }),
+    task("t-mesh", "blocked", "Unblock the mesh id migration", "The old ids must survive the cut-over.", 11 * MIN, [meshAsk!], { project: MESH }),
+    task("t-mesh-quiet", "done", "Write the migration notes", "", 6 * 60 * MIN, [meshQuiet!], { project: MESH }),
+  );
+}
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
   const hide = (id: string, by: "operator" | "agent", secondsAgo: number) => {
@@ -652,7 +676,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
-    const body = JSON.stringify({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
+    /* #1820's first run: an installation with nothing in it at all. */
+    const scoped = OVERVIEW_EMPTY
+      ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
+      : {
+        files,
+        projectCatalog: [...new Set(files.map((file) => file.project))].map((project) => {
+          const own = files.filter((file) => file.project === project);
+          return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
+        }),
+        flows,
+        pipelines,
+        tasks,
+      };
+    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -672,7 +709,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskCreates.push(body);
@@ -926,10 +963,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
-localStorage.setItem("llvProject", PROJECT);
+/* #1820's scenarios ARE the Overview, which is the view with no project
+   selected; every other scenario opens on `atlas`'s own board. */
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY;
+if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
+else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so
    English is only the DEFAULT here — writing it unconditionally turned every
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
-if (!location.hash) location.hash = `#p=${PROJECT}`;
+if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
 createRoot(document.getElementById("root")!).render(<Viewer />);

@@ -2116,21 +2116,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
           </button>
           {props.viewSwitch ? <span className="view-switch">{props.viewSwitch}</span> : null}
         </div>
-        <div className="bar-create">
-          {/* Both creation surfaces write into ONE project's board. The
-              Overview has no single project to write into, so it offers
-              neither rather than picking one for the operator (#1820). */}
-          {props.overview ? null : (
-            <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
-              <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
-            </button>
-          )}
-          {props.onNewAgent ? (
-            <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
-              <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
-            </button>
-          ) : null}
-        </div>
+        {/* Both creation surfaces write into ONE project's board. The Overview
+            has no single project to write into, so it offers neither rather
+            than picking one for the operator — and the slot itself goes with
+            them, so the bar keeps no empty cell where they were (#1820). */}
+        {props.overview && !props.onNewAgent ? null : (
+          <div className="bar-create">
+            {props.overview ? null : (
+              <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
+                <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
+              </button>
+            )}
+            {props.onNewAgent ? (
+              <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
+                <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
+              </button>
+            ) : null}
+          </div>
+        )}
       </header>
 
       <div className="kb-page">

@@ -1,0 +1,237 @@
+{
+  "frames": {
+    "desktop-1440": {
+      "viewport": {
+        "label": "desktop-1440",
+        "width": 1440,
+        "height": 900
+      },
+      "measured": {
+        "boards": 1,
+        "columns": [
+          "inbox",
+          "assigned",
+          "blocked",
+          "done"
+        ],
+        "columnCounts": [
+          {
+            "status": "inbox",
+            "count": "0 of 3"
+          },
+          {
+            "status": "assigned",
+            "count": "5 of 9"
+          },
+          {
+            "status": "blocked",
+            "count": "2 of 3"
+          },
+          {
+            "status": "done",
+            "count": "1 of 6"
+          }
+        ],
+        "cards": [
+          {
+            "id": "lineage:conversation_orchestrator",
+            "status": "inbox",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-export",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-ledger",
+            "status": "assigned",
+            "project": "acme-ledger"
+          },
+          {
+            "id": "task:t-links",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-search",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-upload",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-limits",
+            "status": "blocked",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-mesh",
+            "status": "blocked",
+            "project": "river-mesh"
+          },
+          {
+            "id": "task:t-attach",
+            "status": "done",
+            "project": "atlas"
+          }
+        ],
+        "projectsOnCards": [
+          "acme-ledger",
+          "atlas",
+          "river-mesh"
+        ],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": false,
+        "headerLine": "Overview9 branches running in 2 projects · Only what is working right now"
+      }
+    },
+    "desktop-1440-empty": {
+      "viewport": {
+        "label": "desktop-1440",
+        "width": 1440,
+        "height": 900
+      },
+      "measured": {
+        "boards": 0,
+        "columns": [],
+        "columnCounts": [],
+        "cards": [],
+        "projectsOnCards": [],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": true,
+        "headerLine": "Overviewnothing is running right now"
+      }
+    },
+    "phone-390": {
+      "viewport": {
+        "label": "phone-390",
+        "width": 390,
+        "height": 844
+      },
+      "measured": {
+        "boards": 1,
+        "columns": [
+          "inbox",
+          "assigned",
+          "blocked",
+          "done"
+        ],
+        "columnCounts": [
+          {
+            "status": "inbox",
+            "count": "0 of 3"
+          },
+          {
+            "status": "assigned",
+            "count": "5 of 9"
+          },
+          {
+            "status": "blocked",
+            "count": "2 of 3"
+          },
+          {
+            "status": "done",
+            "count": "1 of 6"
+          }
+        ],
+        "cards": [
+          {
+            "id": "lineage:conversation_orchestrator",
+            "status": "inbox",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-export",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-ledger",
+            "status": "assigned",
+            "project": "acme-ledger"
+          },
+          {
+            "id": "task:t-links",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-search",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-upload",
+            "status": "assigned",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-limits",
+            "status": "blocked",
+            "project": "atlas"
+          },
+          {
+            "id": "task:t-mesh",
+            "status": "blocked",
+            "project": "river-mesh"
+          },
+          {
+            "id": "task:t-attach",
+            "status": "done",
+            "project": "atlas"
+          }
+        ],
+        "projectsOnCards": [
+          "acme-ledger",
+          "atlas",
+          "river-mesh"
+        ],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": false,
+        "headerLine": ""
+      }
+    },
+    "phone-390-empty": {
+      "viewport": {
+        "label": "phone-390",
+        "width": 390,
+        "height": 844
+      },
+      "measured": {
+        "boards": 0,
+        "columns": [],
+        "columnCounts": [],
+        "cards": [],
+        "projectsOnCards": [],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": true,
+        "headerLine": ""
+      }
+    }
+  },
+  "failures": []
+}
