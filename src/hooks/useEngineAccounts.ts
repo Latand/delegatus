@@ -239,7 +239,7 @@ export function observedAccountFields(raw: unknown, authPresent: boolean): Pick<
   return { authHealth, plan, limits: parseAccountLimits(record.limits), resetCredits: parseResetCredits(record.resetCredits) };
 }
 export type AccountLoadState = "loading" | "ready" | "error";
-export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "terminal" | "refreshLimits" | "resetCredit";
+export type AccountOperation = "refresh" | "add" | "switch" | "login" | "remove" | "cleanup" | "terminal" | "refreshLimits" | "resetCredit";
 
 /** The per-card limits actions (issues #1418, #1373) run one at a time and
     keep the rest of the panel usable; this names the card and the action. */
@@ -250,14 +250,11 @@ export type AccountRetryAction =
   | { type: "retry"; kind: "refresh" }
   | { type: "retry"; kind: "add"; label: string }
   | { type: "retry"; kind: "switch"; accountId: string }
-  | { type: "retry"; kind: "loginRetry"; accountId: string }
-  | { type: "retry"; kind: "forceRemove"; accountId: string }
-  | { type: "retry"; kind: "cleanupOrphans" };
+  | { type: "retry"; kind: "loginRetry"; accountId: string };
 
 export type AccountNoticeKey =
   | "accounts.refreshFailed" | "accounts.switchFailed" | "accounts.addFailed" | "accounts.loginOpened"
   | "accounts.claudeLoginStarted"
-  | "accounts.removeBlocked" | "accounts.removeHistoryBlocked" | "accounts.removeFailed" | "accounts.cleanupPending" | "accounts.cleanupManual" | "accounts.cleanupFailed"
   | "accounts.terminalCopied" | "accounts.terminalFailed"
   | "accounts.limitsRefreshFailed"
   | "accounts.resetUsed" | "accounts.resetNone" | "accounts.resetNothing" | "accounts.resetFailed"
@@ -272,6 +269,115 @@ export interface AccountNotice {
       switch failure names its actual cause instead of only the generic copy. */
   detail?: string;
   action: AccountRetryAction | null;
+}
+
+/** Why a removal did not happen (issue #1857): one per server answer, so the
+    dialog says what to do about each instead of one sentence for all of them. */
+export type AccountRefusalReason =
+  | "live_sessions" | "login_pending" | "queued_pin" | "current_conversations"
+  | "unsafe_home" | "archive_unavailable" | "accounts_locked" | "unknown_account"
+  | "removal_failed" | "no_answer";
+
+const BLOCKER_REASONS = new Set<AccountRefusalReason>(["live_sessions", "login_pending", "queued_pin", "current_conversations"]);
+const CODE_REASONS = new Set<AccountRefusalReason>(["unsafe_home", "archive_unavailable", "accounts_locked", "unknown_account", "removal_failed"]);
+/** A refusal block draws at most this many blocker lines. */
+export const MAX_REFUSAL_REASONS = 3;
+
+export interface AccountRemovalRefusal {
+  accountId: string;
+  label: string;
+  reasons: AccountRefusalReason[];
+  /** The archive destination `archive_unavailable` names. */
+  archive?: string;
+  /** The failed filesystem step's errno, for `removal_failed`. */
+  errno?: string;
+}
+
+/** What a successful removal moved, as the DELETE answers it. */
+export interface AccountRemovalSummary {
+  accountId: string;
+  label: string;
+  archive: string | null;
+  files: number;
+  bytes: number;
+  conversations: number;
+  pins: number;
+  deliveries: number;
+  migrations: number;
+  /** `pending`: the sign-in file is still inside the archive (`cleanupPending`);
+      `deleted`: a later clean-up took it out. */
+  credential: "clean" | "pending" | "deleted";
+}
+
+/** The clean-up answer: `removed[]`, `unresolved[]` and, once the server moves
+    retired-in-place homes, `archived[]`. */
+export interface AccountCleanupReport {
+  removed: string[];
+  unresolved: string[];
+  archived: Array<{ id: string; files: number; bytes: number }>;
+}
+
+/** The one removal answer the dialog shows: a refusal inside the refused row,
+    a summary or a clean-up result in the footer slot. */
+export type AccountRemovalOutcome =
+  | { kind: "refused"; refusal: AccountRemovalRefusal }
+  | { kind: "removed"; summary: AccountRemovalSummary }
+  | { kind: "cleanup"; report: AccountCleanupReport }
+  | { kind: "cleanupFailed" };
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** Maps a refused DELETE answer to its reasons; `body` null means no answer. */
+export function removalRefusalOf(accountId: string, label: string, status: number | null, body: unknown): AccountRemovalRefusal {
+  const base = { accountId, label };
+  if (status === null) return { ...base, reasons: ["no_answer"] };
+  const record = (body ?? {}) as { code?: unknown; blockers?: unknown; archive?: unknown; errno?: unknown };
+  if (record.code === "account_removal_blocked") {
+    const reasons = [...new Set(strings(record.blockers))].filter((item): item is AccountRefusalReason => BLOCKER_REASONS.has(item as AccountRefusalReason));
+    if (reasons.length > 0) return { ...base, reasons: reasons.slice(0, MAX_REFUSAL_REASONS) };
+    return { ...base, reasons: ["removal_failed"] };
+  }
+  const code = typeof record.code === "string" && CODE_REASONS.has(record.code as AccountRefusalReason) ? record.code as AccountRefusalReason : "removal_failed";
+  return {
+    ...base,
+    reasons: [code],
+    ...(code === "archive_unavailable" && typeof record.archive === "string" && record.archive ? { archive: record.archive } : {}),
+    ...(code === "removal_failed" && typeof record.errno === "string" && record.errno ? { errno: record.errno } : {}),
+  };
+}
+
+/** Reads a 200 DELETE answer into the summary; a missing number reads as zero. */
+export function removalSummaryOf(accountId: string, label: string, body: unknown): AccountRemovalSummary {
+  const record = (body ?? {}) as { moved?: { archive?: unknown; files?: unknown; bytes?: unknown }; conversationsRewritten?: unknown; pinsCleared?: unknown; deliveriesDropped?: unknown; migrationsSettled?: unknown; cleanupPending?: unknown };
+  return {
+    accountId,
+    label,
+    archive: typeof record.moved?.archive === "string" && record.moved.archive ? record.moved.archive : null,
+    files: count(record.moved?.files),
+    bytes: count(record.moved?.bytes),
+    conversations: count(record.conversationsRewritten),
+    pins: count(record.pinsCleared),
+    deliveries: count(record.deliveriesDropped),
+    migrations: count(record.migrationsSettled),
+    credential: record.cleanupPending === true ? "pending" : "clean",
+  };
+}
+
+export function cleanupReportOf(body: unknown): AccountCleanupReport {
+  const record = (body ?? {}) as { removed?: unknown; unresolved?: unknown; archived?: unknown };
+  const archived = Array.isArray(record.archived)
+    ? record.archived.flatMap((raw) => {
+      const item = raw as { id?: unknown; files?: unknown; bytes?: unknown } | null;
+      return typeof item?.id === "string" ? [{ id: item.id, files: count(item.files), bytes: count(item.bytes) }] : [];
+    })
+    : [];
+  return { removed: strings(record.removed), unresolved: strings(record.unresolved), archived };
 }
 
 export function accountNoticeText(t: TFunction, notice: AccountNotice): string {
@@ -320,6 +426,10 @@ export interface EngineAccountsSnapshot {
   /** Bumps when a card's limits changed through one of those actions, so the
       limits footer re-reads its own payload for the same account. */
   limitsVersion: number;
+  /** The account a removal is in flight for, or null. */
+  removing: string | null;
+  /** The last removal or clean-up answer, until dismissed (#1857). */
+  removal: AccountRemovalOutcome | null;
 }
 
 export interface EngineAccountsState extends EngineAccountsSnapshot {
@@ -339,10 +449,14 @@ export interface EngineAccountsState extends EngineAccountsSnapshot {
   /** Restarts sign-in for an existing managed Claude account (claude only) —
       recovers a canceled/failed/broken account without deleting it. */
   retryLogin: (accountId: string) => Promise<boolean>;
-  /** Removes one managed account. A blocked safety check exposes an explicit force retry. */
-  remove: (accountId: string, force?: boolean) => Promise<boolean>;
-  /** Removes safe managed-home directories that have no registry owner. */
+  /** Removes one managed account; its answer lands on `removal`. */
+  remove: (accountId: string) => Promise<boolean>;
+  /** Cleans up leftovers (failed sign-in folders, retired homes); the report
+      lands on `removal`, or, while a summary waits on its sign-in file, marks
+      that file deleted. */
   cleanupOrphans: () => Promise<boolean>;
+  /** Closes the refusal, summary or clean-up card. */
+  dismissRemoval: () => void;
   /** Copies the account-bound agent CLI command (for a terminal/tmux on the
       operator's machine) to the clipboard; the notice echoes the command. */
   copyTerminalCommand: (accountId: string) => Promise<boolean>;
@@ -379,6 +493,8 @@ const INITIAL_SNAPSHOT: EngineAccountsSnapshot = {
   autoBalance: null,
   limitsBusy: null,
   limitsVersion: 0,
+  removing: null,
+  removal: null,
 };
 
 interface EngineResponse {
@@ -535,9 +651,9 @@ export function createEngineAccountsStore(
     } catch {
       if (generation !== requestGeneration) return false;
       activeRequest = null;
-      // A more specific notice already in flight (e.g. removeBlocked's
-      // force-remove action) survives a transient refresh failure — only a
-      // refresh-owned or absent notice gets replaced by the generic failure.
+      // A more specific notice already in flight survives a transient refresh
+      // failure — only a refresh-owned or absent notice gets replaced by the
+      // generic failure.
       const notice = snapshot.notice && snapshot.notice.operation !== "refresh" ? snapshot.notice : refreshFailure();
       setSnapshot({ ...snapshot, status: "error", notice });
       return false;
@@ -764,47 +880,36 @@ export function createEngineAccountsStore(
     });
   };
 
-  const remove = (accountId: string, force = false): Promise<boolean> => {
+  const remove = (accountId: string): Promise<boolean> => {
     const label = snapshot.accounts.find((account) => account.id === accountId)?.label ?? accountId;
     return runMutation("remove", async () => {
+      // A new attempt takes the previous answer's place.
+      patchSnapshot({ removing: accountId, removal: null });
+      let response: Response;
       try {
-        const response = await fetcher(addUrl, {
+        response = await fetcher(addUrl, {
           method: "DELETE",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id: accountId, force }),
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => null) as { code?: unknown; blockers?: unknown } | null;
-          const blocked = body?.code === "account_removal_blocked";
-          const historyBlocked = blocked && Array.isArray(body?.blockers)
-            && (body.blockers.includes("current_conversations") || body.blockers.includes("filesystem_history"));
-          patchSnapshot({
-            notice: {
-              kind: "error",
-              operation: "remove",
-              messageKey: historyBlocked ? "accounts.removeHistoryBlocked" : blocked ? "accounts.removeBlocked" : "accounts.removeFailed",
-              target: label,
-              action: null,
-            },
-          });
-          await refresh();
-          return false;
-        }
-        const body = await response.json().catch(() => null) as { cleanupPending?: unknown } | null;
-        const accounts = snapshot.accounts.filter((account) => account.id !== accountId);
-        patchSnapshot({
-          accounts,
-          challenge: pendingDeviceAuth(accounts),
-          identityVersion: snapshot.identityVersion + 1,
-          notice: body?.cleanupPending === true
-            ? { kind: "error", operation: "remove", messageKey: "accounts.cleanupPending", target: label, action: { type: "retry", kind: "cleanupOrphans" } }
-            : null,
+          body: JSON.stringify({ id: accountId }),
         });
       } catch {
-        patchSnapshot({ notice: { kind: "error", operation: "remove", messageKey: "accounts.removeFailed", target: label, action: null } });
+        patchSnapshot({ removing: null, removal: { kind: "refused", refusal: removalRefusalOf(accountId, label, null, null) } });
+        return false;
+      }
+      const body = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        patchSnapshot({ removing: null, removal: { kind: "refused", refusal: removalRefusalOf(accountId, label, response.status, body) } });
         await refresh();
         return false;
       }
+      const accounts = snapshot.accounts.filter((account) => account.id !== accountId);
+      patchSnapshot({
+        accounts,
+        challenge: pendingDeviceAuth(accounts),
+        identityVersion: snapshot.identityVersion + 1,
+        removing: null,
+        removal: { kind: "removed", summary: removalSummaryOf(accountId, label, body) },
+      });
       await refresh();
       return true;
     });
@@ -915,7 +1020,10 @@ export function createEngineAccountsStore(
   };
 
   const cleanupOrphans = (): Promise<boolean> => {
-    return runMutation("remove", async () => {
+    return runMutation("cleanup", async () => {
+      // A summary still waiting on its sign-in file keeps its place: the
+      // clean-up is its "Finish clean-up" and only turns that line over.
+      const waiting = snapshot.removal?.kind === "removed" && snapshot.removal.summary.credential === "pending" ? snapshot.removal.summary : null;
       try {
         const response = await fetcher(addUrl, {
           method: "DELETE",
@@ -923,19 +1031,25 @@ export function createEngineAccountsStore(
           body: JSON.stringify({ cleanupOrphans: true }),
         });
         if (!response.ok) throw new Error("orphan cleanup failed");
-        const body = await response.json().catch(() => null) as { unresolved?: unknown } | null;
-        const unresolved = Array.isArray(body?.unresolved) ? body.unresolved.filter((item): item is string => typeof item === "string") : [];
-        patchSnapshot({ notice: unresolved.length
-          ? { kind: "error", operation: "remove", messageKey: "accounts.cleanupManual", action: null }
-          : null });
+        const report = cleanupReportOf(await response.json().catch(() => null));
+        if (waiting) {
+          const stuck = report.unresolved.some((name) => name === waiting.accountId || name.startsWith(`${waiting.accountId}.`));
+          patchSnapshot({ removal: { kind: "removed", summary: { ...waiting, credential: stuck ? "pending" : "deleted" } } });
+        } else {
+          patchSnapshot({ removal: { kind: "cleanup", report } });
+        }
       } catch {
-        patchSnapshot({ notice: { kind: "error", operation: "remove", messageKey: "accounts.cleanupFailed", action: null } });
+        if (!waiting) patchSnapshot({ removal: { kind: "cleanupFailed" } });
         await refresh();
         return false;
       }
       await refresh();
       return true;
     });
+  };
+
+  const dismissRemoval = (): void => {
+    if (snapshot.removal) patchSnapshot({ removal: null });
   };
 
   const retryNotice = async (): Promise<boolean> => {
@@ -948,10 +1062,6 @@ export function createEngineAccountsStore(
         return add(action.label);
       case "loginRetry":
         return retryLogin(action.accountId);
-      case "cleanupOrphans":
-        return cleanupOrphans();
-      case "forceRemove":
-        return remove(action.accountId, true);
       case "switch":
         return select(action.accountId);
     }
@@ -985,6 +1095,8 @@ export function createEngineAccountsStore(
     get autoBalance() { return snapshot.autoBalance; },
     get limitsBusy() { return snapshot.limitsBusy; },
     get limitsVersion() { return snapshot.limitsVersion; },
+    get removing() { return snapshot.removing; },
+    get removal() { return snapshot.removal; },
     refresh,
     add,
     retryNotice,
@@ -994,6 +1106,7 @@ export function createEngineAccountsStore(
     retryLogin,
     remove,
     cleanupOrphans,
+    dismissRemoval,
     copyTerminalCommand,
     refreshLimits,
     useResetCredit,
@@ -1038,6 +1151,7 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     retryLogin: store.retryLogin,
     remove: store.remove,
     cleanupOrphans: store.cleanupOrphans,
+    dismissRemoval: store.dismissRemoval,
     copyTerminalCommand: store.copyTerminalCommand,
     refreshLimits: store.refreshLimits,
     useResetCredit: store.useResetCredit,

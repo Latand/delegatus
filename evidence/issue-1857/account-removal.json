@@ -1,0 +1,2872 @@
+{
+  "commit": "11a5e797eafc2e0aac0d24279a14ceeeaa77c7fa",
+  "1440-en-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 496,
+          "w": 398,
+          "h": 36.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 54.234375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 47.390625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:44Refresh5h88%left· reset in 3h · 01:44Week72%left· reset in 4d · Sep 23 16:44Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 61.78125,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 74.0625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 609.21875,
+          "w": 398,
+          "h": 190.03125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 670.75
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 149.03125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 479
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 89.953125,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1440-en-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 496,
+          "w": 398,
+          "h": 36.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 54.234375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 47.390625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:44Refresh5h88%left· reset in 3h · 01:44Week72%left· reset in 4d · Sep 23 16:44Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 61.78125,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 74.0625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 609.21875,
+          "w": 398,
+          "h": 190.03125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 670.75
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 149.03125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 479
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 89.953125,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1440-uk-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 496,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 63.28125,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 65.90625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:44Оновити5 год88%лишилось· скид через 3 год · 01:44Тиждень72%лишилось· скид через 4 д · 23 вер. 16:44Копіювати CLIВидалення…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 69.328125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 102.125,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 609.21875,
+          "w": 398,
+          "h": 205.25
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 685.96875
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 141.15625
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 471.125
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 127.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1440-uk-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 496,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 63.28125,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 65.90625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:44Оновити5 год88%лишилось· скид через 3 год · 01:44Тиждень72%лишилось· скид через 4 д · 23 вер. 16:44Копіювати CLIВидалення…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 69.328125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 102.125,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 532,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 984,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 609.21875,
+          "w": 398,
+          "h": 205.25
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 685.96875
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 141.15625
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 471.125
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 127.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 954,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 953,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1280-en-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 496,
+          "w": 398,
+          "h": 36.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 54.234375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 47.390625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:44Refresh5h88%left· reset in 3h · 01:44Week72%left· reset in 4d · Sep 23 16:44Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 61.78125,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 74.0625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 609.21875,
+          "w": 398,
+          "h": 190.03125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 670.75
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 149.03125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 479
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 89.953125,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1280-en-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 496,
+          "w": 398,
+          "h": 36.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Remove Account B? Its files move to the shared archive and past conversations stay readable.RemoveCancel",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Remove",
+            "w": 54.234375,
+            "h": 28
+          },
+          {
+            "name": "Cancel",
+            "w": 47.390625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxAuthenticated72%Checked · 22:44Refresh5h88%left· reset in 3h · 01:44Week72%left· reset in 4d · Sep 23 16:44Copy CLIRemoving…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxAuthenticated72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Re-read limits for Account B",
+            "w": 61.78125,
+            "h": 24
+          },
+          {
+            "name": "Copy the agent command for Account B",
+            "w": 74.0625,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 111.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "The archive folder for Account B already exists or is on another disk:~/.config/agent-log-viewer/shared/claude/retired/account-bMove it away, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Removing Account C failed at a file step (EACCES). The account was put back as it was.Try again",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Try again",
+            "w": 61.640625,
+            "h": 24
+          },
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Try again",
+              "inside": true
+            },
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 491.75,
+          "w": 354,
+          "h": 159.5
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "An agent is still running on Account C. Stop it or wait for it to finish, then remove the account. Nothing was changed.A sign-in for Account C is still open. Finish it or cancel it above, then remove the account. Nothing was changed.A conversation on Account C is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close this message",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 491.75,
+            "bottom": 651.25
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Close this message",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 609.21875,
+          "w": 398,
+          "h": 190.03125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 670.75
+        },
+        "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settled",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 149.03125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 479
+        },
+        "text": "Account C removedPast conversations stay readable.Moved3 files · 812 KBArchive~/.config/agent-log-viewer/shared/claude/retired/account-cThe sign-in file could not be deleted from the archive.Finish clean-up",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Copy the archive path",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Finish clean-up",
+            "w": 89.953125,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Some leftovers need a lookDeleted3 empty foldersArchived2 retired accounts · 412 files · 96.0 MBNeeds a lookclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 moreThese failed a safety check and were left untouched. Inspect and remove them by hand.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Close the summary",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1280-uk-light": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 496,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 63.28125,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 65.90625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:44Оновити5 год88%лишилось· скид через 3 год · 01:44Тиждень72%лишилось· скид через 4 д · 23 вер. 16:44Копіювати CLIВидалення…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 69.328125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 102.125,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 609.21875,
+          "w": 398,
+          "h": 205.25
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 685.96875
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 141.15625
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 471.125
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 127.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "1280-uk-dark": {
+    "readings": {
+      "armed": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 496,
+          "w": 398,
+          "h": 51.3125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалити Account B? Його файли перейдуть до спільного архіву, а минулі розмови лишаться доступними.ВидалитиСкасувати",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Видалити",
+            "w": 63.28125,
+            "h": 28
+          },
+          {
+            "name": "Скасувати",
+            "w": 65.90625,
+            "h": 28
+          }
+        ]
+      },
+      "inFlight": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 415.1875,
+          "w": 398,
+          "h": 150.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 633.15625
+        },
+        "text": "Account Baccount-bmaxАвторизовано72%Перевірено · 22:44Оновити5 год88%лишилось· скид через 3 год · 01:44Тиждень72%лишилось· скид через 4 д · 23 вер. 16:44Копіювати CLIВидалення…",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Account Baccount-bmaxАвторизовано72%",
+            "w": 398,
+            "h": 50.25
+          },
+          {
+            "name": "Перечитати ліміти для Account B",
+            "w": 69.328125,
+            "h": 24
+          },
+          {
+            "name": "Скопіювати команду агента для Account B",
+            "w": 102.125,
+            "h": 28
+          }
+        ]
+      },
+      "refusal": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 83.75
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "archive": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 532,
+          "w": 354,
+          "h": 95.8125
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Архівна тека для Account B вже існує або лежить на іншому диску:~/.config/agent-log-viewer/shared/claude/retired/account-bПриберіть її, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "lastFailed": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 561.75,
+          "w": 354,
+          "h": 81.875
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "Видалення Account C зупинилося на кроці з файлами (EACCES). Акаунт повернуто як був.Спробувати ще раз",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Спробувати ще раз",
+            "w": 113.921875,
+            "h": 24
+          },
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 561.75,
+            "bottom": 643.625
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Спробувати ще раз",
+              "inside": true
+            },
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "lastBlockers": {
+        "found": true,
+        "rect": {
+          "x": 824,
+          "y": 459.75,
+          "w": 354,
+          "h": 191.375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 600.21875
+        },
+        "text": "На Account C ще працює агент. Зупиніть його або дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.Вхід для Account C ще не завершено. Завершіть або скасуйте його вище, тоді видаліть акаунт. Нічого не змінено.Розмова на Account C ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити повідомлення",
+            "w": 20,
+            "h": 20
+          }
+        ],
+        "fold": {
+          "area": {
+            "top": 231.5,
+            "bottom": 651.5
+          },
+          "block": {
+            "top": 459.75,
+            "bottom": 651.125
+          },
+          "inside": true,
+          "buttons": [
+            {
+              "name": "Закрити повідомлення",
+              "inside": true
+            }
+          ]
+        }
+      },
+      "summary": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 609.21875,
+          "w": 398,
+          "h": 205.25
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 685.96875
+        },
+        "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закрито",
+        "clipped": [],
+        "pathId": {
+          "text": "account-b",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      },
+      "pending": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 141.15625
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 471.125
+        },
+        "text": "Account C видаленоМинулі розмови лишаються доступними.Перенесено3 файли · 812 КБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-cФайл входу не вдалося видалити з архіву.Завершити очищення",
+        "clipped": [],
+        "pathId": {
+          "text": "account-c",
+          "visible": true
+        },
+        "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-c",
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Скопіювати шлях до архіву",
+            "w": 20,
+            "h": 20
+          },
+          {
+            "name": "Завершити очищення",
+            "w": 127.015625,
+            "h": 24
+          }
+        ]
+      },
+      "cleanup": {
+        "found": true,
+        "rect": {
+          "x": 794,
+          "y": 458.46875,
+          "w": 398,
+          "h": 221.34375
+        },
+        "panel": {
+          "x": 793,
+          "y": 129.5,
+          "w": 400,
+          "h": 551.3125
+        },
+        "text": "Частина залишків потребує увагиВидалено3 порожні текиЗаархівовано2 видалені акаунти · 412 файлів · 96,0 МБПотребує увагиclaude-r2.lockclaude-x1claude-x2claude-x3claude-x4+2 щеВони не пройшли перевірку безпеки й лишилися без змін. Перевірте та приберіть їх вручну.",
+        "clipped": [],
+        "pathId": null,
+        "pathShown": null,
+        "targets": [
+          {
+            "name": "Закрити підсумок",
+            "w": 20,
+            "h": 20
+          }
+        ]
+      }
+    },
+    "deletes": 8
+  },
+  "390-en-light-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 83.75
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-light-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 277.03125
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settledThe sign-in file could not be deleted from the archive.Finish clean-up",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the archive path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Finish clean-up",
+        "w": 89.953125,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 83.75
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "A conversation on Account B is still in flight: a live host, an unfinished account move or a message waiting to be delivered. Wait for it to settle, then remove the account. Nothing was changed.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Close this message",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-en-dark-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 277.03125
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B removedPast conversations stay readable.Moved1,284 files · 2.1 GBArchive~/.config/agent-log-viewer/shared/claude/retired/account-bConversations37 now read from the archivePins cleared2Deliveries1 undelivered message droppedAccount moves1 settledThe sign-in file could not be deleted from the archive.Finish clean-up",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Close the summary",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Copy the archive path",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Finish clean-up",
+        "w": 89.953125,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 99.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-light-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 292.25
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закритоФайл входу не вдалося видалити з архіву.Завершити очищення",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до архіву",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Завершити очищення",
+        "w": 127.015625,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-refusal": {
+    "found": true,
+    "rect": {
+      "x": 24,
+      "y": 308,
+      "w": 342,
+      "h": 99.6875
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Розмова на Account B ще триває: живий хост, незавершене перенесення між акаунтами або повідомлення, що чекає доставки. Дочекайтеся завершення, тоді видаліть акаунт. Нічого не змінено.",
+    "clipped": [],
+    "pathId": null,
+    "pathShown": null,
+    "targets": [
+      {
+        "name": "Закрити повідомлення",
+        "w": 44,
+        "h": 44
+      }
+    ]
+  },
+  "390-uk-dark-summary": {
+    "found": true,
+    "rect": {
+      "x": 12,
+      "y": 90,
+      "w": 366,
+      "h": 292.25
+    },
+    "panel": {
+      "x": 0,
+      "y": 52,
+      "w": 390,
+      "h": 792
+    },
+    "text": "Account B видаленоМинулі розмови лишаються доступними.Перенесено1 284 файли · 2,1 ГБАрхів~/.config/agent-log-viewer/shared/claude/retired/account-bРозмови37 тепер читаються з архівуЗнято прив'язок2Доставки1 недоставлене повідомлення відкинутоПеренесення між акаунтами1 закритоФайл входу не вдалося видалити з архіву.Завершити очищення",
+    "clipped": [],
+    "pathId": {
+      "text": "account-b",
+      "visible": true
+    },
+    "pathShown": "~/.config/agent-log-viewer/shared/claude/retired/account-b",
+    "targets": [
+      {
+        "name": "Закрити підсумок",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Скопіювати шлях до архіву",
+        "w": 44,
+        "h": 44
+      },
+      {
+        "name": "Завершити очищення",
+        "w": 127.015625,
+        "h": 44
+      }
+    ]
+  },
+  "failures": []
+}

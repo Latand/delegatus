@@ -582,16 +582,18 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
  *  the point — but a strip left incomplete by an earlier removal is retried. */
 export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
   return withRegistryLock(() => {
-    recoverRemovalsLocked();
+    /* A removal whose archive still holds its sign-in file stays journaled;
+       it is named here so the dialog never reports that file deleted. */
+    const recovery = recoverRemovalsLocked();
     cached = null;
     const registry = mutableRegistry();
     const registered = new Set(registry.accounts.map((account) => account.id));
     const retired = new Set(registry.retired.map((account) => account.id));
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(codexAccountsRoot(), { withFileTypes: true }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [] }; throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [], unresolved: [...recovery.unresolved].sort() }; throw error; }
     const removed: string[] = [];
-    const unresolved: string[] = [];
+    const unresolved: string[] = [...recovery.unresolved];
     const historyReports: Record<string, AccountHistoryInventoryReport> = {};
     for (const entry of entries) {
       if (registered.has(entry.name)) continue;
