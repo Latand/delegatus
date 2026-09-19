@@ -266,12 +266,16 @@ export function outboxReceiptPatch(
   const success = outboxStateForReceiptStatus(status) === "delivered";
   const definitive = receipt?.reason === "delivery-discarded"
     || (!unknown && (status === "rejected" || (status === "failed" && receipt?.resend === "safe")));
-  const deliveryUncertain = unknown || (entry.deliveryUncertain && !success && !definitive) ? true : undefined;
+  // Admission answers a local unknown or an earlier pending reservation.
+  // An operation already reporting an unknown delivery keeps its stronger fence.
+  const admissionUnconfirmed = !previous || (previous.status === "pending" && !receiptHasUnknownFate(previous));
+  const confirmedAdmission = admissionUnconfirmed && receiptIsAdmitted(status);
+  const deliveryUncertain = unknown || (entry.deliveryUncertain && !success && !definitive && !confirmedAdmission) ? true : undefined;
   const state = deliveryUncertain ? "delivering" : outboxStateForReceiptStatus(status);
   const patch: Partial<OutboxEntry> = {
     state, deliveryUncertain, acceptedHeld: undefined,
     awaitingTurn: deliveryUncertain ? undefined : outboxAwaitsTurnBoundary(status),
-    ...(receipt?.operationId ? { deliveryReceipt: (deliveryUncertain
+    ...(receipt?.operationId ? { deliveryReceipt: (deliveryUncertain && !(admissionUnconfirmed && status === "pending" && !unknown)
       ? { ...receipt, resend: "verify-first", reason: receipt.reason ?? previous?.reason }
       : receipt) as RuntimeReceipt } : {}),
   };

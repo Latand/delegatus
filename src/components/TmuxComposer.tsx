@@ -51,6 +51,7 @@ import {
   adoptOutbox,
   cancelOutbox,
   claimOutboxDispatch,
+  clearParkedOutbox,
   enqueueOutbox,
   retryOutbox,
   markOutboxResponded,
@@ -339,6 +340,7 @@ export function RuntimeComposerReceipts({
   onDismiss,
   onDiscard,
   payloadRecoveryKeys = NO_DISMISSED,
+  localRecoveryKeys = NO_DISMISSED,
   onRecheck,
 }: {
   receipts: RuntimeReceipt[];
@@ -364,6 +366,8 @@ export function RuntimeComposerReceipts({
       re-checked rather than retried and the text-only Edit is withheld; a
       terminal failure keeps Retry, which is the operation retry contract. */
   payloadRecoveryKeys?: ReadonlySet<string>;
+  /** Complete local submissions whose admission has no server operation yet. */
+  localRecoveryKeys?: ReadonlySet<string>;
   onRecheck?: () => void;
 }) {
   const { t } = useLocale();
@@ -398,7 +402,7 @@ export function RuntimeComposerReceipts({
     return () => clearInterval(timer);
   }, [pinnedNow, unsettled]);
   const now = nowMs ?? tick;
-  const alternateRetry = (receipt: RuntimeReceipt) => !payloadRecoveryKeys.has(receipt.idempotencyKey);
+  const alternateRetry = (receipt: RuntimeReceipt) => localRecoveryKeys.has(receipt.idempotencyKey) || !payloadRecoveryKeys.has(receipt.idempotencyKey);
   const editable = (receipt: RuntimeReceipt) => alternateRetry(receipt) && isMessageReceipt(receipt)
     && (receipt.status === "failed" || receipt.status === "rejected")
     && !receiptHasUnknownFate(receipt)
@@ -434,8 +438,9 @@ export function RuntimeComposerReceipts({
           and discarding would claim the operator ended something that may be
           sitting in the thread. The reason line beside this says what is
           actually known, which is the whole truth available. A retained
-          attachment copy offers Re-check in place of Retry (#1647). */}
-      {!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && isRetryableReceipt(receipt) ? <>
+          attachment copy with a known operation offers Re-check (#1647).
+          Unconfirmed local admission replays its retained envelope explicitly. */}
+      {(!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
         {alternateRetry(receipt)
           ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
           : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={onRecheck}>{t("composer.payloadRecheck")}</button>}
@@ -1172,11 +1177,12 @@ export function rebindPendingOperations(
   pending: readonly PendingDelivery[],
   receipts: readonly RuntimeReceipt[],
 ): PendingDelivery[] {
+  const authoritative = receipts.filter(receipt => !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX));
   return pending.map((entry) => {
-    const owner = receipts.find((receipt) =>
+    const owner = authoritative.find((receipt) =>
       Boolean(entry.operationId) && retryParentOperationId(receipt) === entry.operationId)
-      ?? receipts.find((receipt) => receipt.operationId === entry.operationId)
-      ?? receipts.find((receipt) => receipt.idempotencyKey === entry.key);
+      ?? authoritative.find((receipt) => receipt.operationId === entry.operationId)
+      ?? authoritative.find((receipt) => receipt.idempotencyKey === entry.key);
     return owner && owner.operationId !== entry.operationId
       ? { ...entry, operationId: owner.operationId }
       : entry;
@@ -1858,7 +1864,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const unresolved = priorSafeAttempt || receipt.status === "pending" || receipt.status === "applying"
       || receipt.status === "queued" || receipt.status === "delivering" || receipt.status === "uncertain"
       || (receipt.status === "failed" && receipt.resend !== "safe" && receipt.reason !== "delivery-discarded");
-    return entry && unresolved ? { ...receipt, resend: "verify-first" as const, reason: receipt.reason ?? entry.deliveryReceipt?.reason } : receipt;
+    return entry?.deliveryReceipt && (entry.deliveryReceipt.status !== "pending" || receiptHasUnknownFate(entry.deliveryReceipt)) && unresolved ? { ...receipt, resend: "verify-first" as const, reason: receipt.reason ?? entry.deliveryReceipt?.reason } : receipt;
   });
   /* #691 §4 — THE RECEIPT-STREAM CONSUMER for parked bridge batches.
      A structured send can answer `pending` and settle minutes later on this stream,
@@ -1929,7 +1935,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      straight back to the draft. */
   /* Rows that state a retained message's own diagnostic; a storage error alone
      states none. */
-  const payloadDiagnostics = payloadRows.length > 0
+  // Local discard hides the retained copy; its bytes and receipt observer stay
+  // alive until the original request has an authoritative outcome.
+  const visiblePayloadRows = payloadRows.filter(row => row.operationId
+    || !dismissedReceipts.has(unconfirmedReceiptOperationId(row.ref.key)));
+  const payloadDiagnostics = visiblePayloadRows.length > 0
     || pendingDeliveries.current.some(entry => entry.payloadComplete === false);
   const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
   const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
@@ -1981,8 +1991,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
 
   /* The reconciliation window closed without authoritative evidence. Release
      the composer while preserving the generation, key and attachments. Local
-     replay stays blocked until affirmative rejection; a real original receipt
-     supplies recovery controls. Late admission still settles the draft. */
+     replay is available explicitly under the original key and exact payload.
+     A late authoritative receipt still settles the submission. */
   const releaseReconciliationToRetry = (clientMessageId: string) => {
     receiptReconciliations.current.delete(clientMessageId);
     /* Drop the polling marker while retaining the unresolved generation for
@@ -2105,6 +2115,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       });
     }
     for (const key of reconcilingKeys) startReceiptReconciliation(key);
+    for (const entry of restoredPending) {
+      const row = readOutbox(cardId).find(candidate => candidate.id === entry.key);
+      if (!entry.reconciling && row?.deliveryUncertain && !row.launchOwned && !row.operationId && !row.deliveryReceipt) {
+        releaseReconciliationToRetry(entry.key);
+      }
+    }
     settledSendKeys.current = new Set();
     /* Keyed by identity alone: a path migration under a stable id must not
        wipe the immediate receipts or the settled-key memory (`file.path` is
@@ -2116,8 +2132,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   // Hydration restores bytes only. Receipt evidence continues to own replay.
   useEffect(() => {
     if (!payloadHydrated) return;
-    let next = [...pendingDeliveries.current];
+    let next = pendingDeliveries.current.filter(entry => !dismissedReceiptIds.includes(unconfirmedReceiptOperationId(entry.key)));
     for (const row of payloadRows) {
+      if (!row.operationId && dismissedReceiptIds.includes(unconfirmedReceiptOperationId(row.ref.key))) continue;
       outboxImages.current.set(row.ref.key, row.submission.images);
       outboxFiles.current.set(row.ref.key, row.submission.files);
       const existing = next.find(entry => entry.key === row.ref.key);
@@ -2145,7 +2162,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setStatus(current => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payloadRows, payloadHydrated, cardId]);
+  }, [payloadRows, payloadHydrated, cardId, dismissedReceiptIds]);
 
   useEffect(() => {
     for (const row of payloadRows) {
@@ -2279,7 +2296,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         (candidate.idempotencyKey === entry.id || candidate.operationId === (entry.deliveryReceipt?.operationId ?? entry.operationId)
           || (entry.deliveryReceipt && ((!entry.deliveryUncertain && !receiptHasUnknownFate(entry.deliveryReceipt)) || (entry.deliveryReceipt as ObservedRuntimeReceipt).retryAuthorized)
             && retryParentOperationId(candidate) === entry.deliveryReceipt.operationId)));
-      if (!receipt) continue;
+      /* A local placeholder is presentation, never a server operation. Feeding
+         it back into the outbox would attach a fictitious operation and hide
+         both local recovery exits forever. */
+      if (!receipt || receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) continue;
       const patch = outboxReceiptPatch(entry, receipt.status, receipt, nowMs());
       if (!patch) continue;
       updateOutbox(cardId, entry.id, patch);
@@ -2563,7 +2583,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
   };
 
-  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string }, outboxId?: string) => {
+  const send = async (overrideText?: string, retry?: { receiptId?: number; clientMessageId?: string; unconfirmedAdmission?: true }, outboxId?: string) => {
     const originalKey = deliveryAttemptKey(idempotencyKey.current, retry?.clientMessageId);
     const knownPayload = payloadRows.find(row => row.ref.key === originalKey);
     let durable: RestoredComposerSubmission | null = null;
@@ -2582,6 +2602,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        failure, and that refusal releases the admitted operation's inbox files.
        The queue bubble's Retry and the recovery row both arrive here. */
     if (durable?.operationId) {
+      // Admission won while an explicit local replay was restoring its bytes.
+      if (retry?.unconfirmedAdmission) { await refreshPayloads(); return; }
       await retryAdmittedPayload(durable, outboxId);
       return;
     }
@@ -2924,12 +2946,22 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
     const responseEpoch = legacyResponseEpoch.current;
     let admissionRequest: Promise<ComposerSendResult> | null = null;
+    const reconcileUnconfirmedAdmission = (lateReceipt?: Promise<RuntimeReceipt | null>) => {
+      if (settledSendKeys.current.has(clientMessageId)) return;
+      markOutboxUnknown();
+      persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+        entry.key === clientMessageId ? { ...entry, reconciling: true } : entry));
+      startReceiptReconciliation(clientMessageId, lateReceipt);
+    };
     try {
       /* The wire fence (#1538): stamped on the durable entry in the same tick
          the request is created, before anything can await. A reload while the
          response is still pending then hydrates this entry as a possible
          dispatch instead of replaying it or presenting it as failed. */
-      if (durable && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
+      // Explicit recovery replays the sealed envelope under its original key.
+      // Its existing durable attempt already records the possible dispatch;
+      // automatic queue dispatch still requires the one-use wire claim.
+      if (durable && !retry?.unconfirmedAdmission && !composerSubmissionPayloads.consumeAttempt(durable.ref)) {
         // The queue bubble's Retry also enters through this dispatcher. Nothing
         // was admitted here, so only a recorded refusal re-opens the envelope.
         const retryClaim = durable.retry === "resend" && await composerSubmissionPayloads.beginAttempt(durable.ref);
@@ -3119,7 +3151,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             await refreshPayloads();
           }
         }
-        else if (possiblyAccepted && outboxId) markOutboxUnknown();
+        // postCommand normalizes a failed fetch into a result. It needs the
+        // same bounded recovery as a request that throws or never answers.
+        else if (possiblyAccepted && outboxId) reconcileUnconfirmedAdmission();
         else settleOutbox("failed", failure);
         setStatus({ kind: "err", text: failure });
         return;
@@ -3152,7 +3186,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           }
           return;
         }
-        markOutboxUnknown();
+        reconcileUnconfirmedAdmission();
         return;
       }
       settleLegacySuccess(json);
@@ -3169,31 +3203,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             ? t("composer.admissionTimedOut")
             : t("common.serverUnavailable"),
         });
-        markOutboxUnknown();
-        if (error instanceof ComposerAdmissionTimeoutError) {
-          persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
-            entry.key === clientMessageId ? { ...entry, reconciling: true } : entry));
-          const lateReceipt = admissionRequest?.then((result) => {
-            const receipt = result.receipt;
-            if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
-              || (result.operationId && result.operationId !== receipt.operationId))) return null;
-            if (receipt && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) {
-              return isMessageReceipt(receipt)
-                && !receipt.text && payloadText.trim()
-                ? { ...receipt, text: payloadText.trim() }
-                : receipt;
-            }
-            if (!result.ok || result.structured) return null;
-            if (!responseEpoch.active || legacyResponseEpoch.current !== responseEpoch) return null;
-            const controller = receiptReconciliations.current.get(clientMessageId);
-            settleLegacySuccess(result);
-            controller?.abort();
-            receiptReconciliations.current.delete(clientMessageId);
-            setReconcilingSend(receiptReconciliations.current.size > 0);
-            return null;
-          });
-          startReceiptReconciliation(clientMessageId, lateReceipt);
-        }
+        const lateReceipt = admissionRequest?.then((result) => {
+          const receipt = result.receipt;
+          if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
+            || (result.operationId && result.operationId !== receipt.operationId))) return null;
+          if (receipt && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) {
+            return isMessageReceipt(receipt)
+              && !receipt.text && payloadText.trim()
+              ? { ...receipt, text: payloadText.trim() }
+              : receipt;
+          }
+          if (!result.ok || result.structured) return null;
+          if (!responseEpoch.active || legacyResponseEpoch.current !== responseEpoch) return null;
+          const controller = receiptReconciliations.current.get(clientMessageId);
+          settleLegacySuccess(result);
+          controller?.abort();
+          receiptReconciliations.current.delete(clientMessageId);
+          setReconcilingSend(receiptReconciliations.current.size > 0);
+          return null;
+        });
+        reconcileUnconfirmedAdmission(lateReceipt);
       }
     } finally {
       setBusy(false);
@@ -3237,8 +3266,27 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return true;
   };
 
+  const localRecoveryEntry = (receipt: RuntimeReceipt) => {
+    if (!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) return null;
+    const entry = readOutbox(cardId).find(candidate => candidate.id === receipt.idempotencyKey);
+    const generation = pendingDeliveries.current.find(candidate => candidate.key === receipt.idempotencyKey);
+    const saved = payloadRows.find(row => row.ref.key === receipt.idempotencyKey);
+    if (!entry || entry.launchOwned || !entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt
+      || !generation || generation.operationId || saved?.operationId
+      || ((generation.payloadComplete === false || generation.images.length || generation.files?.length) && !saved?.envelope)) return null;
+    return entry;
+  };
+
   const retryRuntimeReceipt = async (receipt: RuntimeReceipt, mode?: "uncertain") => {
-    if (busy || voiceSending) return;
+    if (busy || voiceSending || reconcilingSend) return;
+    if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+      const entry = localRecoveryEntry(receipt);
+      if (!entry) return;
+      // Keep recovery visible if this attempt is refused before admission.
+      // An authoritative receipt supersedes the local placeholder by key.
+      await withComposerSubmission(cardId, () => send(entry.text, { clientMessageId: entry.id, unconfirmedAdmission: true }, entry.id));
+      return;
+    }
     setBusy(true);
     setStatus(null);
     if (mode !== "uncertain" && !receiptHasAbsorbingOutcome(receipt)) {
@@ -3268,7 +3316,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   };
 
   const discardRuntimeReceipt = async (receipt: RuntimeReceipt) => {
-    if (busy || voiceSending) return;
+    if (busy || voiceSending || reconcilingSend) return;
+    if (receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) {
+      const entry = localRecoveryEntry(receipt);
+      if (!entry || !clearParkedOutbox(cardId, entry.id)) return;
+      dismissReceipts([receipt.operationId]);
+      persistPendingDeliveries(pendingDeliveries.current.filter(candidate => candidate.key !== entry.id));
+      setImmediateRuntimeReceipts(current => current.filter(candidate => candidate.operationId !== receipt.operationId));
+      setStatus(null);
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
@@ -3911,7 +3968,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const payloadRecovery = hasPayloadRecovery ? (
     <section data-testid="composer-payload-recovery" className="flex flex-col gap-2 text-caption" aria-label={t("composer.payloadRecovery")}>
       {payloadStorageError ? <p role="alert">{payloadStorageError}</p> : null}
-      {payloadRows.map(row => {
+      {visiblePayloadRows.map(row => {
         const persisted = row.receipt ? { ...row.receipt, kind: "send", at: row.receipt.at ?? "", text: row.submission.text } as RuntimeReceipt : undefined;
         const tail = payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId },
           [...runtimeReceipts, ...displayedRuntimeReceipts]).at(-1);
@@ -4152,6 +4209,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         displayedRuntimeReceipts.length
           ? <RuntimeComposerReceipts
               receipts={displayedRuntimeReceipts}
+              localRecoveryKeys={new Set(displayedRuntimeReceipts.filter(receipt => localRecoveryEntry(receipt)).map(receipt => receipt.idempotencyKey))}
               payloadRecoveryKeys={new Set([
                 ...payloadRows.flatMap(row => [row.ref.key, ...payloadReceiptEvidence({ conversationId: row.ref.conversationId,
                   key: row.ref.key, operationId: row.operationId }, [...runtimeReceipts, ...displayedRuntimeReceipts]).map(receipt => receipt.idempotencyKey)]),
