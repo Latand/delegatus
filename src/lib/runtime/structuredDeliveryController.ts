@@ -1495,9 +1495,11 @@ async function recordDemotionInterruption(
  * one turn so several slow engine shutdowns consume one grace window.
  *
  * A host whose turn is in flight is cut by this release, so the continuation
- * it is owed is recorded first (#1835). A host whose obligation could not be
- * written is still released — the Viewer is exiting either way — and the
- * failure is reported with the rest. */
+ * it is owed is recorded first (#1835); the store retries the record and falls
+ * back to its pending journal. A host whose obligation still could not be
+ * written anywhere is not released: cutting its turn would leave no trace that
+ * a continuation is owed, so its engine keeps the turn and the failure is
+ * reported with the rest. */
 export async function releaseStructuredDeliveryHostsForDemotion(
   options: DemotionInterruptionOptions = {},
 ): Promise<void> {
@@ -1506,6 +1508,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   if (!release || registrations.length === 0) return;
   const registry = state.activeRegistry;
   const recordFailures: unknown[] = [];
+  const unrecorded = new Set<string>();
   await Promise.all(registrations.map(async ({ key, host }) => {
     const current = await host.health();
     if ((current.status !== "active" && current.status !== "attention")
@@ -1518,10 +1521,16 @@ export async function releaseStructuredDeliveryHostsForDemotion(
     try {
       await recordDemotionInterruption(registry, key, current, options);
     } catch (error) {
+      unrecorded.add(sessionKeyId(key));
+      console.error("[viewer release] interrupted turn could not be recorded; leaving its host running", {
+        hostKey: sessionKeyId(key), error,
+      });
       recordFailures.push(error);
     }
   }));
-  const outcomes = await Promise.allSettled(registrations.map(({ key }) => release(key)));
+  const outcomes = await Promise.allSettled(registrations
+    .filter(({ key }) => !unrecorded.has(sessionKeyId(key)))
+    .map(({ key }) => release(key)));
   const failures = [
     ...recordFailures,
     ...outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []),

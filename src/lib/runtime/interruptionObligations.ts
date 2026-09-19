@@ -121,10 +121,65 @@ function isObligation(value: unknown): value is InterruptionObligation {
     && typeof record.state === "string";
 }
 
+/** Appends one line and syncs it: the fallback a release writes when the
+    obligation directory refuses the record. */
+function appendDurably(filename: string, line: string): void {
+  const descriptor = fs.openSync(filename, "a", 0o600);
+  try {
+    fs.writeSync(descriptor, line);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 /** One file per obligation, so the incumbent recording at release and the
-    successor reading at boot never rewrite each other's records. */
+    successor reading at boot never rewrite each other's records.
+
+    A release that cannot write the record, even on a second try, appends it
+    to a pending journal beside the directory instead. Every read merges that
+    journal and imports its records into the directory once it accepts them,
+    so the successor sees the obligation either way. */
 export function interruptionObligationStore(directory: string): InterruptionObligationStore {
   const fileFor = (id: string) => path.join(directory, `${id}.json`);
+  const pendingFile = `${directory}.pending.jsonl`;
+  const readPending = (): InterruptionObligation[] => {
+    let text: string;
+    try {
+      text = fs.readFileSync(pendingFile, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      console.error("[interruption recovery] unreadable pending obligations", { filename: pendingFile, error });
+      return [];
+    }
+    return text.split("\n").flatMap((line) => {
+      if (!line.trim()) return [];
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        return isObligation(parsed) ? [parsed] : [];
+      } catch {
+        return [];
+      }
+    });
+  };
+  /* Moves pending records into the directory; the journal goes only once
+     every record in it has a file. Returns the records still waiting. */
+  const importPending = (): InterruptionObligation[] => {
+    const pending = readPending();
+    if (pending.length === 0) return [];
+    const stranded: InterruptionObligation[] = [];
+    for (const obligation of pending) {
+      if (fs.existsSync(fileFor(obligation.id))) continue;
+      try {
+        writeJsonDurably(fileFor(obligation.id), obligation);
+      } catch (error) {
+        console.error("[interruption recovery] pending obligation is not importable yet", { obligation: obligation.id, error });
+        stranded.push(obligation);
+      }
+    }
+    if (stranded.length === 0) fs.rmSync(pendingFile, { force: true });
+    return stranded;
+  };
   const read = (filename: string): InterruptionObligation | null => {
     try {
       const parsed = JSON.parse(fs.readFileSync(filename, "utf8")) as unknown;
@@ -136,12 +191,13 @@ export function interruptionObligationStore(directory: string): InterruptionObli
     }
   };
   const list = (): InterruptionObligation[] => {
+    const stranded = importPending();
     let names: string[];
     try {
       names = fs.readdirSync(directory);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      names = [];
     }
     const now = Date.now();
     const obligations: InterruptionObligation[] = [];
@@ -155,6 +211,9 @@ export function interruptionObligationStore(directory: string): InterruptionObli
         continue;
       }
       obligations.push(obligation);
+    }
+    for (const obligation of stranded) {
+      if (!obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
     }
     return obligations.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
   };
@@ -185,11 +244,22 @@ export function interruptionObligationStore(directory: string): InterruptionObli
         resolvedAt: null,
         resolution: null,
       };
-      writeJsonDurably(fileFor(id), obligation);
+      try {
+        writeJsonDurably(fileFor(id), obligation);
+      } catch (first) {
+        try {
+          writeJsonDurably(fileFor(id), obligation);
+        } catch (second) {
+          console.error("[interruption recovery] obligation directory refused the record; appending it to the pending journal", {
+            obligation: id, first, second,
+          });
+          appendDurably(pendingFile, `${JSON.stringify(obligation)}\n`);
+        }
+      }
       return { obligation, created: true };
     },
     update(id, patch) {
-      const current = read(fileFor(id));
+      const current = read(fileFor(id)) ?? readPending().find((pending) => pending.id === id) ?? null;
       if (!current) return null;
       const next = { ...current, ...patch };
       writeJsonDurably(fileFor(id), next);

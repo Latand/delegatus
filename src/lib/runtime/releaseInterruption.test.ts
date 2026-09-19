@@ -397,6 +397,72 @@ test("failed demotion cleanup keeps the obligation, and a surviving owner keeps 
   }
 });
 
+test("an obligation the release cannot write to its directory still reaches the successor, which resumes the turn once", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("codex", cutSessionId(12), deadEngine(2_000_001_112));
+    const obligations = path.join(path.dirname(cut.registryFile), "interruption-obligations");
+    fs.mkdirSync(obligations, { recursive: true });
+    fs.chmodSync(obligations, 0o500);
+    const { exitCode } = await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_112));
+    fs.chmodSync(obligations, 0o700);
+
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expectDeploymentContinuation(writes[0]);
+
+    /* The imported record is the one the next boot reads: nothing more. */
+    await bindStructuredDeliveryQueue([], { registry: new AgentRegistry(cut.registryFile), client: null });
+    const again = createFakeDeliveryLedger();
+    await successorBoot(cut.registryFile, journal, again);
+    await settle(() => again.writes.length > 0, 150);
+    expect(again.writes).toEqual([]);
+    /* Recorded durably, so the release itself did not fail. */
+    expect(exitCode).toBe(0);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a host whose obligation cannot be recorded anywhere is left running and the demotion reports it", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(13), deadEngine(2_000_001_113));
+    const registry = new AgentRegistry(cut.registryFile);
+    const released: string[] = [];
+    await bindStructuredDeliveryQueue([{
+      key: { engine: "claude", sessionId: cut.sessionId },
+      host: hostFor(createFakeDeliveryLedger(), {
+        status: "active", pid: 2_000_001_113, processStartIdentity: "engine-2000001113", activeTurnRef: CUT_TURN,
+      }, async () => { released.push(cut.hostKey); }) as never,
+    }], { registry, client: journalClient(journal) });
+    const unwritable = {
+      list: () => [],
+      record: () => { throw new Error("obligation storage is unavailable"); },
+      update: () => null,
+    };
+    let exitCode = null as number | null;
+    const reported: unknown[] = [];
+    const logged = spyOn(console, "error").mockImplementation((...args: unknown[]) => { reported.push(args); });
+    try {
+      await completeViewerReleaseDemotion(async () => {}, (code) => { exitCode = code; }, () => {}, () =>
+        releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:unwritable", store: unwritable }));
+    } finally {
+      logged.mockRestore();
+    }
+    expect(released).toEqual([]);
+    expect(exitCode).toBe(1);
+    expect(JSON.stringify(reported, (_key, value) => value instanceof Error ? value.message : value))
+      .toContain("obligation storage is unavailable");
+  } finally {
+    journal.close();
+  }
+});
+
 test("restarts between recording, admitting and recording the admission deliver one continuation, never two", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {

@@ -1387,16 +1387,18 @@ export async function adoptStructuredHostsAtStartup(
       /* Re-read: identity, a seat rotation or a message admitted while this
          pass adopted can each discharge an obligation it adopted for. The
          runtime's receipts are read again too — adoption can take tens of
-         seconds, and a send it admitted in that time is not in `signals`. */
-      const admittedSinceAdoption = admittedRuntimeMessages(registry, await client.snapshot());
-      const owedInterruptions = dischargeInterruptionObligations(
+         seconds, and a send it admitted in that time is not in `signals`. A
+         pass with nothing owed skips that snapshot. */
+      const unresolvedAfterAdoption = interruptions.list().filter((obligation) =>
+        interruptionObligationUnresolved(obligation)
+          && interruptedHostKeys.has(obligation.hostKey)
+          && !deferredHostKeys.has(obligation.hostKey));
+      const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
         registry,
         interruptions,
-        interruptions.list().filter((obligation) => interruptionObligationUnresolved(obligation)
-          && interruptedHostKeys.has(obligation.hostKey)
-          && !deferredHostKeys.has(obligation.hostKey)),
+        unresolvedAfterAdoption,
         orchestratorSeats(),
-        admittedSinceAdoption,
+        admittedRuntimeMessages(registry, await client.snapshot()),
         pipelineEvidence.settled,
       );
       const continuationFailures = await deliverInterruptionContinuations(
