@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -126,6 +127,22 @@ export function viewerReleaseOwnsTraffic(
   } catch {
     return false;
   }
+}
+
+/** Names the release that demoted this Viewer: the durable target that now
+ * appoints its successor. A turn cut by this release records it as the
+ * boundary of the continuation it is owed (#1835). */
+export function viewerReleaseBoundary(
+  readTarget: () => string = () => fs.readFileSync(statePath("viewer-release.json"), "utf8"),
+): string {
+  let target: string;
+  try {
+    target = readTarget();
+  } catch {
+    return `viewer-release:pid-${process.pid}`;
+  }
+  const digest = crypto.createHash("sha256").update(target).digest("hex").slice(0, 16);
+  return `viewer-release:${digest}`;
 }
 
 function legacyHotStateSignature(): string {
@@ -737,10 +754,8 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
-    const { releaseUnpublishedStartupHostsForDemotion } = await import("@/lib/runtime/startup");
-    await releaseUnpublishedStartupHostsForDemotion();
-    const { releaseStructuredDeliveryHostsForDemotion } = await import("@/lib/runtime/structuredDeliveryController");
-    await releaseStructuredDeliveryHostsForDemotion();
+    const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
+    await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
   await activateViewerRuntimeWhenCurrent(async () => {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
