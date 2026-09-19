@@ -29,7 +29,7 @@ function fingerprint(digest: string, mtimeMs: number): ProdStateFingerprint {
 
 test("the prod evidence set covers every state family staging must not touch", () => {
   expect([...PROD_STATE_EVIDENCE_FILES].sort()).toEqual([
-    "agent-registry.json",
+    "agent-registry.sqlite",
     "board.json",
     "flows.json",
     "pipelines.json",

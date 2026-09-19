@@ -49,15 +49,14 @@ function select(id: string) {
   }));
 }
 
-test("selecting the default account succeeds over a markerless JSON mirror in sqlite mode", async () => {
+test("selecting the default account succeeds over a markerless JSON registry in sqlite mode", async () => {
   const response = await select("default");
   expect(response.status).toBe(200);
   const body = await response.json() as { active: string; revision: number };
   expect(body.active).toBe("default");
   expect(body.revision).toBeGreaterThan(0);
-  // The authoritative-SQLite startup stamped and repaired the mirror.
-  const mirror = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"), "utf8")) as { _sqliteRevision?: number };
-  expect(typeof mirror._sqliteRevision).toBe("number");
+  // The SQLite open imported the JSON and kept it renamed; there is no mirror (#1870).
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json"))).toBe(false);
 });
 
 test("an unknown account stays a 400 with its own message", async () => {

@@ -198,7 +198,6 @@ function fixture(failedCount: number, fullHistory = false) {
     serving: 300_000, action: 360_000,
   }));
   console.log(JSON.stringify({ counts: Object.fromEntries((["conversations", "entries", "receipts", "heldDeliveries"] as const).map(k => [k, Object.keys(data[k]).length])) }));
-  registry.checkpointRollbackMirrorForDemotion();
   const journalFilename = path.join(directory, "runtime-events.sqlite");
   const journal = new RuntimeJournal(journalFilename, { structuredHosts: true });
   for (let i = 0; i < 4336; i++) {

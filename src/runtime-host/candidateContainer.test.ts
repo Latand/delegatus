@@ -115,7 +115,9 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   expect(environment.LLV_DOCKER_NSENTER_SHIMS).toBe("1");
   expect(environment.GIT_SSH_COMMAND).toBe("ssh compose-config");
   expect(environment.LLV_ALLOW_LEGACY_VIEWER).toBe("1");
-  expect(environment[AGENT_REGISTRY_SQLITE_ENV]).toBe("off");
+  /* Compose names no registry mode: unset is SQLite (#1870), and the
+     candidate receives it explicitly so its capability report can be held to it. */
+  expect(environment[AGENT_REGISTRY_SQLITE_ENV]).toBe("sqlite");
   expect(valuesAfter(args, "--label")).toEqual([
     "compose.viewer=production",
     "dev.live-log-viewer.managed=1",

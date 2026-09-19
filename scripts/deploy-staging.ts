@@ -58,7 +58,7 @@ import { withoutWakatimeCredential } from "../src/lib/wakatime/credential";
 /** Prod state families the issue forbids staging from touching. */
 export const PROD_STATE_EVIDENCE_FILES: ReadonlySet<string> = new Set([
   "viewer-release.json",
-  "agent-registry.json",
+  "agent-registry.sqlite",
   "runtime-events.sqlite",
   "board.json",
   "pipelines.json",

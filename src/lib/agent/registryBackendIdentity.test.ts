@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,17 @@ function withStore(root: string): string {
   return store;
 }
 
+/** A store whose first-boot import committed: the only kind that can be an
+    authority. An empty or unmarked store is an import that never finished. */
+function withImportedStore(root: string): string {
+  const store = path.join(root, "agent-registry.sqlite");
+  const db = new Database(store, { create: true });
+  db.exec("CREATE TABLE registry_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  db.query("INSERT INTO registry_meta(key, value) VALUES ('migration_complete', '1')").run();
+  db.close();
+  return store;
+}
+
 /* The production defect, reduced: Claude launches the MCP server with an empty
    env, so the reader saw `off` and opened the JSON mirror while the writer
    owned SQLite. Every host pid it then read was dead, and caller authority
@@ -47,7 +59,7 @@ test("an MCP reader with no env resolves the writer's SQLite backend, not the JS
 
   const resolved = resolveRegistryBackend(filename, {});
 
-  expect(resolved).toEqual({ mode: "sqlite", sqliteFilename: store, source: "descriptor" });
+  expect(resolved).toEqual({ mode: "sqlite", sqliteFilename: store, source: "descriptor", pendingJsonImport: false });
 });
 
 test("a stale JSON mirror is never chosen when the descriptor names SQLite", () => {
@@ -70,42 +82,76 @@ test("an explicit environment overrides the descriptor and stays authoritative",
 
   const resolved = resolveRegistryBackend(filename, { LLV_AGENT_REGISTRY_SQLITE: "sqlite" });
 
-  expect(resolved).toEqual({ mode: "sqlite", sqliteFilename: null, source: "environment" });
+  expect(resolved).toEqual({ mode: "sqlite", sqliteFilename: null, source: "environment", pendingJsonImport: false });
 });
 
-test("a genuine JSON-only deployment keeps working without a descriptor", () => {
+test("a JSON-only deployment with no descriptor resolves to SQLite with the JSON pending import", () => {
   const root = stateRoot();
   const filename = registryFile(root);
 
   const resolved = resolveRegistryBackend(filename, {});
 
-  expect(resolved).toEqual({ mode: "off", sqliteFilename: null, source: "json-only" });
+  expect(resolved).toEqual({ mode: "sqlite", sqliteFilename: null, source: "default", pendingJsonImport: true });
 });
 
-test("a descriptor that declares the JSON backend resolves off when no store exists", () => {
-  const root = stateRoot();
-  const filename = registryFile(root);
-  publishRegistryBackendIdentity(filename, "off", path.join(root, "unused.sqlite"));
+test("nothing on disk resolves to the SQLite default with nothing to import", () => {
+  const filename = path.join(stateRoot(), "agent-registry.json");
 
-  expect(resolveRegistryBackend(filename, {})).toEqual({ mode: "off", sqliteFilename: null, source: "descriptor" });
+  expect(resolveRegistryBackend(filename, {})).toEqual({ mode: "sqlite", sqliteFilename: null, source: "default", pendingJsonImport: false });
 });
 
-test("an unpublished identity beside an existing store fails closed", () => {
+test("an imported store with no descriptor and no JSON is the authority", () => {
+  const root = stateRoot();
+  const filename = path.join(root, "agent-registry.json");
+  withImportedStore(root);
+
+  expect(resolveRegistryBackend(filename, {})).toEqual({ mode: "sqlite", sqliteFilename: null, source: "default", pendingJsonImport: false });
+});
+
+test("a descriptor that declares a JSON backend resolves to SQLite with the JSON pending import", () => {
+  for (const mode of ["off", "dual-write"] as const) {
+    const root = stateRoot();
+    const filename = registryFile(root);
+    publishRegistryBackendIdentity(filename, mode, path.join(root, "agent-registry.sqlite"));
+    /* A store beside it is a stale experiment the import sets aside. */
+    withImportedStore(root);
+
+    expect(resolveRegistryBackend(filename, {})).toEqual({ mode: "sqlite", sqliteFilename: null, source: "descriptor", pendingJsonImport: true });
+  }
+});
+
+test("a writer told sqlite over a JSON descriptor imports the JSON", () => {
   const root = stateRoot();
   const filename = registryFile(root);
-  withStore(root);
+  publishRegistryBackendIdentity(filename, "off", path.join(root, "agent-registry.sqlite"));
+
+  expect(resolveRegistryBackend(filename, { LLV_AGENT_REGISTRY_SQLITE: "sqlite" }))
+    .toEqual({ mode: "sqlite", sqliteFilename: null, source: "environment", pendingJsonImport: true });
+});
+
+test("an explicitly configured JSON mode is honoured and imports nothing", () => {
+  const root = stateRoot();
+  const filename = registryFile(root);
+
+  expect(resolveRegistryBackend(filename, { LLV_AGENT_REGISTRY_SQLITE: "off" }))
+    .toEqual({ mode: "off", sqliteFilename: null, source: "environment", pendingJsonImport: false });
+});
+
+test("an unpublished identity with both the JSON and an imported store fails closed", () => {
+  const root = stateRoot();
+  const filename = registryFile(root);
+  withImportedStore(root);
 
   expect(() => resolveRegistryBackend(filename, {})).toThrow(RegistryBackendIdentityError);
-  expect(() => resolveRegistryBackend(filename, {})).toThrow(/unpublished while agent-registry\.sqlite exists/);
+  expect(() => resolveRegistryBackend(filename, {})).toThrow(/unpublished while both agent-registry\.json and agent-registry\.sqlite exist/);
 });
 
-test("a descriptor contradicted by an existing store fails closed", () => {
+test("an unmarked store beside the JSON is no authority: the JSON imports", () => {
   const root = stateRoot();
   const filename = registryFile(root);
-  publishRegistryBackendIdentity(filename, "off", path.join(root, "unused.sqlite"));
   withStore(root);
 
-  expect(() => resolveRegistryBackend(filename, {})).toThrow(/claims the JSON backend while agent-registry\.sqlite exists/);
+  expect(resolveRegistryBackend(filename, {})).toMatchObject({ mode: "sqlite", pendingJsonImport: true });
 });
 
 test("a descriptor naming an unavailable store fails closed", () => {

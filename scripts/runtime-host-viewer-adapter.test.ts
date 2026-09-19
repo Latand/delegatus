@@ -1120,7 +1120,7 @@ test("rollback starts and health-checks the retained release before switching th
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }
@@ -1181,7 +1181,7 @@ test("rollback checkpoints hot state before publishing a legacy target", async (
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }
@@ -1243,7 +1243,7 @@ test("rollback publishes destination authority before changing the stable target
     fetch(request) {
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
-        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "off" });
+        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
       }
       if (pathname === "/_next/static/app.js") return new Response("self.__viewer=true");
       return new Response('<script src="/_next/static/app.js"></script>', { headers: { "content-type": "text/html" } });
@@ -1298,7 +1298,7 @@ test("rollback resumes after a crash between destination authority and target pu
     fetch(request) {
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
-        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "off" });
+        return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
       }
       if (pathname === "/_next/static/app.js") return new Response("self.__viewer=true");
       return new Response('<script src="/_next/static/app.js"></script>', { headers: { "content-type": "text/html" } });
@@ -1361,7 +1361,7 @@ test("SQLite rollback recovers an interrupted promotion before health and keeps 
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { status: previousWriterReady() ? 200 : 503 },
         );
       }
@@ -1470,7 +1470,7 @@ test("rollback retains the SQLite target when mirror checkpointing fails", async
       const pathname = new URL(request.url).pathname;
       if (pathname === "/api/runtime/deployments/capabilities/v1") {
         return Response.json(
-          { capability: "viewer-deployments", version: 1, registryBackendMode: "off" },
+          { capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" },
           { headers: { connection: "close" } },
         );
       }

@@ -26,7 +26,7 @@ const { selectAccount } = await import("@/lib/accounts/manager");
 const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
 const { setClaudeLoginSupervisorForTests } = await import("@/lib/accounts/claudeLogin");
-const { AgentRegistry, agentRegistry } = await import("@/lib/agent/registry");
+const { AgentRegistry, agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { bindAccountToProject } = await import("@/lib/accounts/projectBindings");
 const credentialStore = await import("@/lib/accounts/claudeCredentials");
@@ -54,12 +54,16 @@ function installRuntime(authenticated: boolean): void {
 }
 
 beforeEach(() => {
+  /* Close the process-wide registry's SQLite store before its directory goes;
+     macOS answers the next query on a removed store with SQLITE_IOERR_VNODE. */
+  closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   installRuntime(false);
 });
 afterAll(() => {
   setClaudeLoginSupervisorForTests(null);
   setManagedCodexRuntimeForTests(null);
+  closeAgentRegistryForTests();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CODEX_HOME;

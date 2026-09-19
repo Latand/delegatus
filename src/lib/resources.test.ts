@@ -418,9 +418,11 @@ describe("resource observation", () => {
           ...process.env,
           HOME: home,
           LLV_STATE_DIR: state,
-          LLV_AGENT_REGISTRY_SQLITE: "off",
           PATH: "/usr/bin:/bin",
         };
+        /* The default backend: a worker that opened the registry would create
+           the SQLite store here (#1870). */
+        delete env.LLV_AGENT_REGISTRY_SQLITE;
         delete env.XDG_CONFIG_HOME;
         delete env.XDG_CACHE_HOME;
         delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
@@ -428,7 +430,7 @@ describe("resource observation", () => {
         const child = Bun.spawn(["/usr/bin/node", path.join(directory, bundleName)], {
           cwd: process.cwd(),
           env,
-          stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"files\":[],\"hosts\":[]}\n"]),
+          stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -467,12 +469,13 @@ describe("resource observation", () => {
     writeFileSync(staleRegistryTemp, "stale-temp-sentinel\n");
     writeFileSync(scanSentinel, "scan-byte-sentinel\n");
     const before = readFileSync(scanSentinel);
-    const env: Record<string, string | undefined> = { ...process.env, HOME: home, LLV_STATE_DIR: state, LLV_AGENT_REGISTRY_SQLITE: "off" };
+    const env: Record<string, string | undefined> = { ...process.env, HOME: home, LLV_STATE_DIR: state };
+    delete env.LLV_AGENT_REGISTRY_SQLITE;
     delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
     const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/resourceCollector.worker.ts")], {
       cwd: process.cwd(),
       env,
-      stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"files\":[],\"hosts\":[]}\n"]),
+      stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -497,6 +500,7 @@ describe("resource observation", () => {
       });
       expect(existsSync(staleRegistryTemp)).toBeTrue();
       expect(readFileSync(scanSentinel)).toEqual(before);
+      expect(readdirSync(state).sort()).toEqual([path.basename(staleRegistryTemp), path.basename(scanSentinel)].sort());
     } finally {
       child.kill("SIGKILL");
       await child.exited;
