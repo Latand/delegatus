@@ -2705,7 +2705,17 @@ export function createMcpToolService(
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
-          settled = failure(
+          // Tools without a downstream recovery reader still preserve an
+          // uncertain dispatch as unknown. Cache that answer under the original
+          // key so replay cannot repeat a possibly executed control.
+          settled = error instanceof McpDispatchUncertainError
+            ? recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "dispatch-uncertain",
+              reason: `${error.message}; execution remains possible, so look up this call under the same clientRequestId; do not repeat it with a new key`,
+              ids: stringIds(error.details),
+            }, false)
+            : failure(
             typedTool,
             requestId,
             taskCode ?? "tool_failed",

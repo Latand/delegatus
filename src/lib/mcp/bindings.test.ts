@@ -1232,44 +1232,37 @@ test("deployment_status uses Viewer HTTP while resources keeps its resource read
   ]);
 });
 
-test("conversation_action delegates to the ownership-fenced conversation command with a stable receipt", async () => {
-  const requests: unknown[] = [];
-  const bindings = viewerMcpBindings(undefined, undefined, {
-    applyConversationAction: async (request: { operationId: string }) => {
+test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("conversation_action dispatches %s through Viewer controls with a stable receipt", async (action) => {
+  const requests: Record<string, unknown>[] = [];
+  const abort = new AbortController();
+  const context = { signal: abort.signal, deadlineAt: Date.now() + 10_000 };
+  const bindings = viewerMcpBindings(undefined, {
+    post: async () => { throw new Error("controls must use single-attempt dispatch"); },
+    dispatch: async (pathname, request, _headers, receivedContext) => {
+      expect(pathname).toBe("/api/conversation-host");
+      expect(receivedContext).toBe(context);
       requests.push(request);
       return {
-        status: 202,
-        body: {
-          ok: true,
-          structured: true,
-          target: "conversation_608",
-          operationId: request.operationId,
-          receipt: { operationId: request.operationId, status: "queued" },
-        },
+        ok: true, structured: true, target: "conversation_608",
+        operationId: request.operationId,
+        receipt: { operationId: request.operationId, status: "queued" },
       };
     },
-  } as never);
-
-  const result = await bindings.conversation_action({
-    clientRequestId: "interrupt-608",
-    conversationId: "conversation_608",
-    action: "interrupt",
   });
-
+  const result = await bindings.conversation_action({
+    clientRequestId: `control-608-${action}`,
+    conversationId: "conversation_608", transcriptPath: "/fixtures/session.jsonl",
+    action, key: "Enter", label: "Confirm", question: "Proceed?",
+  }, context);
   expect(requests).toEqual([{
     operationId: expect.stringMatching(/^mcp_conversation_action_[0-9a-f]{24}$/),
-    conversationId: "conversation_608",
-    transcriptPath: "",
-    action: "interrupt",
-    key: "",
-    label: undefined,
-    question: undefined,
+    conversationId: "conversation_608", path: "/fixtures/session.jsonl",
+    action, key: "Enter", label: "Confirm", question: "Proceed?",
   }]);
-  const operationId = (requests[0] as { operationId: string }).operationId;
+  const operationId = requests[0]!.operationId;
   expect(result).toMatchObject({
-    conversationId: "conversation_608",
-    operationId,
-    receipt: { operationId, status: "queued" },
+    conversationId: "conversation_608", transcriptPath: "/fixtures/session.jsonl",
+    operationId, receipt: { operationId, status: "queued" },
   });
 });
 
@@ -1575,7 +1568,10 @@ test("conversation_action archives ghosts and reconciles interrupted receipts wi
   };
   let runtimeCalls = 0;
   let scanCalls = 0;
-  const bindings = viewerMcpBindings(undefined, undefined, {
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    runtimeCalls += 1;
+    throw new Error("archive must not enter runtime conversation control");
+  } }, {
     registrySnapshot: () => registrySnapshot,
     completedFileScan: async () => {
       scanCalls += 1;
@@ -1590,10 +1586,6 @@ test("conversation_action archives ghosts and reconciles interrupted receipts wi
       patchBoard: (key, revision, patch) => patchBoard(key, revision, patch, boardFile),
       mutateBoard: (key, revision, mutations) => mutateBoard(key, revision, mutations, boardFile),
     }),
-    applyConversationAction: async () => {
-      runtimeCalls += 1;
-      throw new Error("archive must not enter runtime conversation control");
-    },
   } as never);
 
   const archiveArgs = {
@@ -1891,10 +1883,9 @@ test("conversation_action aggregates only successful chunks across a revision co
 
 test("conversation_action refuses archive batches above 100 before reading board or runtime state", async () => {
   let reads = 0;
-  const bindings = viewerMcpBindings(undefined, undefined, {
+  const bindings = viewerMcpBindings(undefined, { post: async () => { reads += 1; return {}; } }, {
     registrySnapshot: () => { reads += 1; return {} as never; },
     boardFor: () => { reads += 1; return {} as never; },
-    applyConversationAction: async () => { reads += 1; return {} as never; },
   } as never);
   const targets = Array.from({ length: 101 }, (_, index) => ({ transcriptPath: `/fixtures/project/session-${index}.jsonl` }));
 
