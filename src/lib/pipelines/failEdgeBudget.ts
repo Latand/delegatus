@@ -1,4 +1,8 @@
-import type { Pipeline, PipelineEdgeKind, PipelineStage } from "./types";
+import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage } from "./types";
+
+/** What the record says when a spent fail edge handed its last findings on
+    without asking the source again (#1868). */
+export const FAIL_EDGE_BUDGET_SPENT_DETAIL = "budget spent: last findings handed to the fix stage, not re-reviewed";
 
 /**
  * How many times an edge has been traversed, derived (never stored) from the
@@ -9,7 +13,8 @@ import type { Pipeline, PipelineEdgeKind, PipelineStage } from "./types";
  * — never the target's own attempts. A retry of the target (a spawn failure, a
  * provider throttle, a cut turn) is a fresh attempt carrying the same
  * activation, and it spends no round (#1754). Lineage-adopted evidence
- * (`historical`) is not the stage's own work and never counts.
+ * (`historical`) is not the stage's own work and never counts. The handoff
+ * that ends a spent budget (#1868) is a traversal like any other.
  */
 export function edgeRoundsUsed(
   pipeline: Pipeline,
@@ -32,4 +37,15 @@ export function edgeRoundsUsed(
 export function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): number {
   if (!stage.onFail) return 0;
   return edgeRoundsUsed(pipeline, { from: stage.id, to: stage.onFail.to, kind: "fail" });
+}
+
+export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExhaustion {
+  return edge.onExhausted ?? "advance";
+}
+
+/** Whether this stage has already handed findings along its spent fail edge.
+    Read from the stage's own attempts, so the handoff happens once. */
+export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): boolean {
+  const run = pipeline.runs.find((candidate) => candidate.stageId === stage.id);
+  return Boolean(run?.attempts.some((attempt) => !attempt.historical && attempt.budgetSpent));
 }

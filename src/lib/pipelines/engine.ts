@@ -57,7 +57,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { requestPipelineTick } from "./controllerSignal";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
-import { failEdgeRoundsUsed } from "./failEdgeBudget";
+import { FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeRoundsUsed } from "./failEdgeBudget";
 import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
@@ -88,6 +88,8 @@ import type {
   PatchPipelineRequest,
   Pipeline,
   PipelineBoundedWait,
+  PipelineFailEdge,
+  PipelineFailEdgeExhaustion,
   PipelineGraphEdit,
   PipelineGraphEditAction,
   PipelineGuardErrorCode,
@@ -105,6 +107,7 @@ import type {
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
 } from "./types";
+import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
@@ -2136,23 +2139,57 @@ function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication">): boolean
     attempt's output is the next activation's `{{prev.output}}`, written in the
     same mutation as the verdict/commit that produced it (exactly-once, #353). */
 function advancePipeline(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null): void {
-  if (stage.next === null) {
+  const successor = passSuccessor(pipeline, stage, attempt);
+  const detail = successor.handoff ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
+  if (successor.next === null) {
     pipeline.cursor = null;
     pipeline.state = "completed";
-    pipeline.stateDetail = null;
+    pipeline.stateDetail = detail;
     pipeline.pausedState = null;
     pipeline.closedAt = ports.now();
     return;
   }
   pipeline.cursor = {
-    stageId: stage.next,
+    stageId: successor.next,
     state: "pending",
-    input: attempt?.output ?? null,
+    input: successor.handoff ? budgetSpentInput(attempt?.output ?? null, successor.handoff) : attempt?.output ?? null,
     activatedBy: attempt ? { stageId: stage.id, attempt: attempt.n, edge: "pass" } : null,
   };
   pipeline.state = "running";
-  pipeline.stateDetail = null;
+  pipeline.stateDetail = detail;
   pipeline.pausedState = null;
+}
+
+/** Where a pass of this attempt goes. A fix that ran on a spent fail edge's
+    last handoff (#1868) follows the reviewer's own pass edge: the budget said
+    how much review the lane gets, so the reviewer is not asked again. */
+function passSuccessor(
+  pipeline: Pipeline,
+  stage: PipelineStage,
+  attempt?: PipelineStageAttempt | null,
+): { next: string | null; handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null } | null } {
+  const activation = attempt?.activatedBy;
+  const source = activation?.edge === "fail" && activation.budgetSpent
+    ? pipeline.stages.find((candidate) => candidate.id === activation.stageId) ?? null
+    : null;
+  if (!source || !activation) return { next: stage.next, handoff: null };
+  const sourceAttempt = pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null;
+  return { next: source.next, handoff: { source, attempt: sourceAttempt } };
+}
+
+/** The next stage reads the fix's output and, beside it, the findings nobody
+    reviewed after that fix, so the stage that merges the work sees them. */
+function budgetSpentInput(
+  output: string | null,
+  handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null },
+): string {
+  const findings = handoff.attempt?.verdict?.findings ?? [];
+  const note = [
+    `${FAIL_EDGE_BUDGET_SPENT_DETAIL} (review stage ${handoff.source.id}).`,
+    ...(findings.length ? ["Unreviewed findings:", ...findings.map((finding) => `- ${finding}`)] : []),
+  ].join("\n");
+  if (!output) return note;
+  return `${output.slice(0, Math.max(0, MAX_OUTPUT_CHARS - note.length - 2))}\n\n${note}`;
 }
 
 function keepPassedStageUnpublished(
@@ -2221,18 +2258,41 @@ function routeFailedAttempt(
   detail: string,
   /** A `needs_decision` routed as a fail (#1785) parks exactly as it did before
       when the edge has nothing left, so the operator still reads the verdict's
-      own detail rather than a budget message about a fail it never reported. */
+      own detail rather than a budget message about a fail it never reported.
+      A spent edge under the default `advance` still hands it on once (#1868). */
   parkOnExhaustedBudget = true,
 ): boolean {
   if (!stage.onFail) return false;
   const targetStage = pipeline.stages.find((candidate) => candidate.id === stage.onFail!.to);
   const used = failEdgeRoundsUsed(pipeline, stage);
-  if (targetStage && used < stage.onFail.maxRounds) {
+  /* Under the default `advance` (#1868) `maxRounds` is also how many reviews
+     the source gets: the fail of its last one is the handoff below, so the
+     reviewer runs N times and the fix stage N+1. `park` keeps today's count,
+     which reviews once more and then stops. */
+  const advancesWhenSpent = failEdgeExhaustion(stage.onFail) === "advance";
+  const loopRounds = advancesWhenSpent ? stage.onFail.maxRounds - 1 : stage.onFail.maxRounds;
+  if (targetStage && used < loopRounds) {
     pipeline.cursor = {
       stageId: targetStage.id,
       state: "pending",
       input,
       activatedBy: { stageId: stage.id, attempt: attempt.n, edge: "fail" },
+    };
+    pipeline.state = "running";
+    pipeline.stateDetail = null;
+    pipeline.pausedState = null;
+    return true;
+  }
+  /* The budget is spent (#1868). Under the default the last findings go to
+     the fix stage one more time, and that fix's pass follows this stage's pass
+     edge; `park` keeps the stop for the operator. The handoff happens once. */
+  if (targetStage && advancesWhenSpent && !failEdgeBudgetSpent(pipeline, stage)) {
+    attempt.budgetSpent = true;
+    pipeline.cursor = {
+      stageId: targetStage.id,
+      state: "pending",
+      input,
+      activatedBy: { stageId: stage.id, attempt: attempt.n, edge: "fail", budgetSpent: true },
     };
     pipeline.state = "running";
     pipeline.stateDetail = null;
@@ -2293,7 +2353,7 @@ function commitPassedStage(
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
   attempt.state = "passed";
   attempt.completedAt = ports.now();
-  if (published.remote === "unreachable" && stage.next === null) {
+  if (published.remote === "unreachable" && passSuccessor(pipeline, stage, attempt).next === null) {
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
@@ -2358,8 +2418,7 @@ function settleStageVerdict(
        parking. The failed attempt keeps its truthful failed state and verdict;
        the relay record (input + fail activation) lands in the SAME atomic
        mutation as the verdict. No worktree reset — the target continues from
-       lastPassedCommit plus its own committed passes. An exhausted budget parks
-       with an actionable detail.
+       lastPassedCommit plus its own committed passes.
 
        A needs_decision that carries findings is routed the same way (#1785):
        reviewers reported a fixable defect under that status because their
@@ -2367,8 +2426,10 @@ function settleStageVerdict(
        is exactly where those findings belong. {@link verdictRoutesAsFail} is
        that whole rule, so the engine's own synthesized findings never spend a
        round. The attempt records the decision request. Without routable
-       findings, without a fail edge, or with the budget spent, it parks exactly
-       as it always did. */
+       findings or without a fail edge, it parks exactly as it always did.
+
+       A spent budget (#1868) hands the findings to the target once more under
+       the edge's default `onExhausted: "advance"`, and parks under `park`. */
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
@@ -4499,9 +4560,20 @@ const STAGE_SANDBOX_SHAPE = '"full" | "restricted" (default "full")';
 const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relative paths, each at most ${MAX_STAGE_OUTPUT_PATH_LENGTH} characters`;
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
-const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}} — run stages only`;
+const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "park"} — run stages only`;
 const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and creation or start without baseRef leaves the base to the controller, fetched time-bounded after the call is answered) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
+
+/** A validated fail edge in its stored shape; `onExhausted` is kept only when
+    the author named it, so an edge without it reads as the default. */
+function normalizedFailEdge(raw: unknown): PipelineFailEdge {
+  const edge = raw as { to: string; maxRounds?: number; onExhausted?: PipelineFailEdgeExhaustion };
+  return {
+    to: edge.to.trim(),
+    maxRounds: edge.maxRounds ?? DEFAULT_FAIL_EDGE_ROUNDS,
+    ...(edge.onExhausted !== undefined ? { onExhausted: edge.onExhausted } : {}),
+  };
+}
 
 function stageViolations(violations: PipelineValidationViolation[]): { error: string; violations: PipelineValidationViolation[] } {
   return { error: pipelineValidationError(violations), violations };
@@ -4564,7 +4636,7 @@ function normalizeStages(
         violations.push({ field: at("onFail"), message: `stage ${id} onFail must be an object or null`, expected: STAGE_ON_FAIL_SHAPE });
         onFailValid = false;
       } else {
-        const edge = rawOnFail as { to?: unknown; maxRounds?: unknown };
+        const edge = rawOnFail as { to?: unknown; maxRounds?: unknown; onExhausted?: unknown };
         if (typeof edge.to !== "string" || !edge.to.trim()) {
           violations.push({ field: at("onFail.to"), message: `stage ${id} onFail requires a target stage id`, expected: "id of an existing stage" });
           onFailValid = false;
@@ -4575,6 +4647,14 @@ function normalizeStages(
             field: at("onFail.maxRounds"),
             message: `stage ${id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`,
             expected: `integer 1–${MAX_FAIL_EDGE_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
+          });
+          onFailValid = false;
+        }
+        if (edge.onExhausted !== undefined && !(PIPELINE_FAIL_EDGE_EXHAUSTIONS as readonly unknown[]).includes(edge.onExhausted)) {
+          violations.push({
+            field: at("onFail.onExhausted"),
+            message: `stage ${id} onFail onExhausted must be advance or park`,
+            expected: '"advance" (default: after the last round, hand the findings to the fix stage once more and follow this stage\'s pass edge) | "park" (stop for the operator)',
           });
           onFailValid = false;
         }
@@ -4676,7 +4756,7 @@ function normalizeStages(
         kind: stage.kind as PipelineStage["kind"],
         next: stage.next ?? null,
         onFail: rawOnFail
-          ? { to: (rawOnFail as { to: string }).to.trim(), maxRounds: ((rawOnFail as { maxRounds?: number }).maxRounds ?? DEFAULT_FAIL_EDGE_ROUNDS) }
+          ? normalizedFailEdge(rawOnFail)
           : null,
       });
     } else {
@@ -4684,12 +4764,7 @@ function normalizeStages(
     }
     if (idValid) ids.add(id);
     if (violations.length > before) continue;
-    const onFailEdge = rawOnFail
-      ? {
-          to: (rawOnFail as { to: string }).to.trim(),
-          maxRounds: ((rawOnFail as { maxRounds?: number }).maxRounds ?? DEFAULT_FAIL_EDGE_ROUNDS),
-        }
-      : null;
+    const onFailEdge = rawOnFail ? normalizedFailEdge(rawOnFail) : null;
     const input: PipelineStageInput = {
       id,
       kind: stage.kind as PipelineStage["kind"],
@@ -5786,6 +5861,7 @@ export async function patchPipeline(
       }
       if (req.edge === "pass") {
         if (req.maxRounds !== undefined) return { error: "maxRounds applies only to fail edges", status: 400 };
+        if (req.onExhausted !== undefined) return { error: "onExhausted applies only to fail edges", status: 400 };
         if (passEdgeTaken(pipeline, from.id)) return { error: "stage has already passed along its pass edge; it is frozen evidence", status: 409 };
         const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, next: req.to as string | null } : item));
         const graphError = pipelineGraphError(candidate);
@@ -5807,6 +5883,7 @@ export async function patchPipeline(
         if (traversed) return { error: "fail edge has already been traversed; it is frozen evidence", status: 409 };
         if (req.to === null) {
           if (req.maxRounds !== undefined) return { error: "maxRounds requires a fail-edge target", status: 400 };
+          if (req.onExhausted !== undefined) return { error: "onExhausted requires a fail-edge target", status: 400 };
           from.onFail = null;
           graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null, summary: `cleared the fail edge of ${from.id}` });
         } else {
@@ -5814,13 +5891,17 @@ export async function patchPipeline(
           if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_FAIL_EDGE_ROUNDS) {
             return { error: `maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`, status: 400 };
           }
-          const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail: { to: req.to as string, maxRounds } } : item));
+          if (req.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(req.onExhausted)) {
+            return { error: "onExhausted must be advance or park", status: 400 };
+          }
+          const onFail: PipelineFailEdge = { to: req.to, maxRounds, ...(req.onExhausted !== undefined ? { onExhausted: req.onExhausted } : {}) };
+          const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail } : item));
           const graphError = pipelineGraphError(candidate);
           if (graphError) return { error: graphError, status: 400 };
-          from.onFail = { to: req.to, maxRounds };
+          from.onFail = onFail;
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
-            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}`,
+            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(onFail) === "park" ? ", then park" : ""}`,
           });
         }
       }
