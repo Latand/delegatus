@@ -2420,6 +2420,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "attention.arrival": "Оркестратор перемістив вас сюди: {reason}",
   "attention.return": "Назад, де ви були",
   "attention.returnLine": "Повернутися туди, де ви були",
+  "attention.laneWithdrawn": "«{title}» так і не створився — лейн прибрано з дошки.",
 
   /* Мобільна оболонка v2 (issue #1439, смуга 1): один бар, слот банера,
      примітиви аркуша й квитанції, перемикач проєктів і меню дошки. */

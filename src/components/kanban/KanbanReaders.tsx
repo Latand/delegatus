@@ -284,6 +284,11 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
           attributes: {
             tabIndex: "-1",
             "data-kanban-reader": readerKey,
+            /* The pane's own transcript path. An attention arrival that opens a
+               conversation no card holds lands on THIS pane, and the board's
+               anchor for it is the path — the reader key is the conversation
+               id, which the board index does not hold (#1836 item 4). */
+            "data-reader-path": file.path,
             "data-folded": "0",
             "data-in-sheet": "1",
             role: "region",
@@ -371,6 +376,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
         attributes: {
           tabIndex: "-1",
           "data-kanban-reader": readerKey,
+          /* See above: the pane an arrival on a loose conversation lands on. */
+          "data-reader-path": file.path,
           "data-folded": folded ? "1" : "0",
           role: "region",
           "aria-label": t("kanban.readerAria", { title, state: stateWord }),

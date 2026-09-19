@@ -47,6 +47,19 @@ export interface FocusFrameIndex {
    * not in the layout at all.
    */
   concreteAnchorKey?(anchorKey: string): string | null;
+  /**
+   * Optional: a CSS selector for the element this board DRAWS the anchor as.
+   *
+   * The arrival pulse (#1836 item 4) needs to find the landed card in the
+   * page, and only the board knows how it draws one — the kanban as a card
+   * keyed by its band id, the scheme as a node, group or band. Answering with
+   * a SELECTOR rather than an element keeps this module what it says it is:
+   * a description of a layout, with no DOM in it.
+   *
+   * Null when this board draws nothing for the anchor, in which case nothing
+   * pulses and nothing else changes.
+   */
+  pulseSelectorFor?(anchorKey: string): string | null;
   /** Optional: named objects, used only to phrase a geometric destination. */
   named?: readonly NamedFrame[];
 }

@@ -534,3 +534,99 @@ body {
 [data-tts-seekable] {
   cursor: pointer;
 }
+
+/* The arrival pulse (#1836 item 4): where the view was just taken.
+   `request_attention` moves the operator's camera or opens a card, and on a
+   busy board neither says WHICH thing was the point. So the landed target —
+   a task band, a lane, a stage slot, a conversation card — blinks for a few
+   seconds and then settles by itself.
+
+   Deliberately louder than the board's other two treatments (the `needs you`
+   breathe and the pane-attention orbit): those are standing states a card
+   wears for as long as they are true, while this is a one-off gesture that is
+   over in four seconds, and being findable at a glance on a phone-width
+   column is the whole of its job. It rings the accent rather than the warning
+   so it never reads as a status the card has acquired, and the ring is drawn
+   outside the element's own border, which is why both a card with a border
+   and an SVG-backed scheme node carry it the same way. */
+@keyframes attention-arrival-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+      0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in srgb, var(--color-accent) 30%, transparent),
+      0 0 26px 8px color-mix(in srgb, var(--color-accent) 16%, transparent);
+  }
+}
+
+/* The attribute is doubled to carry the weight of the surfaces it lands on:
+   a kanban card's own shadow is `.kb .card`, which outweighs a single
+   attribute — and under reduced motion, where the ring is a plain declaration
+   rather than an animation, losing that contest would leave the arrival
+   saying nothing at all.
+
+   The ring is declared here as well as animated, and that is deliberate: the
+   scheme's task scene suppresses every node animation with
+   `animation: none !important` while the camera is a layout, so a pulse that
+   existed only inside the keyframes would land there and show NOTHING. The
+   animation breathes the same ring; whatever stops it leaves it standing. */
+[data-attention-pulse][data-attention-pulse] {
+  animation: attention-arrival-pulse 0.85s ease-in-out infinite;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent);
+}
+
+/* The scheme's task scene stops every node animation with
+   `animation: none !important` while the camera is a layout (`SchemeBoard`).
+   There the blink cannot run, so the ring has to stand on the declaration
+   alone — against whatever the node or band already wears. Same reasoning as
+   the reduced-motion block below, in the one other place where the animation
+   is not there to carry it, and scoped to that scene so it can cost the blink
+   nothing anywhere else. */
+[data-atomic-task-layout] [data-attention-pulse][data-attention-pulse] {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
+}
+
+/* Positioning is the one thing this decoration may not touch. A scheme node
+   and a task band are `position: absolute` and are placed by `left/top` or a
+   transform; forcing `position: relative` on them drops them into normal flow
+   and moves the very card the camera just landed on. So the lift is asked for
+   BY the marking code, and only for an element that was statically positioned
+   to begin with (a kanban card), where relative changes nothing and buys the
+   ring its paint order over a neighbour's own shadow. */
+[data-attention-pulse="lift"][data-attention-pulse="lift"] {
+  position: relative;
+  z-index: 3;
+}
+
+/* Reduced motion keeps the same duration and the same loudness, held steady:
+   what is being communicated is "this one", and a blink is only one way to
+   say it.
+
+   The ring is `!important` HERE and nowhere else. With the blink running, the
+   animation's own box-shadow outranks every ordinary rule the surface wears,
+   whatever its specificity — which is why the mark reads on a card and on a
+   reader pane alike. With the blink refused there is no animation to do that,
+   and a surface that dresses itself more specifically than an attribute
+   (`.kb .reader-full .reader.conv` carries four classes) simply kept its own
+   shadow: the operator was handed to a pane with nothing lit on it. Weight is
+   the whole of the problem, so it is settled here rather than by counting
+   attribute repetitions until the next surface out-dresses them — and it
+   cannot cost the blink anything, because where the blink plays this block
+   does not apply. */
+@media (prefers-reduced-motion: reduce) {
+  [data-attention-pulse][data-attention-pulse] {
+    animation: none;
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+      0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
+  }
+}
