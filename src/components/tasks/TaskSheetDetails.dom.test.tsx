@@ -223,3 +223,54 @@ test("a refused clear keeps the open field and the draft, so the retry is one bl
     globalThis.fetch = originalFetch;
   }
 });
+
+test("an agent's newer details reach an untouched field, and leaving it writes nothing back", async () => {
+  const sent: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    sent.push(String(url));
+    return new Response(JSON.stringify({ ok: true, task: task(AGENT_CONTEXT) }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const newer = "Lane ffb09e5c, review round 2. Gates green; waiting on the reviewer.";
+    const view = opened(task(AGENT_CONTEXT));
+    /* The poll brings the agent's write while the operator has the task open. */
+    view.refresh(task(newer));
+    flushSync(() => toggle(view.host)!.click());
+    const editor = field(view.host)!;
+    expect(editor.value).toBe(newer);
+    flushSync(() => editor.dispatchEvent(new dom.FocusEvent("focusin", { bubbles: true }) as unknown as Event));
+    flushSync(() => editor.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual([]);
+    expect(field(view.host)!.value).toBe(newer);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an operator's edit in progress is kept when the agent's details move under it", async () => {
+  const sent: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(init?.body ? JSON.parse(String(init.body)) : null);
+    return new Response(JSON.stringify({ ok: true, task: task("saved") }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const view = opened(task(AGENT_CONTEXT));
+    flushSync(() => toggle(view.host)!.click());
+    const editor = field(view.host)!;
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
+    flushSync(() => {
+      setter.call(editor, "Operator's note.");
+      editor.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    view.refresh(task("Agent moved on."));
+    expect(field(view.host)!.value).toBe("Operator's note.");
+    flushSync(() => field(view.host)!.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }) as unknown as Event));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual([{ details: "Operator's note." }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

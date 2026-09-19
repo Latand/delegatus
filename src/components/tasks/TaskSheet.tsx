@@ -174,6 +174,15 @@ function TaskDetailView({
   useEffect(() => {
     setDetailsSaved(null);
   }, [task.details]);
+  /* The stored value the draft was taken from. Until the operator changes the
+     draft it follows the task as it moves, so an agent's newer details are what
+     the field shows, and leaving an untouched field never writes the older text
+     back over them. */
+  const [detailsBase, setDetailsBase] = useState(storedDetails);
+  if (storedDetails !== detailsBase && detailsDraft === detailsBase) {
+    setDetailsBase(storedDetails);
+    setDetailsDraft(storedDetails);
+  }
 
   useEffect(() => {
     if (!armDelete) return;
@@ -214,12 +223,13 @@ function TaskDetailView({
      no longer anything to disclose. A refused save keeps the draft and the open
      field, which is what the operator retries from. */
   const commitDetails = async (): Promise<void> => {
-    if (detailsDraft === storedDetails) return;
+    if (detailsDraft === detailsBase) return;
     const error = await updateTask(task.id, { details: detailsDraft });
     if (error) {
       pushTaskToast("err", error);
       return;
     }
+    setDetailsBase(detailsDraft);
     setDetailsSaved(detailsDraft);
     if (!detailsDraft) setDetailsOpen(false);
   };
