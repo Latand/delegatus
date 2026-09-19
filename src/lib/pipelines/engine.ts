@@ -7,10 +7,11 @@ import { accountManager } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
-  engineConnection,
   engineNotConnectedDetails,
   engineNotConnectedMessage,
+  engineReadiness,
   type EngineNotConnectedDetails,
+  type EngineReadiness,
 } from "@/lib/accounts/engineConnection";
 import { listClaudeAccounts, mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -300,9 +301,10 @@ export interface PipelinePorts {
   /** Accounts `project` allows for `engine`, or null when the project has no
       binding for it — which means every account, as it always did (#1279). */
   allowedAccountIds?(project: string, engine: FlowEngine): string[] | null;
-  /** Whether `engine` has a signed-in account `project` may use (#1876). Absent
-      means no check, which is what a port set built for a test gets. */
-  engineConnected?(engine: FlowEngine, project: string): boolean;
+  /** Whether `engine`'s command resolves and it has a signed-in account
+      `project` may use (#1876). Absent means no check, which is what a port
+      set built for a test gets. */
+  engineReadiness?(engine: FlowEngine, project: string): EngineReadiness;
   /** Shared project account-selection seam used to decide a usage-limit retry. */
   resolveProjectSpawn?(
     engine: FlowEngine,
@@ -359,14 +361,15 @@ function stageEngineProblems(
   stages: readonly PipelineStage[],
   project: string,
   ports: PipelinePorts,
-): { stageId: string; role: string | null; engine: FlowEngine }[] {
-  if (!ports.engineConnected) return [];
-  const connected = new Map<FlowEngine, boolean>();
-  const problems: { stageId: string; role: string | null; engine: FlowEngine }[] = [];
+): { stageId: string; role: string | null; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected"> }[] {
+  if (!ports.engineReadiness) return [];
+  const readiness = new Map<FlowEngine, EngineReadiness>();
+  const problems: { stageId: string; role: string | null; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected"> }[] = [];
   for (const stage of stages) {
     const engine = stage.effectiveRole.engine;
-    if (!connected.has(engine)) connected.set(engine, ports.engineConnected(engine, project));
-    if (!connected.get(engine)) problems.push({ stageId: stage.id, role: stage.effectiveRole.roleId ?? null, engine });
+    if (!readiness.has(engine)) readiness.set(engine, ports.engineReadiness(engine, project));
+    const reason = readiness.get(engine)!;
+    if (reason !== "connected") problems.push({ stageId: stage.id, role: stage.effectiveRole.roleId ?? null, engine, reason });
   }
   return problems;
 }
@@ -1025,7 +1028,7 @@ export function defaultPipelinePorts(
     preflightRepo: preflightPipelineRepo,
     roleLookup: pipelineRoleLookup,
     allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
-    engineConnected: (engine, project) => engineConnection(engine, project),
+    engineReadiness: (engine, project) => engineReadiness(engine, project),
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
@@ -2771,9 +2774,10 @@ async function tickRunStage(
     /* #1876: an engine signed out since the lane started parks the stage before
        anything spawns. No launch is spent, and resuming once the engine is
        connected activates the same stage again. */
-    if (ports.engineConnected && !ports.engineConnected(engine, pipeline.project)) {
+    const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
+    if (readiness !== "connected") {
       const roleId = attempt.definition ? attempt.effectiveRole.roleId : stage.effectiveRole.roleId;
-      park(pipeline, engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine }), attempt);
+      park(pipeline, engineNotConnectedMessage({ stageId: stage.id, role: roleId ?? null, engine, reason: readiness }), attempt);
       return;
     }
     /* A publication this process is merely between is transient. Waiting for it
@@ -4990,7 +4994,7 @@ export type PipelineMutationResult = {
   details?: EngineNotConnectedDetails;
   /** A draft created with stages whose engine has nobody signed in: one line
       per stage, so the author sees it before pressing Start (#1876). */
-  warnings?: { stageId: string; engine: FlowEngine; message: string }[];
+  warnings?: { stageId: string; engine: FlowEngine; reason: Exclude<EngineReadiness, "connected">; message: string }[];
   field?: "repoDir";
   path?: string;
   /** #1026: every request-shape constraint the call violated, each naming its
@@ -5191,7 +5195,7 @@ export async function createPipelineFromRequest(
     if (engineRefusal) return engineRefusal;
   }
   const engineWarnings = req.autoStart === false
-    ? stageEngineProblems(normalized.stages, project, ports).map((problem) => ({ stageId: problem.stageId, engine: problem.engine, message: engineNotConnectedMessage(problem) }))
+    ? stageEngineProblems(normalized.stages, project, ports).map((problem) => ({ stageId: problem.stageId, engine: problem.engine, reason: problem.reason, message: engineNotConnectedMessage(problem) }))
     : [];
   /* #1799: only a PINNED base is resolved before the answer, and that read is
      a local `rev-parse`. Without `baseRef` the record is admitted with the

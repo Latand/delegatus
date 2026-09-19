@@ -25,6 +25,7 @@ type PipelinePorts = import("./engine").PipelinePorts;
 const REPO = path.join(sandbox, "repo");
 fs.mkdirSync(REPO, { recursive: true });
 const ACCOUNTS = { claude: [{ id: "primary", authPresent: true }], codex: [] as { id: string; authPresent: boolean }[] };
+const CLI_FOUND = { claude: true, codex: true };
 let spawns = 0;
 
 function ports(): PipelinePorts {
@@ -33,7 +34,7 @@ function ports(): PipelinePorts {
     preflightRepo: () => ({ ok: true, repoDir: REPO, gitCommonDir: path.join(REPO, ".git"), worktreeParent: sandbox }),
     projectForCwd: () => "project-atlas",
     allowedAccountIds: () => null,
-    engineConnected: (engine) => engineConnectedFrom(ACCOUNTS[engine], null),
+    engineReadiness: (engine) => !CLI_FOUND[engine] ? "cli-missing" : engineConnectedFrom(ACCOUNTS[engine], null) ? "connected" : "signed-out",
     spawnAgent: async () => {
       spawns += 1;
       throw new Error("no stage may spawn in this suite");
@@ -53,6 +54,8 @@ function reviewDraft() {
 beforeEach(() => {
   savePipelines([]);
   spawns = 0;
+  ACCOUNTS.codex = [];
+  CLI_FOUND.codex = true;
 });
 
 test("starting a pipeline whose reviewer runs on a disconnected engine is refused before anything spawns", async () => {
@@ -61,12 +64,12 @@ test("starting a pipeline whose reviewer runs on a disconnected engine is refuse
   if (!id) throw new Error(`draft was not created: ${created.error}`);
   expect(created.pipeline?.stages[0]?.effectiveRole.engine).toBe("codex");
   /* The draft is stored, and says which stage would be refused. */
-  expect(created.warnings).toEqual([{ stageId: "review", engine: "codex", message: expect.stringContaining("no Codex account is signed in") }]);
+  expect(created.warnings).toEqual([{ stageId: "review", engine: "codex", reason: "signed-out", message: expect.stringContaining("no Codex account is signed in") }]);
 
   const started = await patchPipeline(id, { action: "start" }, ports());
   expect(started.status).toBe(409);
   expect(started.code).toBe(ENGINE_NOT_CONNECTED);
-  expect(started.details).toEqual({ stageId: "review", role: "reviewer", engine: "codex", connect: "accounts", mapping: "agent-mapping" });
+  expect(started.details).toEqual({ stageId: "review", role: "reviewer", engine: "codex", reason: "signed-out", connect: "accounts", mapping: "agent-mapping" });
   expect(started.error).toBe('Stage "review" runs on Codex, and no Codex account is signed in on this machine. Connect Codex (menu → Accounts), or point the reviewer role at another engine (menu → Agent mapping), or set engine and model on this stage.');
   expect(spawns).toBe(0);
   const { getPipeline } = await import("./engine");
@@ -99,4 +102,18 @@ test("a stage with an explicit engine is never refused for another engine's sign
   if (!id) throw new Error(`draft was not created: ${created.error}`);
   const started = await patchPipeline(id, { action: "start" }, ports());
   expect(started.error).toBeUndefined();
+});
+
+test("a signed-in engine whose command is missing is refused just the same, and says so", async () => {
+  ACCOUNTS.codex = [{ id: "codex-main", authPresent: true }];
+  CLI_FOUND.codex = false;
+  const created = await createPipelineFromRequest(reviewDraft(), ports(), { allowOperatorDraftWithoutLineage: true });
+  const id = created.pipeline?.id;
+  if (!id) throw new Error(`draft was not created: ${created.error}`);
+  expect(created.warnings).toEqual([{ stageId: "review", engine: "codex", reason: "cli-missing", message: expect.stringContaining("the codex command was not found") }]);
+  const started = await patchPipeline(id, { action: "start" }, ports());
+  expect(started.status).toBe(409);
+  expect(started.code).toBe(ENGINE_NOT_CONNECTED);
+  expect(started.details).toMatchObject({ stageId: "review", engine: "codex", reason: "cli-missing" });
+  expect(spawns).toBe(0);
 });

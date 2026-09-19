@@ -27,6 +27,8 @@ export type MappingCatalogItem = RoleCatalogItem & {
 
 export type EngineStatus = {
   connected: boolean;
+  /** The engine's command does not resolve here, whatever its sign-in says. */
+  missing?: boolean;
   /** The engine's active account, for the headroom line. */
   account: AccountOption | null;
 };
@@ -34,6 +36,15 @@ export type EngineStatus = {
 type RowKey = { roleId: RoleId; variant?: BuilderVariantId };
 
 const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex" };
+
+/* One track list for the head and every row. The model column stops at 220 px
+   and the role column takes what is left, so the standalone surface (no step
+   rail) widens the names instead of stretching one select. */
+const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_136px_minmax(0,220px)_104px_104px]";
+
+function blockedText(t: TFunction, engine: RoleEngine, status: EngineStatus): string {
+  return t(status.missing ? "onboarding.agents.blockedMissing" : "onboarding.agents.blocked", { engine: ENGINE_NAME[engine] });
+}
 
 const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rare"; rows: readonly RowKey[] }[] = [
   { id: "build", rows: [{ roleId: "builder" }, { roleId: "builder", variant: "frontend" }, { roleId: "builder", variant: "apply-fixes" }] },
@@ -132,13 +143,13 @@ function CostChip({ config }: { config: RoleConfig }) {
   );
 }
 
-function Headroom({ config, status }: { config: RoleConfig; status: EngineStatus }) {
+function Headroom({ config, status, compact = false }: { config: RoleConfig; status: EngineStatus; compact?: boolean }) {
   const { t } = useLocale();
   if (!status.connected) {
     return (
       <span className="flex items-center gap-1 text-label font-semibold text-warning">
         <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
-        {t("onboarding.agents.blocked", { engine: ENGINE_NAME[config.engine] })}
+        {blockedText(t, config.engine, status)}
       </span>
     );
   }
@@ -149,7 +160,12 @@ function Headroom({ config, status }: { config: RoleConfig; status: EngineStatus
     : headroom.window === "weekly" ? t("onboarding.agents.window.weekly") : headroom.window;
   /* The accounts panel's own thresholds: warning under 30 %, danger under 10 %. */
   const tone = headroom.percentLeft < 10 ? "text-danger" : headroom.percentLeft < 30 ? "text-warning" : "text-muted";
-  return <span className={`text-label ${tone}`}>{t("onboarding.agents.headroom", { window: windowName, percent: headroom.percentLeft })}</span>;
+  const full = t("onboarding.agents.headroom", { window: windowName, percent: headroom.percentLeft });
+  /* In the table the line lives in the 104 px cost cell under the chip, so it
+     keeps the percent on one line and names the window on hover. */
+  return compact
+    ? <span data-mapping-headroom="" title={full} aria-label={full} className={`block whitespace-nowrap text-label leading-4 ${tone}`}>{t("onboarding.agents.headroomShort", { percent: headroom.percentLeft })}</span>
+    : <span data-mapping-headroom="" className={`text-label ${tone}`}>{full}</span>;
 }
 
 function EngineSegments({ value, label, statuses, onChange }: { value: RoleEngine; label: string; statuses: Record<RoleEngine, EngineStatus>; onChange: (engine: RoleEngine) => void }) {
@@ -167,9 +183,9 @@ function EngineSegments({ value, label, statuses, onChange }: { value: RoleEngin
             data-engine-segment={engine}
             /* A disconnected engine stays selectable: someone who connects Codex
                tomorrow may still point a role at it today. */
-            title={statuses[engine].connected ? ENGINE_NAME[engine] : t("onboarding.agents.blocked", { engine: ENGINE_NAME[engine] })}
+            title={statuses[engine].connected ? ENGINE_NAME[engine] : blockedText(t, engine, statuses[engine])}
             onClick={() => { if (!checked) onChange(engine); }}
-            className={`inline-flex min-w-0 items-center gap-1 rounded-[6px] px-1.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center ${checked ? "bg-card text-primary shadow-1" : "text-muted hover:text-primary"}`}
+            className={`inline-flex min-w-0 items-center gap-1 rounded-[6px] px-1.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : "text-muted hover:text-primary"}`}
           >
             <EngineMark engine={engine} size={12} />
             {ENGINE_NAME[engine]}
@@ -233,7 +249,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
         <span className="flex items-center gap-1 text-label text-secondary">
           <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
           {t("onboarding.agents.stateChanged")} ·
-          <button type="button" data-mapping-reset={rowId(row)} onClick={() => onChange(null)} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
+          <button type="button" data-mapping-reset={rowId(row)} onClick={() => onChange(null)} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
             {t("onboarding.agents.reset")}
           </button>
         </span>
@@ -243,7 +259,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
   const nudgeLine = nudge ? (
     <span data-mapping-nudge={rowId(row)} className="flex flex-wrap items-center gap-x-1.5 text-label text-danger">
       {t("onboarding.agents.heavyNudge")}
-      <button type="button" onClick={() => onChange({ ...config, effort: "high" })} className="rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
+      <button type="button" onClick={() => onChange({ ...config, effort: "high" })} className="rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
         {t("onboarding.agents.heavyNudgeAction")}
       </button>
     </span>
@@ -252,9 +268,10 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
   if (layout === "card") {
     return (
       <div data-mapping-row={rowId(row)} data-mapping-blocked={status.connected ? undefined : ""} className="flex flex-col gap-2 rounded-[12px] border border-border bg-card p-3">
-        <div className="flex min-w-0 items-center gap-2">
+        {/* The chip stays on the name's line when a changed row adds its own. */}
+        <div className="flex min-w-0 items-start gap-2">
           <span className="min-w-0 flex-1">{roleCell}</span>
-          <CostChip config={config} />
+          <span className="flex h-6 shrink-0 items-center"><CostChip config={config} /></span>
         </div>
         <div className="flex [&>div]:flex-1">{engineControl}</div>
         {modelSelect}
@@ -266,18 +283,20 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
   }
   return (
     <div data-mapping-row={rowId(row)} data-mapping-blocked={status.connected ? undefined : ""} className="border-b border-border py-1.5 last:border-b-0">
-      <div className="grid min-h-8 grid-cols-[176px_136px_minmax(0,1fr)_104px_104px] items-center">
+      <div className={`grid min-h-8 ${TABLE_GRID} items-center`}>
         <span className="min-w-0 pr-2">{roleCell}</span>
         <span className="min-w-0 pr-2">{engineControl}</span>
         <span className="min-w-0 pr-2">{modelSelect}</span>
         <span className="min-w-0 pr-2">{effortSelect}</span>
-        <span className="min-w-0"><CostChip config={config} /></span>
+        <span className="flex min-w-0 flex-col items-start">
+          <CostChip config={config} />
+          {status.connected ? <Headroom config={config} status={status} compact /> : null}
+        </span>
       </div>
-      {!status.connected || nudgeLine || tightestHeadroom(config.engine, config.model, status.account?.limits) ? (
-        <div className="grid grid-cols-[176px_1fr_104px] items-start pt-1">
+      {!status.connected || nudgeLine ? (
+        <div className={`grid ${TABLE_GRID} items-start pt-1`}>
           <span />
-          <span className="flex min-w-0 flex-col gap-0.5">{!status.connected ? <Headroom config={config} status={status} /> : null}{nudgeLine}</span>
-          <span className="min-w-0">{status.connected ? <Headroom config={config} status={status} /> : null}</span>
+          <span className="col-span-4 flex min-w-0 flex-col gap-0.5">{!status.connected ? <Headroom config={config} status={status} /> : null}{nudgeLine}</span>
         </div>
       ) : null}
     </div>
@@ -363,6 +382,8 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
 
   return (
     <div data-agent-mapping="" className="flex flex-col gap-3">
+      {/* The legend comes before the first chip it explains. */}
+      <p data-mapping-legend="" className="text-label text-muted">{t("onboarding.agents.legend")}</p>
       {connectedEngines.length === 0 ? (
         <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-body text-warning">{t("onboarding.agents.neither")}</p>
       ) : null}
@@ -396,7 +417,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
       {saveError ? <p role="alert" className="text-ui text-danger">{t("onboarding.agents.saveFailed", { reason: saveError })}</p> : null}
 
       {layout === "table" ? (
-        <div className="grid grid-cols-[176px_136px_minmax(0,1fr)_104px_104px] text-label font-semibold uppercase tracking-[0.02em] text-muted">
+        <div className={`grid ${TABLE_GRID} text-label font-semibold uppercase tracking-[0.02em] text-muted`}>
           <span>{t("onboarding.agents.col.role")}</span>
           <span>{t("onboarding.agents.col.engine")}</span>
           <span>{t("onboarding.agents.col.model")}</span>
@@ -441,7 +462,6 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
           </section>
         );
       })}
-      <p className="pt-1 text-label text-muted">{t("onboarding.agents.legend")}</p>
     </div>
   );
 }

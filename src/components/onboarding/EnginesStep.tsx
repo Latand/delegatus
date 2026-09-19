@@ -29,6 +29,12 @@ export function engineConnected(state: Pick<EngineAccountsState, "accounts">): b
   return state.accounts.some(accountConnected);
 }
 
+/** Connected as a launch counts it: a missing command outranks a present
+    credential, since the engine cannot start either way. */
+export function engineReady(state: Pick<EngineAccountsState, "accounts">, cli: CliPresence): boolean {
+  return cli !== "missing" && engineConnected(state);
+}
+
 /** The account whose windows the cost hints read: the active one when it is
     signed in, otherwise the first that is. */
 export function engineAccount(state: Pick<EngineAccountsState, "accounts" | "active">): AccountOption | null {
@@ -40,10 +46,13 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
   const { t } = useLocale();
   const [signingIn, setSigningIn] = useState(false);
   const engine = state.engine;
-  const connected = engineConnected(state);
+  const missing = cli === "missing";
+  const connected = engineReady(state, cli);
   const account = engineAccount(state);
   const loading = state.status === "loading" && state.accounts.length === 0;
-  const missing = cli === "missing" && !connected;
+  /* The embedded rows either carry their own "sign in" or, for an account
+     only a terminal can sign in, leave "add an account" as the way in. */
+  const signable = state.accounts.some((candidate) => !accountConnected(candidate) && (engine === "claude" || candidate.kind === "managed"));
   const stateLine = loading
     ? null
     : connected
@@ -93,6 +102,9 @@ function EngineCard({ state, cli, now, onRecheck }: { state: EngineAccountsState
       ) : null}
       {signingIn && !connected ? (
         <div data-onboarding-sign-in-body={engine} className="-mx-3 -mb-3 border-t border-border">
+          <p data-onboarding-sign-in-hint={engine} className="px-3 pt-2.5 text-ui text-secondary">
+            {signable ? t("onboarding.engines.signInPick") : t("onboarding.engines.signInAdd", { engine: ENGINE_NAME[engine] })}
+          </p>
           <MobileAccountsBody engines={[state]} now={now} />
         </div>
       ) : null}
@@ -108,8 +120,8 @@ export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
   onRecheck: () => void;
 }) {
   const { t } = useLocale();
-  const claudeOn = engineConnected(claude);
-  const codexOn = engineConnected(codex);
+  const claudeOn = engineReady(claude, cli.claude);
+  const codexOn = engineReady(codex, cli.codex);
   const settled = claude.status !== "loading" && codex.status !== "loading";
   const note = !settled
     ? null
@@ -120,7 +132,7 @@ export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
         : t("onboarding.engines.neither");
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1 max-sm:gap-3">
+      <div className="grid grid-cols-2 items-start gap-4 max-sm:grid-cols-1 max-sm:gap-3">
         <EngineCard state={claude} cli={cli.claude} now={now} onRecheck={onRecheck} />
         <EngineCard state={codex} cli={cli.codex} now={now} onRecheck={onRecheck} />
       </div>

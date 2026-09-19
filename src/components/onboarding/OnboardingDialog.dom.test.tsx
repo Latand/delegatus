@@ -94,3 +94,28 @@ test("once the guide is gone, Escape no longer reaches it", () => {
   expect(closes).toEqual([]);
   host.remove();
 });
+
+test("an engine whose command is missing reads Not installed even with a credential present", async () => {
+  const { EnginesStep } = await import("./EnginesStep");
+  type State = Parameters<typeof EnginesStep>[0]["claude"];
+  const engineState = (engine: "claude" | "codex") => ({
+    engine,
+    status: "ready",
+    active: "main",
+    accounts: [{ id: "main", label: "Main", authPresent: true }],
+  }) as unknown as State;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(
+    <EnginesStep claude={engineState("claude")} codex={engineState("codex")} cli={{ claude: "found", codex: "missing" }} now={0} onRecheck={() => {}} />,
+  ));
+  expect(host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state")).toBe("connected");
+  const codex = host.querySelector("[data-onboarding-engine=codex]")!;
+  expect(codex.getAttribute("data-engine-state")).toBe("missing");
+  expect(codex.textContent).toContain("Not installed");
+  expect(codex.textContent).not.toContain("Connected");
+  expect(host.querySelector("[data-onboarding-engines-note]")?.textContent).toContain("With Claude only");
+  flushSync(() => root.unmount());
+  host.remove();
+});

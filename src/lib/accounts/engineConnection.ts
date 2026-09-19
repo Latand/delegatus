@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -6,9 +8,11 @@ import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { resolveBinary } from "@/lib/agent/cli";
 
 /**
- * Whether an engine can run a launch here (#1876, design §4.5): at least one of
- * its accounts holds credentials and, for a project with an account binding
- * (#1279), at least one such account is inside the project's allowed set.
+ * Whether an engine can run a launch here (#1876, design §4.5): its command
+ * resolves on this machine, at least one of its accounts holds credentials and,
+ * for a project with an account binding (#1279), at least one such account is
+ * inside the project's allowed set. A missing command outranks a present
+ * credential: a signed-in engine whose CLI cannot start still starts and dies.
  *
  * `authPresent` proves a credential file, which can still be expired; that case
  * keeps the engine's own health pass. This removes the case a file check can
@@ -25,7 +29,15 @@ export function engineConnectedFrom(accounts: readonly ConnectionAccount[], allo
     && (allowed === null || allowed.includes(account.id)));
 }
 
-export function engineConnection(engine: EngineName, project: string | null): boolean {
+/** Why an engine can or cannot run a launch; `connected` is the only one that can. */
+export type EngineReadiness = "connected" | "signed-out" | "cli-missing";
+
+export function engineReadiness(engine: EngineName, project: string | null): EngineReadiness {
+  if (!cliResolvable(resolveBinary(engine))) return "cli-missing";
+  return engineSignedIn(engine, project) ? "connected" : "signed-out";
+}
+
+function engineSignedIn(engine: EngineName, project: string | null): boolean {
   const accounts: ConnectionAccount[] = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   let allowed: string[] | null = null;
   try {
@@ -47,23 +59,47 @@ export type EngineNotConnectedDetails = {
   stageId: string | null;
   role: string | null;
   engine: EngineName;
+  reason: Exclude<EngineReadiness, "connected">;
   connect: "accounts";
   mapping: "agent-mapping";
 };
 
+type RefusalInput = { stageId?: string | null; role?: string | null; engine: EngineName; reason?: Exclude<EngineReadiness, "connected"> };
+
 /** The one sentence every seam answers with (design §4.5). */
-export function engineNotConnectedMessage(input: { stageId?: string | null; role?: string | null; engine: EngineName }): string {
+export function engineNotConnectedMessage(input: RefusalInput): string {
   const engine = ENGINE_LABEL[input.engine];
   const subject = input.stageId ? `Stage "${input.stageId}" runs on ${engine}` : `This launch runs on ${engine}`;
   const role = input.role ? `point the ${input.role} role at another engine (menu → Agent mapping), or ` : "";
-  return `${subject}, and no ${engine} account is signed in on this machine. Connect ${engine} (menu → Accounts), or ${role}set engine and model on this ${input.stageId ? "stage" : "launch"}.`;
+  const target = input.stageId ? "stage" : "launch";
+  if (input.reason === "cli-missing") {
+    return `${subject}, and the ${input.engine} command was not found on this machine. Install it or start the Viewer from a shell where \`${input.engine}\` runs, or ${role}set engine and model on this ${target}.`;
+  }
+  return `${subject}, and no ${engine} account is signed in on this machine. Connect ${engine} (menu → Accounts), or ${role}set engine and model on this ${target}.`;
 }
 
-export function engineNotConnectedDetails(input: { stageId?: string | null; role?: string | null; engine: EngineName }): EngineNotConnectedDetails {
-  return { stageId: input.stageId ?? null, role: input.role ?? null, engine: input.engine, connect: "accounts", mapping: "agent-mapping" };
+export function engineNotConnectedDetails(input: RefusalInput): EngineNotConnectedDetails {
+  return { stageId: input.stageId ?? null, role: input.role ?? null, engine: input.engine, reason: input.reason ?? "signed-out", connect: "accounts", mapping: "agent-mapping" };
 }
 
 /* ── CLI presence ─────────────────────────────────────────────────────── */
+
+/** The launch seams' synchronous reading of what `probeCli` answers: whether
+    the binary `resolveBinary` names is an executable file, directly or on
+    PATH. Windows resolves by extension and is left to the probe. */
+export function cliResolvable(binary: string, envPath = process.env.PATH ?? ""): boolean {
+  if (process.platform === "win32") return true;
+  const executable = (candidate: string) => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (binary.includes("/")) return executable(binary);
+  return envPath.split(path.delimiter).some((dir) => dir !== "" && executable(path.join(dir, binary)));
+}
 
 export type CliPresence = "found" | "missing";
 

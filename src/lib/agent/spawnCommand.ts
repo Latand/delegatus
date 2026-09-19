@@ -17,7 +17,7 @@ import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUG
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { resolveSpawnRole } from "@/lib/roles/registry";
-import { ENGINE_NOT_CONNECTED, engineConnection, engineNotConnectedDetails, engineNotConnectedMessage } from "@/lib/accounts/engineConnection";
+import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMessage, engineReadiness, type EngineReadiness } from "@/lib/accounts/engineConnection";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
@@ -115,10 +115,10 @@ export interface SpawnCommandDependencies {
    */
   internalGrant?(): { sessionClass: McpSessionClass; mcpServers: readonly string[] } | null;
   recordOperatorActivity?: typeof recordDirectOperatorWakatimeActivity;
-  /** Whether an engine has a signed-in account (#1876). A role-shaped launch
-      onto an engine nobody is signed in to is refused before any receipt
-      exists; absent means no check. */
-  engineConnected?(engine: AgentEngine, project: string | null): boolean;
+  /** Whether an engine's command resolves and it has a signed-in account
+      (#1876). A role-shaped launch onto an engine that is not ready is refused
+      before any receipt exists; absent means no check. */
+  engineReadiness?(engine: AgentEngine, project: string | null): EngineReadiness;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -137,7 +137,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
   recordOperatorActivity: recordDirectOperatorWakatimeActivity,
-  engineConnected: (engine, project) => engine === "claude" || engine === "codex" ? engineConnection(engine, project) : true,
+  engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
 };
 
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
@@ -298,9 +298,11 @@ export async function executeSpawnRequest(
   if (!engine) return NextResponse.json({ error: "engine must be claude or codex" }, { status: 400 });
   /* #1876: a role's launch onto an engine nobody is signed in to is refused in
      words, before a receipt exists, and never moved onto the other engine. */
-  if (role.value && (engine === "claude" || engine === "codex") && dependencies.engineConnected
-    && !dependencies.engineConnected(engine, typeof body.project === "string" ? body.project : null)) {
-    const refusal = { role: role.value.role, engine };
+  const readiness = role.value && (engine === "claude" || engine === "codex")
+    ? dependencies.engineReadiness?.(engine, typeof body.project === "string" ? body.project : null) ?? "connected"
+    : "connected";
+  if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
+    const refusal = { role: role.value.role, engine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
     if (!authenticatedCallerError) fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
     return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });

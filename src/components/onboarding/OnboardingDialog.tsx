@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronLeft, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Z } from "@/components/layers";
@@ -11,7 +11,7 @@ import type { OnboardingMarker, OnboardingStepId } from "@/lib/onboarding/marker
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
-import { engineAccount, engineConnected, EnginesStep, type CliPresence } from "./EnginesStep";
+import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
 
 /**
@@ -140,9 +140,13 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   useEffect(() => { bodyRef.current?.scrollTo?.({ top: 0 }); }, [step, view]);
 
   const statuses: Record<RoleEngine, EngineStatus> = {
-    claude: { connected: engineConnected(claude), account: engineAccount(claude) },
-    codex: { connected: engineConnected(codex), account: engineAccount(codex) },
+    claude: { connected: engineReady(claude, cli.claude), missing: cli.claude === "missing", account: engineAccount(claude) },
+    codex: { connected: engineReady(codex, cli.codex), missing: cli.codex === "missing", account: engineAccount(codex) },
   };
+  /* A visited Engines step earns its check only when an engine can run; with
+     none it carries the warning its own screen shows. */
+  const enginesSettled = claude.status !== "loading" && codex.status !== "loading";
+  const noEngine = enginesSettled && !statuses.claude.connected && !statuses.codex.connected;
   const current = STEPS[step]!;
   const last = step === STEPS.length - 1;
 
@@ -181,7 +185,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   );
   const content = view === "mapping" || current === "agents" ? (
     <>
-      {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.lead")}</p> : null}
+      {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
     </>
   ) : (
@@ -193,6 +197,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
       {STEPS.map((id, index) => {
         const active = index === step;
         const state = steps[id];
+        const warn = id === "engines" && state === "done" && noEngine;
         return (
           <li key={id}>
             <button
@@ -204,7 +209,9 @@ export function OnboardingDialog({ mode, marker, onClose }: {
             >
               {active ? <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" /> : null}
               <span className="w-4 shrink-0 text-center tabular-nums">
-                {state === "done" && !active ? <Check className="h-3.5 w-3.5 text-success" aria-label={t("onboarding.stepDone")} /> : index + 1}
+                {warn && !active
+                  ? <AlertTriangle className="h-3.5 w-3.5 text-warning" aria-label={t("onboarding.stepNoEngine")} />
+                  : state === "done" && !active ? <Check className="h-3.5 w-3.5 text-success" aria-label={t("onboarding.stepDone")} /> : index + 1}
               </span>
               <span className="min-w-0 flex-1 truncate">{t(STEP_KEY[id])}</span>
               {state === "skipped" ? <span className="text-caption text-muted">{t("onboarding.stepSkipped")}</span> : null}
