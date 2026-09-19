@@ -445,28 +445,35 @@ export function OrchestratorPanel({
             <StateBadge state={state} file={file} word />
           </span>
           {state.kind === "loading" || failed ? null : (
-            <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed} currentEngine={seatEngine} />
+            <PreviousSeatsControl status={status} tasks={seatTasks} compact={collapsed || placement === "side"} currentEngine={seatEngine} />
           )}
           {/* The seat is short on purpose: who holds it and its host control
               ride this row instead of rows of their own under it. */}
+          {/* Who holds the seat and its host control: in line on top, their
+              own row under the title at the side, where 380 px is not room
+              for both (#1841). */}
           {state.kind === "live" && !rotating && !collapsed ? (
-            <IncumbentHeader
-              inline
-              project={project}
-              projectName={projectName}
-              incumbent={incumbent}
-              file={file}
-              catalog={catalog}
-              predecessorConversationId={state.seat.predecessorConversationId}
-              promptVersion={state.seat.promptVersion}
-              rotating={rotating}
-              opening={rotateOpening}
-              onRotate={() => void openRotate(state.conversationId)}
-            />
+            <span className="seat-meta">
+              <IncumbentHeader
+                inline
+                project={project}
+                projectName={projectName}
+                incumbent={incumbent}
+                file={file}
+                catalog={catalog}
+                predecessorConversationId={state.seat.predecessorConversationId}
+                promptVersion={state.seat.promptVersion}
+                rotating={rotating}
+                opening={rotateOpening}
+                onRotate={() => void openRotate(state.conversationId)}
+              />
+              {file ? <ProcessStatusControls file={file} hideChip compact /> : null}
+            </span>
           ) : (
             <span className="grow" />
           )}
-          {state.kind === "live" && file && !collapsed ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          {state.kind === "live" && !collapsed && file && rotating ? <ProcessStatusControls file={file} hideChip compact /> : null}
+          <span className="grow side-only" />
           {unreadReply ? (
             <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
               <i aria-hidden />

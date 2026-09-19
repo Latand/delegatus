@@ -2633,6 +2633,16 @@ async function seatsMain(which: SeatCase): Promise<void> {
         must(topCollapsed!.frame !== null && topExpanded!.frame !== null && topCollapsed!.frame.y < topExpanded!.frame.y - 100, `${tag}: collapsing on top freed ${(topExpanded!.frame?.y ?? 0) - (topCollapsed!.frame?.y ?? 0)}px`);
         must(sideExpanded!.seatPlacement === "side" && sideExpanded!.seat !== null && near(sideExpanded!.seat.w, 380, 1), `${tag}: the side seat is ${sideExpanded!.seat?.w}px`);
         must(sideCollapsed!.seat !== null && near(sideCollapsed!.seat.w, 44, 1) && sideCollapsed!.rail !== null, `${tag}: the rail is ${sideCollapsed!.seat?.w}px`);
+        /* Every head control inside the 380 px panel and clear of the others, in both placements. */
+        for (const [name, state] of [["top", topExpanded!], ["side", sideExpanded!], ["top strip", topCollapsed!]] as const) {
+          const controls = state.headControls;
+          must(state.seat === null || controls.every((control) => control.rect.x >= state.seat!.x - 0.5 && control.rect.x + control.rect.w <= state.seat!.x + state.seat!.w + 0.5), `${tag} ${name}: a head control leaves the seat`);
+          for (const [index, a] of controls.entries()) for (const b of controls.slice(index + 1)) {
+            if (a.rect.x <= b.rect.x && a.rect.x + a.rect.w >= b.rect.x + b.rect.w && a.rect.y <= b.rect.y && a.rect.y + a.rect.h >= b.rect.y + b.rect.h) continue;
+            if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w && b.rect.y <= a.rect.y && b.rect.y + b.rect.h >= a.rect.y + a.rect.h) continue;
+            must(!overlaps(a.rect, b.rect, 0.5), `${tag} ${name}: seat head «${a.name}» and «${b.name}» overlap`);
+          }
+        }
         must(sideCollapsed!.page !== null && sideExpanded!.page !== null && near(sideCollapsed!.page.w - sideExpanded!.page.w, 336, 2), `${tag}: the board grew ${(sideCollapsed!.page?.w ?? 0) - (sideExpanded!.page?.w ?? 0)}px when the side seat collapsed`);
         for (const [name, state] of Object.entries(states)) must(state.bar !== null && near(state.bar.h, 48, 0.5), `${tag} ${name}: the bar is ${state.bar?.h}px`);
         must(sideCollapsed!.togglePressed === "false" && sideCollapsed!.toggleDot !== null && sideCollapsed!.toggleDot === sideCollapsed!.railTone, `${tag}: the toggle dot ${sideCollapsed!.toggleDot} vs the rail ${sideCollapsed!.railTone}`);
