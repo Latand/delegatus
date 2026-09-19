@@ -20,9 +20,10 @@ import { handleOverlayEscape } from "@/lib/overlay";
  */
 
 /** At or above this bar width the controls carry their labels and the account switches sit in
-    the bar; below it they are icons and the accounts move into ⋯. Labelled, with two account
-    switches, the groups need about 1 300 px beside the island's 252 px of padding and reserve. */
-export const BAR_WIDE_MIN = 1600;
+    the bar; below it they are icons and the accounts move into ⋯. Measured on a seeded home, the
+    uk labels with two account switches and a short project name need about 1 640 px of bar
+    (the island's 252 px of padding and reserve included); 1 700 leaves room for a longer name. */
+export const BAR_WIDE_MIN = 1700;
 
 export const BAR_CONTROL =
   "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control border px-3 text-[12px] font-semibold shadow-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";

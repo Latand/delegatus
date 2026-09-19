@@ -10,7 +10,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 2. **One control height: 32 px**, radius `--radius-control` (8 px), 12 px / 600 text, 15 px icons. Three variants only: *outlined* (card fill, default border), *pressed* (`aria-pressed="true"`: accent-soft fill, accent text, accent/45 border; used by the view switch segments, Orchestrator, Tasks), *quiet icon* (32 × 32, no border until hover; only inside the `⋯` menu trigger). The account switches take the outlined variant in the bar. Hover strengthens the border (`border-strong`) and never recolours the label, so pressed stays the only accent-coloured state. The `+` of the create controls is the same 15 px stroke icon as the others, in the control's own text colour. No pills, no 26/27/28 px controls, no tinted one-offs. Dark theme uses the same tokens; nothing is colour-coded by hand.
 3. **The one loud element is the attention island** (`AttentionIsland`, fenced, untouched). It stays the only warning-coloured thing in the bar. Its mount in `Viewer.tsx` moves from `fixed right-4 top-12` to `top-[10px]` so its 28 px pill centres in the 48 px bar; the bar keeps the existing 236 px right reserve for it.
 4. **One search in the bar: the task field.** It filters this board's cards by card title, description, member conversation titles and pipeline task text (`searchText`, all columns; unchanged behaviour). The message search (`search.open`, shortcut `/`, unchanged) leaves the bar and becomes the first row of the `⋯` menu. On the conversations view, which has no task filter, the same slot shows the message-search field-shaped button instead, so either view shows exactly one search.
-5. **View switch**: one outlined 32 px group whose two segments fill it edge to edge, split by one rule, the selected one in the *pressed* variant; the group's border is the visible edge its neighbours are spaced from. Icon + label when the bar is ≥ 1600 px wide, icon only below (label stays as `aria-label` and tooltip).
+5. **View switch**: one outlined 32 px group whose two segments fill it edge to edge, split by one rule, the selected one in the *pressed* variant; the group's border is the visible edge its neighbours are spaced from. Icon + label when the bar is ≥ 1700 px wide, icon only below (label stays as `aria-label` and tooltip).
 6. **Every fact once** — see §3.
 7. **Phone (390) is unchanged.** Under 640 px the desktop rows are not rendered; the phone already has one 52 px `MobileShell` bar: project title, `⚠ n` (hidden at zero), search, `⋯`. It already meets the requirement; this lane's only change there is that its ⋯ menu loses the Undo and Redo rows (§4).
 
@@ -18,13 +18,13 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 
 | # | Purpose | Holds | Notes |
 |---|---|---|---|
-| 1 | where am I | project name (truncates, max 220 px); account switches (`ProjectAccounts`) | accounts collapse into `⋯` below 1600 px |
+| 1 | where am I | project name (truncates, 48–220 px); account switches (`ProjectAccounts`) | accounts collapse into `⋯` below 1700 px |
 | 2 | what is happening | `● N working` (green dot), or the existing red `catalog.unreachable` / `kanban.filesFailed` text | plain text |
 | — | one elastic spacer | | the only empty stretch in the bar |
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
 | 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | |
-| 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1600 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
-| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1600 px |
+| 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1700 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
+| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px |
 | 7 | more | `⋯` menu | §4 |
 | 8 | what needs me | attention island, in the 236 px reserve | far right, where it already lives |
 
@@ -44,7 +44,7 @@ Gaps, measured edge to edge between visible controls: 8 px inside a group, 16 px
 Groups, top to bottom, each drawn only when it has a row, with one rule between two groups that both drew one (none at the top, none at the bottom):
 
 1. Search your messages ( / ) — Пошук моїх повідомлень ( / ) (Board only; on Conversations it is the bar's find slot).
-2. Below 1600 px: one row per engine account switch (`Claude · <account>`, `Codex · <account>`), each opening the existing account panel.
+2. Below 1700 px: one row per engine account switch (`Claude · <account>`, `Codex · <account>`), each opening the existing account panel.
 3. Mute sound / Sound levels (existing labels).
 4. Archive project or Restore from archive · Delete project (danger row, existing confirm). Both stand down while anything in the project runs, as before; the group then draws nothing.
 
@@ -101,7 +101,7 @@ Not rendered here: account pills, undo/redo and the non-zero island (the synthet
 ## 8. Build notes
 
 - `KanbanBoard` `.bar` becomes the bar: it already owns query, hidden tray, create. `ProjectDashboard` stops rendering its `h-10` row on the board leaf and passes two nodes, `barLead` (groups 1) and `barTrail` (groups 6–7); on the conversations leaf it renders the same two nodes in its own 48 px row with the branches/trees line and the message-search button. Exempt the slots from the `.kb button` reset the way `.seat *` is, or restyle the switch with `.kb` classes; either way the pressed state must survive the reset.
-- Delete `.kb[data-mode="scroll"|"tabs"] .bar` wrap rules, `flex-wrap`, the `order` rules and the −220 px margin. The tier follows the bar's own width (`ResizeObserver` already present, threshold 1600 px). The tabbed face (board under 768 px, a narrow desktop window outside this lane's three widths) is the one place the groups may wrap: one row there cannot hold them beside the 252 px of padding and island reserve.
+- Delete `.kb[data-mode="scroll"|"tabs"] .bar` wrap rules, `flex-wrap`, the `order` rules and the −220 px margin. The tier follows the bar's own width (`ResizeObserver` already present, threshold 1700 px). The tabbed face (board under 768 px, a narrow desktop window outside this lane's three widths) is the one place the groups may wrap: one row there cannot hold them beside the 252 px of padding and island reserve.
 - `Viewer.tsx`: island `top-12` → `top-[10px]`. No edits under `src/components/attention/`, `src/lib/attention/`, `src/lib/mcp/`, the pipeline data layer, or the limits code.
 - Evidence: `BOARD_CAPTURE_CASE=header` in `scripts/capture-board-geometry.ts`, at 2540, 1850 and 1280, en and uk, light and dark, on a home seeded like production: three Claude accounts and one Codex account with usage readings bound to the project (invented names, written through the Viewer's account modules), three questions waiting behind live holder processes, working agents, two tasks off the board, and a quiet second project whose ⋯ shows Archive and Delete. It asserts header height 48, every control 32 px (island 28), gaps 8 / 16 around one spacer, no two rects intersecting, a non-zero island inside the bar, a non-zero Hidden, the pressed segment's fill differing from the other, the switch's x equal on Board and Conversations, hover leaving the label colour, `+` an icon in its control's colour, ⋯ rules only between drawn groups, no undo or redo anywhere, and the Claude panel listing all three accounts with usage. Phone, en and uk, light and dark: bar 52 px, 44 px targets, the waiting count, no undo row.
 
@@ -111,6 +111,6 @@ Not rendered here: account pills, undo/redo and the non-zero island (the synthet
 - Orchestrator placement and collapse, column expand (items 2, 3): #1841.
 - A project-scoped waiting count beside the global island: would be a second counter; the cards already mark who waits.
 
-## Build correction: the tier threshold is 1600 px, not 1200
+## Build correction: the tier threshold is 1700 px, not 1200
 
-Measured while building: labelled, with two account switches, the groups need about 1 300 px plus the bar's 16 px left padding and 236 px island reserve. A bar between 1200 and ~1550 px in the labelled tier runs past its own box, so the wide tier starts at 1600 px of bar (a 1850 px viewport with the rail). 2540 is wide and 1280 narrow either way; the evidence adds a 1850 px case and checks the bar never overflows.
+Measured while building: labelled, with two account switches, the groups need about 1 300 px plus the bar's 16 px left padding and 236 px island reserve, so the first build put the wide tier at 1600 px of bar. The seeded capture of the fix round then showed 1602 px (a 1850 px viewport with the rail) is too tight in uk: the project name collapsed to nothing and the account switches ran into the status text. The uk labels need about 1 640 px, so the wide tier starts at 1700 px of bar (a 1948 px viewport), and the project name keeps at least 48 px before anything else gives. 2540 is wide; 1850 and 1280 are narrow. The evidence keeps the 1850 case and checks the name stays visible and the bar never overflows.

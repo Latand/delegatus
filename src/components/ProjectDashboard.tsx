@@ -1956,7 +1956,7 @@ function ProjectDashboardView({
   const openTaskCount = projectTasks.filter((task) => task.status !== "done").length;
   const barLead = (wide: boolean) => (
     <>
-      <h1 className="min-w-0 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
+      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
       {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
     </>
   );

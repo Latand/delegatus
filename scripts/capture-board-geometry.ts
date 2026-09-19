@@ -1082,7 +1082,12 @@ function writeQuietProject(): void {
     { type: "assistant", uuid: `${id}-a1`, timestamp: stamp, cwd: QUIET_DIR, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: "The index is tidy." }] } },
     { type: "result", subtype: "success", uuid: `${id}-r1`, timestamp: stamp, cwd: QUIET_DIR, sessionId: id, is_error: false, duration_ms: 900, num_turns: 1, result: "The index is tidy." },
   ];
-  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  const file = path.join(folder, `${id}.jsonl`);
+  fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+  /* Quiet for two hours: a transcript touched within the last half hour can read as a turn in
+     progress, and a live one stands Archive and Delete down. */
+  const quietSince = new Date(Date.now() - 2 * 3_600_000);
+  fs.utimesSync(file, quietSince, quietSince);
 }
 
 /** Two tasks with no conversation yet: off the board, so `Hidden` counts them. */
@@ -1173,6 +1178,8 @@ interface HeaderReading {
   /** The `+` of the create controls: an icon in the control's own colour. */
   plus: { svg: boolean; iconColor: string | null; textColor: string | null }[];
   hidden: string | null;
+  /** The project name's box, visible or not. */
+  name: Rect | null;
 }
 
 /** Runs inside the page: the header bar, its visible controls and the island, in viewport pixels. */
@@ -1223,6 +1230,7 @@ function readHeader(): HeaderReading {
     tier: bar?.getAttribute("data-bar-tier") ?? null,
     plus,
     hidden: hiddenPill && visible(hiddenPill) ? hiddenPill.textContent?.replace(/\s+/g, " ").trim() ?? "" : null,
+    name: bar?.querySelector("h1") ? rect(bar.querySelector("h1")!) : null,
   };
 }
 
@@ -1280,11 +1288,12 @@ async function headerMain(): Promise<void> {
     await Bun.sleep(4_000);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    /* 1850 is the narrowest viewport whose bar (1602 px after the rail) takes the labelled tier. */
+    /* The labelled tier starts at 1700 px of bar (a 1948 px viewport with the rail): 2540 is wide,
+       and 1850 (1602 px of bar), where the uk labels did not fit, and 1280 are narrow. */
     const cases = [2540, 1850, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
     for (const { width, lang, colorScheme } of cases) {
       const tag = `${width}-${lang}-${colorScheme}`;
-      const wide = width >= 1850;
+      const wide = width >= 1948;
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -1298,9 +1307,10 @@ async function headerMain(): Promise<void> {
       must(reading.bars === 1, `${tag}: ${reading.bars} header bars`);
       must(reading.bar !== null && near(reading.bar.h, 48, 0.5), `${tag}: the bar is ${reading.bar?.h}px tall`);
       must(reading.overflow <= 0.5, `${tag}: the bar's content runs ${reading.overflow}px past its box`);
+      must(reading.name !== null && reading.name.w >= 40, `${tag}: the project name is ${reading.name?.w ?? 0}px wide`);
       must(reading.tier === (wide ? "wide" : "narrow"), `${tag}: the bar is in its ${reading.tier} tier`);
       for (const control of reading.controls) {
-        if (control.name === "H1" || control.rect.h < 24) continue;
+        if (control.rect.h < 24) continue;
         must(near(control.rect.h, 32, 0.5), `${tag}: «${control.name}» is ${control.rect.h}px tall`);
       }
       const boxes = [...reading.controls, ...(reading.island ? [{ name: "island", rect: reading.island }] : [])];
@@ -1360,6 +1370,8 @@ async function headerMain(): Promise<void> {
       /* The ⋯ menu on this busy project: Archive and Delete stand down while agents run, and no rule dangles. */
       await page.click("[data-bar-more]");
       await page.waitForSelector("[data-bar-more-menu]");
+      /* Narrow, the account rows arrive with their own read of the project's bindings. */
+      if (!wide) await page.waitForSelector('[data-bar-more-menu] [data-account-switch-engine="codex"]', { timeout: 15_000 }).catch(() => {});
       menu = await page.evaluate(readMenu);
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-more.png`), clip: { x: Math.max(0, menu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, menu.rect.x - 40), menu.rect.w + 80), height: menu.rect.y + menu.rect.h + 16 } });
       const checkMenu = (label: string, reading: MenuReading) => {

@@ -483,6 +483,16 @@ test("hover never paints a control in the accent, and + is an icon in the contro
   }
 });
 
+test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did not fit there", async () => {
+  barWidth = 1602;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(bar(host).getAttribute("data-bar-tier")).toBe("narrow");
+  /* The project name keeps a floor, so it never truncates to nothing. */
+  expect(bar(host).querySelector("h1")!.className).toContain("min-w-12");
+});
+
 test("uk: the switch and the working count read in Ukrainian", () => {
   expect(uk["kanban.viewTab"]).toBe("Дошка");
   expect(uk["dash.viewList"]).toBe("Розмови");
