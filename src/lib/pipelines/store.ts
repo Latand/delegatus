@@ -107,7 +107,8 @@ function isActivation(value: unknown): value is PipelineEdgeActivation | null {
     typeof activation.stageId === "string" &&
     Number.isInteger(activation.attempt) &&
     (activation.attempt as number) >= 1 &&
-    (activation.edge === "pass" || activation.edge === "fail")
+    (activation.edge === "pass" || activation.edge === "fail") &&
+    (activation.budgetSpent === undefined || (activation.budgetSpent === true && activation.edge === "fail"))
   );
 }
 
@@ -172,6 +173,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdict(attempt.verdict) &&
     isNullableString(attempt.error) &&
     (attempt.decisionRequested === undefined || typeof attempt.decisionRequested === "boolean") &&
+    (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isAttemptDefinition(attempt.definition) &&
     isStageReport(attempt.report) &&
@@ -298,12 +300,13 @@ function isRun(value: unknown): value is Pipeline["runs"][number] {
 function isFailEdge(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const edge = value as { to?: unknown; maxRounds?: unknown };
+  const edge = value as { to?: unknown; maxRounds?: unknown; onExhausted?: unknown };
   return (
     typeof edge.to === "string" &&
     Number.isInteger(edge.maxRounds) &&
     (edge.maxRounds as number) >= 1 &&
-    (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS
+    (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS &&
+    (edge.onExhausted === undefined || edge.onExhausted === "advance" || edge.onExhausted === "park")
   );
 }
 
@@ -401,6 +404,9 @@ export function pipelineGraphError(
     if (onFail && !ids.has(onFail.to)) return `stage ${stage.id} onFail must reference an existing stage`;
     if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
       return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
+    }
+    if (onFail?.onExhausted !== undefined && onFail.onExhausted !== "advance" && onFail.onExhausted !== "park") {
+      return `stage ${stage.id} onFail onExhausted must be advance or park`;
     }
   }
   /* Out-degree-1 pass graph: walking `next` from any stage must terminate

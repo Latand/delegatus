@@ -52,7 +52,11 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
       promptScaffold: runtime.promptScaffold ?? null,
     },
     next: stage.next ?? null,
-    onFail: stage.onFail ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds } : null,
+    /* `onExhausted` joins only when named (#1868), so every digest taken
+       before it existed still matches its stage. */
+    onFail: stage.onFail
+      ? { to: stage.onFail.to, maxRounds: stage.onFail.maxRounds, ...(stage.onFail.onExhausted ? { onExhausted: stage.onFail.onExhausted } : {}) }
+      : null,
   });
 }
 

@@ -491,9 +491,9 @@ test("a needs_decision with findings fires the fail edge and hands the findings 
   expect(relayed).toContain("Fixable; my confidence in the call is partial.");
 });
 
-test("a needs_decision with findings parks once the fail edge's budget is spent (#1785)", async () => {
+test("a needs_decision with findings parks once a park edge's budget is spent (#1785)", async () => {
   const h = harness();
-  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1 } })]);
+  await reachedVerify(h, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 1, onExhausted: "park" } })]);
 
   /* Round one: the only round this edge has. */
   await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
@@ -515,6 +515,40 @@ test("a needs_decision with findings parks once the fail edge's budget is spent 
   expect(parked.state).toBe("needs_decision");
   expect(parked.decisionRequested).toBeUndefined();
   expect(attemptsOf("build")).toHaveLength(2);
+});
+
+test("a needs_decision with findings on a spent default edge is handed to the fix stage once, then follows the pass edge (#1868)", async () => {
+  const h = harness();
+  await reachedVerify(h, [
+    stage("build", "verify"),
+    stage("verify", "ship", { onFail: { to: "build", maxRounds: 1 } }),
+    stage("ship", null),
+  ]);
+
+  /* The edge's only review fails: the findings go to build as the last fix. */
+  await h.report(2, { verdict: "needs_decision", findings: [{ severity: "P1", text: "the fence is missing" }] });
+  await tickPipelines([h.endTurn(2, "Reviewed.")], h.ports);
+
+  const handed = attemptsOf("verify")[0]!;
+  expect(handed.state).toBe("needs_decision");
+  expect(handed.decisionRequested).toBe(true);
+  expect(handed.budgetSpent).toBe(true);
+  expect(current().state).toBe("running");
+  expect(current().cursor).toMatchObject({
+    stageId: "build",
+    state: "pending",
+    activatedBy: { stageId: "verify", attempt: 1, edge: "fail", budgetSpent: true },
+  });
+
+  await tickPipelines([], h.ports); // spawn build attempt 2
+  expect(attemptsOf("build")[1]!.input!).toContain("Needs-decision verdict findings:\n- P1 — the fence is missing");
+  await tickPipelines([h.endTurn(3, 'Fixed.\n\n```json\n{"status":"pass","findings":[]}\n```')], h.ports);
+  await tickPipelines([], h.ports);
+
+  /* verify is not asked again: the fix follows verify's pass edge to ship. */
+  expect(h.spawnedStages).toEqual(["build", "verify", "build", "ship"]);
+  expect(attemptsOf("verify")).toHaveLength(1);
+  expect(current().cursor?.stageId).toBe("ship");
 });
 
 test("a needs_decision parks with no fail edge, and parks with no findings (#1785)", async () => {

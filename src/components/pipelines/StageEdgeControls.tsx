@@ -5,14 +5,15 @@ import { useState } from "react";
 import { Select } from "@/components/ui/Select";
 import { MAX_FAIL_EDGE_ROUNDS } from "@/lib/pipelines/limits";
 import { useLocale } from "@/lib/i18n";
-import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineFailEdgeExhaustion, PipelineStage } from "@/lib/pipelines/types";
 
 import { setPipelineEdge, stageAttempts, stageChipLabel, stageFailEdgeFrozen } from "./pipelineModel";
 
 /**
  * Keyboard/mobile-safe edge editing (#353): the stage config card's "Connect"
  * pickers rewire the stage's pass edge (direct links, merges — the server
- * validates acyclicity) and fail edge (cycles, with a bounded round budget).
+ * validates acyclicity) and fail edge (cycles, with a bounded round budget and
+ * what a spent budget does: hand on and advance, or park, #1868).
  * Frozen edges — a pass edge on a stage that already ran, a fail edge already
  * traversed — render as disabled with an explanation, mirroring the API's
  * evidence-freeze guards so the control never fires a PATCH the server rejects.
@@ -38,11 +39,11 @@ export function StageEdgeControls({
      the pass picker omits it. */
   const passTargets = pipeline.stages.filter((candidate) => candidate.id !== stage.id);
   const failTargets = pipeline.stages;
-  const apply = async (edge: "pass" | "fail", to: string | null, maxRounds?: number) => {
+  const apply = async (edge: "pass" | "fail", to: string | null, maxRounds?: number, onExhausted?: PipelineFailEdgeExhaustion) => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    setError(await setPipelineEdge(pipeline, stage.id, edge, to, maxRounds));
+    setError(await setPipelineEdge(pipeline, stage.id, edge, to, maxRounds, onExhausted));
     setBusy(false);
   };
   const fieldLabel = "text-caption font-semibold text-muted";
@@ -72,7 +73,12 @@ export function StageEdgeControls({
             className={selectClass}
             value={stage.onFail?.to ?? ""}
             disabled={disabled || busy || terminal || failFrozen}
-            onChange={(event) => void apply("fail", event.target.value || null, event.target.value ? stage.onFail?.maxRounds : undefined)}
+            onChange={(event) => void apply(
+              "fail",
+              event.target.value || null,
+              event.target.value ? stage.onFail?.maxRounds : undefined,
+              event.target.value ? stage.onFail?.onExhausted : undefined,
+            )}
           >
             <option value="">{t("pipelineSlot.failEdgeNone")}</option>
             {failTargets.map((candidate) => (
@@ -94,11 +100,25 @@ export function StageEdgeControls({
               onChange={(event) => {
                 const rounds = Number.parseInt(event.target.value, 10);
                 if (Number.isInteger(rounds) && rounds >= 1 && rounds <= MAX_FAIL_EDGE_ROUNDS) {
-                  void apply("fail", stage.onFail!.to, rounds);
+                  void apply("fail", stage.onFail!.to, rounds, stage.onFail!.onExhausted);
                 }
               }}
               className="h-7 w-full rounded-control border border-border bg-canvas px-2 text-ui font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
             />
+          </label>
+        ) : null}
+        {stage.onFail ? (
+          <label className="flex min-w-[140px] flex-1 flex-col gap-1">
+            <span className={fieldLabel}>{t("pipelineSlot.failEdgeExhausted")}</span>
+            <Select
+              className={selectClass}
+              value={stage.onFail.onExhausted ?? "advance"}
+              disabled={disabled || busy || terminal || failFrozen}
+              onChange={(event) => void apply("fail", stage.onFail!.to, stage.onFail!.maxRounds, event.target.value as PipelineFailEdgeExhaustion)}
+            >
+              <option value="advance">{t("pipelineSlot.failEdgeExhaustedAdvance")}</option>
+              <option value="park">{t("pipelineSlot.failEdgeExhaustedPark")}</option>
+            </Select>
           </label>
         ) : null}
       </div>
