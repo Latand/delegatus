@@ -534,6 +534,9 @@ test("a fail edge takes no slot in the collapsed row: it is a return arc, silent
   await tick();
   const stopped = arc(parked.host, "review:fail:fix")!;
   expect(stopped.dataset.arcState).toBe("exhausted");
+  /* And it says it FIRST: that is what the arc was opened to find out, and
+     behind the budget clause it is the last line of a four-line note. */
+  expect(stopped.querySelector("title")?.textContent).toMatch(/^No rounds left/);
   expect(stopped.querySelector("title")?.textContent).toContain("parked here");
   expect(stopped.querySelector("title")?.textContent).not.toContain("another failure");
 
@@ -549,16 +552,20 @@ test("a fail edge takes no slot in the collapsed row: it is a return arc, silent
    so a case about the drawing has to hand the row a layout: three pills of
    70 px on one line, which is the shape of a real collapsed row. */
 const PILL_BOX: Record<string, [number, number]> = { fix: [0, 60], critique: [70, 140], review: [150, 220] };
-const box = (left: number, right: number) => ({
-  left, right, top: 10, bottom: 34, width: right - left, height: 24, x: left, y: 10, toJSON() { return this; },
+const box = (left: number, right: number, top = 10) => ({
+  left, right, top, bottom: top + 24, width: right - left, height: 24, x: left, y: top, toJSON() { return this; },
 });
-function withRowLayout(): () => void {
+/** All three pills on one line, which is what an arc is drawn under. `wrapped`
+    drops the last one onto a second line instead: a row of four stages does
+    that in every column this board has, and there the arcs give way to a count
+    on the failing stage's own pill. */
+function withRowLayout(wrapped = false): () => void {
   const original = dom.HTMLElement.prototype.getBoundingClientRect;
   Object.defineProperty(dom.HTMLElement.prototype, "getBoundingClientRect", {
     configurable: true,
     value(this: HTMLElement) {
       const stage = this.getAttribute?.("data-stage");
-      if (stage && PILL_BOX[stage]) return box(...PILL_BOX[stage]!);
+      if (stage && PILL_BOX[stage]) return box(...PILL_BOX[stage]!, wrapped && stage === "review" ? 44 : 10);
       if (this.classList?.contains("psummary")) return box(0, 240);
       return original.call(this);
     },
@@ -603,6 +610,42 @@ test("two arcs into one pill nest instead of crossing, and every arc carries a h
     tap(hit);
     await tick();
     expect(card(host).querySelector("[data-arc-note]")).toBeNull();
+  } finally {
+    restore();
+  }
+});
+
+test("a row that wraps drops the arcs and puts the same count on the failing pill, marked while the return is in flight (#1798)", async () => {
+  const restore = withRowLayout(true);
+  try {
+    /* At rest a wrapped row says nothing extra at all: the budget stays in the
+       sentence the pill already carries. */
+    const rest = mount([arcPipeline({ max: 3, fired: 0 })]);
+    await tick();
+    expect(card(rest.host).querySelector<HTMLElement>(".psummary")?.dataset.arcs).toBe("suffix");
+    expect(card(rest.host).querySelectorAll(".psummary [data-loop-arc]")).toHaveLength(0);
+    expect(card(rest.host).querySelector(".psummary .pret")).toBeNull();
+
+    /* Once it has fired the count rides the failing stage's own pill. A row of
+       four stages wraps in every column this board has, so this — not the arc
+       — is the rendering most lanes get, and it carries the same readings: the
+       state, and that the return is in flight. With no arc to make live, the
+       mark is the only thing left that can say so. */
+    const fired = mount([arcPipeline({ max: 3, fired: 1, running: true })]);
+    await tick();
+    expect(card(fired.host).querySelectorAll(".psummary [data-loop-arc]")).toHaveLength(0);
+    const mark = card(fired.host).querySelector<HTMLElement>('.pchip[data-stage="review"] .pret')!;
+    expect(mark.dataset.stageReturn).toBe("review:fail:fix");
+    expect(mark.dataset.arcState).toBe("fired");
+    expect(mark.dataset.arcLive).toBe("1");
+    expect(mark.textContent).toContain("1/3");
+    /* The sentence the arc would have kept is on the pill that carries it. */
+    expect(card(fired.host).querySelector<HTMLElement>('.pchip[data-stage="review"]')?.title).toContain("Fired 1 of 3 times");
+
+    /* A return that is over is not marked as one still running. */
+    const over = mount([arcPipeline({ max: 3, fired: 1 })]);
+    await tick();
+    expect(card(over.host).querySelector<HTMLElement>(".psummary .pret")?.dataset.arcLive).toBe("0");
   } finally {
     restore();
   }

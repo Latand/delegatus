@@ -329,9 +329,15 @@ export function loopArcs(summary: KanbanPipeline): LoopArc[] {
 function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): string {
   const { fired, max } = arc.loop;
   if (arc.state === "rest") return t("kanban.loopRest", { from, to, max });
+  /* A lane that stopped here leads with that. It is the one thing the operator
+     opened the arc to find out, and last of three clauses of budget it is read
+     after everything it explains — in Ukrainian at a narrow width the note runs
+     four lines and the clause lands on the last two. */
+  const stopped = arc.state === "exhausted" && arc.parked;
   return [
+    stopped ? t("kanban.loopParkedHere", { from }) : null,
     t("kanban.loopTitle", { from, to, fired, max }),
-    arc.state === "exhausted" ? t(arc.parked ? "kanban.loopParkedHere" : "kanban.loopParked", { from }) : null,
+    arc.state === "exhausted" && !stopped ? t("kanban.loopParked", { from }) : null,
     arc.live ? t("kanban.loopLive", { from, to }) : null,
   ].filter(Boolean).join(" · ");
 }
@@ -344,7 +350,11 @@ const ARC_GAP = 3;
 const ARC_DIP = 11;
 const ARC_STEP = 9;
 const ARC_HEAD = 5;
-const ARC_LABEL = 8;
+/* The counter's room is the digits plus the halo cut out around them, which is
+   3.5 px on every side — enough to keep the thickest stroke any state draws
+   2 px clear of the digits, and enough that the counter still clears the row's
+   own bottom edge. */
+const ARC_LABEL = 10;
 /* A row of arcs that all rest reserves only the ink of the deepest curve: the
    counter's room is the counter's, and an empty band under a quiet lane is
    just dead space. */
@@ -355,7 +365,7 @@ const ARC_QUIET = 3;
 const ARC_FAN = 11;
 const ARC_HEAD_HALF = 3.5;
 
-interface ArcPath { d: string; head: string; lx: number; ly: number; rank: number }
+interface ArcPath { d: string; lead: string; head: string; lx: number; ly: number; rank: number }
 interface ArcBand {
   /** Serialized geometry: one compare decides whether a measurement changed. */
   key: string;
@@ -367,6 +377,44 @@ interface ArcBand {
 }
 const EMPTY_BAND: ArcBand = { key: "", wrapped: false, top: 0, height: 0, paths: new Map() };
 const round = (value: number) => Math.round(value * 2) / 2;
+const fine = (value: number) => Math.round(value * 100) / 100;
+
+/* The live arc's dashes move, so the phase at the head is not fixed: for part
+   of every cycle a gap of the pattern sits exactly where the arrowhead is, and
+   a head standing off its own line reads as a second mark rather than the end
+   of this one. The first few px of the curve are therefore drawn a second time,
+   solid, under the dashes. 6 px covers the pattern's 5 px gap. */
+const ARC_LEAD = 6;
+
+type Point = readonly [number, number];
+const mix = (a: Point, b: Point, at: number): Point => [a[0] + (b[0] - a[0]) * at, a[1] + (b[1] - a[1]) * at];
+
+/**
+ * The head end of a cubic as a path of its own: de Casteljau at the parameter
+ * that walks `want` px along the curve from its first point. Split, not
+ * approximated — the piece IS the curve it covers, so the solid drawing and
+ * the dashed one lie on each other exactly and no seam can show between them.
+ */
+function leadOf(p0: Point, p1: Point, p2: Point, p3: Point, want: number): string {
+  const at = (t: number): Point => mix(mix(mix(p0, p1, t), mix(p1, p2, t), t), mix(mix(p1, p2, t), mix(p2, p3, t), t), t);
+  let split = 1;
+  let run = 0;
+  let previous = p0;
+  for (let step = 1; step <= 128; step += 1) {
+    const point = at(step / 128);
+    run += Math.hypot(point[0] - previous[0], point[1] - previous[1]);
+    previous = point;
+    if (run >= want) { split = step / 128; break; }
+  }
+  const a = mix(p0, p1, split);
+  const b = mix(p1, p2, split);
+  const c = mix(p2, p3, split);
+  const d = mix(a, b, split);
+  const e = mix(b, c, split);
+  const end = mix(d, e, split);
+  const xy = (point: Point) => `${fine(point[0])} ${fine(point[1])}`;
+  return `M ${xy(p0)} C ${xy(a)} ${xy(d)} ${xy(end)}`;
+}
 
 /**
  * The arcs' geometry, from the pills' own boxes: a cubic that leaves the
@@ -437,12 +485,16 @@ function measureArcs(row: HTMLElement, chips: ReadonlyMap<string, HTMLElement>, 
     const x2 = round(heads.get(entry.id)!);
     /* Drawn from the arrowhead back to the failing pill, which is the same
        curve and a different dash phase: a dash pattern starts painting at the
-       path's first point, so the head end is always met by ink and whatever
-       gap the pattern ends on falls under the pill the arc leaves. Drawn the
-       other way round the dashed arcs lose their last dash and the arrowhead
-       floats free of its own line. */
+       path's first point, so a STILL pattern always meets the head with ink
+       and ends whatever gap it is on under the pill the arc leaves. Drawn the
+       other way round the resting arcs lose their last dash and the arrowhead
+       floats free of its own line. A moving pattern has no fixed phase and
+       cannot be answered by which end it starts at: the head keeps its ink
+       from `lead`, and the motion is turned round in the stylesheet so the
+       dashes still travel towards the head. */
     paths.set(entry.id, {
       d: `M ${x2} ${ARC_HEAD} C ${x2} ${control} ${x1} ${control} ${x1} 0`,
+      lead: leadOf([x2, ARC_HEAD], [x2, control], [x1, control], [x1, 0], ARC_LEAD),
       head: `${x2},0 ${x2 - ARC_HEAD_HALF},${ARC_HEAD} ${x2 + ARC_HEAD_HALF},${ARC_HEAD}`,
       lx: round((x1 + x2) / 2),
       ly: dip,
@@ -518,6 +570,11 @@ function ReturnArcs({ arcs, band, titles }: { arcs: readonly LoopArc[]; band: Ar
             >
               <title>{title}</title>
               {path ? <path className="parc" d={path.d} /> : null}
+              {/* The dashes of a live arc travel towards the head; the solid
+                  piece under them is what keeps the head met by ink whatever
+                  phase the motion is in. The other states draw a solid curve
+                  already, so only the live one needs it. */}
+              {path && arc.live ? <path className="parc parc-lead" d={path.lead} /> : null}
               {path ? <polygon className="parc-head" points={path.head} /> : null}
               {arc.loop.fired ? <text className="parc-count" x={path?.lx ?? 0} y={path?.ly ?? 0}>{`${arc.loop.fired}/${arc.loop.max}`}</text> : null}
               {path ? (
@@ -546,10 +603,15 @@ function ReturnArcs({ arcs, band, titles }: { arcs: readonly LoopArc[]; band: Ar
 }
 
 /** The wrapped row's stand-in for an arc: the return glyph and the same count,
-    on the failing stage's own pill, and only once the edge has fired. */
+    on the failing stage's own pill, and only once the edge has fired.
+
+    A row of four stages wraps in every column the board actually gives it, so
+    this — not the arc — is what most lanes draw, and it carries the same three
+    readings the arc does: the state in its colour, and a return in flight
+    marked as running rather than left to read like one that is over. */
 function ReturnSuffix({ arc, title }: { arc: LoopArc; title: string }) {
   return (
-    <span className="pret" title={title} data-stage-return={arc.id} data-arc-state={arc.state} data-arc-fired={arc.loop.fired} data-arc-max={arc.loop.max}>
+    <span className="pret" title={title} data-stage-return={arc.id} data-arc-state={arc.state} data-arc-live={arc.live ? "1" : "0"} data-arc-fired={arc.loop.fired} data-arc-max={arc.loop.max}>
       <span aria-hidden="true">↺</span>
       {`${arc.loop.fired}/${arc.loop.max}`}
     </span>

@@ -243,12 +243,15 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
   ];
 })() : [];
 
-/* #1798. Four lanes on one card, each with the fail edge in one state, so the
+/* #1798. Six lanes on one card, each with the fail edge in one state, so the
    arcs under the rows can be read side by side at any width: at rest, fired
-   once with the returned stage running because of it, a spent budget, and two
-   edges into one target. The stages are short on purpose — the row of a real
-   card is 220-264 px wide, and both the one-line row (arcs) and the wrapped
-   row (the pill suffix) have to be visible in one frame. */
+   once with the returned stage running because of it, a spent budget, a lane
+   the spent budget stopped, and two edges into one target. Their stages are
+   short on purpose — the row of a real card is 220-264 px wide, and the
+   one-line row with its arcs has to be readable in the same frame. The sixth
+   is the length a real lane usually has, four stages, and wraps everywhere the
+   board is not a 1920 px screen: that is the row the suffix is drawn on, and
+   it is the common case rather than the narrow one. */
 const arcPipelines: Pipeline[] = ARCS ? (() => {
   const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
   const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
@@ -262,6 +265,9 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
   const twoFix = conv("arc-two-fix", "Third pass on the picker", working({ plan: { current: "Reworking the picker" } }));
   const twoCrit = conv("arc-two-crit", "Sent it back: the picker hides the default", { mtime: now - 140 * MIN });
   const twoRev = conv("arc-two-rev", "Sent it back: the default is still not marked", { mtime: now - 90 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const longImpl = conv("arc-long-impl", "Second pass after the verifier sent it back", working({ plan: { current: "Re-reading the column widths" } }));
+  const longRev = conv("arc-long-rev", "Read the first pass", { mtime: now - 120 * MIN });
+  const longVer = conv("arc-long-ver", "Sent it back: two columns still clip", { mtime: now - 80 * MIN, engine: "codex", model: "gpt-6-astra" });
   return [
     /* At rest: three stages, one fail edge, nothing used. The arc is faint and
        wordless — the budget is in its tooltip only. */
@@ -339,6 +345,25 @@ const arcPipelines: Pipeline[] = ARCS ? (() => {
       ] },
       { stageId: "review", attempts: [attempt(1, "failed", twoRev, { startedAt: iso(100 * MIN), activatedBy: { stageId: "critique", attempt: 2, edge: "pass" } })] },
     ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* Four stages, which is the ordinary length of a real lane. A row this long
+       wraps in every column the board actually gives it short of a 1920 px
+       screen, so the suffix on the failing pill — not the arc — is what most
+       lanes draw, and the wide frames have to show it. Its edge fired once and
+       the return is in flight, which is the reading the suffix has to keep
+       apart from a return that is over. */
+    pipeline("p-arc-long", "Keep every column legible while a lane runs", "t-arcs", "running", [
+      stage("implement", "builder", "review"),
+      stage("review", "reviewer", "verify"),
+      stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 3 } }),
+      stage("merge", "cleaner", null),
+    ], [
+      { stageId: "implement", attempts: [
+        attempt(1, "passed", longImpl, { startedAt: iso(160 * MIN) }),
+        attempt(2, "running", longImpl, { startedAt: iso(35 * MIN), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "passed", longRev, { startedAt: iso(120 * MIN), activatedBy: { stageId: "implement", attempt: 1, edge: "pass" } })] },
+      { stageId: "verify", attempts: [attempt(1, "failed", longVer, { startedAt: iso(80 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "implement", state: "running", input: null, activatedBy: null }),
   ];
 })() : [];
 

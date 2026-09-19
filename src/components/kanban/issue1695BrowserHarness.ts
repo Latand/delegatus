@@ -45,8 +45,12 @@ export async function openFixture(
   /* The Viewer reads its language from `llv_lang` in localStorage, so a case
      that gates both languages seeds it before the first render (#1743). */
   lang?: "en" | "uk",
+  /* A surface whose resting state is drawn by an animation has a second
+     rendering under `prefers-reduced-motion`, and a case that gates the one
+     the motion leaves behind has to ask for it (#1798). */
+  motion: "no-preference" | "reduce" = "no-preference",
 ) {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: "no-preference" });
+  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, reducedMotion: motion });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
   const pageErrors: string[] = [];

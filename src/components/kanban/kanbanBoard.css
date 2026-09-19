@@ -378,14 +378,33 @@
 .kb [data-arc-state="exhausted"] .parc { stroke: var(--color-danger); stroke-width: 2; stroke-dasharray: none; }
 .kb [data-arc-state="exhausted"] .parc-head { fill: var(--color-danger); }
 /* The arc that carried the work that is running right now, drawn as the graph
-   draws its live edge: the same moving dashes, the same width. */
-.kb [data-arc-live="1"] .parc { stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-edge-flow 700ms linear infinite; }
+   draws its live edge: the same moving dashes, the same width. The motion runs
+   the other way round here. The graph draws its edges from source to target,
+   so dashes travelling forward along the path travel towards the arrowhead;
+   this curve is drawn from its arrowhead back to the failing pill, so the same
+   keyframe would send the dashes AWAY from the head the arrow points at — the
+   drawing would say the work goes back to Fix and the motion that it goes to
+   Review. A positive offset moves them along the path in reverse, which here
+   is towards the head. */
+.kb [data-arc-live="1"] .parc { stroke-width: 2.25; stroke-dasharray: 7 5; animation: kb-arc-flow 700ms linear infinite; }
+@keyframes kb-arc-flow { to { stroke-dashoffset: 24; } }
+/* Moving dashes put a gap of the pattern over the head for part of every cycle,
+   and an arrowhead standing off its own line reads as a second mark. The first
+   6 px of the same curve are drawn solid under the dashes, so the head is met
+   by ink at every phase. It is a split of the same cubic, not a stand-in, so
+   the two drawings lie on each other exactly. */
+.kb .parc.parc-lead { stroke-dasharray: none; animation: none; }
 /* The counter rides the arc, so the stroke is haloed out from behind the digits
-   rather than boxed away — one less rectangle on a 256 px card. */
+   rather than boxed away — one less rectangle on a 256 px card. The halo has to
+   be wide enough to be air: at 3 px it cut the stroke only to the edge of the
+   first and last digit and left specks of it between them, so a count read as a
+   line struck through dirty digits. 7 px is 3.5 px a side, which clears the
+   thickest stroke any state draws (3 px, the live arc with motion off) by 2 px
+   on both sides and closes over every gap between two digits from both sides. */
 .kb .parc-count {
   font: 700 var(--text-caption)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums; text-anchor: middle; dominant-baseline: middle;
-  paint-order: stroke; stroke: var(--section-surface, var(--surface-card)); stroke-width: 3px; stroke-linejoin: round;
+  paint-order: stroke; stroke: var(--section-surface, var(--surface-card)); stroke-width: 7px; stroke-linejoin: round;
   fill: var(--color-warning); pointer-events: none;
 }
 .kb [data-arc-state="exhausted"] .parc-count { fill: var(--color-danger); }
@@ -393,6 +412,11 @@
    the count instead — and only once the edge has fired. */
 .kb .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
 .kb .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
+/* A return in flight, on the surface that has no arc to make live: the count
+   keeps the state's own colour and sits on the accent ground the board gives
+   anything running, so a lane still going back does not read as one that is
+   over. */
+.kb .pret[data-arc-live="1"] { padding: 0 3px; border-radius: 999px; background: var(--color-accent-soft); }
 /* The tapped arc's sentence, for the surface a tooltip never reaches. */
 .kb .parc-note {
   position: absolute; left: 0; right: 0; z-index: 4; padding: 3px 7px;

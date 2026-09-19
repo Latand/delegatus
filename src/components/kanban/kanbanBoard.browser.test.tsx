@@ -4247,7 +4247,10 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
    * One task carries the lanes the arc has to tell apart: a fail edge at rest,
    * one that fired once and is carrying the work back right now, one whose
    * budget is spent with the last return still in flight, one the spent budget
-   * already stopped, and a lane with two fail edges into the same stage.
+   * already stopped, and a lane with two fail edges into the same stage. A
+   * sixth lane has four stages, the length a real lane usually has, and wraps
+   * in every column this board has — which is what puts the pill suffix, not
+   * the arc, on most of the rows an operator sees.
    *
    * What only a browser settles, and is gated here:
    *   - the collapsed row holds stage pills and nothing else — the fail-edge
@@ -4267,15 +4270,23 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
    *     the sentence is the only place the budget lives;
    *   - a lane that parked on a spent edge does not say what a lane still
    *     running says;
-   *   - the counter's halo is cut out of the ground the section paints, and a
-   *     lane whose edges all rest reserves no room for a counter it has not;
+   *   - the counter's halo is cut out of the ground the section paints, and is
+   *     wide enough to be air: 2 px of ground on both sides of the digits
+   *     against the thickest stroke any state draws, and no gap between two
+   *     digits that the halo cannot close from both sides;
+   *   - the dashes of a live arc travel towards its own arrowhead, and a solid
+   *     piece under them keeps the head met by ink at every phase;
+   *   - a lane whose edges all rest reserves no room for a counter it has not;
    *   - a row that wrapped drops the arcs altogether and puts the same count on
-   *     the failing stage's own pill, and only once the edge has fired.
+   *     the failing stage's own pill, only once the edge has fired, and marks a
+   *     return still in flight apart from one that is over.
    *
    * The phone (390 px) is recorded rather than gated: under 640 px the Viewer
    * hands the whole board to the mobile shell, so the collapsed kanban row has
-   * no phone surface at all — the wrapped row, which is what the issue calls
-   * the phone case, is the narrow desktop column, and is gated there.
+   * no phone surface at all. The wrapped row is therefore a desktop rendering
+   * — and not only a narrow one: a four-stage lane wraps in a 1680 px board's
+   * columns too, so the suffix is gated at every width here and the arcs are
+   * what the short lanes draw.
    *
    * Measurements go to `evidence/issue-1798/arcs.json`; frames to
    * `.artifacts/issue-1798/`, which is not committed.
@@ -4304,6 +4315,24 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     /** The colour the counter's halo is cut out of: it has to be the ground the
         section actually paints, or the count carries a blot of another colour. */
     countHalo: string;
+    /** How wide that halo is cut. Half of it is the air on each side of the
+        digits, and the arc runs at the digits' own vertical middle, so a halo
+        no wider than the stroke leaves the count read as a line struck into
+        dirty digits. */
+    countHaloWidth: number;
+    /** The widest gap between two digits' INK, measured in the font the counter
+        actually draws with. The halo closes over a gap from both sides, so a
+        gap wider than the whole halo keeps a speck of the arc inside the
+        count. Null when the browser cannot report glyph ink. */
+    countInkGap: number | null;
+    /** The live arc's dashes move; these are its `stroke-dashoffset` sampled
+        with the animation paused at three points of one cycle. The curve is
+        drawn from the head backwards, so an offset that GROWS is a dash
+        travelling towards the arrowhead — which is where the work goes. */
+    flow: number[] | null;
+    /** The solid piece drawn over the head end of a live arc, so no phase of
+        the motion leaves the arrowhead standing off its own line. */
+    lead: { length: number; dash: string } | null;
     /** The arrowhead's own box, so two heads on one pill can be told apart. */
     head: { x: number; right: number } | null;
     /** What a pointer aimed at the arc actually meets, over `samples` points
@@ -4353,7 +4382,12 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         come, and how much clear air is between their two arrowheads. */
     pairs: Array<{ a: string; b: string; crosses: boolean; minGap: number; headGap: number }>;
     arcs: ArcMeasure[];
-    suffixes: Array<{ edge: string; state: string | null; text: string; title: string }>;
+    /** The wrapped row's stand-in for the arcs, on the failing stage's own
+        pill. `live` and `ground` are how a return still in flight is told
+        apart from one that is over on the surface that has no arc to make
+        live — and a four-stage lane wraps in every column the board has, so
+        this is the rendering most lanes get. */
+    suffixes: Array<{ edge: string; state: string | null; live: string | null; text: string; title: string; colour: string; ground: string }>;
     /** The gap between the row's bottom and the next thing the card draws. */
     gapBelow: number;
   }
@@ -4422,6 +4456,44 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         const inside = samples.filter((point) => point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight);
         const hitPath = group.querySelector<SVGPathElement>(".parc-hit");
         const style = path ? getComputedStyle(path) : null;
+        const countStyle = count ? getComputedStyle(count) : null;
+        /* The digits' own ink, in the font the counter draws with: the halo
+           dilates each glyph outline by half its width, so a gap between two
+           digits wider than the halo reaches from both sides keeps a speck of
+           the arc in it. Canvas is the one place a glyph's ink box can be
+           asked for; a browser that does not answer reports nothing rather
+           than a number nobody measured. */
+        const inkGap = (() => {
+          const text = count?.textContent ?? "";
+          const context = text.length > 1 ? document.createElement("canvas").getContext("2d") : null;
+          if (!context || !countStyle) return null;
+          context.font = `${countStyle.fontWeight} ${countStyle.fontSize} ${countStyle.fontFamily}`;
+          if (!Number.isFinite(context.measureText("1").actualBoundingBoxRight)) return null;
+          let widest = 0;
+          for (let index = 1; index < text.length; index += 1) {
+            const run = context.measureText(text.slice(0, index));
+            const next = context.measureText(text[index]!);
+            widest = Math.max(widest, (run.width - next.actualBoundingBoxLeft) - run.actualBoundingBoxRight);
+          }
+          return round(widest);
+        })();
+        /* Where the dashes of a live arc are going. The animation is paused at
+           three points of one cycle and its offset read off the same element
+           the eye watches; the curve starts at the arrowhead, so an offset
+           that grows is ink travelling towards the head. The motion is put
+           back as it was, so nothing after this reads a stopped board. */
+        const flow = (() => {
+          if (!path || group.dataset.arcLive !== "1") return null;
+          const animations = path.getAnimations();
+          if (!animations.length) return null;
+          const samples = [0, 175, 350].map((at) => {
+            for (const animation of animations) { animation.pause(); animation.currentTime = at; }
+            return round(Number.parseFloat(getComputedStyle(path).strokeDashoffset) || 0);
+          });
+          for (const animation of animations) animation.play();
+          return samples;
+        })();
+        const leadPath = group.querySelector<SVGPathElement>(".parc-lead");
         /* A stroke is painted half outside the geometry the box reports, so the
            half-width is added on every side before anything is called a clash. */
         const half = style ? Number.parseFloat(style.strokeWidth) / 2 || 0 : 0;
@@ -4439,8 +4511,12 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
           stroke: style?.stroke ?? "",
           strokeWidth: style?.strokeWidth ?? "",
           dash: style?.strokeDasharray ?? "",
-          countFill: count ? getComputedStyle(count).fill : "",
-          countHalo: count ? getComputedStyle(count).stroke : "",
+          countFill: countStyle?.fill ?? "",
+          countHalo: countStyle?.stroke ?? "",
+          countHaloWidth: countStyle ? round(Number.parseFloat(countStyle.strokeWidth) || 0) : 0,
+          countInkGap: inkGap,
+          flow,
+          lead: leadPath ? { length: round(leadPath.getTotalLength()), dash: getComputedStyle(leadPath).strokeDasharray } : null,
           head: head ? { x: round(head.getBoundingClientRect().left - rowBox.left), right: round(head.getBoundingClientRect().right - rowBox.left) } : null,
           hit: {
             strokeWidth: hitPath ? getComputedStyle(hitPath).strokeWidth : "",
@@ -4515,8 +4591,11 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         suffixes: [...row.querySelectorAll<HTMLElement>(".pret")].map((mark) => ({
           edge: mark.dataset.stageReturn ?? "",
           state: mark.dataset.arcState ?? null,
+          live: mark.dataset.arcLive ?? null,
           text: mark.textContent?.trim() ?? "",
           title: mark.getAttribute("title") ?? "",
+          colour: getComputedStyle(mark).color,
+          ground: getComputedStyle(mark).backgroundColor,
         })),
         gapBelow: round(next.top - rowBox.bottom),
       };
@@ -4532,9 +4611,13 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     const failures: string[] = [];
     const frames: Record<string, unknown> = {};
 
+    /* The thickest stroke any state of an arc draws: the live one with motion
+       switched off, which is the rendering the halo has the least room against. */
+    const ARC_INK = 3;
+
     const check = (label: string, rows: RowMeasure[], plain: RowMeasure[]) => {
       const by = (id: string) => rows.find((row) => row.pipeline === id);
-      if (rows.length !== 5) {
+      if (rows.length !== 6) {
         failures.push(`${label}: the card drew ${rows.length} pipeline rows`);
         return;
       }
@@ -4569,6 +4652,37 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
              count carries a blot of the card's colour on a tinted row. */
           if (arc.count && arc.countHalo !== row.sectionSurface) {
             failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count with ${arc.countHalo} over a ${row.sectionSurface} ground`);
+          }
+          /* And it is wide enough to BE air. The counter sits on the arc, at
+             the digits' own vertical middle, so a halo that only reaches the
+             edge of the first and last digit leaves the arc drawn through the
+             count: 2 px of ground on both sides of the digits is the target,
+             against the thickest stroke any state of the arc draws. */
+          if (arc.count && (arc.countHaloWidth - ARC_INK) / 2 < 2) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} halos its count ${arc.countHaloWidth} px wide, which leaves ${(arc.countHaloWidth - ARC_INK) / 2} px of air beside the digits`);
+          }
+          /* The halo closes over a gap between two digits from both sides. A
+             gap wider than the whole halo keeps a speck of arc inside the
+             count, which is what blinks as the dashes pass. */
+          if (arc.count && arc.countInkGap !== null && arc.countInkGap > arc.countHaloWidth) {
+            failures.push(`${label}: ${row.pipeline} ${arc.edge} leaves a ${arc.countInkGap} px gap between digits that a ${arc.countHaloWidth} px halo cannot close`);
+          }
+          /* A live arc says where the work goes twice: with its arrowhead, and
+             with the way its dashes move. They have to say the same thing. The
+             curve runs from the head backwards, so the offset has to GROW. */
+          if (arc.live === "1" && arc.flow) {
+            const [start, middle, end] = arc.flow;
+            if (!(start! < middle! && middle! < end!)) {
+              failures.push(`${label}: ${row.pipeline} ${arc.edge} runs its dashes ${JSON.stringify(arc.flow)}, away from its own arrowhead`);
+            }
+          }
+          /* And the head is met by ink at every phase of that motion: the first
+             px of the curve are drawn solid under the dashes. */
+          if (arc.live === "1" && arc.dash !== "none") {
+            if (!arc.lead) failures.push(`${label}: ${row.pipeline} ${arc.edge} moves dashes over its arrowhead with nothing solid under it`);
+            else if (arc.lead.dash !== "none" || arc.lead.length < 5) {
+              failures.push(`${label}: ${row.pipeline} ${arc.edge} draws a ${arc.lead.length} px lead dashed ${arc.lead.dash}, which cannot hold the head`);
+            }
           }
         }
         /* Two arcs into one pill nest; they never tangle and their tips never
@@ -4686,11 +4800,32 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
       } else if (two.suffixes.length !== 2) {
         failures.push(`${label}: the wrapped two-edge lane marks ${two.suffixes.length} pill(s)`);
       }
+
+      /* The four-stage lane: the length a real lane usually has. It wraps in
+         every column this board has, which makes the suffix the ORDINARY
+         rendering rather than a narrow-column fallback, so the wide frames
+         have to show it and it has to carry every reading the arc carries. */
+      const long = by("p-arc-long")!;
+      const longMark = markOf(long, "verify:fail:implement");
+      if (long.mode !== "suffix") {
+        failures.push(`${label}: the four-stage lane reads ${JSON.stringify(long.mode)}; the suffix is what a row of that length draws`);
+      } else {
+        if (long.arcs.length) failures.push(`${label}: the four-stage lane wrapped and still drew ${long.arcs.length} arc(s)`);
+        if (longMark?.state !== "fired") failures.push(`${label}: the four-stage lane's mark reads ${JSON.stringify(longMark?.state)}`);
+        if (!/1.*3/.test(longMark?.text ?? "")) failures.push(`${label}: the four-stage lane marks its pill ${JSON.stringify(longMark?.text)}`);
+        /* A return in flight is not a return that is over. With no arc to make
+           live, the mark itself has to carry it. */
+        if (longMark?.live !== "1") failures.push(`${label}: the four-stage lane's return is in flight and its mark says ${JSON.stringify(longMark?.live)}`);
+        const settled = [parked, spent, fired, rest].flatMap((row) => row.suffixes).find((mark) => mark.live === "0");
+        if (settled && longMark && settled.ground === longMark.ground && settled.colour === longMark.colour) {
+          failures.push(`${label}: a return in flight is drawn exactly like one that is over (${longMark.colour} on ${longMark.ground})`);
+        }
+      }
     };
 
-    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk") => {
-      const label = `${width}-${lang}-${scheme}`;
-      const opened = await openFixture(browser, base, { width, height }, scheme, lang);
+    const desktop = async (width: number, height: number, scheme: Scheme, lang: "en" | "uk", motion: "no-preference" | "reduce" = "no-preference") => {
+      const label = `${width}-${lang}-${scheme}${motion === "reduce" ? "-still" : ""}`;
+      const opened = await openFixture(browser, base, { width, height }, scheme, lang, motion);
       try {
         await opened.page.waitForSelector(CARD, { state: "attached", timeout: 20_000 });
         await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -4699,8 +4834,21 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
         const plain = await readRows(opened.page, PLAIN);
         await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `card-${label}.png`) });
         await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
+        /* One label also keeps the live arc still at three points of a cycle.
+           Which way the dashes go, and whether the arrowhead is left standing
+           off its own line while they go there, are questions about a moving
+           drawing: a single frame of it answers neither. */
+        if (label === "1680-en-light") {
+          for (const at of [0, 175, 350]) {
+            await opened.page.evaluate((ms) => {
+              for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = ms; }
+            }, at);
+            await opened.page.locator(CARD).screenshot({ path: path.join(OUT, `phase-${at}.png`) });
+          }
+          await opened.page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+        }
         check(label, rows, plain);
-        frames[label] = { viewport: { width, height }, lang, scheme, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
+        frames[label] = { viewport: { width, height }, lang, scheme, motion, documentLang: await opened.page.evaluate(() => document.documentElement.lang), rows, plain };
         if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
       } catch (error) {
         failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
@@ -4731,12 +4879,21 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     try {
       for (const scheme of ["light", "dark"] as const) {
         for (const lang of ["en", "uk"] as const) {
-          /* A wide board and the scroller, where every row is one line and all
-             four arcs are drawn; then 640 px, the narrowest desktop the board
-             supports, where the three-stage rows wrap and hand their count to
-             the failing pill while the two-stage ones keep their arcs. */
-          await desktop(1680, 950, scheme, lang);
-          await desktop(1280, 900, scheme, lang);
+          /* A wide board and the scroller, where the short rows are one line
+             and their arcs are drawn while the four-stage lane already wraps;
+             then 640 px, the narrowest desktop the board supports, where the
+             three-stage rows wrap too and hand their count to the failing pill
+             while the two-stage ones keep their arcs. */
+          /* Tall enough that the whole card is inside the frame at every
+             width: the arcs are read off the drawing, and a curve scrolled
+             past the bottom of the window is a curve nothing can be asked
+             about. */
+          await desktop(1680, 1150, scheme, lang);
+          await desktop(1280, 1250, scheme, lang);
+          /* Motion off is the arc's second rendering, and the one the counter's
+             halo has the least room against: the live arc is a solid 3 px line
+             there rather than dashes with gaps in it. */
+          if (lang === "en") await desktop(1440, 1250, scheme, lang, "reduce");
           /* Tall enough that the whole card fits one frame: the wrapped row's
              pill suffix is the only drawing of the edge there, and a frame
              that clips it away shows nothing of what it replaced. */
@@ -4750,10 +4907,19 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     }
 
     /* Both modes have to appear across the widths, or the evidence only shows
-       half the design. */
-    const modes = new Set(Object.values(frames).flatMap((frame) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode)));
+       half the design — and the suffix has to appear at a WIDE one, because
+       that is where it is the ordinary rendering rather than the fallback. */
+    const modesOf = (frame: unknown) => ((frame as { rows?: RowMeasure[] }).rows ?? []).map((row) => row.mode);
+    const modes = new Set(Object.values(frames).flatMap(modesOf));
     for (const wanted of ["arcs", "suffix"]) {
       if (!modes.has(wanted)) failures.push(`no width produced a row in ${wanted} mode; modes seen: ${[...modes].join(", ")}`);
+    }
+    const wide = Object.entries(frames).filter(([, frame]) => ((frame as { viewport?: { width: number } }).viewport?.width ?? 0) >= 1280);
+    if (!wide.some(([, frame]) => modesOf(frame).includes("suffix"))) {
+      failures.push("no wide frame drew a row in suffix mode, so the common case is not on record");
+    }
+    if (!wide.some(([, frame]) => modesOf(frame).includes("arcs"))) {
+      failures.push("no wide frame drew a row in arcs mode");
     }
 
     fs.writeFileSync(path.join(EVIDENCE, "arcs.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
