@@ -762,6 +762,25 @@ function canonicalConversationId(registry: AgentRegistry, conversationId: string
     : conversationId;
 }
 
+/** Every send or steer the runtime snapshot shows admitted, by canonical
+    conversation. */
+function admittedRuntimeMessages(
+  registry: AgentRegistry,
+  runtime: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>,
+): StructuredStartupSignals["admittedMessages"] {
+  const admittedMessages = new Map<string, { idempotencyKey: string; at: number }[]>();
+  for (const receipt of [...runtime.recentOperations, ...runtime.sessions.flatMap((session) => session.recentReceipts ?? [])]) {
+    if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
+    const at = Date.parse(receipt.admittedAt ?? receipt.at);
+    if (!Number.isFinite(at)) continue;
+    const conversationId = canonicalConversationId(registry, receipt.conversationId);
+    const messages = admittedMessages.get(conversationId) ?? [];
+    messages.push({ idempotencyKey: receipt.idempotencyKey, at });
+    admittedMessages.set(conversationId, messages);
+  }
+  return admittedMessages;
+}
+
 async function structuredStartupSignals(
   registry: AgentRegistry,
   client: RuntimeHostClient | null,
@@ -787,16 +806,7 @@ async function structuredStartupSignals(
     .filter((receipt) => receipt.kind !== "kill")
     .map((receipt) => canonicalConversationId(registry, receipt.conversationId)));
   const pendingCodexContinuationConversationIds = new Set<string>();
-  const admittedMessages = new Map<string, { idempotencyKey: string; at: number }[]>();
-  for (const receipt of [...runtime.recentOperations, ...runtime.sessions.flatMap((session) => session.recentReceipts ?? [])]) {
-    if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
-    const at = Date.parse(receipt.admittedAt ?? receipt.at);
-    if (!Number.isFinite(at)) continue;
-    const conversationId = canonicalConversationId(registry, receipt.conversationId);
-    const messages = admittedMessages.get(conversationId) ?? [];
-    messages.push({ idempotencyKey: receipt.idempotencyKey, at });
-    admittedMessages.set(conversationId, messages);
-  }
+  const admittedMessages = admittedRuntimeMessages(registry, runtime);
   let afterEventSeq = 0;
   while (true) {
     const batch = await client.effectBatch(STRUCTURED_HOST_OPERATION_EFFECT_KINDS, afterEventSeq);
@@ -1375,7 +1385,10 @@ export async function adoptStructuredHostsAtStartup(
     if (client) {
       reportProgress("recovering orchestrator deliveries");
       /* Re-read: identity, a seat rotation or a message admitted while this
-         pass adopted can each discharge an obligation it adopted for. */
+         pass adopted can each discharge an obligation it adopted for. The
+         runtime's receipts are read again too — adoption can take tens of
+         seconds, and a send it admitted in that time is not in `signals`. */
+      const admittedSinceAdoption = admittedRuntimeMessages(registry, await client.snapshot());
       const owedInterruptions = dischargeInterruptionObligations(
         registry,
         interruptions,
@@ -1383,7 +1396,7 @@ export async function adoptStructuredHostsAtStartup(
           && interruptedHostKeys.has(obligation.hostKey)
           && !deferredHostKeys.has(obligation.hostKey)),
         orchestratorSeats(),
-        signals.admittedMessages,
+        admittedSinceAdoption,
         pipelineEvidence.settled,
       );
       const continuationFailures = await deliverInterruptionContinuations(

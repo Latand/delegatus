@@ -230,6 +230,8 @@ async function successorBoot(
   options: {
     seats?: () => OrchestratorSeat[];
     adoptionFails?: boolean;
+    /** Runs inside adoption, after the rows are claimed. */
+    duringAdoption?: (registry: AgentRegistry) => Promise<void>;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = new AgentRegistry(registryFile);
@@ -255,6 +257,15 @@ async function successorBoot(
       return [{ key: entry.key, host: hostFor(ledger) as never }];
     });
   };
+  const adoptThenRun = async (
+    engine: "codex" | "claude",
+    received: AgentRegistry,
+    shouldAdopt: StructuredHostAdoptionFilter,
+  ) => {
+    const hosts = await adopt(engine, received, shouldAdopt);
+    if (hosts.length > 0) await options.duringAdoption?.(received);
+    return hosts;
+  };
   let error: unknown = null;
   try {
     await adoptStructuredHostsAtStartup({
@@ -262,9 +273,9 @@ async function successorBoot(
       client: journal ? journalClient(journal) : null,
       orchestratorSeats: options.seats ?? (() => []),
       adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) =>
-        adopt("codex", received, shouldAdopt) as never,
+        adoptThenRun("codex", received, shouldAdopt) as never,
       adoptClaude: async (received, _optionsFor, _env, shouldAdopt = () => true) =>
-        adopt("claude", received, shouldAdopt) as never,
+        adoptThenRun("claude", received, shouldAdopt) as never,
     });
   } catch (caught) {
     error = caught;
@@ -491,6 +502,84 @@ test("a message that reaches the cut conversation first discharges the obligatio
     }, registry);
     await settle(() => ledger.writes.length > 1, 300);
     expect(continuationsIn(ledger)).toEqual(["the deploy is done; where are we?"]);
+  } finally {
+    journal.close();
+  }
+});
+
+/** The runtime host's own row for the cut conversation: it outlives the
+    Viewer, so a send can be admitted before any successor host is up. */
+function runtimeSession(journal: RuntimeJournal, cut: CutConversation): void {
+  journal.append({
+    scope: { type: "session", id: cut.conversationId },
+    kind: "session-status",
+    payload: {
+      conversationId: cut.conversationId,
+      sessionKey: { engine: cut.engine, sessionId: cut.sessionId },
+      hostKind: cut.engine === "codex" ? "codex-app-server" : "claude-broker",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath: cut.artifactPath,
+      capabilities: { steer: cut.engine === "codex", structuredAttention: true },
+    },
+  });
+}
+
+/** An operator send the runtime host admits itself, with no Viewer
+    reservation: only its receipt says the conversation was taken up. */
+function operatorSend(journal: RuntimeJournal, cut: CutConversation, idempotencyKey: string, text: string) {
+  return journal.executeOperation({
+    kind: "send",
+    operationId: `${idempotencyKey}-operation`,
+    idempotencyKey,
+    conversationId: cut.conversationId,
+    text,
+    policy: "queue",
+  }).receipt;
+}
+
+test("a send the runtime admitted before the successor boots discharges the obligation and nothing else is sent", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(10), deadEngine(2_000_001_110));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_110));
+    runtimeSession(journal, cut);
+    await Bun.sleep(5);
+
+    const admitted = operatorSend(journal, cut, "operator-send-before-boot", "status after the deploy?");
+    expect(admitted.status).not.toBe("rejected");
+
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 1, 300);
+    expect(continuationsIn(ledger)).toEqual(["status after the deploy?"]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a send the runtime admits while the successor is adopting discharges the obligation and nothing else is sent", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("codex", cutSessionId(11), deadEngine(2_000_001_111));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_111));
+    runtimeSession(journal, cut);
+
+    const ledger = createFakeDeliveryLedger();
+    let receipt: { status: string } | null = null;
+    const boot = await successorBoot(cut.registryFile, journal, ledger, {
+      duringAdoption: async () => {
+        await Bun.sleep(5);
+        receipt = operatorSend(journal, cut, "operator-send-during-adoption", "are you back?");
+      },
+    });
+    expect(boot.error).toBeNull();
+    expect(receipt).not.toBeNull();
+    expect(receipt!.status).not.toBe("rejected");
+    await settle(() => ledger.writes.length > 0, 300);
+    expect(continuationsIn(ledger)).toEqual(["are you back?"]);
   } finally {
     journal.close();
   }
