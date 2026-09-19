@@ -470,32 +470,34 @@ test("Claude cards carry the refresh action but no reset-credit line; a signed-o
   expect(html).not.toContain('data-account-limits="signed-out"');
 });
 
-const claudeLimits = (flagship: number | null) => ({
+const tierWindow = (tier: string, usedPercent: number) => ({ usedPercent, resetsAt: nowS() + 4 * 86_400, windowMinutes: 10_080, tier });
+const claudeLimits = (tiers: { tier: string; usedPercent: number }[]) => ({
   freshness: "fresh" as const,
   session: { usedPercent: 12, resetsAt: nowS() + 3_600, windowMinutes: 300 },
   weekly: { usedPercent: 40, resetsAt: nowS() + 4 * 86_400, windowMinutes: 10_080 },
-  ...(flagship === null ? {} : { flagship: { usedPercent: flagship, resetsAt: nowS() + 4 * 86_400, windowMinutes: 10_080, tier: "opus" } }),
+  ...(tiers.length ? { tiers: tiers.map((entry) => tierWindow(entry.tier, entry.usedPercent)) } : {}),
   checkedAt: new Date().toISOString(),
 });
-const claudeAccount = (flagship: number | null) => base({
+const claudeAccount = (tiers: { tier: string; usedPercent: number }[]) => base({
   engine: "claude",
-  accounts: [{ id: "account-a", label: "Account A", kind: "managed", authPresent: true, authHealth: "authenticated", plan: "max", loginPending: false, loginState: "authenticated", deviceAuth: null, limits: claudeLimits(flagship) }],
+  accounts: [{ id: "account-a", label: "Account A", kind: "managed", authPresent: true, authHealth: "authenticated", plan: "max", loginPending: false, loginState: "authenticated", deviceAuth: null, limits: claudeLimits(tiers) }],
   active: "account-a",
 });
+const opusOnly = (usedPercent: number) => [{ tier: "opus", usedPercent }];
 
-test("no flagship bucket: two rows, no placeholder (#1358)", () => {
-  const html = render(claudeAccount(null));
+test("no tier bucket: two rows, no placeholder (#1358)", () => {
+  const html = render(claudeAccount([]));
   expect(html).toContain('data-limit-row="session"');
   expect(html).toContain('data-limit-row="weekly"');
-  expect(html).not.toContain('data-limit-row="flagship"');
+  expect(html).not.toContain('data-limit-row="tier:');
   expect(html).not.toContain("Opus · Week");
   expect(html).toContain('title="weekly window binds"'); // 60% left on the week binds
   expect(html).toContain(">60%<");
 });
 
-test("a healthy flagship bucket renders as its own row named by the tier, and the general week still binds (#1358)", () => {
-  const html = render(claudeAccount(10));
-  const row = html.match(/<div[^>]*data-limit-row="flagship"[^>]*>[\s\S]*?<\/dd><\/div>/)?.[0] ?? "";
+test("a healthy tier bucket renders as its own row named by the tier, and the general week still binds (#1358)", () => {
+  const html = render(claudeAccount(opusOnly(10)));
+  const row = html.match(/<div[^>]*data-limit-row="tier:opus"[^>]*>[\s\S]*?<\/dd><\/div>/)?.[0] ?? "";
   expect(row).not.toBe("");
   expect(row).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
   expect(row).toContain(">90%<");
@@ -505,11 +507,22 @@ test("a healthy flagship bucket renders as its own row named by the tier, and th
   expect(html).toContain(">60%<");
 });
 
-test("a flagship bucket tighter than the general week binds the capacity chip (#1358)", () => {
-  const html = render(claudeAccount(80));
+test("a tier bucket tighter than the general week binds the capacity chip (#1358)", () => {
+  const html = render(claudeAccount(opusOnly(80)));
   expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
-  expect(html).toContain(`title="${translate("en", "accounts.effectiveTip", { window: translate("en", "limits.windowFlagship", { tier: "Opus" }) })}"`);
+  expect(html).toContain(`title="${translate("en", "accounts.effectiveTip", { window: translate("en", "limits.windowTier", { tier: "Opus" }) })}"`);
   expect(html).toContain(">20%<");
+});
+
+test("every tier the provider meters gets its own line, Fable included (#1796)", () => {
+  const html = render(claudeAccount([{ tier: "fable", usedPercent: 88 }, { tier: "opus", usedPercent: 63 }]));
+  expect(html).toContain('data-limit-row="tier:fable"');
+  expect(html).toContain('data-limit-row="tier:opus"');
+  expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Fable" }));
+  expect(html).toContain(translate("en", "limits.tierWeek", { tier: "Opus" }));
+  // The tightest of them is what the card's chip names.
+  expect(html).toContain(`title="${translate("en", "accounts.effectiveTip", { window: translate("en", "limits.windowTier", { tier: "Fable" }) })}"`);
+  expect(html).toContain(">12%<");
 });
 
 test("uk-locale smoke: the new card strings resolve and interpolate", () => {

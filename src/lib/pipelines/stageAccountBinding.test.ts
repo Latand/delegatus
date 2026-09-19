@@ -244,7 +244,9 @@ test("the launch refuses an account the project forbids, before any launch is re
   try {
     await expect(defaultPipelinePorts().spawnAgent(spawnInput(SPARE), (reservation) => { reservations.push(reservation); }))
       .rejects.toThrow(`claude account ${SPARE} is not allowed on project ${ATLAS} (allowed claude accounts: ${RESERVED})`);
-    expect(resolve.mock.calls[0]?.[1]).toEqual({ project: ATLAS, requestedId: SPARE });
+    /* The stage's own model rides along (#1796): capacity is judged on the
+       window that model's tier draws on, not on some other tier's. */
+    expect(resolve.mock.calls[0]?.[1]).toEqual({ project: ATLAS, requestedId: SPARE, model: "claude-opus-5" });
     expect(reservations).toEqual([]);
   } finally {
     resolve.mockRestore();

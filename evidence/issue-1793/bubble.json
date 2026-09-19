@@ -1,0 +1,122 @@
+{
+  "queued-phone-390-en": {
+    "outboxEntries": 1,
+    "outboxState": "delivering",
+    "outboxWait": "handing-over",
+    "statusLabel": "Delivering",
+    "spinner": true,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "queued-phone-390-uk": {
+    "outboxEntries": 1,
+    "outboxState": "delivering",
+    "outboxWait": "handing-over",
+    "statusLabel": "Доставляється",
+    "spinner": true,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "receipt-delivered-phone-390-en": {
+    "outboxEntries": 1,
+    "outboxState": "delivered",
+    "outboxWait": null,
+    "statusLabel": "Delivered",
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "receipt-delivered-phone-390-uk": {
+    "outboxEntries": 1,
+    "outboxState": "delivered",
+    "outboxWait": null,
+    "statusLabel": "Доставлено",
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "retired-on-transcript-phone-390-en": {
+    "outboxEntries": 0,
+    "outboxState": null,
+    "outboxWait": null,
+    "statusLabel": null,
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "retired-on-transcript-phone-390-uk": {
+    "outboxEntries": 0,
+    "outboxState": null,
+    "outboxWait": null,
+    "statusLabel": null,
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 390
+  },
+  "queued-desktop-1280-en": {
+    "outboxEntries": 1,
+    "outboxState": "delivering",
+    "outboxWait": "handing-over",
+    "statusLabel": "Delivering",
+    "spinner": true,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "queued-desktop-1280-uk": {
+    "outboxEntries": 1,
+    "outboxState": "delivering",
+    "outboxWait": "handing-over",
+    "statusLabel": "Доставляється",
+    "spinner": true,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "receipt-delivered-desktop-1280-en": {
+    "outboxEntries": 1,
+    "outboxState": "delivered",
+    "outboxWait": null,
+    "statusLabel": "Delivered",
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "receipt-delivered-desktop-1280-uk": {
+    "outboxEntries": 1,
+    "outboxState": "delivered",
+    "outboxWait": null,
+    "statusLabel": "Доставлено",
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "retired-on-transcript-desktop-1280-en": {
+    "outboxEntries": 0,
+    "outboxState": null,
+    "outboxWait": null,
+    "statusLabel": null,
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  },
+  "retired-on-transcript-desktop-1280-uk": {
+    "outboxEntries": 0,
+    "outboxState": null,
+    "outboxWait": null,
+    "statusLabel": null,
+    "spinner": false,
+    "transcriptRecords": 1,
+    "overflowX": 0,
+    "viewportWidth": 1280
+  }
+}

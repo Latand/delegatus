@@ -1,3 +1,4 @@
+import { gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
 
 const FRESH_QUOTA_MS = 5 * 60 * 1_000;
@@ -15,7 +16,7 @@ type Capacity =
   | { kind: "unavailable" }
   | { kind: "unknown" };
 
-function capacity(observation: DurableQuotaObservation | undefined, now: number): Capacity {
+function capacity(observation: DurableQuotaObservation | undefined, now: number, model?: string | null): Capacity {
   if (!observation) return { kind: "unknown" };
   const observedAt = Date.parse(observation.observedAt);
   const authCheckedAt = Date.parse(observation.authCheckedAt);
@@ -24,9 +25,12 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number)
   }
   if (!observation.authenticated) return { kind: "unavailable" };
   if (!observation.limits) return { kind: "unknown" };
-  /* The flagship weekly (issue #1358) gates an unattended spawn like the
-     general week does: the headless launch default is a flagship model. */
-  const windows = [observation.limits.session, observation.limits.weekly, observation.limits.flagship ?? null].filter((window) => window !== null);
+  /* A tier weekly (issues #1358, #1796) gates an unattended spawn like the
+     general week does, but only the tier the spawn's own model draws on
+     (issue #1431); an unstated model resolves to the launch default. */
+  const windows = gatingWindows(observation.engine, observation.limits, model)
+    .map((entry) => entry.value)
+    .filter((window) => window !== null && window !== undefined);
   if (!windows.length || windows.some((window) => !Number.isFinite(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100 || (window.resetsAt !== null && (!Number.isSafeInteger(window.resetsAt) || window.resetsAt < 0)))) {
     return { kind: "unknown" };
   }
@@ -55,12 +59,14 @@ export function selectHeadlessAccount(
   preferredId: string | null | undefined,
   excludedIds: string[],
   now = Date.now(),
+  /** The model this launch names, so capacity is judged on its own window. */
+  model?: string | null,
 ): HeadlessAccountSelection {
   const byAccount = new Map(observations.map((observation) => [observation.accountId, observation]));
   const excluded = new Set(excludedIds);
   const candidates = accounts
     .filter((account) => account.authPresent)
-    .map((account) => ({ account, capacity: capacity(byAccount.get(account.id), now) }))
+    .map((account) => ({ account, capacity: capacity(byAccount.get(account.id), now, model) }))
     .filter((candidate) => candidate.capacity.kind !== "unavailable");
   if (!candidates.length) return { kind: "unavailable" };
   for (const attempted of [false, true]) {

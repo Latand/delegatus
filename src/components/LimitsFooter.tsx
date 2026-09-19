@@ -292,12 +292,12 @@ function EngineLimitsBlock({
     now,
   );
   const accountLimits = quotaAsEngineLimits(quota);
-  const hasWindows = Boolean(accountLimits && (accountLimits.session || accountLimits.weekly || accountLimits.flagship));
+  const hasWindows = Boolean(accountLimits && (accountLimits.session || accountLimits.weekly || accountLimits.tiers?.length));
   const stale = accountLimits?.capturedAt && now - accountLimits.capturedAt > LIMITS_FRESHNESS_S ? fmtAge(accountLimits.capturedAt) : null;
   const activeLabel = activeAccount?.label ?? t("accounts.trigger");
   const effective = effectiveQuota(quota);
   const effectiveStaleHint = fmtQuotaStaleHint(Boolean(effective?.stale), effective?.observedAt ?? null, locale);
-  const anyStale = Boolean(quota.session?.stale || quota.weekly?.stale || quota.flagship?.stale);
+  const anyStale = Boolean(quota.session?.stale || quota.weekly?.stale || quota.tiers.some((tier) => tier.stale));
   const draining = accounts.migration?.state === "draining";
   const failureReason = fmtLimitsFailureReason(provenance, locale);
   const visibleFailureReason = accounts.status === "loading" || identityPending ? null : failureReason;
@@ -357,11 +357,19 @@ function EngineLimitsBlock({
           >
             <LimitRow label={windowLabel(t, "session", accountLimits!.session?.windowMinutes)} window={accountLimits!.session} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.session?.stale), quota.session?.observedAt ?? null, locale)} />
             <LimitRow label={windowLabel(t, "weekly", accountLimits!.weekly?.windowMinutes)} window={accountLimits!.weekly} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.weekly?.stale), quota.weekly?.observedAt ?? null, locale)} />
-            {/* The flagship tier's own weekly (#1358): rendered only when the
-                account reports a distinct bucket, named by the provider's tier. */}
-            {accountLimits!.flagship ? (
-              <LimitRow label={t("limits.tierWeek", { tier: claudeTierDisplayName(accountLimits!.flagship.tier) })} window={accountLimits!.flagship} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.flagship?.stale), quota.flagship?.observedAt ?? null, locale)} />
-            ) : null}
+            {/* One line per model tier the provider meters for this account
+                (#1358, #1796), named by the provider's own tier — a tier it
+                never reported simply has no line. */}
+            {quota.tiers.map((tier) => (
+              <LimitRow
+                key={tier.value.tier}
+                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) })}
+                window={tier.value}
+                engineColor={tint.color}
+                now={now}
+                staleHint={fmtQuotaStaleHint(tier.stale, tier.observedAt, locale)}
+              />
+            ))}
           </button>
         ) : visibleFailureReason ? null : (
           <div className="px-3.5 pb-3 pt-0.5 text-[10px] text-muted">{accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")}</div>

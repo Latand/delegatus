@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
+import { gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 
@@ -8,7 +9,10 @@ import { listClaudeAccounts, UnknownClaudeAccountError, type ClaudeAccount } fro
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
 import { withAccountMutationLockAsync } from "./accountMutation";
 
-export type ClaudeValidityProbeResult = SpawnAccountAdmission;
+export type ClaudeValidityProbeResult = SpawnAccountAdmission & {
+  /** Shared provider read; each waiter applies its own model without another probe. */
+  limitRead?: Parameters<typeof claudeValidityFromLimitRead>[0];
+};
 
 export class ClaudeCredentialUnavailableError extends Error {
   constructor() { super("Claude credential store is unavailable; retry when access is restored"); this.name = "ClaudeCredentialUnavailableError"; }
@@ -80,6 +84,8 @@ export function claudeValidityFromLimitRead(
     retryAt?: number | string | null;
   },
   now = Date.now(),
+  /** The model the launch names, when the caller knows it. */
+  model?: string | null,
 ): ClaudeValidityProbeResult {
   if (result.reason === "credential store unavailable" || result.reason?.startsWith("credentials unreadable:")) {
     throw new ClaudeCredentialUnavailableError();
@@ -91,9 +97,12 @@ export function claudeValidityFromLimitRead(
     : result.source === "live"
       ? "authenticated" as const
       : "unknown" as const;
-  const windows = result.data
-    ? [result.data.session, result.data.weekly, result.data.flagship ?? null].filter((window) => window !== null)
-    : [];
+  /* The windows that gate THIS spawn (issues #1796, #1431): the session and
+     general week, plus the requested model's own tier weekly when the provider
+     reports one. Another tier's exhaustion is not this launch's refusal. */
+  const windows = gatingWindows("claude", result.data, model)
+    .map((entry) => entry.value)
+    .filter((window) => window !== null && window !== undefined);
   const exhausted = windows.filter((window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 100);
   const limits = exhausted.length > 0
     ? "exhausted" as const
@@ -125,7 +134,7 @@ async function liveValidityProbe(account: ClaudeAccount): Promise<ClaudeValidity
     Date.now,
     CLAUDE_SPAWN_HEALTH_TIMEOUT_MS,
   );
-  return claudeValidityFromLimitRead(result);
+  return { ...claudeValidityFromLimitRead(result), limitRead: result };
 }
 
 function currentClaudeAccount(account: ClaudeAccount): ClaudeAccount {
@@ -182,8 +191,12 @@ export async function selectHealthyClaudeAccount(
   dependencies: ClaudeSpawnHealthDependencies = productionDependencies,
   pinPreferred = true,
   fallbackPreferredId: string | null | undefined = preferredId,
+  model?: string | null,
 ): Promise<ClaudeSpawnAccountSelection> {
   const now = dependencies.now();
+  const forModel = (result: ClaudeValidityProbeResult): SpawnAccountAdmission => result.limitRead
+    ? claudeValidityFromLimitRead(result.limitRead, now, model)
+    : result;
   const classified = accounts.map((account) => {
     const metadata = claudeOauthMetadata(account);
     const unknown = metadata === "unknown";
@@ -197,7 +210,7 @@ export async function selectHealthyClaudeAccount(
     probe: ClaudeSpawnHealthDependencies["probe"],
   ): Promise<Evaluated | null> => {
     try {
-      return { account, admission: await probe(account) };
+      return { account, admission: forModel(await probe(account)) };
     } catch (error) {
       // Credential uncertainty excludes only this candidate. An explicit pin
       // must still refuse substitution; identity and other errors retain their fences.
@@ -237,7 +250,7 @@ export async function selectHealthyClaudeAccount(
   if (preferredExpired) {
     requested = {
       account: preferredExpired.account,
-      admission: await refreshSingleFlight(preferredExpired.account, dependencies.refresh),
+      admission: forModel(await refreshSingleFlight(preferredExpired.account, dependencies.refresh)),
     };
     if (requested.admission.kind === "admissible") return result(requested, requested);
   }

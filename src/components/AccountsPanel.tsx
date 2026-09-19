@@ -20,6 +20,7 @@ import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
 import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
+import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
@@ -55,18 +56,23 @@ function accountQuota(account: AccountOption, now: number) {
   return reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
 }
 
-type LimitRowKey = "session" | "weekly" | "flagship";
+type LimitRowKey = "session" | "weekly" | TierWindowKey;
 
 /** The windows an account reports, in the order every surface lists them:
-    session, week, then the flagship tier's own week (#1358) when the account
-    reports a distinct bucket. Each row carries the label its horizon earns. */
+    session, week, then one row per model tier the provider meters for this
+    account (#1358, #1796) — Fable and Opus each answer for themselves. Each
+    row carries the label its horizon earns. */
 type LimitRow = { key: LimitRowKey; label: string; window: ReconciledQuotaWindow };
 
-function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
+export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
   const candidates: { key: LimitRowKey; label: string; window: ReconciledQuotaWindow | null }[] = [
     { key: "session", label: windowLabel(t, "session", quota.session?.value.windowMinutes), window: quota.session },
     { key: "weekly", label: windowLabel(t, "weekly", quota.weekly?.value.windowMinutes), window: quota.weekly },
-    { key: "flagship", label: quota.flagship ? t("limits.tierWeek", { tier: claudeTierDisplayName(quota.flagship.value.tier) }) : "", window: quota.flagship },
+    ...quota.tiers.map((tier) => ({
+      key: tierWindowKey(tier.value.tier),
+      label: t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) }),
+      window: tier as ReconciledQuotaWindow,
+    })),
   ];
   return candidates.filter((row): row is LimitRow => row.window != null);
 }
@@ -76,8 +82,9 @@ function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "clau
   const effective = effectiveQuota(quota);
   if (!effective) return null;
   const tint = engineTintOf(engine);
-  const window = effective.window === "flagship"
-    ? t("limits.windowFlagship", { tier: claudeTierDisplayName(quota.flagship?.value.tier ?? "") })
+  const effectiveTier = tierOfWindowKey(effective.window);
+  const window = effectiveTier
+    ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier) })
     : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
   const stale = effective.stale;
   const color = capacityColor(effective.percent, tint.color);
@@ -103,7 +110,8 @@ const LIMITS_ACTION_CLASS = "inline-flex min-h-[44px] shrink-0 items-center gap-
  *   Checked · 14:32                                    ↻ Refresh
  *   rate-limited until 6 Sep 10:48
  *   Week         ▓▓░░░░░░   0% left · reset in 5d · 6 Sep 10:48
- *   Opus · Week  ▓▓▓▓▓░░░  62% left · reset in 3d · …      (flagship tier, when reported)
+ *   Opus · Week  ▓▓▓▓▓░░░  62% left · reset in 3d · …      (one row per metered tier)
+ *   Fable · Week ▓▓░░░░░░  12% left · reset in 3d · …
  *   1 reset available · expires 21 Sep 10:48           ⚡ Use one reset   (Codex only)
  *
  * Refresh re-reads that account's live limits now; Use one reset redeems one
@@ -122,7 +130,7 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
   now: number;
   busy: LimitsAction["operation"] | null;
   disabled: boolean;
-  /** True when any card in the dialog carries a flagship row: every card then
+  /** True when any card in the dialog carries a tier row: every card then
       uses the wider label column, so the meters line up down the whole list. */
   wideLabels: boolean;
   onRefresh: () => void;
@@ -744,9 +752,9 @@ export function AccountsPanel({
     account,
     quota: quotaOverride?.accountId === active && account.id === active ? quotaOverride.quota : accountQuota(account, quotaNow),
   }));
-  // One label column for the whole list (#1358): a flagship row's longer label
+  // One label column for the whole list (#1358): a tier row's longer label
   // widens every card's column, so the meters stay aligned from card to card.
-  const wideLabels = rows.some(({ quota }) => quota.flagship !== null);
+  const wideLabels = rows.some(({ quota }) => quota.tiers.length > 0);
 
   return (
     <>
@@ -803,7 +811,7 @@ export function AccountsPanel({
                 // (credentials present) and to any account that still carries a
                 // last-known reading; a fresh managed account awaiting sign-in
                 // shows neither numbers nor actions.
-                const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.flagship);
+                const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
                   <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
                     {showLimits ? (
@@ -920,8 +928,9 @@ export function mobileAccountState(account: AccountOption, activeId: string): Mo
 export function mobileAccountCorner(quota: ReconciledQuota, t: TFunction): { left: number; window: string; tone: MeterTone } | null {
   const effective = effectiveQuota(quota);
   if (!effective) return null;
-  const window = effective.window === "flagship"
-    ? t("limits.tierWeek", { tier: claudeTierDisplayName(quota.flagship?.value.tier ?? "") })
+  const effectiveTier = tierOfWindowKey(effective.window);
+  const window = effectiveTier
+    ? t("limits.tierWeek", { tier: claudeTierDisplayName(effectiveTier) })
     : windowLabel(t, effective.window === "weekly" ? "weekly" : "session", effective.value.windowMinutes);
   const left = Math.round(effective.percent);
   return { left, window, tone: meterTone(left) };

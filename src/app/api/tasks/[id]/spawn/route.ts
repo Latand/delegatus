@@ -63,7 +63,7 @@ interface TaskSpawnDependencies {
   /** #1279: the project the work belongs to is part of the question, because
       this route names no account of its own — it resolves one. The account id
       is the one this task already ran on, a PREFERENCE and not a pin. */
-  resolveSpawnAccount(engine: AgentEngine, preferredAccountId: string | null, project: string | null): AccountContext;
+  resolveSpawnAccount(engine: AgentEngine, preferredAccountId: string | null, project: string | null, model?: string | null): AccountContext;
   spawnAgentWithPrompt: typeof spawnAgentWithPrompt;
   resolveSpawnedTranscriptPath: typeof resolveSpawnedTranscriptPath;
   ensureTaskPipelineForAssignment?: typeof ensureTaskPipelineForAssignment;
@@ -74,7 +74,7 @@ const productionDependencies: TaskSpawnDependencies = {
   registry: agentRegistry,
   loadTasks,
   mutateTasks,
-  resolveSpawnAccount: (engine, preferredAccountId, project) => resolveProjectSpawnAccount(engine, project, preferredAccountId),
+  resolveSpawnAccount: (engine, preferredAccountId, project, model) => resolveProjectSpawnAccount(engine, project, preferredAccountId, model),
   spawnAgentWithPrompt,
   resolveSpawnedTranscriptPath,
   ensureTaskPipelineForAssignment,
@@ -273,7 +273,7 @@ async function postTaskSpawn(
        bound elsewhere REFUSE its own task launch while its pool sat idle —
        the automatic path declining to draw from the pool it was given. As a
        preference it orders the allowed candidates and loses to the fence. */
-    account = dependencies.resolveSpawnAccount(engine, previous, project);
+    account = dependencies.resolveSpawnAccount(engine, previous, project, launchModel);
   } catch (error) {
     /* A refusal on the merits of the project's pool, or a record that needs the
        operator: the request was well formed and the state it addresses is what

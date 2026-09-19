@@ -680,7 +680,7 @@ export async function executeSpawnRequest(
     try {
       account = existingAttempt && existingAttempt.accountId !== null && !(existingAttempt.accountPin && requestedAccountId)
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
-        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject);
+        : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model);
     } catch (error) {
       /* The record needs the operator, and until it gets them this launch
          selects nothing. A conflict, not a server fault: the request is well
@@ -701,7 +701,7 @@ export async function executeSpawnRequest(
       if (engine === "claude" && requestedAccountId) {
         try {
           const pinned = dependencies.resolveSpawnAccount(engine, requestedAccountId);
-          const admission = await (dependencies.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(engine, pinned);
+          const admission = await (dependencies.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(engine, pinned, selectedModel.model);
           if (admission.kind === "retry-at" || admission.kind === "admissible") {
             account = { ...pinned, admission, requestedAdmission: admission };
           } else {

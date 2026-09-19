@@ -159,6 +159,10 @@ export interface ProjectAccountSelectionInput {
    * means at this seam.
    */
   unbound?: "engine-default" | "capacity";
+  /** The model this launch names, so capacity is judged on the window that
+      model's own tier draws on (issues #1796, #1431). Unstated resolves to the
+      engine's launch default, exactly as it always did. */
+  model?: string | null;
   now?: number;
 }
 
@@ -211,6 +215,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
     preferred,
     [...(input.excludedIds ?? [])],
     input.now,
+    input.model,
   );
   if (selected.kind === "available") return selected;
   const consulted = allowed ?? permitted.map((account) => account.id);
@@ -243,6 +248,10 @@ export interface AutomaticAccountTargetInput {
   targetId: string;
   observations: readonly DurableQuotaObservation[];
   bindings: readonly AccountProjectBinding[];
+  /** The model this launch names, so capacity is judged on the window that
+      model's own tier draws on (issues #1796, #1431). Unstated resolves to the
+      engine's launch default, exactly as it always did. */
+  model?: string | null;
   now?: number;
 }
 
@@ -272,6 +281,7 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
     targetId,
     [],
     input.now,
+    input.model,
   );
   if (selected.kind === "available") return { kind: "available", accountId: targetId };
   return selected.kind === "exhausted"

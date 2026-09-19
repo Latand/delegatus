@@ -65,6 +65,7 @@ export async function resolveHealthySpawnAccount(
   /* The project the work belongs to; `null` is a project a caller genuinely
      cannot name, and resolves exactly as an unbound one always did. */
   project: string | null = null,
+  model?: string | null,
 ): Promise<HealthySpawnAccountResolution> {
   const named = requested === undefined || requested === null ? null : requested;
   /* A DAMAGED record means two different things to this seam's two callers. To
@@ -96,6 +97,7 @@ export async function resolveHealthySpawnAccount(
     observations: registry.quotaObservations(engine),
     bindings,
     preferredId: routing ?? null,
+    model,
     /* An unbound project keeps the engine's active account with no capacity
        arithmetic in front of it, which is what this seam has always done. */
     unbound: "engine-default" as const,
@@ -181,6 +183,7 @@ export async function resolveHealthySpawnAccount(
       undefined,
       named !== null && requestedExists,
       active,
+      model,
     );
     return {
       ...contextForSpawn(engine, selected.account.id),
@@ -256,8 +259,9 @@ export function resolveProjectSpawnAccount(
   engine: "claude" | "codex",
   project: string | null,
   preferredAccountId?: string | null,
+  model?: string | null,
 ): AccountContext {
-  const resolution = accountManager.resolveProjectSpawn(engine, { project, preferredId: preferredAccountId ?? null });
+  const resolution = accountManager.resolveProjectSpawn(engine, { project, preferredId: preferredAccountId ?? null, model });
   if (resolution.kind !== "available") throw new ProjectAccountRefusedError(resolution, engine, project);
   return resolution.account;
 }
@@ -436,7 +440,7 @@ export const accountManager: AccountManager = {
   async submitLoginInput() { throw new Error("login input is Claude-operation specific"); },
   async cancelLogin() { throw new Error("login cancellation is Claude-operation specific"); },
   resolveSpawn(engine, requested) { return contextForSpawn(engine, requested ?? agentRegistry().engineRouting(engine).activeAccountId ?? undefined); },
-  resolveHeadlessSpawn(engine, requested, excludedIds, project) {
+  resolveHeadlessSpawn(engine, requested, excludedIds, project, model) {
     const selected = selectProjectAccount({
       project,
       engine,
@@ -450,6 +454,7 @@ export const accountManager: AccountManager = {
       /* This path has always been the rate-limit-aware one, bound project or
          not, and stays so — the binding only narrows what it may pick from. */
       unbound: "capacity",
+      model,
     });
     if (selected.kind === "available") {
       return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined) };
@@ -472,6 +477,7 @@ export const accountManager: AccountManager = {
       observations: agentRegistry().quotaObservations(engine),
       bindings: accountProjectBindings(),
       requestedId: request.requestedId,
+      model: request.model,
       /* The caller's continuity hint outranks the engine's routing as an
          ORDERING, and neither one widens the candidate set. */
       preferredId: request.preferredId ?? agentRegistry().engineRouting(engine).activeAccountId,

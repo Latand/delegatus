@@ -732,7 +732,7 @@ test("a readable record still carries each account's bound projects, and says no
     .toEqual([{ project: "project-atlas", displayName: "project-atlas" }]);
 });
 
-test("accounts GET projects each account's reset credits and flagship weekly from the durable observation (#1373, #1358)", async () => {
+test("accounts GET projects each account's reset credits and tier weeklies from the durable observation (#1373, #1358)", async () => {
   const codex = createManagedCodexAccount("Credited");
   authenticateCodex(codex);
   const claude = createManagedClaudeAccount("Flagship");
@@ -767,7 +767,7 @@ test("accounts GET projects each account's reset credits and flagship weekly fro
       limits: {
         session: { usedPercent: 12, resetsAt: nowS + 3_600, windowMinutes: 300 },
         weekly: { usedPercent: 40, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080 },
-        flagship: { usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" },
+        tiers: [{ usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" }],
         plan: "max",
         capturedAt: null,
       },
@@ -782,17 +782,17 @@ test("accounts GET projects each account's reset credits and flagship weekly fro
   });
 
   const body = await (await GET()).json() as {
-    codex: { accounts: { id: string; resetCredits: unknown; limits: { flagship: unknown } }[] };
-    claude: { accounts: { id: string; resetCredits: unknown; limits: { flagship: unknown }; effective: { percent: number; window: string } | null }[] };
+    codex: { accounts: { id: string; resetCredits: unknown; limits: { tiers: unknown } }[] };
+    claude: { accounts: { id: string; resetCredits: unknown; limits: { tiers: unknown }; effective: { percent: number; window: string } | null }[] };
   };
   const credited = body.codex.accounts.find((item) => item.id === codex.id)!;
   expect(credited.resetCredits).toEqual({ availableCount: 1, expiresAt: nowS + 20 * 86_400 });
-  expect(credited.limits.flagship).toBeNull();
-  const flagship = body.claude.accounts.find((item) => item.id === claude.id)!;
-  expect(flagship.limits.flagship).toEqual({ usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" });
-  // The tighter flagship week binds the account's effective remaining.
-  expect(flagship.effective).toMatchObject({ percent: 37, window: "flagship" });
-  expect(flagship.resetCredits).toBeNull();
+  expect(credited.limits.tiers).toEqual([]);
+  const tiered = body.claude.accounts.find((item) => item.id === claude.id)!;
+  expect(tiered.limits.tiers).toEqual([{ usedPercent: 63, resetsAt: nowS + 4 * 86_400, windowMinutes: 10_080, tier: "opus" }]);
+  // The tighter Opus week binds the account's effective remaining.
+  expect(tiered.effective).toMatchObject({ percent: 37, window: "tier:opus" });
+  expect(tiered.resetCredits).toBeNull();
   // An account never read carries "not checked yet", never a zero.
   const unread = body.codex.accounts.find((item) => item.id === "default")!;
   expect(unread.resetCredits).toBeNull();

@@ -4457,6 +4457,63 @@ describe("#1820 the Overview is the project board over every project", () => {
   }, 900_000);
 });
 
+describe("#1796 per-model limits", () => {
+  browserTest("Fable and Opus lines survive the footer fold and render on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/issue-1796/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=tier-limits",
+      values: "invented",
+    };
+    const readRows = (page: Page, selector: string) => page.locator(selector).evaluate((root) => ({
+      rows: [...root.querySelectorAll<HTMLElement>("[data-limit-row]")].map((row) => ({
+        key: row.dataset.limitRow, text: row.textContent?.replace(/\s+/g, " ").trim(),
+        width: Math.round(row.getBoundingClientRect().width),
+      })),
+      overflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    }));
+    try {
+      for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["phone", { width: 390, height: 844 }]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?scenario=tier-limits", viewport, "light", "en");
+        try {
+          let selector: string;
+          if (name === "desktop") {
+            await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText).toContain("Opus · Week");
+            await page.screenshot({ path: path.join(out, "desktop-footer.png") });
+            await page.click("[data-rail-footer-toggle]");
+            expect(await page.locator("[data-rail-footer]").innerText()).not.toContain("Fable");
+            await page.click("[data-rail-footer-toggle]");
+            await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
+            evidence.footer = { text: footerText, restoredAfterFold: true };
+            await page.click('button[aria-label="Claude accounts — switch or add"]');
+            selector = '[role="dialog"][aria-label="Claude accounts"]';
+          } else {
+            await page.waitForSelector('[data-mobile2-screen="board"]');
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            selector = '[data-mobile2-screen="accounts"]';
+          }
+          await page.waitForSelector(selector + ' [data-limit-row="tier:fable"]');
+          const facts = await readRows(page, selector);
+          expect(facts.rows.some((row) => row.key === "tier:fable" && row.text?.includes("Fable · Week") && row.text.includes("12%"))).toBe(true);
+          expect(facts.rows.some((row) => row.key === "tier:opus" && row.text?.includes("Opus · Week") && row.text.includes("37%"))).toBe(true);
+          expect(facts.overflow).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${name}-accounts.png`), fullPage: true });
+          evidence[name] = { viewport, ...facts, pageErrors };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1796", { recursive: true });
+      fs.writeFileSync("evidence/issue-1796/limits.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 describe("#1819 putting the whole project sidebar away, and the header that stays", () => {
   /*
    * Rendered evidence for the operator's correction before a stream (#1819),

@@ -266,12 +266,16 @@ export function outboxReceiptPatch(
   const success = outboxStateForReceiptStatus(status) === "delivered";
   const definitive = receipt?.reason === "delivery-discarded"
     || (!unknown && (status === "rejected" || (status === "failed" && receipt?.resend === "safe")));
-  const deliveryUncertain = unknown || (entry.deliveryUncertain && !success && !definitive) ? true : undefined;
+  // Admission answers a local unknown or an earlier pending reservation.
+  // An operation already reporting an unknown delivery keeps its stronger fence.
+  const admissionUnconfirmed = !previous || (previous.status === "pending" && !receiptHasUnknownFate(previous));
+  const confirmedAdmission = admissionUnconfirmed && receiptIsAdmitted(status);
+  const deliveryUncertain = unknown || (entry.deliveryUncertain && !success && !definitive && !confirmedAdmission) ? true : undefined;
   const state = deliveryUncertain ? "delivering" : outboxStateForReceiptStatus(status);
   const patch: Partial<OutboxEntry> = {
     state, deliveryUncertain, acceptedHeld: undefined,
     awaitingTurn: deliveryUncertain ? undefined : outboxAwaitsTurnBoundary(status),
-    ...(receipt?.operationId ? { deliveryReceipt: (deliveryUncertain
+    ...(receipt?.operationId ? { deliveryReceipt: (deliveryUncertain && !(admissionUnconfirmed && status === "pending" && !unknown)
       ? { ...receipt, resend: "verify-first", reason: receipt.reason ?? previous?.reason }
       : receipt) as RuntimeReceipt } : {}),
   };
@@ -1120,6 +1124,56 @@ export function retireLaunchOutboxOnAdoption(
     adoptedAt: existing.adoptedAt ?? launch.adoptedAt,
   };
   write(cardId, queue.map((item) => (item.id === launch.id ? adopted : item)));
+}
+
+/**
+ * Retire a launch-owned bubble against the transcript the launch CREATED
+ * (issue #1793), on the same evidence the server used to retire that launch's
+ * facts.
+ *
+ * The bubble's delivery state has exactly one carrier: the transient launch
+ * facts the projection rides on the live row. Those facts retire the moment the
+ * launch has succeeded and its row carries an assistant turn (issue #1138), and
+ * a single poll can cross the whole distance — no transcript, then a transcript
+ * that has already answered. A bubble seeded before that poll then never sees
+ * its own receipt again: nothing settles it, nothing adopts it, and it reads
+ * "Delivering" under a finished turn until some later poll happens to carry the
+ * facts once more.
+ *
+ * The pane itself proves what the facts would have said. A transcript that
+ * BEGAN at or after this launch's admission is the transcript this launch
+ * created, so its first user record IS this launch's message — matched by the
+ * launch's own conversation and generation, with no text to compare. An
+ * assistant turn at or after the same admission proves the agent has answered
+ * since, so the message is in. Both together, and only then, the bubble is
+ * history and retires through the ordinary adoption path.
+ *
+ * Neither half alone would do. A launch reseeded into a conversation that
+ * already had a transcript (board task 226e7bb5 / issue #641) is exactly the
+ * opposite case — its message may still be queued behind a running turn — and
+ * it is fenced out here by the transcript predating the admission. A launch
+ * that FAILED keeps its own word too: its error and its retry are the point of
+ * the row, and no transcript reading may take them away.
+ */
+export function retireLaunchOutboxOnTranscriptTurn(
+  cardId: string,
+  evidence: { owner: OutboxOwner; startedAt: number; assistantTurnAt: number },
+): void {
+  if (!Number.isFinite(evidence.startedAt) || !Number.isFinite(evidence.assistantTurnAt)) return;
+  const launch = readOutbox(cardId).find((entry) => entry.launchOwned
+    && entry.state !== "failed"
+    && entry.adoptedAt === undefined
+    && entry.retiredEchoId === undefined
+    && entry.responseStartedAt === undefined
+    && sameOutboxOwner(entry.owner, evidence.owner)
+    && entry.at <= evidence.startedAt
+    && entry.at <= evidence.assistantTurnAt);
+  if (!launch) return;
+  retireLaunchOutboxOnAdoption(cardId, {
+    id: launch.id,
+    adoptedAt: evidence.assistantTurnAt,
+    owner: evidence.owner,
+  });
 }
 
 /**

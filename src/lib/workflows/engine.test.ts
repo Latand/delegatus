@@ -648,7 +648,7 @@ test("a workflow stage launches on the account the project's allowed set resolve
   } finally {
     resolve.mockRestore();
   }
-  expect(asked).toEqual([["codex", { project: "repo" }]]);
+  expect(asked).toEqual([["codex", { project: "repo", model: null }]]);
   const cur = load(wf.id);
   expect(cur.state).toBe("implementing");
   expect(cur.stageRuns[0]!.accountId).toBe("acct-reserved");

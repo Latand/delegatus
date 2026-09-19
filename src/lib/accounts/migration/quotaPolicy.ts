@@ -1,5 +1,5 @@
-import { claudeModelGatedByFlagshipWeekly } from "@/lib/agent/models";
-import type { EngineLimits, LimitsProvenance, QuotaWindowKey } from "@/lib/types";
+import { claudeSpawnTier } from "@/lib/agent/models";
+import { modelTierWindows, tierWindowKey, type EngineLimits, type LimitWindow, type LimitsProvenance, type QuotaWindowKey } from "@/lib/types";
 
 import type { AutoBalancePolicy, MigrationEvidence, MigrationEngine } from "./contracts";
 
@@ -37,17 +37,31 @@ export interface EffectiveRemaining {
 }
 
 export interface EffectiveRemainingOptions {
-  /** The model the next spawn would use. The flagship weekly (issue #1358)
-      gates the minimum only when that model draws on it; an unstated model
-      resolves to the launch default, which does. */
+  /** The model the next spawn would use. A model-tier weekly (issues #1358,
+      #1796) gates the minimum only when that model draws on it; an unstated
+      model resolves to the launch default. */
   model?: string | null;
 }
 
 /** The windows that gate the account's next spawn: the session and general
-    weekly always, plus the flagship weekly when the chosen model is on that tier. */
-export function gatingWindowKeys(engine: MigrationEngine, model?: string | null): readonly QuotaWindowKey[] {
-  if (engine === "claude" && claudeModelGatedByFlagshipWeekly(model)) return ["session", "weekly", "flagship"];
-  return ["session", "weekly"];
+    weekly always, plus the model's OWN tier weekly when the provider reports a
+    bucket for it (issues #1796, #1431). A model whose tier is unreported is
+    gated by the general week alone — the tightest window of some other tier is
+    not evidence about this spawn, and treating it as one refused Sonnet and
+    Haiku launches the provider would have accepted. */
+export function gatingWindows(
+  engine: MigrationEngine,
+  limits: EngineLimits | null | undefined,
+  model?: string | null,
+): { window: QuotaWindowKey; value: LimitWindow | null | undefined }[] {
+  const windows: { window: QuotaWindowKey; value: LimitWindow | null | undefined }[] = [
+    { window: "session", value: limits?.session },
+    { window: "weekly", value: limits?.weekly },
+  ];
+  if (engine !== "claude") return windows;
+  const tier = claudeSpawnTier(model);
+  const reported = modelTierWindows(limits).find((window) => window.tier === tier);
+  return reported ? [...windows, { window: tierWindowKey(reported.tier), value: reported }] : windows;
 }
 
 export function effectiveRemaining(observation: QuotaObservation, now = Date.now(), options: EffectiveRemainingOptions = {}): EffectiveRemaining | null {
@@ -56,9 +70,8 @@ export function effectiveRemaining(observation: QuotaObservation, now = Date.now
   const age = now - observation.observedAt;
   const authAge = now - (observation.authCheckedAt ?? observation.observedAt);
   if (!observation.authenticated || observation.provenance.source !== "live" || age < 0 || authAge < 0 || age > AUTO_BALANCE_FRESH_MS || authAge > AUTO_BALANCE_FRESH_MS || !observation.limits) return null;
-  const reportedWindows = gatingWindowKeys(observation.engine, options.model)
-    .map((window) => ({ window, value: observation.limits?.[window] }))
-    .filter((entry): entry is { window: QuotaWindowKey; value: NonNullable<EngineLimits["session"]> } => entry.value !== null && entry.value !== undefined);
+  const reportedWindows = gatingWindows(observation.engine, observation.limits, options.model)
+    .filter((entry): entry is { window: QuotaWindowKey; value: LimitWindow } => entry.value !== null && entry.value !== undefined);
   if (reportedWindows.some(({ value }) => !Number.isFinite(value.usedPercent) || value.usedPercent < 0 || value.usedPercent > 100 ||
     (value.resetsAt !== null && (!Number.isSafeInteger(value.resetsAt) || value.resetsAt < 0)))) return null;
   const windows = reportedWindows;
@@ -75,14 +88,15 @@ export function chooseAutoBalance(
   observations: QuotaObservation[],
   policy: AutoBalancePolicy,
   now = Date.now(),
+  options: EffectiveRemainingOptions = {},
 ): BalanceDecision | null {
   if (!policy.enabled || (policy.cooldownUntil && Date.parse(policy.cooldownUntil) > now)) return null;
   const active = observations.find((item) => item.engine === engine && item.accountId === activeId);
-  const activeRemaining = active && effectiveRemaining(active, now);
+  const activeRemaining = active && effectiveRemaining(active, now, options);
   if (!active || !activeRemaining || activeRemaining.percent >= AUTO_BALANCE_THRESHOLD) return null;
   const candidates = observations.flatMap((item) => {
     if (item.engine !== engine || item.accountId === activeId) return [];
-    const remaining = effectiveRemaining(item, now);
+    const remaining = effectiveRemaining(item, now, options);
     const departedAt = policy.departed[item.accountId] ? Date.parse(policy.departed[item.accountId]) : 0;
     const returnBlocked = departedAt > 0 && now - departedAt < AUTO_BALANCE_RETURN_WINDOW_MS && (remaining?.percent ?? 0) <= AUTO_BALANCE_RETURN_ERC;
     return remaining && remaining.percent > AUTO_BALANCE_THRESHOLD && !returnBlocked ? [{ item, remaining }] : [];

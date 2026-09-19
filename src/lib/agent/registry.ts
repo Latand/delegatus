@@ -1076,6 +1076,7 @@ function migrationEnrollmentAdmission(
       project,
       engine: conversation.engine,
       targetId: intent.targetId,
+      model: source.launchProfile.model,
       observations: Object.values(file.quotaObservations[conversation.engine]),
       bindings: accountProjectBindings(),
     });
@@ -6707,6 +6708,7 @@ export class AgentRegistry {
           project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
           engine: input.engine,
           targetId: input.targetId,
+          model: source.launchProfile.model,
           observations: Object.values(file.quotaObservations[input.engine]),
           bindings,
         }).kind !== "available") continue;
@@ -6757,6 +6759,7 @@ export class AgentRegistry {
         project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
         engine: conversation.engine,
         targetId,
+        model: source.launchProfile.model,
         observations: Object.values(file.quotaObservations[conversation.engine]),
         bindings,
       }).kind !== "available") return clone(conversation);
