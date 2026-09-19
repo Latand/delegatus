@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeClaudeAccountId, claudeAccountsMutationLocked, listClaudeAccounts } from "@/lib/accounts/claude";
@@ -71,13 +71,12 @@ function autoBalanceProjection(engine: MigrationEngine, snapshot: ReturnType<Ret
   };
 }
 
-/** Pure durable projection. Live auth/quota/login reconciliation runs in the controller.
-    `?recheck=cli` re-probes the two CLIs instead of answering the cached probe. */
-export async function GET(req?: NextRequest) {
-  const fresh = req?.nextUrl.searchParams.get("recheck") === "cli";
+/** Pure durable projection. Live auth/quota/login reconciliation runs in the controller. */
+export async function GET() {
   /* Whether each engine's command resolves (#1876): a bounded `--version`,
-     cached for a minute, started before the durable reads so it overlaps them. */
-  const cliProbe = Promise.all([engineCliPresence("claude", { fresh }), engineCliPresence("codex", { fresh })]);
+     cached for a minute, started before the durable reads so it overlaps them.
+     `GET /api/accounts/cli` re-probes on demand. */
+  const cliProbe = Promise.all([engineCliPresence("claude"), engineCliPresence("codex")]);
   const registry = agentRegistry();
   const snapshot = registry.readOnlySnapshot();
   const now = Date.now();

@@ -1,0 +1,5646 @@
+{
+  "commit": "4ea43eb217fea35dc7cf49f793d3b3c3a39ab60c",
+  "case": "onboarding",
+  "firstRunMarker": null,
+  "desktop-1440-light-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1440-light-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1440-dark-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1440-dark-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "dialog": {
+        "x": 260,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1280-light-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1280-light-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1280-dark-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "desktop-1280-dark-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 718,
+        "clientWidth": 718
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 1280,
+        "h": 900
+      },
+      "dialog": {
+        "x": 180,
+        "y": 130,
+        "w": 920,
+        "h": 640
+      },
+      "scroller": {
+        "scrollWidth": 918,
+        "clientWidth": 918
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 168
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 168
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "phone-390-light-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 268
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 268
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "phone-390-light-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 273
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 273
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "phone-390-dark-en": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 268
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Cleaner",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Prod-auditor",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Deployer",
+          "clipped": false,
+          "w": 268
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Moved 7 roles to Claude.Undo",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Back",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Open the board",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Who does what"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Continue",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Which engines can run here"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Builder",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, frontend",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Builder, fix rounds",
+          "clipped": false,
+          "w": 268
+        },
+        {
+          "text": "Reviewer",
+          "clipped": false,
+          "w": 263
+        },
+        {
+          "text": "Verifier",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Architect",
+          "clipped": false,
+          "w": 285
+        },
+        {
+          "text": "Orchestrator",
+          "clipped": false,
+          "w": 285
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 roles run on Codex, which is not connected. A stage on one of them will be refused at launch.Move them to ClaudeConnect CodexLeave as is",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "phone-390-dark-uk": {
+    "engines-one-connected": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-blocked": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 273
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "agents-moved": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Прибиральник",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Аудитор продакшену",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Деплоєр",
+          "clipped": false,
+          "w": 273
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": "Перенесено ролей: 7 → Claude.Скасувати",
+      "nudges": 2,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy",
+        "cleaner=moderate",
+        "prod-auditor=very-heavy",
+        "deployer=moderate"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-sign-in": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "connected",
+        "codex": "signed-out"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "agents-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        }
+      ],
+      "footerButtons": [
+        {
+          "text": "Назад",
+          "clipped": false,
+          "inside": true
+        },
+        {
+          "text": "Відкрити дошку",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 7,
+      "banner": null,
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": "Хто що робить"
+    },
+    "engines-neither": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [],
+      "footerButtons": [
+        {
+          "text": "Далі",
+          "clipped": false,
+          "inside": true
+        }
+      ],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {
+        "claude": "signed-out",
+        "codex": "missing"
+      },
+      "blockedRows": 0,
+      "banner": null,
+      "receipt": null,
+      "nudges": 0,
+      "costClasses": [],
+      "heading": "Які рушії тут працюють"
+    },
+    "mapping-alone": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "dialog": {
+        "x": 0,
+        "y": 0,
+        "w": 390,
+        "h": 844
+      },
+      "scroller": {
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "documentOverflowX": 0,
+      "roleLabels": [
+        {
+          "text": "Розробник",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, фронтенд",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Розробник, виправлення",
+          "clipped": false,
+          "w": 273
+        },
+        {
+          "text": "Рев'юер",
+          "clipped": false,
+          "w": 256
+        },
+        {
+          "text": "Верифікатор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Архітектор",
+          "clipped": false,
+          "w": 283
+        },
+        {
+          "text": "Оркестратор",
+          "clipped": false,
+          "w": 283
+        }
+      ],
+      "footerButtons": [],
+      "segmentOverflow": 0,
+      "smallTargets": [],
+      "engines": {},
+      "blockedRows": 4,
+      "banner": "7 ролей працюють на Codex, який не підключено. Етап на такій ролі буде відхилено під час запуску.Перенести на ClaudeПідключити CodexЗалишити як є",
+      "receipt": null,
+      "nudges": 1,
+      "costClasses": [
+        "builder=heavy",
+        "builder:frontend=heavy",
+        "builder:apply-fixes=moderate",
+        "reviewer=very-heavy",
+        "verifier=heavy",
+        "architect=heavy",
+        "orchestrator=heavy"
+      ],
+      "heading": null
+    }
+  },
+  "failures": []
+}

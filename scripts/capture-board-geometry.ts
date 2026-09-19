@@ -592,7 +592,7 @@ async function captureOnboarding(): Promise<void> {
     claudeSignedIn(true);
     fakeCli("claude", true);
     fakeCli("codex", codexInstalled);
-    await fetch(`${baseUrl}/api/accounts?recheck=cli`);
+    await fetch(`${baseUrl}/api/accounts/cli`);
   };
   try {
     fakeCli("claude", true);
@@ -662,7 +662,8 @@ async function captureOnboarding(): Promise<void> {
           await page.click('[data-mapping-group="rare"] button[aria-expanded]');
           await page.waitForSelector('[data-mapping-row="deployer"]');
           await shot("agents-blocked", (r) => {
-            must(r.blockedRows === 6, `${tag}: ${r.blockedRows} blocked rows, expected the six Codex rows`);
+            /* Seven rows ship on Codex: builder, fix rounds, reviewer, verifier, cleaner, prod-auditor, deployer. */
+            must(r.blockedRows === 7, `${tag}: ${r.blockedRows} blocked rows, expected the seven Codex rows`);
             must(r.nudges >= 1, `${tag}: no very-heavy nudge on the reviewer's xhigh default`);
             must(r.costClasses.includes("reviewer=very-heavy") && r.costClasses.includes("cleaner=moderate"), `${tag}: cost classes ${r.costClasses.join(", ")}`);
             must(r.roleLabels.length === 10, `${tag}: ${r.roleLabels.length} role rows rendered, expected 10`);
@@ -697,11 +698,11 @@ async function captureOnboarding(): Promise<void> {
              the unfinished guide by itself, on the step after the last done. */
           claudeSignedIn(false);
           fakeCli("codex", false);
-          await fetch(`${baseUrl}/api/accounts?recheck=cli`);
+          await fetch(`${baseUrl}/api/accounts/cli`);
           await page.reload({ waitUntil: "domcontentloaded" });
           await page.waitForSelector("[data-agent-mapping] [data-mapping-row]", { timeout: 60_000 });
           await shot("agents-neither", (r) => {
-            must(r.blockedRows === 10, `${tag}: with no engine ${r.blockedRows} rows are blocked, expected all 10`);
+            must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
           });
           if (viewport.phone) await page.click('button[aria-label="' + (locale === "en" ? "Back" : "Назад") + '"]');
           else await page.click('[data-onboarding-step="engines"]');

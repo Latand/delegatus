@@ -8,7 +8,6 @@ import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { OnboardingMarker, OnboardingStepId } from "@/lib/onboarding/marker";
-import { handleOverlayEscape } from "@/lib/overlay";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
@@ -46,13 +45,18 @@ const LEAD_KEY: Record<OnboardingStepId, Parameters<TFunction>[0]> = {
 function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; recheck: () => void } {
   const [cli, setCli] = useState<Record<RoleEngine, CliPresence>>({ claude: null, codex: null });
   const read = useCallback((fresh: boolean) => {
-    void fetch(fresh ? "/api/accounts?recheck=cli" : "/api/accounts")
-      .then(async (response) => response.ok ? (await response.json()) as { claude?: { cli?: unknown }; codex?: { cli?: unknown } } : null)
+    const presence = (value: unknown): CliPresence => value === "found" || value === "missing" ? value : null;
+    void fetch(fresh ? "/api/accounts/cli" : "/api/accounts")
+      .then(async (response) => response.ok ? (await response.json()) as Record<RoleEngine, unknown> : null)
       .catch(() => null)
       .then((body) => {
         if (!body) return;
-        const presence = (value: unknown): CliPresence => value === "found" || value === "missing" ? value : null;
-        setCli({ claude: presence(body.claude?.cli), codex: presence(body.codex?.cli) });
+        /* The accounts read nests the fact per engine; the re-probe answers it flat. */
+        const read = (engine: RoleEngine) => {
+          const value = body[engine];
+          return presence(value && typeof value === "object" ? (value as { cli?: unknown }).cli : value);
+        };
+        setCli({ claude: read("claude"), codex: read("codex") });
       });
   }, []);
   useEffect(() => read(false), [read]);
@@ -91,7 +95,48 @@ export function OnboardingDialog({ mode, marker, onClose }: {
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { panelRef.current?.focus(); }, []);
+  const dismissRef = useRef<() => void>(() => {});
+  /* Keyboard for the whole time the dialog is open, listened on the window so
+     it holds wherever focus is: Escape closes the guide, and Tab cycles inside
+     the panel. Focus goes to the panel on open and back to whatever held it
+     before on close. */
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>("button:not([disabled]), select:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])"))
+        .filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0]!;
+      const last = focusable.at(-1)!;
+      const active = document.activeElement;
+      const inside = active instanceof Node && panel.contains(active);
+      if (!inside || active === panel) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   useEffect(() => { bodyRef.current?.scrollTo?.({ top: 0 }); }, [step, view]);
 
   const statuses: Record<RoleEngine, EngineStatus> = {
@@ -125,6 +170,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
     goTo(0);
   };
   const dismiss = () => onClose("dismissed");
+  useEffect(() => { dismissRef.current = dismiss; });
 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : t("onboarding.title");
   const heading = view === "mapping" ? null : (
@@ -192,7 +238,6 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        onKeyDown={(event) => handleOverlayEscape(event, dismiss)}
         className={`fixed inset-0 ${Z.modal} flex flex-col bg-canvas outline-none`}
       >
         <header className="shrink-0 border-b border-border bg-raised pt-[env(safe-area-inset-top)]">
@@ -242,7 +287,6 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        onKeyDown={(event) => handleOverlayEscape(event, dismiss)}
         className="flex h-[640px] max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none"
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">

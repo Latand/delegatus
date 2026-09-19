@@ -223,16 +223,21 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
     </select>
   );
   const engineControl = <EngineSegments value={config.engine} label={label} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine))} />;
+  /* The state sits on its own line under the name, so the longest Ukrainian
+     names («Розробник, виправлення», «Аудитор продакшену») keep the whole
+     column when a row is changed. */
   const roleCell = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {changed ? <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
+    <span className="flex min-w-0 flex-col">
       <span className="min-w-0 truncate text-body font-semibold text-primary" title={label}>{label}</span>
       {changed ? (
-        <button type="button" onClick={() => onChange(null)} className="shrink-0 rounded-[6px] px-1 text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
-          {t("onboarding.agents.reset")}
-        </button>
-      ) : null}
-      <span className="sr-only">{changed ? t("onboarding.agents.stateChanged") : t("onboarding.agents.stateDefault")}</span>
+        <span className="flex items-center gap-1 text-label text-secondary">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+          {t("onboarding.agents.stateChanged")} ·
+          <button type="button" data-mapping-reset={rowId(row)} onClick={() => onChange(null)} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
+            {t("onboarding.agents.reset")}
+          </button>
+        </span>
+      ) : <span className="sr-only">{t("onboarding.agents.stateDefault")}</span>}
     </span>
   );
   const nudgeLine = nudge ? (
@@ -261,7 +266,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
   }
   return (
     <div data-mapping-row={rowId(row)} data-mapping-blocked={status.connected ? undefined : ""} className="border-b border-border py-1.5 last:border-b-0">
-      <div className="grid min-h-8 grid-cols-[176px_128px_minmax(0,1fr)_112px_104px] items-center">
+      <div className="grid min-h-8 grid-cols-[176px_136px_minmax(0,1fr)_104px_104px] items-center">
         <span className="min-w-0 pr-2">{roleCell}</span>
         <span className="min-w-0 pr-2">{engineControl}</span>
         <span className="min-w-0 pr-2">{modelSelect}</span>
@@ -271,7 +276,7 @@ function RowControls({ row, config, shipped, statuses, layout, onChange }: {
       {!status.connected || nudgeLine || tightestHeadroom(config.engine, config.model, status.account?.limits) ? (
         <div className="grid grid-cols-[176px_1fr_104px] items-start pt-1">
           <span />
-          <span className="min-w-0">{!status.connected ? <Headroom config={config} status={status} /> : nudgeLine}</span>
+          <span className="flex min-w-0 flex-col gap-0.5">{!status.connected ? <Headroom config={config} status={status} /> : null}{nudgeLine}</span>
           <span className="min-w-0">{status.connected ? <Headroom config={config} status={status} /> : null}</span>
         </div>
       ) : null}
@@ -391,7 +396,7 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
       {saveError ? <p role="alert" className="text-ui text-danger">{t("onboarding.agents.saveFailed", { reason: saveError })}</p> : null}
 
       {layout === "table" ? (
-        <div className="grid grid-cols-[176px_128px_minmax(0,1fr)_112px_104px] text-label font-semibold uppercase tracking-[0.02em] text-muted">
+        <div className="grid grid-cols-[176px_136px_minmax(0,1fr)_104px_104px] text-label font-semibold uppercase tracking-[0.02em] text-muted">
           <span>{t("onboarding.agents.col.role")}</span>
           <span>{t("onboarding.agents.col.engine")}</span>
           <span>{t("onboarding.agents.col.model")}</span>
