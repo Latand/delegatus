@@ -7,6 +7,7 @@ import type { PendingWakeup } from "@/lib/types";
 
 import { AlarmClock } from "./icons";
 import { fmtWakeClock, fmtWakeMagnitude } from "./wakeupFormat";
+import { Z } from "@/components/layers";
 
 /** React `key` for a {@link WakeupChip}. Keying by the fire time remounts the
     chip whenever the wakeup changes (a fresh schedule or a reschedule), so its
@@ -105,7 +106,7 @@ export function WakeupChip({
         {face}
       </button>
       {open ? (
-        <span role="tooltip" className="absolute left-0 top-full z-20 mt-1 max-w-[240px] whitespace-normal rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-normal leading-snug text-primary shadow-1">
+        <span role="tooltip" className={`absolute left-0 top-full ${Z.tooltip} mt-1 max-w-[240px] whitespace-normal rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-normal leading-snug text-primary shadow-1`}>
           {label}
         </span>
       ) : null}

@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 
 import { X } from "@/components/icons";
 import { useLocale } from "@/lib/i18n";
+import { Z } from "@/components/layers";
 
 interface Props {
   src: string;
@@ -63,7 +64,7 @@ export function Lightbox({ src, alt, caption, onClose }: Props) {
      overlay would fill the pane, not the screen. Portal to <body> escapes it. */
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/85 backdrop-blur-sm"
+      className={`fixed inset-0 ${Z.overlay} flex flex-col bg-black/85 backdrop-blur-sm`}
       role="dialog"
       aria-modal="true"
       aria-label={alt}

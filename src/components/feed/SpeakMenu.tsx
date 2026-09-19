@@ -9,6 +9,7 @@ import { useLocale } from "@/lib/i18n";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 
 import { subscribeTtsCache } from "./ttsSession";
+import { Z } from "@/components/layers";
 
 export type BackendId = "openai" | "elevenlabs" | "soniox";
 
@@ -191,7 +192,7 @@ export function SpeakAlert({
       role="alert"
       data-tts-alert
       style={style}
-      className="fixed z-[80] w-56 max-w-[calc(100vw-16px)] break-all rounded-[10px] border border-border bg-card p-2 text-[11px] text-danger shadow-2"
+      className={`fixed ${Z.popover} w-56 max-w-[calc(100vw-16px)] break-all rounded-[10px] border border-border bg-card p-2 text-[11px] text-danger shadow-2`}
     >
       {children}
     </div>,
@@ -295,7 +296,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       data-tts-menu
       aria-label={t("tts.menuTitle")}
       style={style}
-      className="fixed z-[80] max-h-[calc(100vh-16px)] w-[300px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[12px] border border-border bg-card p-1.5 text-left shadow-2 focus-visible:outline-none"
+      className={`fixed ${Z.popover} max-h-[calc(100vh-16px)] w-[300px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-[12px] border border-border bg-card p-1.5 text-left shadow-2 focus-visible:outline-none`}
     >
       <div className="px-2 pb-1 pt-1.5 text-label font-semibold text-secondary">{t("tts.menuTitle")}</div>
       {/* The honesty line the confirm dialog used to carry: what the next left
