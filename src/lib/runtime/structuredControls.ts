@@ -41,6 +41,8 @@ export type StructuredControlResult =
       caller can tell "this engine cannot" from "this attempt failed", and no
       prompt-based fallback is ever offered in its place. */
   | { status: 409; body: { error: string; code: "unsupported-capability"; capability: RuntimeControlCapability } }
+  /** Picking the account it runs on once a message engaged the pick (#1846): too late to take back here. */
+  | { status: 409; body: { error: string; code: "switch-applying"; applying: string } }
   /** The calling process has no structured control channel at all (no
       `LLV_RUNTIME_HOST_SOCKET`): the command was never sent. Typed so a caller
       can tell "this process cannot ask any host generation" from a host that
