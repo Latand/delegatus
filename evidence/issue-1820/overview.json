@@ -91,7 +91,87 @@
           "addAgent": 0
         },
         "firstRun": false,
-        "headerLine": "Overview9 branches running in 2 projects · Only what is working right now"
+        "headerLine": "Overview9 branches running in 2 projects · Only what is working right now",
+        "emptyStates": [
+          {
+            "status": "inbox",
+            "text": ""
+          },
+          {
+            "status": "assigned",
+            "text": ""
+          },
+          {
+            "status": "blocked",
+            "text": ""
+          },
+          {
+            "status": "done",
+            "text": ""
+          }
+        ]
+      }
+    },
+    "desktop-1440-quiet": {
+      "viewport": {
+        "label": "desktop-1440",
+        "width": 1440,
+        "height": 900
+      },
+      "measured": {
+        "boards": 1,
+        "columns": [
+          "inbox",
+          "assigned",
+          "blocked",
+          "done"
+        ],
+        "columnCounts": [
+          {
+            "status": "inbox",
+            "count": "0 of 3"
+          },
+          {
+            "status": "assigned",
+            "count": "0 of 9"
+          },
+          {
+            "status": "blocked",
+            "count": "0 of 3"
+          },
+          {
+            "status": "done",
+            "count": "0 of 6"
+          }
+        ],
+        "cards": [],
+        "projectsOnCards": [],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": false,
+        "headerLine": "Overviewnothing is running right now · Only what is working right now",
+        "emptyStates": [
+          {
+            "status": "inbox",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "assigned",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "blocked",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "done",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          }
+        ]
       }
     },
     "desktop-1440-empty": {
@@ -113,7 +193,8 @@
           "addAgent": 0
         },
         "firstRun": true,
-        "headerLine": "Overviewnothing is running right now"
+        "headerLine": "Overviewnothing is running right now",
+        "emptyStates": []
       }
     },
     "phone-390": {
@@ -207,7 +288,87 @@
           "addAgent": 0
         },
         "firstRun": false,
-        "headerLine": ""
+        "headerLine": "",
+        "emptyStates": [
+          {
+            "status": "inbox",
+            "text": ""
+          },
+          {
+            "status": "assigned",
+            "text": ""
+          },
+          {
+            "status": "blocked",
+            "text": ""
+          },
+          {
+            "status": "done",
+            "text": ""
+          }
+        ]
+      }
+    },
+    "phone-390-quiet": {
+      "viewport": {
+        "label": "phone-390",
+        "width": 390,
+        "height": 844
+      },
+      "measured": {
+        "boards": 1,
+        "columns": [
+          "inbox",
+          "assigned",
+          "blocked",
+          "done"
+        ],
+        "columnCounts": [
+          {
+            "status": "inbox",
+            "count": "0 of 3"
+          },
+          {
+            "status": "assigned",
+            "count": "0 of 9"
+          },
+          {
+            "status": "blocked",
+            "count": "0 of 3"
+          },
+          {
+            "status": "done",
+            "count": "0 of 6"
+          }
+        ],
+        "cards": [],
+        "projectsOnCards": [],
+        "singleProjectControls": {
+          "newTask": 0,
+          "newAgent": 0,
+          "seat": 0,
+          "addAgent": 0
+        },
+        "firstRun": false,
+        "headerLine": "",
+        "emptyStates": [
+          {
+            "status": "inbox",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "assigned",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "blocked",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          },
+          {
+            "status": "done",
+            "text": "No agent is working in any project right now.Only cards someone is working on appear here; a project's own board holds the rest."
+          }
+        ]
       }
     },
     "phone-390-empty": {
@@ -229,7 +390,8 @@
           "addAgent": 0
         },
         "firstRun": true,
-        "headerLine": ""
+        "headerLine": "",
+        "emptyStates": []
       }
     }
   },

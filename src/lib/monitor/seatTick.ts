@@ -4,6 +4,7 @@ import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SE
 import { evidenceStallReason } from "./classify";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
+  SEAT_TICK_ANNOUNCED_LANES_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickCard,
@@ -572,6 +573,10 @@ function ownSettledLanes(input: SeatTickCheckInput): readonly SeatTickOwnLaneInp
 }
 
 function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
+  if (lane.settled === "provisioned") return `${lane.title} — lane you launched: provisioned, first stage running`;
+  if (lane.settled === "provisioning-failed") {
+    return `${lane.title} — lane you launched: provisioning failed, it never ran a stage: ${lane.detail || "no reason recorded"}`;
+  }
   const settled = lane.settled === "completed"
     ? "completed, and nobody has closed it out"
     : lane.settled === "failed"
@@ -1311,7 +1316,12 @@ function wakeItems(context: {
   const pulled = new Set(input.pullRequests.map((pullRequest) => pullRequest.pipelineId));
   for (const lane of context.ownLanes) {
     if (pulled.has(lane.id)) continue;
-    items.push({ kind: "pipeline", id: lane.id, label: ownLaneLabel(lane) });
+    /* The provisioned lane is the create call's own answer arriving late
+       (#1799), so it says so in the line's kind. Nothing else about it is
+       special: it rides the same reason, the same agenda order and the same
+       per-wake bound as every other own-lane line, and the bound cutting it is
+       what leaves it unannounced and offerable next time. */
+    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane) });
   }
   for (const event of context.laneEvents) {
     items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}` });
@@ -1394,7 +1404,7 @@ export function seatTickWakeCommitPlan(
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], shownChildren: [] };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], shownChildren: [] };
   if (verdict.kind !== "wake") return null;
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
@@ -1409,7 +1419,12 @@ export function seatTickWakeCommitPlan(
     .filter((item) => item.kind === "child")
     .flatMap((item) => (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id]))
     .filter((id) => terminal.has(id));
-  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, shownChildren };
+  /* Read off the items the wake actually CARRIES, never off the check's own
+     list (#1799): a provisioned lane the per-wake bound held back was not
+     announced, and recording it here would be the announcement nobody ever
+     received. Same rule the harvested children live under. */
+  const announcedLanes = verdict.items.filter((item) => item.kind === "provisioning").map((item) => item.id);
+  return { proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, shownChildren };
 }
 
 /**
@@ -1475,7 +1490,14 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
+    announcedLanes: announcedLanes(state.announcedLanes ?? [], commit.announcedLanes ?? []),
   };
+}
+
+/** The lanes announced after a landing (#1799), newest last and bounded. */
+function announcedLanes(before: readonly string[], announced: readonly string[]): string[] {
+  return [...new Set([...before.filter((id) => !announced.includes(id)), ...announced])]
+    .slice(-SEAT_TICK_ANNOUNCED_LANES_LIMIT);
 }
 
 /** The harvest cursor after a landing (#1465): the children this wake named,

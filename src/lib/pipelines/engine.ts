@@ -49,7 +49,7 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { requestPipelineTick } from "./controllerSignal";
 import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
 import { failEdgeRoundsUsed } from "./failEdgeBudget";
-import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineBaseBranchError, pipelineWorktreeChanges, provisionPipelineWorktree, publishPipelineBranch, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -71,7 +71,7 @@ import { collectStageProvenance } from "./stageProvenance";
 import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
-import { buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import type {
   CreatePipelineRequest,
@@ -3466,35 +3466,125 @@ function deferContendedReviewerLaunch(
   return "waiting";
 }
 
+/** What a pipeline in `provisioning` still says while its base is being
+    resolved (#1799). Written by the create path and by a draft `start`, and
+    cleared by the controller pass that provisions the lane. */
+export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and provisioning the worktree";
+
+/**
+ * One lane's base fetch and `git worktree add`, performed OUTSIDE the registry
+ * mutation (#1799).
+ *
+ * Both are slow — the fetch is bounded at sixty seconds and a worktree add
+ * costs a repository copy — and the pipeline lease is the lock every writer in
+ * the Viewer waits on, so a create that arrived while the controller was
+ * provisioning waited behind the whole of it: twenty-five of the twenty-seven
+ * seconds the operator reported were spent exactly here.
+ *
+ * The record it read travels back with the outcome as {@link fence}, because
+ * the work is applied in a LATER lease than the one it was decided from. A
+ * record that moved under it — closed, started against a different repository,
+ * provisioned by another pass — is left alone and the next tick reads it
+ * again. Both operations are idempotent, so repeating one costs nothing.
+ */
+interface PipelineProvisionOutcome {
+  id: string;
+  /** The identity the work was performed against. */
+  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string };
+  /** The commit the fetch resolved, recorded even when the worktree then
+      failed: a retry of a parked provisioning provisions the SAME commit the
+      lane was parked on rather than whatever the base has moved to since. */
+  base: { baseBranch: string; baseRef: string } | null;
+  /** What stopped the lane, or null when it is provisioned. */
+  error: string | null;
+}
+
+function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
+  return {
+    repoDir: pipeline.repoDir,
+    worktreeDir: pipeline.worktreeDir,
+    branch: pipeline.branch,
+    baseBranch: pipeline.baseBranch,
+    baseRef: pipeline.baseRef,
+  };
+}
+
+function provisionPipelineOutsideLease(pipeline: Pipeline, ports: PipelinePorts): PipelineProvisionOutcome {
+  const fence = provisionFence(pipeline);
+  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef };
+  if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
+    /* The lane's OWN base branch, never a hardcoded default: the create path
+       records what the caller asked for and resolves nothing, so this is the
+       only place that reads it (#1799). */
+    const resolved = resolvePipelineBase(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, ports.exec);
+    if (!resolved.ok) return { id: pipeline.id, fence, base: null, error: resolved.error };
+    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef };
+  }
+  const provisioned = provisionPipelineWorktree({ ...pipeline, ...base }, ports.exec);
+  return { id: pipeline.id, fence, base, error: provisioned.ok ? null : provisioned.error };
+}
+
+/**
+ * The provisioning pre-pass: every lane waiting on a base, fetched and
+ * provisioned before the controller takes the lease (#1799).
+ *
+ * The registry read is the lease-free projection read, so a pass that finds
+ * nothing to provision — every pass but the one after a create — costs one
+ * cached read and no subprocess at all.
+ */
+function provisionPendingPipelines(ports: PipelinePorts): Map<string, PipelineProvisionOutcome> {
+  const outcomes = new Map<string, PipelineProvisionOutcome>();
+  let pending: Pipeline[];
+  try {
+    pending = loadPipelinesForProjection().filter((pipeline) =>
+      pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt);
+  } catch (error) {
+    /* The lease-taking pass below reports an unreadable registry; this read
+       having failed is not a second outage to announce. */
+    if (!(error instanceof PipelineStoreError)) throw error;
+    return outcomes;
+  }
+  for (const pipeline of pending) outcomes.set(pipeline.id, provisionPipelineOutsideLease(pipeline, ports));
+  return outcomes;
+}
+
+/** Applies one pre-pass outcome under the lease, or declines it (#1799). The
+    record is re-read here, so everything the decision rested on is checked
+    against the record as it stands now. */
+function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined): boolean {
+  if (!outcome || pipeline.state !== "provisioning") return false;
+  const fence = provisionFence(pipeline);
+  if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
+  if (outcome.base) {
+    pipeline.baseBranch = outcome.base.baseBranch;
+    pipeline.baseRef = outcome.base.baseRef;
+    pipeline.lastPassedCommit = outcome.base.baseRef;
+  }
+  if (outcome.error) {
+    park(pipeline, outcome.error);
+    return true;
+  }
+  pipeline.state = "running";
+  pipeline.stateDetail = null;
+  return true;
+}
+
 async function tickPipeline(
   pipeline: Pipeline,
   entries: FileEntry[],
   ports: PipelinePorts,
   persist: () => void,
   recoveryAccountingDeadline: number,
+  provisioned: Map<string, PipelineProvisionOutcome>,
 ): Promise<boolean> {
   const before = JSON.stringify(pipeline);
   if (pipeline.state === "provisioning") {
-    if (!pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit) {
-      const base = resolvePipelineBase(pipeline.repoDir, {}, ports.exec);
-      if (!base.ok) {
-        park(pipeline, base.error);
-        return JSON.stringify(pipeline) !== before;
-      }
-      pipeline.baseBranch = base.baseBranch;
-      pipeline.baseRef = base.baseRef;
-      pipeline.lastPassedCommit = base.baseRef;
-      persist();
-    }
-    const provisioned = provisionPipelineWorktree(pipeline, ports.exec);
-    if (!provisioned.ok) park(pipeline, provisioned.error);
-    else {
-      pipeline.baseBranch = provisioned.baseBranch ?? "";
-      pipeline.baseRef = provisioned.sha;
-      pipeline.lastPassedCommit = provisioned.sha;
-      pipeline.state = "running";
-      pipeline.stateDetail = null;
-    }
+    /* Nothing slow runs here any more (#1799): the fetch and the worktree add
+       happened in the pre-pass, outside this lease, and all that is left is
+       recording what they produced. A lane the pre-pass did not reach — it was
+       admitted after the pre-pass read the registry, or its record moved under
+       the work — stays in `provisioning` and the next tick provisions it. */
+    applyProvisionOutcome(pipeline, provisioned.get(pipeline.id));
   } else if (pipeline.state === "running") {
     const stage = currentStage(pipeline);
     if (!stage) park(pipeline, "pipeline cursor points to an unknown stage");
@@ -4212,6 +4302,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   let followUp = false;
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    /* Before the lease, never under it (#1799). */
+    const provisioned = provisionPendingPipelines(ports);
     const result = await withPipelineControllerMutation(async (pipelines, persist) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist);
       await forEachCooperatively(pipelines, async (pipeline) => {
@@ -4239,6 +4331,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             ports,
             persistPipeline,
             recoveryAccountingDeadline,
+            provisioned,
           ) || pipelineChanged;
         }
         if (pipelineChanged) {
@@ -4285,7 +4378,7 @@ const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relati
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}} — run stages only`;
-const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and only creation or start without baseRef fetches the base, time-bounded) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (default: the Viewer\'s own attempt, verdict and exact local revision decide every stage; nothing is pushed or read from a remote while the pipeline runs, and creation or start without baseRef leaves the base to the controller, fetched time-bounded after the call is answered) | "remote-branch" (push every accepted revision to origin/<branch>, launch and settle reviews only on the published head, and complete only once the final revision is remotely durable)';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 function stageViolations(violations: PipelineValidationViolation[]): { error: string; violations: PipelineValidationViolation[] } {
@@ -4909,6 +5002,13 @@ export async function createPipelineFromRequest(
   }
   if (req.baseBranch !== undefined && typeof req.baseBranch !== "string") violations.push({ field: "baseBranch", message: "baseBranch must be a string", expected: "branch name string" });
   if (req.baseRef !== undefined && typeof req.baseRef !== "string") violations.push({ field: "baseRef", message: "baseRef must be a string", expected: "commit-ish string resolved against repoDir" });
+  /* #1799: the create path no longer resolves the base, so the branch name is
+     checked here — the one half of resolvePipelineBase that reads neither the
+     repository nor the network. An invalid branch is still refused before the
+     record is admitted; what it no longer does is cost a fetch to find out. */
+  if (typeof req.baseBranch === "string" && pipelineBaseBranchError(req.baseBranch)) {
+    violations.push({ field: "baseBranch", message: pipelineBaseBranchError(req.baseBranch)!, expected: "branch name string" });
+  }
   if (req.taskIds !== undefined && (!Array.isArray(req.taskIds) || req.taskIds.some((taskId) => typeof taskId !== "string" || !taskId.trim()))) {
     violations.push({ field: "taskIds", message: "taskIds must be an array of non-empty strings", expected: "array of board task ids" });
   }
@@ -4960,9 +5060,14 @@ export async function createPipelineFromRequest(
   const project = ports.projectForCwd(repoDir) ?? path.basename(repoDir);
   const accountRefusal = stageAccountRefusal(normalized.stages, project, ports);
   if (accountRefusal) return accountRefusal;
-  const base = req.autoStart === false && !explicitBaseRef
-    ? null
-    : resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec);
+  /* #1799: only a PINNED base is resolved before the answer, and that read is
+     a local `rev-parse`. Without `baseRef` the record is admitted with the
+     base unresolved and the controller fetches it — which is what makes the
+     call answer at once, and what keeps the 60-second fetch bound off the
+     lease every other writer waits on. */
+  const base = explicitBaseRef
+    ? resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec)
+    : null;
   if (base && !base.ok) return { error: base.error, status: 409 };
   const pipeline = buildPipeline({
     id: crypto.randomUUID().slice(0, 8),
@@ -4983,6 +5088,13 @@ export async function createPipelineFromRequest(
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
     pipeline.lastPassedCommit = base.baseRef;
+  } else if (pipeline.state === "provisioning") {
+    /* The branch the controller must fetch travels on the record: without it
+       the provisioning tick would fall back to `main` and resolve a base the
+       caller never asked for. `baseRef` and `lastPassedCommit` stay empty,
+       which is what "unresolved" means to every reader. */
+    pipeline.baseBranch = requestedBaseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+    pipeline.stateDetail = PIPELINE_BASE_UNRESOLVED_DETAIL;
   }
   return withPipelineMutation((pipelines, persist) => {
     if (options.ensureTask && options.spawnParams) {
@@ -5347,15 +5459,13 @@ export async function patchPipeline(
         pipeline.project = project;
         Object.assign(pipeline, pipelineIdentity(pipeline.id, pipeline.task, admission.repoDir));
       }
-      if (!pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit) {
-        const base = resolvePipelineBase(pipeline.repoDir, {}, ports.exec);
-        if (!base.ok) return { error: base.error, status: 409 };
-        pipeline.baseBranch = base.baseBranch;
-        pipeline.baseRef = base.baseRef;
-        pipeline.lastPassedCommit = base.baseRef;
-      }
+      /* #1799: a draft with no pinned base used to fetch here, inside the
+         pipeline mutation — a sixty-second network bound held across the lock
+         every other writer waits on. The controller resolves it instead, the
+         same way it does for a lane created without `baseRef`. */
+      const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
       pipeline.state = "provisioning";
-      pipeline.stateDetail = null;
+      pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
     } else if (req.action === "update-draft") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
       if (req.task === undefined && req.spec === undefined && req.repoDir === undefined) return { error: "update-draft needs at least one field to change", status: 400 };

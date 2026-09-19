@@ -1,6 +1,6 @@
 "use client";
 
-import { Crown, X } from "lucide-react";
+import { ChevronRight, Crown, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
@@ -46,7 +46,7 @@ import { OverviewBoard } from "./OverviewBoard";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { isChildConversation, OVERVIEW, projectKey } from "./projectModel";
-import { ProjectRail } from "./ProjectRail";
+import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
 import { activityDot, cleanTitle } from "./utils";
@@ -406,6 +406,32 @@ export function Viewer() {
       return next;
     });
   }, [project]);
+
+  /* The whole rail goes away behind one control (issue #1819): while a stream
+     is watching, no project name, count, limit or account name may be on the
+     screen at all. Hidden means UNMOUNTED — the rail's footers stop fetching
+     with it — and the choice is this browser's, read in an effect so the
+     server's first paint and hydration stay identical. A missing or unreadable
+     value means shown. */
+  const [railHidden, setRailHidden] = useState(false);
+  useEffect(() => {
+    try {
+      setRailHidden(window.localStorage.getItem(RAIL_HIDDEN_STORAGE_KEY) === "hidden");
+    } catch {
+      /* private mode: the rail stays shown for this page */
+    }
+  }, []);
+  const toggleRail = useCallback(() => {
+    setRailHidden((hidden) => {
+      const next = !hidden;
+      try {
+        window.localStorage.setItem(RAIL_HIDDEN_STORAGE_KEY, next ? "hidden" : "shown");
+      } catch {
+        /* private mode: the choice holds for this page only */
+      }
+      return next;
+    });
+  }, []);
 
   /* The overview board has no project view state to report: presence publishes
      the overview context/slice here, and ProjectDashboard takes over the moment
@@ -812,6 +838,12 @@ export function Viewer() {
         if (!queue.length) return;
         event.preventDefault();
         setAttentionFilter((value) => !value);
+      } else if (event.key === "b" || event.key === "B") {
+        /* B for the rail (issue #1819). Free on both sides: the Viewer binds
+           only N, F and / at window level, the kanban board U and /, and the
+           browser binds no bare letter. */
+        event.preventDefault();
+        toggleRail();
       } else if (event.key === "/") {
         /* No Ctrl/Cmd chord: this app has none, and the `typing()` guard above
            already keeps the key quiet inside the search field itself. */
@@ -821,7 +853,7 @@ export function Viewer() {
     };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
-  }, [isMobile, projectQueue, queue.length, requestFocus, openSearch]);
+  }, [isMobile, projectQueue, queue.length, requestFocus, openSearch, toggleRail]);
 
   /* A popover click is a deliberate act, so unlike the N hotkey it may switch
      the project; the focus hand-off glides the board to the node. */
@@ -1021,9 +1053,28 @@ export function Viewer() {
 
   const shell = (
     <div className="flex h-full">
-      {isMobile ? null : (
-        <ProjectRail files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
+      {isMobile || railHidden ? null : (
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
       )}
+      {/* Hidden rail (issue #1819): one small control at the top-left edge of
+          the main area brings it back, and nothing else of the rail is left on
+          screen. It is a flex sibling of its own, ahead of the dock and the
+          board, so it can never sit over the board header's first control or
+          over the orchestrator dock. */}
+      {!isMobile && railHidden ? (
+        <div className="flex shrink-0 flex-col items-center px-1 pt-1.5">
+          <button
+            type="button"
+            data-rail-restore=""
+            className="flex h-[26px] w-[26px] items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            title={t("rail.show")}
+            aria-label={t("rail.show")}
+            onClick={toggleRail}
+          >
+            <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </div>
+      ) : null}
       {/* PUSHED INTO the layout, never over it (PRD #976 decision 1): the dock
           is a flex sibling between the rail and the board, so the board keeps
           the rest of the row instead of being covered. Desktop only — the phone

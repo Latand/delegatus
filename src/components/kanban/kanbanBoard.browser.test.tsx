@@ -4456,3 +4456,153 @@ describe("#1820 the Overview is the project board over every project", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+describe("#1819 putting the whole project sidebar away, and the header that stays", () => {
+  /*
+   * Rendered evidence for the operator's correction before a stream (#1819),
+   * in the real Viewer over `issue1695Evidence.fixture.tsx`, in Chromium at a
+   * desktop viewport, light and dark:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * Gated here, because only a laid-out page settles it:
+   *   - shown, the rail's header carries the title, the hide control and ONE
+   *     menu, and no digit and no paused badge; the menu opens onto three rows
+   *     that each say in words what they are;
+   *   - hidden, no rail element is in the document at all and none of its copy
+   *     is readable, the main area is wider by what the rail gave back, and the
+   *     one control that brings it back overlaps neither the board header's
+   *     first control nor the orchestrator dock;
+   *   - the B key does the same toggle from the keyboard.
+   *
+   * Measurements go to `evidence/issue-1819/sidebar.json`; no frame is
+   * committed — the PNGs stay in the run's own temp directory.
+   */
+
+  const EVIDENCE = path.resolve("evidence/issue-1819");
+
+  interface Box { x: number; y: number; w: number; h: number }
+  interface Shell {
+    rail: { present: boolean; width: number; headerText: string; headerButtons: string[] } | null;
+    menu: { open: boolean; rows: string[] } | null;
+    restore: Box | null;
+    main: Box;
+    /** Every control the main area paints, plus the dock, so an overlap with
+        the restore button is a measurement and not an opinion. */
+    neighbours: { label: string; box: Box }[];
+    shellText: string;
+  }
+
+  const readShell = (page: Page) => page.evaluate((): Shell => {
+    const box = (el: Element): Box => {
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+    };
+    const rail = document.querySelector<HTMLElement>("aside:not([data-orchestrator-dock])");
+    const header = rail?.querySelector<HTMLElement>("header") ?? null;
+    const panel = document.querySelector<HTMLElement>("[data-rail-menu-panel]");
+    const main = document.querySelector<HTMLElement>("main")!;
+    const restore = document.querySelector<HTMLElement>("[data-rail-restore]");
+    const neighbours = [
+      ...[...main.querySelectorAll<HTMLElement>("button")].slice(0, 12).map((el, index) => ({ label: `main control ${index + 1}`, box: box(el) })),
+      ...[...document.querySelectorAll<HTMLElement>("[data-orchestrator-dock]")].map((el) => ({ label: "orchestrator dock", box: box(el) })),
+    ].filter((entry) => entry.box.w > 0 && entry.box.h > 0);
+    return {
+      rail: rail
+        ? {
+          present: true,
+          width: box(rail).w,
+          headerText: (header?.textContent ?? "").replace(/\s+/g, " ").trim(),
+          headerButtons: [...(header?.querySelectorAll<HTMLElement>(":scope > button, :scope > div > button") ?? [])].map((el) => el.getAttribute("aria-label") ?? ""),
+        }
+        : null,
+      menu: panel ? { open: true, rows: [...panel.querySelectorAll<HTMLElement>(":scope > div")].map((row) => (row.textContent ?? "").replace(/\s+/g, " ").trim()) } : null,
+      restore: restore ? box(restore) : null,
+      main: box(main),
+      neighbours,
+      shellText: (document.getElementById("root")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+    };
+  });
+
+  const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  browserTest("one control puts the whole sidebar away, and the header it leaves carries no counters", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const OUT = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-1819-"));
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, VIEWPORT, scheme, "en");
+        try {
+          await page.waitForSelector("aside [data-rail-menu]");
+          await page.waitForTimeout(500);
+
+          /* ---- Shown, with the menu open: the frame the operator judges. */
+          await page.click("[data-rail-menu]");
+          await page.waitForSelector("[data-rail-menu-panel]");
+          const shown = await readShell(page);
+          await page.screenshot({ path: path.join(OUT, `${scheme}-rail-shown-menu-open.png`) });
+
+          if (!shown.rail) failures.push(`${scheme}: the rail is not on screen to begin with`);
+          if (/\d/.test(shown.rail?.headerText ?? "")) failures.push(`${scheme}: the rail header still prints a count: ${JSON.stringify(shown.rail?.headerText)}`);
+          if ((shown.rail?.headerText ?? "").includes("⏸")) failures.push(`${scheme}: the rail header still carries the paused badge`);
+          if ((shown.rail?.headerButtons.length ?? 0) !== 2) failures.push(`${scheme}: the rail header carries ${shown.rail?.headerButtons.length} controls, not the hide control and one menu`);
+          if ((shown.menu?.rows.length ?? 0) !== 3) failures.push(`${scheme}: the menu holds ${shown.menu?.rows.length} rows, not three`);
+          for (const needle of ["Language", "English", "Open on phone (QR)", "Notifications"]) {
+            if (!(shown.menu?.rows ?? []).some((row) => row.includes(needle))) failures.push(`${scheme}: the menu says nothing about "${needle}" (${JSON.stringify(shown.menu?.rows)})`);
+          }
+
+          /* ---- Hidden: the rail is gone from the document, not merely off. */
+          await page.keyboard.press("Escape");
+          await page.click("[data-rail-hide]");
+          await page.waitForTimeout(400);
+          const hidden = await readShell(page);
+          await page.screenshot({ path: path.join(OUT, `${scheme}-rail-hidden.png`) });
+
+          if (hidden.rail) failures.push(`${scheme}: the rail is still in the document after the hide control`);
+          if (!hidden.restore) failures.push(`${scheme}: nothing on screen brings the rail back`);
+          if (hidden.shellText.includes("Agent logs")) failures.push(`${scheme}: the rail's title is still readable with the rail hidden`);
+          if (hidden.main.w <= shown.main.w) failures.push(`${scheme}: the main area did not widen (${shown.main.w} → ${hidden.main.w})`);
+          if (hidden.main.w < shown.main.w + (shown.rail?.width ?? 0) - 48) failures.push(`${scheme}: the main area took back only ${hidden.main.w - shown.main.w}px of the rail's ${shown.rail?.width}px`);
+          if (hidden.restore && (hidden.restore.w > 40 || hidden.restore.h > 40)) failures.push(`${scheme}: the restore control is ${hidden.restore.w}×${hidden.restore.h}, not an unobtrusive edge control`);
+          for (const neighbour of hidden.neighbours) {
+            if (hidden.restore && overlaps(hidden.restore, neighbour.box)) failures.push(`${scheme}: the restore control overlaps the ${neighbour.label}`);
+          }
+
+          /* ---- Back, and then the same toggle from the keyboard. */
+          await page.click("[data-rail-restore]");
+          await page.waitForTimeout(400);
+          const back = await readShell(page);
+          if (!back.rail) failures.push(`${scheme}: the restore control did not bring the rail back`);
+
+          await page.keyboard.press("Escape");
+          await page.click("main");
+          await page.keyboard.press("b");
+          await page.waitForTimeout(400);
+          const afterKey = await readShell(page);
+          if (afterKey.rail) failures.push(`${scheme}: the B key did not hide the rail`);
+          await page.keyboard.press("b");
+          await page.waitForTimeout(400);
+          const afterKeyBack = await readShell(page);
+          if (!afterKeyBack.rail) failures.push(`${scheme}: the B key did not bring the rail back`);
+
+          frames[scheme] = { shown, hidden, back: { rail: back.rail, main: back.main }, afterKey: { rail: afterKey.rail, restore: afterKey.restore }, afterKeyBack: { rail: afterKeyBack.rail } };
+          if (pageErrors.length) failures.push(`${scheme}: ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "sidebar.json"), `${JSON.stringify({ viewport: VIEWPORT, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
