@@ -286,3 +286,10 @@ test("session recovery refuses a missing revision before issuing a request", asy
     globalThis.fetch = original;
   }
 });
+
+
+test("legacy migration reasons preserve the old Opus window", () => {
+  expect(parseEngineMigration({ intentId: "i1", targetId: "work", origin: "auto", state: "complete",
+    counts: { done: 1, total: 1 }, reason: { window: "flagship", fromPercent: 8, toPercent: 40 },
+  })?.reason?.window).toBe("tier:opus");
+});

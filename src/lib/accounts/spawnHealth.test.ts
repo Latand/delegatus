@@ -499,3 +499,31 @@ test("spawn selection reports every dead account when none can launch", async ()
     expect((error as Error).message).toContain("Re-login");
   }
 });
+
+
+test("shared refresh is classified separately for Fable and Sonnet without another usage read", async () => {
+  const candidate = account("shared-tier", NOW - 1000);
+  let refreshes = 0;
+  const dependencies = {
+    now: () => NOW,
+    probe: async () => { throw new Error("expired account must refresh"); },
+    refresh: async () => {
+      refreshes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const limitRead = { source: "live" as const, reason: null, data: {
+        session: { usedPercent: 10, resetsAt: NOW / 1000 + 3600 },
+        weekly: { usedPercent: 20, resetsAt: NOW / 1000 + 86400 },
+        tiers: [{ tier: "fable", usedPercent: 100, resetsAt: NOW / 1000 + 86400 }],
+        plan: "max", capturedAt: NOW / 1000,
+      } };
+      return { ...claudeValidityFromLimitRead(limitRead, NOW), limitRead };
+    },
+  };
+  const results = await Promise.allSettled([
+    selectHealthyClaudeAccount([candidate], candidate.id, dependencies, true, candidate.id, "fable"),
+    selectHealthyClaudeAccount([candidate], candidate.id, dependencies, true, candidate.id, "sonnet"),
+  ]);
+  expect(results[0].status).toBe("rejected");
+  expect(results[1].status).toBe("fulfilled");
+  expect(refreshes).toBe(1);
+});

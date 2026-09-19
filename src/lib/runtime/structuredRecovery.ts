@@ -46,11 +46,13 @@ export type StructuredHostParkResolver = (
   engine: "claude" | "codex",
   accountId: string | null,
   snapshot: Pick<RegistryFile, "quotaObservations">,
+  model?: string | null,
 ) => AccountPark | null;
 
-const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snapshot) => accountPark(engine, accountId, {
+const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snapshot, model) => accountPark(engine, accountId, {
   quotaObservation: (forEngine, id) => snapshot.quotaObservations[forEngine]?.[id],
   limitsProvenance: cachedLimitsProvenance,
+  model,
 });
 
 export interface StructuredRecoveryDependencies {
@@ -153,8 +155,6 @@ function candidateFor(
      reported with the bounded recheck the park carries, so the caller waits a
      wait that ends rather than enqueuing into a spent account. */
   const hostAccountId = entry?.accountId ?? generation.accountId ?? null;
-  const hostPark = hostLive ? park(conversation.engine, hostAccountId, snapshot) : null;
-  const publishReady = hostLive && !hostPark;
   const inheritedProfile = emptyLaunchProfile(durableProfileWins ? {
     ...(entry?.launchProfile ?? {}),
     ...generation.launchProfile,
@@ -164,6 +164,8 @@ function candidateFor(
     ...(entry?.launchProfile ?? {}),
     cwd: entry?.launchProfile?.cwd || generation.launchProfile.cwd || entry?.cwd,
   });
+  const hostPark = hostLive ? park(conversation.engine, hostAccountId, snapshot, inheritedProfile.model) : null;
+  const publishReady = hostLive && !hostPark;
   const inheritedTitle = durableSemanticTitle(generation.launchProfile.title, 120)
     ?? durableSemanticTitle(entry?.launchProfile?.title, 120);
   const profile = emptyLaunchProfile({

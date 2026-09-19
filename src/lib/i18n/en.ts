@@ -357,8 +357,9 @@ export const en = {
   "autobalance.override": "Auto balance suggested «{to}»; your choice takes over.",
   "limits.windowSession": "5h window",
   "limits.windowWeekly": "weekly window",
-  // The flagship tier's own weekly window (#1358), named by the provider's tier.
-  "limits.windowFlagship": "{tier} weekly window",
+  // One model tier's own weekly window (#1358, #1796), named by the tier the
+  // provider reported it under — Fable, Opus, Sonnet, or one nobody has seen yet.
+  "limits.windowTier": "{tier} weekly window",
   "limits.tierWeek": "{tier} · Week",
 
   // SwitchCard

@@ -358,8 +358,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "autobalance.override": "Автобаланс пропонував «{to}»; ваш вибір має пріоритет.",
   "limits.windowSession": "вікно 5 год",
   "limits.windowWeekly": "тижневе вікно",
-  // Окреме тижневе вікно флагманського рівня (#1358), назване за рівнем провайдера.
-  "limits.windowFlagship": "тижневе вікно {tier}",
+  // Власне тижневе вікно одного рівня моделі (#1358, #1796), назване так, як
+  // рівень назвав провайдер — Fable, Opus, Sonnet чи ще не бачений.
+  "limits.windowTier": "тижневе вікно {tier}",
   "limits.tierWeek": "{tier} · Тиждень",
 
   "switchCard.openColumn": "Відкрити колонкою {title}",

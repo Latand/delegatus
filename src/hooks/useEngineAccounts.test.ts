@@ -777,16 +777,24 @@ test("the accounts read carries each account's reset-credit count, and parseRese
   expect(parseResetCredits(null)).toBeNull();
 });
 
-test("parseAccountLimits keeps a flagship tier window only when it names its tier (#1358)", () => {
+test("parseAccountLimits keeps every tier window that names its tier, and drops the ones that do not (#1358, #1796)", () => {
   const parsed = parseAccountLimits({
     state: "fresh",
     session: null,
     weekly: { usedPercent: 40, resetsAt: null, windowMinutes: 10_080 },
-    flagship: { usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, tier: "opus" },
+    tiers: [
+      { usedPercent: 88, resetsAt: 1_800_000_000, windowMinutes: 10_080, tier: "fable" },
+      { usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, tier: "opus" },
+      { usedPercent: 12, resetsAt: null },
+    ],
   });
-  expect(parsed?.flagship).toEqual({ usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, observedAt: null, tier: "opus" });
-  expect(parseAccountLimits({ state: "fresh", session: null, weekly: { usedPercent: 40, resetsAt: null }, flagship: { usedPercent: 63, resetsAt: null } })?.flagship).toBeUndefined();
-  expect(parseAccountLimits({ state: "fresh", session: null, weekly: null, flagship: { usedPercent: 63, resetsAt: null, tier: "opus" } })).not.toBeNull();
+  expect(parsed?.tiers).toEqual([
+    { usedPercent: 88, resetsAt: 1_800_000_000, windowMinutes: 10_080, observedAt: null, tier: "fable" },
+    { usedPercent: 63, resetsAt: 1_800_000_000, windowMinutes: 10_080, observedAt: null, tier: "opus" },
+  ]);
+  expect(parseAccountLimits({ state: "fresh", session: null, weekly: { usedPercent: 40, resetsAt: null }, tiers: [{ usedPercent: 63, resetsAt: null }] })?.tiers).toBeUndefined();
+  expect(parseAccountLimits({ state: "fresh", session: null, weekly: null, tiers: [{ usedPercent: 63, resetsAt: null, tier: "opus" }] })).not.toBeNull();
+  expect(parseAccountLimits({ state: "fresh", session: null, weekly: null, tiers: "not-a-list" })).toBeNull();
 });
 
 test("refreshLimits posts the account id and merges the live reading into that card (#1418)", async () => {
@@ -890,4 +898,11 @@ test("useResetCredit is a Codex action: a Claude store refuses without a request
   await expect(store.useResetCredit("main")).resolves.toBeFalse();
   expect(calls.some((call) => call.url.includes("reset-credits"))).toBeFalse();
   unsub();
+});
+
+
+test("a stored flagship reading loads as its named tier and an explicit empty list replaces it", () => {
+  const old = { state: "stale", session: null, weekly: null, flagship: { tier: "opus", usedPercent: 63, resetsAt: null } };
+  expect(parseAccountLimits(old)?.tiers).toMatchObject([{ tier: "opus", usedPercent: 63 }]);
+  expect(parseAccountLimits({ ...old, tiers: [] })).toBeNull();
 });

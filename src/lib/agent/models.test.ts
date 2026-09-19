@@ -10,7 +10,7 @@ import {
   ENGINE_MODELS,
   modelFromBody,
   normalizeClaudeLaunchModel,
-  validateLaunchModel, claudeModelGatedByFlagshipWeekly, claudeTierDisplayName } from "./models";
+  validateLaunchModel, claudeSpawnTier, claudeTierDisplayName } from "./models";
 
 test("the model catalog exposes Opus 5 as the Claude default and GPT-6-Astra as the Codex one", () => {
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5", shortLabel: "Opus 5", use: "review" });
@@ -64,16 +64,16 @@ test("unknown or unsafe Claude transcript model ids omit the launch override", (
   expect(normalizeClaudeLaunchModel(null)).toBeNull();
 });
 
-test("flagship-class Claude models draw on the flagship weekly; lower tiers and Codex do not (#1358)", () => {
-  // The launch default is flagship class, so an unstated model is gated too.
-  expect(claudeModelGatedByFlagshipWeekly(null)).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly(undefined)).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly("fable")).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly("claude-fable-5-1")).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly("opus")).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly("claude-opus-5")).toBeTrue();
-  expect(claudeModelGatedByFlagshipWeekly("sonnet")).toBeFalse();
-  expect(claudeModelGatedByFlagshipWeekly("claude-haiku-4-5-20251001")).toBeFalse();
+test("a Claude spawn names the provider tier it draws on, and an unstated model the launch default (#1796)", () => {
+  expect(claudeSpawnTier("unknown-model")).toBeNull();
+  expect(claudeSpawnTier(null)).toBe("opus");
+  expect(claudeSpawnTier(undefined)).toBe("opus");
+  expect(claudeSpawnTier("fable")).toBe("fable");
+  expect(claudeSpawnTier("claude-fable-5-1")).toBe("fable");
+  expect(claudeSpawnTier("opus")).toBe("opus");
+  expect(claudeSpawnTier("claude-opus-5")).toBe("opus");
+  expect(claudeSpawnTier("sonnet")).toBe("sonnet");
+  expect(claudeSpawnTier("claude-haiku-4-5-20251001")).toBe("haiku");
 });
 
 test("a provider tier bucket names its row by the tier, capitalised when unknown", () => {

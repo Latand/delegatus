@@ -27,6 +27,7 @@ const {
 } = await import("./limits");
 const { recordLimitSample } = await import("@/lib/limitsHistoryStore");
 const { selectHeadlessAccount } = await import("@/lib/accounts/headlessSelection");
+const { effectiveRemaining } = await import("@/lib/accounts/migration/quotaPolicy");
 
 afterAll(() => {
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -1396,7 +1397,7 @@ test("a transcript left with only windowless events reports no snapshot rather t
   expect(result.source).toBe("unavailable");
 });
 
-test("the Claude usage payload's flagship tier bucket becomes the flagship window, named by the provider's tier (#1358)", async () => {
+test("a Claude usage payload's tier bucket becomes a tier window, named by the provider's tier (#1358)", async () => {
   const realFetch = globalThis.fetch;
   let payload: Record<string, unknown> = {
     five_hour: { utilization: 12, resets_at: "2026-09-01T14:00:00.000Z" },
@@ -1411,14 +1412,15 @@ test("the Claude usage payload's flagship tier bucket becomes the flagship windo
     const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
     const withBucket = await fetchClaudeLimits(credentials);
     expect(withBucket.source).toBe("live");
-    expect(withBucket.data?.flagship).toEqual({ usedPercent: 63, resetsAt: Math.round(Date.parse("2026-09-05T08:00:00.000Z") / 1000), windowMinutes: 10_080, tier: "opus" });
+    expect(withBucket.data?.tiers?.find((window) => window.tier === "opus"))
+      .toEqual({ usedPercent: 63, resetsAt: Math.round(Date.parse("2026-09-05T08:00:00.000Z") / 1000), windowMinutes: 10_080, tier: "opus" });
     expect(withBucket.data?.weekly).toMatchObject({ usedPercent: 40 });
-    // The provider sends the key as null when the account has no distinct
-    // flagship bucket (observed on a live payload): the field is null and
-    // nothing renders. A lower tier's bucket never becomes the flagship row.
+    // The provider sends a tier key as null when the account has no bucket for
+    // it (observed on a live payload): that tier has no line, while the tiers
+    // it does meter keep theirs. Non-tier keys never become a row.
     payload = { five_hour: { utilization: 12 }, seven_day: { utilization: 40 }, seven_day_opus: null, seven_day_sonnet: { utilization: 5 } };
     const without = await fetchClaudeLimits(credentials);
-    expect(without.data?.flagship).toBeNull();
+    expect(without.data?.tiers?.map((window) => window.tier)).toEqual(["sonnet"]);
     expect(without.data?.weekly).toMatchObject({ usedPercent: 40 });
   } finally {
     globalThis.fetch = realFetch;
@@ -1462,4 +1464,92 @@ test("Claude limits uses the shared account store and contains unknown-store err
     expect(request).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(file)).toBe(false);
   } finally { read.mockRestore(); request.mockRestore(); }
+});
+
+test("every model tier the provider meters becomes its own window, and a spawn is gated by its own model's (#1796)", async () => {
+  const realFetch = globalThis.fetch;
+  const resets = "2026-09-26T08:00:00.000Z";
+  const resetsAt = Math.round(Date.parse(resets) / 1000);
+  /* Invented values. The tier buckets are the model tiers the provider meters;
+     `oauth_apps`, `overage_included` and `cowork` are buckets of the same
+     `seven_day_*` shape that are NOT model tiers and never become a line. */
+  const payload = {
+    five_hour: { utilization: 12, resets_at: "2026-09-19T14:00:00.000Z" },
+    seven_day: { utilization: 30, resets_at: resets },
+    seven_day_fable: { utilization: 88, resets_at: resets },
+    seven_day_opus: { utilization: 63, resets_at: resets },
+    seven_day_sonnet: { utilization: 5, resets_at: resets },
+    seven_day_oauth_apps: { utilization: 99, resets_at: resets },
+    seven_day_overage_included: { utilization: 97, resets_at: resets },
+    seven_day_cowork: { utilization: 96, resets_at: resets },
+  };
+  globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+  let read: Awaited<ReturnType<typeof fetchClaudeLimits>>;
+  try {
+    read = await fetchClaudeLimits(path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  expect(read.source).toBe("live");
+  // One line per model tier, in a stable order, and no line for the rest.
+  expect(read.data?.tiers?.map((window) => window.tier)).toEqual(["fable", "opus", "sonnet"]);
+  expect(read.data?.tiers?.find((window) => window.tier === "fable"))
+    .toEqual({ usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable" });
+  expect(read.data?.weekly).toMatchObject({ usedPercent: 30 });
+  const { limitRows } = await import("@/components/AccountsPanel");
+  const { reconcileQuotaReadings } = await import("./rateLimit");
+  const { translate } = await import("./i18n");
+  const quota = reconcileQuotaReadings({ limits: read.data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+  expect(limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label))
+    .toEqual(["5h", "Week", "Fable · Week", "Opus · Week", "Sonnet · Week"]);
+
+
+  // The gate follows the same data: each model answers to its own window, and a
+  // model the provider meters no bucket for answers to the general week alone.
+  const now = Date.now();
+  const observation = {
+    engine: "claude" as const,
+    accountId: "default",
+    authenticated: true,
+    limits: read.data,
+    provenance: { source: "live" as const, reason: null, staleSince: null },
+    observedAt: now,
+    authCheckedAt: now,
+  };
+  expect(effectiveRemaining(observation, now, { model: "fable" })).toEqual({ percent: 12, window: "tier:fable" });
+  expect(effectiveRemaining(observation, now, { model: "opus" })).toEqual({ percent: 37, window: "tier:opus" });
+  expect(effectiveRemaining(observation, now, { model: "sonnet" })).toEqual({ percent: 70, window: "weekly" });
+  expect(effectiveRemaining(observation, now, { model: "haiku" })).toEqual({ percent: 70, window: "weekly" });
+});
+
+
+test("pre-tier-list cached limits load without a provider read and keep recording history", async () => {
+  resetLimitsCache();
+  const now = Date.now();
+  const legacy = {
+    session: { usedPercent: 11, resetsAt: Math.floor(now / 1000) + 3600 },
+    weekly: { usedPercent: 30, resetsAt: Math.floor(now / 1000) + 86400 },
+    flagship: { tier: "opus", usedPercent: 70, resetsAt: Math.floor(now / 1000) + 86400 },
+    plan: "max", capturedAt: Math.floor(now / 1000),
+  };
+  const file = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 2, engines: {
+    claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null } } }, codex: {},
+  } }));
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("cached usage must not fetch"); }) as unknown as typeof fetch);
+  try {
+    const payload = await readLimits({ codexLiveReader });
+    expect(payload.claude?.tiers).toEqual([legacy.flagship]);
+    expect(payload.claude?.weekly).toEqual(legacy.weekly);
+    expect(request).not.toHaveBeenCalled();
+    request.mockImplementation((async () => Response.json({
+      five_hour: { utilization: 11 }, seven_day: { utilization: 30 }, seven_day_fable: { utilization: 88 },
+    })) as unknown as typeof fetch);
+    const fresh = await readLimits({ codexLiveReader, now: () => now + 60_000 });
+    expect(fresh.claude?.tiers?.map((tier) => tier.tier)).toEqual(["fable"]);
+    expect(request).toHaveBeenCalledTimes(1);
+    const { historySamples } = await import("./limitsHistoryStore");
+    expect(historySamples("claude", "default", "weekly").at(-1)?.remaining).toBe(70);
+  } finally { request.mockRestore(); resetLimitsCache(); }
 });
