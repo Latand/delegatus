@@ -3638,7 +3638,12 @@ async function conversationAction(
     key: text(args.key),
     label: args.label,
     question: args.question,
-  }, callerCapabilityHeaders());
+  }, callerCapabilityHeaders()).catch((error: unknown) => {
+    if (error instanceof McpDispatchUncertainError) {
+      throw new McpDispatchUncertainError(error.message, { operationId });
+    }
+    throw error;
+  });
   if (result.ok !== true) {
     throw new Error(text(result.error) || "conversation action failed");
   }

@@ -7,6 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
+import type { McpToolResult } from "./server";
 
 // No inherited release, capability, provider home or runtime socket is usable.
 const originalEnv = { ...process.env };
@@ -191,3 +192,69 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     journal.close();
   }
 }, 20_000);
+
+test.each(["kill", "interrupt", "resume", "compact", "dialog-key"])("MCP %s preserves an unknown timeout outcome without repeating the control", async (action) => {
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const received = new Promise<void>(resolve => { entered = resolve; });
+  let effects = 0;
+  const operations: string[] = [];
+  setConversationHostDependenciesForTests({
+    applyConversationAction: async request => {
+      operations.push(request.operationId!);
+      entered();
+      await delayed;
+      effects++;
+      return { status: 200, body: { ok: true, structured: true, target: "conversation_timeout_target", outcome: "delivered" } };
+    },
+  });
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  const receiptPath = path.join(sandbox, `timeout-${action}.sqlite`);
+  let receipts = new SqliteMcpReceiptStore(receiptPath);
+  const bindings = viewerMcpBindings(undefined, productionViewerControlDependencies(true));
+  let service = createMcpToolService(bindings, receipts);
+  const deadline = new AbortController();
+  let callSignal: AbortSignal | undefined = deadline.signal;
+  const server = createViewerMcpServer({
+    callTool: (name, args, context) => service.callTool(name, args, { ...context, signal: callSignal ?? context?.signal }),
+  });
+  const client = new Client({ name: "conversation-timeout-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(a), server.connect(b)]);
+  const args = { clientRequestId: `timeout-${action}`, conversationId: "conversation_timeout_target", action };
+  const call = async () => (await client.callTool({ name: "conversation_action", arguments: args })).structuredContent as McpToolResult;
+  try {
+    const pending = call();
+    await received;
+    // End the hop only once the actual HTTP handler has received the request.
+    deadline.abort(new Error("test dispatch deadline"));
+    const first = await pending;
+    callSignal = undefined;
+    expect(effects).toBe(0);
+    expect(first).toMatchObject({
+      ok: false, code: "outcome_unknown", retryable: false, clientRequestId: args.clientRequestId,
+      details: { outcome: "unknown", nextAction: "original-key-lookup", operationId: operations[0] },
+    });
+    expect(JSON.stringify(first)).toContain("same clientRequestId");
+    expect(operations[0]).toMatch(/^mcp_conversation_action_[0-9a-f]{24}$/);
+    expect(await call()).toEqual({ ...first, replayed: true });
+    release();
+    await eventually(() => effects === 1);
+    // Reopen the durable store to prove replay survives an MCP restart.
+    receipts.close();
+    receipts = new SqliteMcpReceiptStore(receiptPath);
+    service = createMcpToolService(bindings, receipts);
+    expect(await call()).toEqual({ ...first, replayed: true });
+    expect(operations).toHaveLength(1);
+    expect(effects).toBe(1);
+  } finally {
+    release();
+    await client.close();
+    await server.close();
+    viewer.stop(true);
+    receipts.close();
+    setConversationHostDependenciesForTests(null);
+  }
+});
