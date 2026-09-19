@@ -104,6 +104,10 @@ const LIVENESS_LIMIT = 60;
 const CHILD_TITLE_LIMIT = 120;
 /** Bounded title of a settled lane the seat launched (#1749). */
 const OWN_LANE_TITLE_LIMIT = 120;
+/** How much of a failed provisioning's reason a wake line carries (#1799).
+    The reason is a git error, so it is bounded and redacted like every other
+    clause the tick composes. */
+const OWN_LANE_DETAIL_LIMIT = 160;
 /** Settled lanes of the seat's own one check carries. The decision bounds the
     agenda again at {@link SeatTickPolicy.itemsPerWake}; this bounds the READ,
     so a seat that launched two hundred lanes in its epoch projects a page of
@@ -607,13 +611,20 @@ function pipelineSummary(pipeline: Pipeline): PipelineSummary {
  */
 function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | null {
   if (pipeline.hiddenAt || pipeline.dismissedAt || pipeline.closedAt || pipeline.state === "closed") return null;
+  const attempts = pipeline.runs.flatMap((run) => run.attempts);
   if (pipeline.state === "completed") return "completed";
-  if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") return "needs_decision";
+  if (pipeline.state === "needs_decision" || pipeline.pausedState === "needs_decision") {
+    /* A lane that parked with no attempt behind it never ran a stage, so what
+       stopped it is its own provisioning (#1799): the base fetch or the
+       worktree the controller makes after the create call was answered. The
+       seat is told that as what it is, with the reason, rather than as a lane
+       "parked on a decision" it would have to go and read. */
+    return attempts.length === 0 ? "provisioning-failed" : "needs_decision";
+  }
   /* Otherwise the lane is still open, and only its newest attempt can say it
      stopped: a stage that failed — a spawn that never came up among them —
      leaves the lane holding an attempt in that state with nothing after it. A
      lane whose newest attempt is running or pending is simply working. */
-  const attempts = pipeline.runs.flatMap((run) => run.attempts);
   const newest = attempts.reduce<typeof attempts[number] | null>((held, attempt) => {
     const at = Date.parse(attempt.completedAt ?? attempt.startedAt ?? "");
     const heldAt = held ? Date.parse(held.completedAt ?? held.startedAt ?? "") : Number.NEGATIVE_INFINITY;
@@ -621,6 +632,15 @@ function laneSettlement(pipeline: Pipeline): SeatTickOwnLaneInput["settled"] | n
   }, null);
   if (newest?.state === "failed") return "failed";
   if (newest?.state === "needs_decision") return "needs_decision";
+  /* The answer the seat's own create call could not give it (#1799): the call
+     is answered while the base is still unresolved, so "the lane you asked for
+     is up and its first stage is running" arrives here instead. It is the
+     lane's FIRST attempt and only its first — past that the lane is simply
+     working, and the interval agenda already lists it as open.
+
+     A lane still in `provisioning` has not been provisioned; one that is
+     running with no attempt yet is between the two and settles nothing. */
+  if (pipeline.state === "running" && attempts.length === 1) return "provisioned";
   return null;
 }
 
@@ -640,7 +660,12 @@ function laneMovedAt(pipeline: Pipeline): string | null {
  * records the transcript that created it, so a lane the operator or another
  * agent opened settles onto their board and never onto this seat's wake.
  */
-function ownSettledLanes(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickOwnLaneInput[] {
+function ownSettledLanes(
+  project: string,
+  seat: SeatTickSeatInput | null,
+  announced: readonly string[],
+  sources: SeatTickSources,
+): SeatTickOwnLaneInput[] {
   if (!seat) return [];
   /* The HOT store only, and deliberately: a settled lane lives there for three
      days, which is the same window the decision's backlog bound keeps this
@@ -654,11 +679,18 @@ function ownSettledLanes(project: string, seat: SeatTickSeatInput | null, source
     if (pipeline.srcConversationId !== seat.conversationId) continue;
     const settled = laneSettlement(pipeline);
     if (!settled) continue;
+    /* The one settlement with no obligation behind it is announced once and
+       then gone (#1799); every other settlement stands until the seat closes
+       the lane out, which is what discharges it. */
+    if (settled === "provisioned" && announced.includes(pipeline.id)) continue;
     lanes.push({
       id: pipeline.id,
       title: redactBounded(pipeline.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT),
       settled,
       updatedAt: laneMovedAt(pipeline),
+      ...(settled === "provisioning-failed"
+        ? { detail: redactBounded(pipeline.stateDetail ?? "", OWN_LANE_DETAIL_LIMIT) || null }
+        : {}),
     });
   }
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
@@ -1563,7 +1595,7 @@ export async function gatherSeatTickInput(
     updatedAt: task.updatedAt ?? null,
   }));
 
-  const ownLanes = ownSettledLanes(canonical, seat, sources);
+  const ownLanes = ownSettledLanes(canonical, seat, state.announcedLanes ?? [], sources);
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as

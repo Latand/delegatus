@@ -1709,3 +1709,69 @@ test("a child finishing, and a harvested child leaving, both move the fingerprin
   expect(seatTickBoardMoved(finished.changeFingerprint, harvested.changeFingerprint)).toBe(true);
   expect(seatTickBoardMoved(finished.changeFingerprint, (await childGather(fixture)).changeFingerprint)).toBe(false);
 });
+
+/* ---------------------------------------------------------------------------
+ * What the seat's own create call produced, read off the lane (#1799)
+ * ------------------------------------------------------------------------- */
+
+test("a lane the seat created reads as provisioned while its first stage is its only attempt (#1799)", async () => {
+  const provisioned = lane({ srcConversationId: CONVERSATION, state: "running" });
+  const input = await gather({ pipelines: [provisioned] });
+  expect(input.ownLanes).toEqual([{
+    id: "pipeline_a1",
+    title: "ship the exporter",
+    settled: "provisioned",
+    updatedAt: expect.any(String),
+  }]);
+
+  /* Past the first attempt the lane is simply working, and the interval agenda
+     already lists it as open: the announcement is about the create call, not
+     about every stage the lane goes on to run. */
+  const second = lane({
+    srcConversationId: CONVERSATION,
+    state: "running",
+    runs: [{ stageId: "build", attempts: [
+      { n: 1, state: "passed", startedAt: "2026-08-28T11:00:00.000Z", completedAt: "2026-08-28T11:10:00.000Z" },
+      { n: 2, state: "running", startedAt: "2026-08-28T11:20:00.000Z" },
+    ] }],
+  });
+  expect((await gather({ pipelines: [second] })).ownLanes).toEqual([]);
+
+  /* A lane still provisioning has not been provisioned. */
+  const waiting = lane({ srcConversationId: CONVERSATION, state: "provisioning", runs: [{ stageId: "build", attempts: [] }] });
+  expect((await gather({ pipelines: [waiting] })).ownLanes).toEqual([]);
+});
+
+test("an announced lane is not offered as provisioned a second time (#1799)", async () => {
+  const provisioned = lane({ srcConversationId: CONVERSATION, state: "running" });
+  /* The same lane, against a row that has announced nothing, is offered. */
+  expect((await gather({ pipelines: [provisioned] })).ownLanes).toMatchObject([{ settled: "provisioned" }]);
+  const announced = { ...emptySeatTickState(), announcedLanes: ["pipeline_a1"] };
+  expect((await gather({ pipelines: [provisioned] }, announced)).ownLanes).toEqual([]);
+
+  /* The lane itself is not silenced — only that one settlement is. */
+  const completed = lane({ srcConversationId: CONVERSATION, state: "completed" });
+  expect((await gather({ pipelines: [completed] }, announced)).ownLanes).toMatchObject([{ settled: "completed" }]);
+});
+
+test("a lane that parked before it ran a stage carries why it never started (#1799)", async () => {
+  const parked = lane({
+    srcConversationId: CONVERSATION,
+    state: "needs_decision",
+    stateDetail: "fetching origin/main: git fetch timed out after 60s",
+    runs: [{ stageId: "build", attempts: [] }],
+    cursor: { stageId: "build", state: "pending", input: null, activatedBy: null },
+  });
+  expect((await gather({ pipelines: [parked] })).ownLanes).toEqual([{
+    id: "pipeline_a1",
+    title: "ship the exporter",
+    settled: "provisioning-failed",
+    updatedAt: expect.any(String),
+    detail: "fetching origin/main: git fetch timed out after 60s",
+  }]);
+
+  /* A lane that parked with a stage behind it parked on a decision, which is
+     the settlement it always had. */
+  const afterAStage = lane({ srcConversationId: CONVERSATION, state: "needs_decision", stateDetail: "the reviewer asked" });
+  expect((await gather({ pipelines: [afterAStage] })).ownLanes).toMatchObject([{ settled: "needs_decision" }]);
+});

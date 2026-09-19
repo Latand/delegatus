@@ -24,6 +24,7 @@ import {
   type SeatTickProjectState,
   type SeatTickPullRequestInput,
   type SeatTickSeatInput,
+  type SeatTickOwnLaneInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
   type SeatTickVerdict,
@@ -1388,4 +1389,77 @@ test("a child-terminal reason that stops producing change is held by the retry g
   }));
   expect(decision.verdict).toEqual({ kind: "quiet", detail: "every wake reason is held by the retry guard" });
   expect(decision.cards.map((entry) => entry.ref)).toEqual(["seat-tick-stuck-child-terminal"]);
+});
+
+/* ---------------------------------------------------------------------------
+ * The outcome of the seat's own create call, carried back on the wake (#1799)
+ * ------------------------------------------------------------------------- */
+
+/** A lane the seat launched, in whatever state the case needs. */
+function ownLane(over: Partial<SeatTickOwnLaneInput> = {}): SeatTickOwnLaneInput {
+  return {
+    id: "pipeline_a1",
+    title: "ship the exporter",
+    settled: "provisioned",
+    updatedAt: new Date(NOW - 2 * MINUTE).toISOString(),
+    ...over,
+  };
+}
+
+test("a provisioned lane reaches its creator as one more item kind under the own-lane reason (#1799)", () => {
+  const decision = seatTickDecision(input({ ownLanes: [ownLane()], state: stateWith(OVERDUE_STATE) }));
+  expect(reasonsOf(decision.verdict)).toEqual(["own-lane-settled"]);
+  const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.items).toEqual([{
+    kind: "provisioning",
+    id: "pipeline_a1",
+    label: "ship the exporter — lane you launched: provisioned, first stage running",
+  }]);
+});
+
+test("a lane whose provisioning failed names what stopped it (#1799)", () => {
+  const decision = seatTickDecision(input({
+    ownLanes: [ownLane({ settled: "provisioning-failed", detail: "fetching origin/main: origin unavailable" })],
+    state: stateWith(OVERDUE_STATE),
+  }));
+  expect(reasonsOf(decision.verdict)).toEqual(["own-lane-settled"]);
+  const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  /* A park is an obligation, so it stays an ordinary lane line — what changes
+     is that the seat is told its lane never ran a stage, and why. */
+  expect(verdict.items[0]).toEqual({
+    kind: "pipeline",
+    id: "pipeline_a1",
+    label: "ship the exporter — lane you launched: provisioning failed, it never ran a stage: fetching origin/main: origin unavailable",
+  });
+});
+
+test("only a landed wake records a provisioning announcement, and only for the lanes it named (#1799)", () => {
+  const crowd = Array.from({ length: 7 }, (_, n) => ownLane({ id: `pipeline_z${n}`, title: `lane ${n}` }));
+  const decision = seatTickDecision(input({ ownLanes: crowd, state: stateWith(OVERDUE_STATE) }));
+  const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  const named = verdict.items.map((item) => item.id);
+  expect(named).toHaveLength(DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+  expect(verdict.deferred).toBe(crowd.length - DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+
+  /* The plan records exactly the lanes the message carries: the two the bound
+     held back were announced to nobody and stay offerable. */
+  const commit = plan(decision.verdict, "fp-2", 0);
+  expect(commit.announcedLanes).toEqual(named);
+  expect(seatTickWakeCommit(emptySeatTickState(), commit, NOW).announcedLanes).toEqual(named);
+  /* A wake that never landed leaves the row untouched, which is what keeps the
+     announcement owed rather than lost. */
+  expect(emptySeatTickState().announcedLanes).toEqual([]);
+});
+
+test("a provisioning announcement does not displace the lane's later settlements (#1799)", () => {
+  /* The source stops offering an announced lane as provisioned; a lane that
+     later completes is a different settlement and a different obligation. */
+  const completed = seatTickDecision(input({
+    ownLanes: [ownLane({ settled: "completed" })],
+    state: stateWith({ ...OVERDUE_STATE, announcedLanes: ["pipeline_a1"] }),
+  }));
+  expect(reasonsOf(completed.verdict)).toEqual(["own-lane-settled"]);
+  const verdict = completed.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
+  expect(verdict.items[0]!.kind).toBe("pipeline");
+  expect(verdict.items[0]!.label).toContain("completed, and nobody has closed it out");
 });
