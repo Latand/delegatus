@@ -28,7 +28,8 @@ Object.assign(globalThis, {
 
 const { CheckStep, resetTime } = await import("./CheckStep");
 
-const runOf = (state: string, rows: unknown[]) => ({
+type CapturedRun = { cleanup: { done: boolean; problems: string[] } } & Record<string, unknown>;
+const runOf = (state: string, rows: unknown[]): { answer: { runtime: typeof RUNTIME; run: CapturedRun } } => ({
   answer: {
     runtime: RUNTIME,
     run: { id: "run00004", state, startedAt: "2026-09-20T10:00:00.000Z", finishedAt: "2026-09-20T10:01:30.000Z", runtime: RUNTIME, rows, cleanup: { done: true, problems: [] }, version: "0.0.0" },
@@ -88,7 +89,45 @@ test("a failed wake opens in place and the footer names the row it stopped at", 
   expect(host.querySelector<HTMLElement>("[data-health-action]")?.dataset.healthAction).toBe("copy");
   expect(host.querySelector<HTMLElement>('[data-health-row="filing"]')?.dataset.healthState).toBe("waiting");
   expect(host.querySelector("[data-health-summary=failed]")?.textContent).toContain("“The orchestrator is woken”");
+  /* Its remedy is a bug report, so the footer does not tell the user to fix it. */
+  expect(host.querySelector("[data-health-summary=failed]")?.textContent).toBe("The check stopped at “The orchestrator is woken”. The rows before it passed.");
   expect(host.querySelector("[data-health-skip]")).toBeNull();
+  /* The state word carries the danger colour with the glyph, not muted grey. */
+  expect(host.querySelector<HTMLElement>('[data-health-row="wake"] span.font-semibold')?.className).toContain("text-danger");
+});
+
+test("a failure the user can fix keeps the footer that asks for the fix", async () => {
+  answer = runOf("failed", [row("spawn", "passed"), row("delivery", "passed"), row("report", "failed", fail("MCP_UNREACHABLE")), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(host.querySelector("[data-health-summary=failed]")?.textContent).toContain("Fix that, then run it again");
+});
+
+test("no orchestrator yet: the note sits under the label on a phone and the run still passes", async () => {
+  const rows = ["spawn", "delivery", "report", "wake"].map((id) => row(id, "passed"));
+  answer = runOf("passed", [...rows, { ...row("filing", "skipped"), note: "no-seat" }]).answer;
+  const host = await render();
+  const note = host.querySelector<HTMLElement>("[data-health-note]");
+  expect(note?.textContent).toBe("No orchestrator yet.");
+  expect(note?.className).toContain("max-sm:w-full");
+  expect(host.querySelector("[data-health-summary=passed]")?.textContent).toBe("Everything works on this machine.");
+});
+
+test("while the check runs nothing is filled: Stop is bordered and the footer steps back", async () => {
+  answer = runOf("running", [row("spawn", "passed"), row("delivery", "running"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  expect(host.querySelector("[data-health-start]")).toBeNull();
+  expect(host.querySelector<HTMLElement>("[data-health-stop]")?.className).not.toContain("bg-accent");
+  expect(ownsPrimary).toBe(true);
+});
+
+test("a cleanup that could not finish says what the Viewer does next", async () => {
+  const passed = runOf("passed", ["spawn", "delivery", "report", "wake", "filing"].map((id) => row(id, "passed"))).answer;
+  passed.run.cleanup = { done: true, problems: ["worktree: device or resource busy"] };
+  answer = passed;
+  const host = await render();
+  const line = host.querySelector("[data-health-cleanup-problem]")?.textContent ?? "";
+  expect(line).toContain("worktree: device or resource busy");
+  expect(line).toContain("the next time this check opens or runs");
 });
 
 test("a spawn timeout with no agent to open ends at the terminal check and the bug report, as code without backticks", async () => {
@@ -99,6 +138,8 @@ test("a spawn timeout with no agent to open ends at the terminal check and the b
   expect(failure.textContent).not.toContain("open the agent");
   expect(failure.textContent).not.toContain("`");
   expect(failure.querySelector("code")?.textContent).toBe("claude --version");
+  /* Both branches of the terminal check are closed. */
+  expect(failure.textContent).toContain("If it does not, reinstall it");
   expect(host.querySelector<HTMLElement>("[data-health-action]")?.dataset.healthAction).toBe("agent");
   expect(host.querySelector<HTMLElement>("[data-health-action]")?.textContent).toBe("Copy details");
   /* The first row has no rows before it. */

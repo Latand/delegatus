@@ -286,7 +286,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
           ) : null}
         </header>
         {stepListOpen ? <div className="shrink-0 border-b border-border bg-sunken p-2">{stepList}</div> : null}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto scroll-pb-6 px-4 pb-6 pt-4">
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
@@ -323,7 +323,9 @@ export function OnboardingDialog({ mode, marker, onClose }: {
         </header>
         <div className="flex min-h-0 flex-1">
           {view === "guide" ? <nav className="w-[200px] shrink-0 border-r border-border bg-sunken p-2">{stepList}</nav> : null}
-          <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-card p-6">
+          {/* scroll-pb-6: what a step scrolls into view keeps the body's own
+            breathing room above the fixed footer, rather than ending flush. */}
+          <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto scroll-pb-6 bg-card p-6">
             {heading}
             <div className={heading ? "mt-4" : ""}>{content}</div>
           </div>

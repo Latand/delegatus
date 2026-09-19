@@ -536,9 +536,10 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  * undo, Codex installed and signed out with the sign-in open, neither engine
  * connected, the menu rows, the mapping opened alone, and a dismissal that
  * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
- * running, passed, stopped, and each of the eleven failures at its row, with
- * the machine detail opened on the last one, the check's answers served from
- * records so no agent is spawned. Each capture is measured in the live DOM:
+ * running, passed, the pass a new install ends on (no orchestrator, so row 5
+ * is skipped), a pass whose cleanup could not finish, stopped, and each of the
+ * eleven failures at its row, with the machine detail opened on the last one,
+ * the check's answers served from records so no agent is spawned. Each capture is measured in the live DOM:
  * the dialog inside the viewport, no horizontal overflow, no clipped role
  * label (the two longest Ukrainian ones by name) or footer button, and 44 px
  * targets on the phone.
@@ -663,6 +664,15 @@ function measureOnboarding(phone: boolean) {
         return Math.max(0, ...Array.from(block.querySelectorAll<HTMLElement>("*")).map((el) => Math.round(el.getBoundingClientRect().right - edge)));
       })(),
       rowLabelsClipped: Array.from(dialog.querySelectorAll<HTMLElement>("[data-health-row] span.flex-1")).filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent ?? ""),
+      /* Lines each row label takes: a note beside the longest label used to
+         push it to three on a phone (#1876). */
+      rowLines: Array.from(dialog.querySelectorAll<HTMLElement>("[data-health-row]")).map((el) => {
+        const label = el.querySelector<HTMLElement>("span.flex-1");
+        const height = label ? parseFloat(getComputedStyle(label).lineHeight) : 0;
+        return { id: el.dataset.healthRow ?? "", lines: label && height ? Math.round(label.getBoundingClientRect().height / height) : 0 };
+      }),
+      note: dialog.querySelector("[data-health-note]")?.textContent ?? null,
+      cleanupProblem: dialog.querySelector("[data-health-cleanup-problem]")?.textContent ?? null,
       /* Everything the failure block paints, for stray markdown marks. */
       failureAll: dialog.querySelector("[data-health-failure]")?.textContent ?? null,
       actionLabel: dialog.querySelector("[data-health-action]")?.textContent ?? null,
@@ -710,24 +720,32 @@ const HEALTH_FAILURES: readonly { code: string; row: typeof HEALTH_ROW_IDS[numbe
   { code: "SEAT_MISFILED", row: "filing", params: { project: "harbor" } },
 ];
 
-function healthAnswer(state: "idle" | "running" | "passed" | "stopped" | { failed: typeof HEALTH_FAILURES[number] }): unknown {
+/* "noSeat" is the pass a new install ends on: it has no orchestrator, so row 5
+   is skipped with its note. "cleanupProblem" is a pass whose cleanup could not
+   finish. */
+type HealthState = "idle" | "running" | "passed" | "noSeat" | "cleanupProblem" | "stopped" | { failed: typeof HEALTH_FAILURES[number] };
+
+function healthAnswer(state: HealthState): unknown {
   if (state === "idle") return { runtime: HEALTH_RUNTIME, run: null };
   const at = (seconds: number) => new Date(Date.parse("2100-01-02T10:00:00.000Z") + seconds * 1000).toISOString();
   const failedAt = typeof state === "object" ? HEALTH_ROW_IDS.indexOf(state.failed.row) : -1;
+  const passed = state === "passed" || state === "noSeat" || state === "cleanupProblem";
   const rows = HEALTH_ROW_IDS.map((id, index) => {
-    const rowState = state === "passed" ? "passed"
+    const rowState = passed ? (state === "noSeat" && id === "filing" ? "skipped" : "passed")
       : state === "running" ? (index < 2 ? "passed" : index === 2 ? "running" : "waiting")
         : state === "stopped" ? (index < 1 ? "passed" : "waiting")
           : index < failedAt ? "passed" : index === failedAt ? "failed" : "waiting";
     const failure = rowState === "failed" && typeof state === "object"
       ? { code: state.failed.code, params: state.failed.params ?? {}, detail: `${state.failed.code.toLowerCase()}: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone`, agentPath: state.failed.agentPath ?? null, accountId: state.failed.accountId ?? null }
       : null;
-    return { id, state: rowState, startedAt: rowState === "waiting" ? null : at(index * 9), finishedAt: rowState === "passed" || rowState === "failed" ? at(index * 9 + 8) : null, failure, note: null };
+    return { id, state: rowState, startedAt: rowState === "waiting" || rowState === "skipped" ? null : at(index * 9), finishedAt: rowState === "passed" || rowState === "failed" ? at(index * 9 + 8) : null, failure, note: rowState === "skipped" ? "no-seat" : null };
   });
-  const runState = typeof state === "object" ? "failed" : state;
+  const runState = typeof state === "object" ? "failed" : passed ? "passed" : state;
+  /* What a cleanup that could not finish reports, as the server redacted it. */
+  const problems = state === "cleanupProblem" ? ["worktree: device or resource busy", "task card: the board did not answer"] : [];
   return {
     runtime: HEALTH_RUNTIME,
-    run: { id: "capture1", state: runState, startedAt: at(0), finishedAt: runState === "running" ? null : at(50), runtime: HEALTH_RUNTIME, rows, cleanup: { done: runState !== "running", problems: [] }, version: "0.0.0" },
+    run: { id: "capture1", state: runState, startedAt: at(0), finishedAt: runState === "running" ? null : at(50), runtime: HEALTH_RUNTIME, rows, cleanup: { done: runState !== "running", problems }, version: "0.0.0" },
   };
 }
 
@@ -982,17 +1000,23 @@ async function captureOnboarding(): Promise<void> {
           let health: unknown = healthAnswer("idle");
           await page.route("**/api/onboarding/health*", (route) => route.fulfill({ json: health }));
           await page.click("[data-onboarding-primary]");
-          const checkFrame = async (name: string, answer: unknown, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void) => {
+          /* `within` tells two frames of the same run state apart, so a frame is
+             never shot before its own answer has rendered. */
+          const checkFrame = async (name: string, answer: unknown, expectState: string, check: (reading: NonNullable<ReturnType<typeof measureOnboarding>>) => void, within?: string) => {
             health = answer;
             await openStep("agents");
             await page.waitForSelector("[data-agent-mapping]");
             await openStep("check");
-            await page.waitForSelector(`[data-health-check="${expectState}"]`, { timeout: 30_000 });
+            await page.waitForSelector(`[data-health-check="${expectState}"]${within ? ` ${within}` : ""}`, { timeout: 30_000 });
             await shot(name, (r) => {
               must(r.health !== null && r.health.rows.length === 5, `${tag} ${name}: the check shows ${r.health?.rows.length ?? 0} rows`);
               must((r.health?.failureOverflow ?? 0) <= 0, `${tag} ${name}: the failure block overflows by ${r.health?.failureOverflow}px`);
               must((r.health?.rowLabelsClipped.length ?? 0) === 0, `${tag} ${name}: clipped row labels ${r.health?.rowLabelsClipped.join(", ")}`);
-              must(r.health?.filledAccents.length === 1, `${tag} ${name}: ${r.health?.filledAccents.length} filled accent buttons (${r.health?.filledAccents.join(", ")})`);
+              /* One accent while the step waits on the user, none while it runs. */
+              const accents = expectState === "running" ? 0 : 1;
+              must(r.health?.filledAccents.length === accents, `${tag} ${name}: ${r.health?.filledAccents.length} filled accent buttons (${r.health?.filledAccents.join(", ")}), expected ${accents}`);
+              const tall = (r.health?.rowLines ?? []).filter((entry) => entry.lines > 2);
+              must(tall.length === 0, `${tag} ${name}: row labels over two lines: ${tall.map((entry) => `${entry.id}=${entry.lines}`).join(", ")}`);
               check(r);
             });
           };
@@ -1002,11 +1026,25 @@ async function captureOnboarding(): Promise<void> {
           });
           await checkFrame("check-running", healthAnswer("running"), "running", (r) => {
             must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=running wake=waiting filing=waiting", `${tag}: running rows ${r.health?.rows.join(" ")}`);
+            /* Nothing is filled while it runs: the brightest control on a
+               two-minute wait would otherwise be the one that leaves. */
+            must(r.health?.filledAccents.length === 0, `${tag}: while the check runs the accent is on ${r.health?.filledAccents.join(", ")}`);
           });
           await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
             must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
             must(r.health?.filledAccents[0] === "footer", `${tag}: after a pass the accent is on ${r.health?.filledAccents[0]}, not Open the board`);
           });
+          /* The pass a new install ends on: no orchestrator, so row 5 is skipped. */
+          await checkFrame("check-passed-no-seat", healthAnswer("noSeat"), "passed", (r) => {
+            must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=passed wake=passed filing=skipped", `${tag}: the no-orchestrator pass shows ${r.health?.rows.join(" ")}`);
+            must(Boolean(r.health?.note), `${tag}: the skipped row carries no note`);
+            const filing = r.health?.rowLines.find((entry) => entry.id === "filing");
+            must(filing?.lines === 1, `${tag}: the longest row label takes ${filing?.lines} lines beside its note`);
+          }, "[data-health-note]");
+          await checkFrame("check-cleanup-problem", healthAnswer("cleanupProblem"), "passed", (r) => {
+            must(Boolean(r.health?.cleanupProblem), `${tag}: a cleanup that could not finish says nothing`);
+            must(/next time|наступного разу/.test(r.health?.cleanupProblem ?? ""), `${tag}: the cleanup line gives no next step: ${r.health?.cleanupProblem}`);
+          }, "[data-health-cleanup-problem]");
           await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
             must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
             must(r.health!.rows.slice(1).every((entry) => entry.endsWith("=notRun")), `${tag}: after Stop the rows that never ran read ${r.health?.rows.join(" ")}`);
@@ -1037,6 +1075,8 @@ async function captureOnboarding(): Promise<void> {
           await shot("check-details", (r) => {
             must(Boolean(r.health?.detailsOpen), `${tag}: Show details did not open`);
             must(r.health?.inView.details === true, `${tag}: the opened details sit below the fold`);
+            /* The detail opens above the controls: the button that runs the check again stays whole. */
+            must(r.health?.inView.start === true, `${tag}: with the detail open, Run it again sits below the fold`);
           });
           health = healthAnswer("idle");
           await openStep("agents");

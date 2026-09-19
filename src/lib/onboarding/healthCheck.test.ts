@@ -336,6 +336,42 @@ test("a sweep leaves the run this process is running alone", async () => {
   expect([...files.keys()]).toEqual([path.join("health-runs", "run00001")]);
 });
 
+test("a cleanup that could not finish keeps its run file, so the next read undoes the rest", async () => {
+  const files = new Map<string, unknown>();
+  const cleaned: string[] = [];
+  let attempts = 0;
+  const ports: HealthCheckPorts = {
+    ...fakePorts({}),
+    recordLeftovers: (stateDir, leftovers) => { files.set(stateDir, { ...leftovers }); },
+    runFiles: () => [...files.entries()].map(([stateDir, leftovers]) => ({ ...(leftovers as object), stateDir }) as never),
+    dropRunFile: (stateDir) => { files.delete(stateDir); },
+    /* The worktree resists once and gives way on the retry. */
+    cleanup: async (input) => { cleaned.push(input.stateDir); return attempts++ === 0 ? ["worktree: device or resource busy"] : []; },
+  };
+  startHealthCheck(ports);
+  await settleHealthCheckForTests();
+  const run = currentHealthRun()!;
+  expect(run.cleanup.problems).toEqual(["worktree: device or resource busy"]);
+  /* The step says the Viewer clears what is left the next time the check opens. */
+  expect([...files.keys()]).toEqual([path.join("health-runs", "run00001")]);
+  await sweepOrphanedHealthRuns(ports);
+  expect(cleaned).toEqual([path.join("health-runs", "run00001"), path.join("health-runs", "run00001")]);
+  expect([...files.keys()]).toEqual([]);
+});
+
+test("a cleanup with nothing left over drops its run file at once", async () => {
+  const files = new Map<string, unknown>();
+  const ports: HealthCheckPorts = {
+    ...fakePorts({}),
+    recordLeftovers: (stateDir, leftovers) => { files.set(stateDir, { ...leftovers }); },
+    dropRunFile: (stateDir) => { files.delete(stateDir); },
+  };
+  startHealthCheck(ports);
+  await settleHealthCheckForTests();
+  expect(currentHealthRun()!.cleanup.problems).toEqual([]);
+  expect([...files.keys()]).toEqual([]);
+});
+
 test("a spawn timeout names an agent only when its transcript exists, since only that one has a card", () => {
   const attempt = { agentPath: "/scratch/agent.jsonl" } as Parameters<typeof timedOutAgentPath>[0];
   expect(timedOutAgentPath(attempt, () => false)).toBeNull();

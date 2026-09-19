@@ -44,6 +44,11 @@ const ACTION: Record<HealthFailureCode, Action> = {
   SEAT_MISFILED: "copy",
 };
 
+/* Failures whose only remedy is a bug report (design §5.2): the footer does
+   not tell the user to fix what the copy says they cannot. None of them can be
+   the check's first row, so the first-row footer keeps precedence. */
+const REPORT_ONLY: ReadonlySet<HealthFailureCode> = new Set(["DELIVERY_FAILED", "WAKE_NOT_OWED", "WAKE_UNDELIVERED"]);
+
 export function modelLabel(runtime: HealthRuntime): string {
   return ENGINE_MODELS[runtime.engine].find((model) => model.id === runtime.model)?.label ?? runtime.model;
 }
@@ -151,13 +156,14 @@ function elapsedSeconds(row: HealthRow, now: number): number | null {
   return Math.max(0, Math.round((end - Date.parse(row.startedAt)) / 1000));
 }
 
-function FailureBlock({ run, row, onGoEngines, onLeave }: { run: HealthRun; row: HealthRow; onGoEngines: () => void; onLeave: () => void }) {
+function FailureBlock({ run, row, onGoEngines, onLeave, onDetailsOpen }: { run: HealthRun; row: HealthRow; onGoEngines: () => void; onLeave: () => void; onDetailsOpen: () => void }) {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const details = useRef<HTMLPreElement>(null);
-  /* The detail block may open below the dialog's fold: bring what was asked for into view. */
-  useEffect(() => { if (open) details.current?.scrollIntoView?.({ block: "nearest" }); }, [open]);
+  /* The detail block opens above the controls and can push them below the
+     dialog's fold: scrolling the controls into view brings the whole tail up,
+     the opened detail included. */
+  useEffect(() => { if (open) onDetailsOpen(); }, [open, onDetailsOpen]);
   const found = row.failure as HealthFailure;
   const params = { ...found.params, time: resetTime(found.params.time, locale) };
   const action = ACTION[found.code];
@@ -197,9 +203,17 @@ function FailureBlock({ run, row, onGoEngines, onLeave }: { run: HealthRun; row:
           {open ? t("onboarding.check.hideDetails") : t("onboarding.check.showDetails")}
         </button>
       </div>
-      {open ? <pre ref={details} data-health-details="" className="mt-2 whitespace-pre-wrap break-words rounded-[8px] bg-sunken p-2 font-mono text-label text-secondary">{healthCopyText(run, row)}</pre> : null}
+      {open ? <pre data-health-details="" className="mt-2 whitespace-pre-wrap break-words rounded-[8px] bg-sunken p-2 font-mono text-label text-secondary">{healthCopyText(run, row)}</pre> : null}
     </div>
   );
+}
+
+/** Which closing line a failure gets: the first row has no rows before it, and
+    a failure the user cannot fix is not asked to be fixed. */
+function failedFooterKey(failedRow: HealthRow, run: HealthRun): Parameters<TFunction>[0] {
+  if (failedRow.id === run.rows[0]?.id) return "onboarding.check.failedFooterFirst";
+  if (failedRow.failure && REPORT_ONLY.has(failedRow.failure.code)) return "onboarding.check.failedFooterReport";
+  return "onboarding.check.failedFooter";
 }
 
 export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimary }: {
@@ -210,8 +224,9 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
   onLeave: () => void;
   /** "Skip the check": the step is marked skipped and the guide finishes. */
   onSkip: () => void;
-  /** Whether the step's own button is the screen's one accent action, so the
-      footer's "Open the board" steps back to a bordered button. */
+  /** Whether the footer's "Open the board" steps back to a bordered button:
+      while the check is still to run, running, or failed, the accent belongs to
+      this step (and to nothing at all while it runs). */
   onOwnsPrimary?: (owns: boolean) => void;
 }) {
   const { t } = useLocale();
@@ -228,6 +243,7 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
     return () => { if (tick.current) clearInterval(tick.current); };
   }, [running]);
 
+  const showControls = useCallback(() => { controls.current?.scrollIntoView?.({ block: "nearest" }); }, []);
   const failedRow = run?.rows.find((row) => row.state === "failed") ?? null;
   const failedAt = failedRow ? `${run!.id}:${failedRow.id}` : null;
   /* A failure can open below the dialog's fold; the button that runs the check again stays in view. */
@@ -235,8 +251,11 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
 
   const runtime = run?.runtime ?? answer?.runtime ?? null;
   const noEngineShown = loaded && !runtime && !run && noEngine;
-  /* One accent per screen: Run the check / Run it again holds it until the check passes. */
-  const ownsPrimary = !noEngineShown && !running && run?.state !== "passed";
+  /* One accent per screen at most: Run the check / Run it again holds it until
+     the check passes, and while the run is in progress nothing is filled — the
+     brightest control on a two-minute wait would otherwise be the one that
+     leaves the step. */
+  const ownsPrimary = !noEngineShown && run?.state !== "passed";
   useEffect(() => { onOwnsPrimary?.(ownsPrimary); }, [ownsPrimary, onOwnsPrimary]);
   useEffect(() => () => onOwnsPrimary?.(false), [onOwnsPrimary]);
   const lead = runtime
@@ -263,25 +282,30 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
           const shown: Shown = run?.state === "stopped" && row.state === "waiting" ? "notRun" : row.state;
           return (
             <li key={row.id} data-health-row={row.id} data-health-state={shown} className="border-b border-border py-2.5 last:border-b-0">
-              <div className="flex min-h-7 items-center gap-3">
+              <div className="flex min-h-7 items-center gap-3 max-sm:flex-wrap">
                 <RowGlyph state={shown} />
                 <span className="min-w-0 flex-1 text-body leading-[1.45] text-primary">
                   {t(ROW_KEY[row.id])}
                   <span className="sr-only">: {t(`onboarding.check.state.${shown}` as Parameters<TFunction>[0])}</span>
                 </span>
                 {row.state === "skipped" && row.note === "no-seat"
-                  ? <span className="text-label text-muted">{t("onboarding.check.noSeat")}</span>
-                  : <span className="shrink-0 text-label font-semibold text-muted">{t(`onboarding.check.state.${shown}` as Parameters<TFunction>[0])}</span>}
-                {seconds !== null ? <span className="w-10 shrink-0 text-right text-label tabular-nums text-muted">{t("onboarding.check.seconds", { seconds })}</span> : <span className="w-10 shrink-0" />}
+                  /* A sentence where the other rows carry one word: on a phone it
+                     drops to its own line under the label, so the longest label
+                     stays at one line and the row at two. */
+                  ? <span data-health-note="" className="text-label text-muted max-sm:order-1 max-sm:w-full max-sm:pl-7">{t("onboarding.check.noSeat")}</span>
+                  : <span className={`shrink-0 text-label font-semibold ${shown === "failed" ? "text-danger" : "text-muted"}`}>{t(`onboarding.check.state.${shown}` as Parameters<TFunction>[0])}</span>}
+                {/* The empty time column keeps the times aligned on a desktop;
+                    on a phone it is 52 px the longest label needs. */}
+                {seconds !== null ? <span className="w-10 shrink-0 text-right text-label tabular-nums text-muted">{t("onboarding.check.seconds", { seconds })}</span> : <span className="w-10 shrink-0 max-sm:hidden" />}
               </div>
-              {row.state === "failed" && row.failure && run ? <FailureBlock run={run} row={row} onGoEngines={onGoEngines} onLeave={onLeave} /> : null}
+              {row.state === "failed" && row.failure && run ? <FailureBlock run={run} row={row} onGoEngines={onGoEngines} onLeave={onLeave} onDetailsOpen={showControls} /> : null}
             </li>
           );
         })}
       </ol>
       <div className="mt-4 flex flex-col gap-3">
         {run?.state === "passed" ? <p data-health-summary="passed" className="text-body font-semibold text-success">{t("onboarding.check.allPassed")}</p> : null}
-        {failedRow ? <p data-health-summary="failed" className="text-body leading-[1.45] text-secondary">{t(failedRow.id === run!.rows[0]?.id ? "onboarding.check.failedFooterFirst" : "onboarding.check.failedFooter", { row: t(ROW_KEY[failedRow.id]) })}</p> : null}
+        {failedRow ? <p data-health-summary="failed" className="text-body leading-[1.45] text-secondary">{t(failedFooterKey(failedRow, run!), { row: t(ROW_KEY[failedRow.id]) })}</p> : null}
         {run?.state === "stopped" && run.cleanup.done ? <p data-health-summary="stopped" className="text-body leading-[1.45] text-secondary">{t("onboarding.check.stopped")}</p> : null}
         {cleaning ? <p className="text-body leading-[1.45] text-muted">{t("onboarding.check.cleaning")}</p> : null}
         {run?.cleanup.done && run.cleanup.problems.length ? <p data-health-cleanup-problem="" className="text-label leading-[1.45] text-warning">{t("onboarding.check.cleanupProblem", { problems: run.cleanup.problems.join("; ") })}</p> : null}

@@ -601,10 +601,17 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
     } catch (error) {
       run.cleanup.problems = [ports.redact(error instanceof Error ? error.message : String(error))];
     }
-    try {
-      ports.dropRunFile(stateDir);
-    } catch {
-      /* A run file left behind is swept on the next read, and its cleanup is idempotent. */
+    /* A cleanup that could not finish keeps its run file, so the next read or
+       start of the check undoes the rest from what the file names — which is
+       what the step tells the user. The sweep drops the file whatever that
+       second attempt does, so a step that can never succeed is tried once and
+       not on every read. */
+    if (run.cleanup.problems.length === 0) {
+      try {
+        ports.dropRunFile(stateDir);
+      } catch {
+        /* A run file left behind is swept on the next read, and its cleanup is idempotent. */
+      }
     }
     run.cleanup.done = true;
     run.finishedAt = iso(ports.now());

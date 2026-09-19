@@ -355,6 +355,8 @@ when one fails.
 | All passed | Everything works on this machine. | На цьому комп'ютері все працює. |
 | Finish | Open the board | Відкрити дошку |
 | Failed footer | The check stopped at "{row}". Fix that, then run it again: the rows before it passed. | Перевірка зупинилась на «{row}». Виправте це й запустіть знову: попередні кроки пройшли. |
+| Failed footer, nothing the user can fix | The check stopped at "{row}". The rows before it passed. | Перевірка зупинилась на «{row}». Попередні кроки пройшли. |
+| Cleanup left something | Could not undo everything: {problems}. The Viewer clears what is left the next time this check opens or runs. If the next run says the same, copy this line into a bug report. | Не вдалося все прибрати: {problems}. Viewer прибере залишки, коли ця перевірка наступного разу відкриється або запуститься. Якщо після наступного запуску напис той самий, скопіюйте цей рядок у повідомлення про помилку. |
 | Skip | Skip the check | Пропустити перевірку |
 | No engine | Connect an engine first (step 1). | Спершу підключіть рушій (крок 1). |
 | Details toggle | Show details | Показати подробиці |
@@ -362,7 +364,20 @@ when one fails.
 Row-by-row failure copy is in §5.2. Skipped when: no engine is connected (the
 row list is replaced by the no-engine line and "Open the board" stays
 available). Row 5 shows `skipped` with "No orchestrator yet." / «Оркестратора
-ще немає.» when the install has no seat.
+ще немає.» when the install has no seat. That is the pass a new install ends
+on, so it is a captured state of its own. The note is a sentence where the
+other rows carry one word: on a phone it drops to its own line under the label,
+which keeps the longest row label at one line and the row at two.
+
+The three footer lines are one sentence apart. "Fix that, then run it again"
+is only written under a failure the user can act on; `DELIVERY_FAILED`,
+`WAKE_NOT_OWED` and `WAKE_UNDELIVERED` say to copy the details into a bug
+report, so their footer states where the check stopped and stops there.
+
+While the check runs, no control on the screen is filled: the step's own button
+is "Stop" and the footer's "Open the board" steps back to a border, so the
+brightest thing during a two-minute wait is not the control that leaves. A
+failed row's state word carries `text-danger` with its glyph.
 
 "Open the board" writes `completedAt` and closes the dialog. It is enabled
 whatever the check's result, including never run.
@@ -710,6 +725,11 @@ the rail names it after the folder. No project archive exists, so the project
 stays in the rail with its two conversations archived off its board and its
 task cards hidden.
 
+A cleanup that could not finish keeps its run file, so the next read or start
+of the check undoes the rest from what the file names; the sweep then removes
+the file whatever that second attempt does, so a step that can never succeed is
+tried once rather than on every read. The amber line says exactly that.
+
 Cleanup survives a Viewer restart. As each thing comes into existence (the
 scratch folder, the test orchestrator, its project, the pipeline), the run
 writes it to `state/onboarding/health-runs/<run>/run.json`. A restart forgets
@@ -748,7 +768,7 @@ detail), a sentence of what happened and a sentence of what to do.
 | 1 | `CLI_MISSING` | The {engine} command was not found on this machine. / Команду {engine} не знайдено на цьому комп'ютері. | Install it, or make sure the Viewer is started from a shell where `{bin}` runs. / Встановіть її або запускайте Viewer з оболонки, де працює `{bin}`. | Go to Engines |
 | 1 | `ENGINE_NOT_CONNECTED` | No {engine} account is signed in. / Немає акаунта {engine} з виконаним входом. | Sign in, then run the check again. / Увійдіть і запустіть перевірку знову. | Go to Engines |
 | 1 | `ACCOUNT_EXHAUSTED` | The {engine} account has no capacity left until {time}. / Акаунт {engine} вичерпав ліміт до {time}. | Wait for the reset, or connect the other engine. / Дочекайтесь оновлення ліміту або підключіть інший рушій. | Open Accounts |
-| 1 | `SPAWN_TIMEOUT` | The agent did not start within 60 seconds. / Агент не запустився за 60 секунд. | Run `{bin} --version` in a terminal. If it answers, open the agent's card to see where it stopped. / Виконайте `{bin} --version` у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився. | Open the agent |
+| 1 | `SPAWN_TIMEOUT` | The agent did not start within 60 seconds. / Агент не запустився за 60 секунд. | Run `{bin} --version` in a terminal. If it answers, open the agent's card to see where it stopped. If it does not, reinstall it. / Виконайте `{bin} --version` у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився. Якщо ні — перевстановіть її. | Open the agent |
 | 2 | `DELIVERY_FAILED` | The agent started, and the first message did not reach it. / Агент запустився, але перше повідомлення до нього не дійшло. | This is a Viewer fault on this machine. Copy the details into a bug report. / Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `MCP_UNREACHABLE` | The agent ran and could not reach the Viewer's tools, so it could not report. / Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував. | The agent's session has no `viewer` MCP server. Restart the Viewer; if it repeats, copy the details into a bug report. / У сесії агента немає MCP-сервера `viewer`. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 3 | `REPORT_TIMEOUT` | The agent finished its turn without reporting the stage. / Агент завершив хід і не відзвітував про етап. | Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes. / Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить. | Open the agent |
