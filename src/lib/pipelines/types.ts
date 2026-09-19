@@ -358,6 +358,20 @@ export type PipelineStageAttempt = {
     resumedAt?: string;
     clientMessageId?: string;
   };
+  /** Why a turn that ended did not settle this attempt (#1441): its agent
+      still held harness-tracked background work, named in `tasks`. `openedAt`
+      is when the wait began and bounds it as a whole; `since` is when the
+      controller first saw the transcript silent at `silentSince` (its newest
+      record) with that work out. `until` is when the lane parks if the work
+      never reports: the earlier of the silence bound and the whole-wait
+      bound. Cleared once the work has reported. */
+  backgroundWait?: {
+    openedAt: string;
+    since: string;
+    until: string;
+    silentSince: number | null;
+    tasks: Array<{ id: string; kind: "command" | "monitor" | "wakeup" }>;
+  };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -365,17 +379,6 @@ export type PipelineStageAttempt = {
       only once the delivery surface accepted the request, and `firstMissAt`
       bounds the whole wait, so a queue that never drains still parks the lane
       through the ordinary recovery checks. */
-  /** Why a turn that ended did not settle this attempt (#1441): its agent
-      still held harness-tracked background work, named in `tasks`. `since` is
-      when the controller first saw the transcript silent at `silentSince`
-      (its newest record) with that work out, and `until` is when the lane
-      parks if the work never reports. Cleared once the work has reported. */
-  backgroundWait?: {
-    since: string;
-    until: string;
-    silentSince: number | null;
-    tasks: Array<{ id: string; kind: "command" | "monitor" | "wakeup" }>;
-  };
   verdictRequest?: {
     firstMissAt: string;
     messageTs: number;

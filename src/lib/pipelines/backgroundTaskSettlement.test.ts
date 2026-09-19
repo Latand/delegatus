@@ -101,6 +101,24 @@ const records = {
       { type: "user", timestamp: iso(ts + 10), message: { role: "user", content: body } },
     ];
   },
+  /** After a restart the harness reports every task the previous process
+      left without a record in one notification: several ids, one status, and
+      a scan marker that names no task. */
+  orphanNotification(ts: number, taskIds: readonly string[]) {
+    const body = [
+      "<task-notification>",
+      ...taskIds.map((id) => `<task-id>${id}</task-id>`),
+      "<task-id>__orphan_summary__:shell</task-id>",
+      "<status>stopped</status>",
+      `<summary>${taskIds.length} background shell command task(s) from the previous session have no completion record. They have been marked stopped. Task ids: ${taskIds.join(", ")}.</summary>`,
+      "</task-notification>",
+    ].join("\n");
+    return [
+      { type: "queue-operation", operation: "enqueue", timestamp: iso(ts), content: body },
+      { type: "queue-operation", operation: "dequeue", timestamp: iso(ts + 5) },
+      { type: "user", timestamp: iso(ts + 10), message: { role: "user", content: body } },
+    ];
+  },
   endTurn(ts: number, text: string) {
     return {
       type: "assistant",
@@ -306,6 +324,76 @@ test("a background task that never reports parks the lane at the deadline, namin
   expect(attempt().completedAt ?? null).toBeNull();
   expect(h.stops).toEqual([]);
   expect(h.requests).toEqual([]);
+});
+
+test("a persistent monitor the agent keeps answering parks the lane at the whole-wait bound, naming it, and stops nothing", async () => {
+  const h = harness();
+  await runningStage(h);
+
+  append(
+    records.toolUse(h.now() + 2_000, "toolu_monitor_p", "Monitor", { command: "tail -f build.log", persistent: true }),
+    records.toolResult(h.now() + 2_010, "toolu_monitor_p", `Monitor started (task ${MONITOR_ID}, persistent).`, {
+      taskId: MONITOR_ID,
+      timeoutMs: 600_000,
+      persistent: true,
+    }),
+    records.endTurn(h.now() + 3_000, "Watching the log."),
+  );
+  /* An event every ten minutes re-invokes the agent, so the transcript is
+     never silent for the hour the silence bound needs. */
+  for (let elapsed = 0; elapsed < 3 * 60 + 50; elapsed += 10) {
+    append(
+      records.notification(h.now() + 1_000, MONITOR_ID, null, "toolu_monitor_p"),
+      records.endTurn(h.now() + 2_000, "Another line; still watching."),
+    );
+    await tickAcross(h, 10 * 60_000, 5 * 60_000);
+    expect(loadPipelines()[0]!.state).toBe("running");
+  }
+  append(
+    records.notification(h.now() + 1_000, MONITOR_ID, null, "toolu_monitor_p"),
+    records.endTurn(h.now() + 2_000, "Another line; still watching."),
+  );
+  await tickAcross(h, 20 * 60_000, 5 * 60_000);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain(`monitor ${MONITOR_ID}`);
+  expect(parked.stateDetail).toContain("exceeded 4 h in all");
+  expect(attempt().completedAt ?? null).toBeNull();
+  expect(h.stops).toEqual([]);
+  expect(h.requests).toEqual([]);
+});
+
+test("one orphan notification after a restart ends every task it lists, and the stage reports and settles", async () => {
+  const h = harness();
+  await runningStage(h);
+
+  append(
+    records.backgroundStart(h.now() + 2_000, "bqx7orph1", "toolu_bg_o1"),
+    records.backgroundStart(h.now() + 3_000, "bqx7orph2", "toolu_bg_o2"),
+    records.backgroundStart(h.now() + 4_000, "bqx7orph3", "toolu_bg_o3"),
+    records.endTurn(h.now() + 5_000, "Three checks are running in the background."),
+  );
+  await tickAcross(h, 60_000);
+  expect(attempt().state).toBe("running");
+  expect(attempt().backgroundWait?.tasks.map((task) => task.id)).toEqual(["bqx7orph1", "bqx7orph2", "bqx7orph3"]);
+  const refused = await reportStageCompletion({ verdict: "pass", summary: "done" }, agent, h.ports);
+  expect(refused.code).toBe("STAGE_REPORT_BACKGROUND_TASK_RUNNING");
+
+  /* The process restarted; the new one reports all three as stopped at once. */
+  h.setHead(STAGE_HEAD);
+  append(records.orphanNotification(h.now() + 1_000, ["bqx7orph1", "bqx7orph2", "bqx7orph3"]));
+  h.advance(2_000);
+  const accepted = await reportStageCompletion({ verdict: "pass", summary: "the checks passed before the restart" }, agent, h.ports);
+  expect(accepted.code).toBeUndefined();
+  expect(accepted.report?.verdict).toMatchObject({ status: "pass" });
+
+  append(records.endTurn(h.now() + 1_000, "Done."));
+  h.advance(2_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(attempt().state).toBe("passed");
+  expect(attempt().backgroundWait).toBeUndefined();
 });
 
 test("a turn with no background task settles on its first end exactly as before", async () => {

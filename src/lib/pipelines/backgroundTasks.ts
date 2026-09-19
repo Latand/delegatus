@@ -70,15 +70,22 @@ function recordTs(record: RecordLike): number {
   return Date.parse(String(record.timestamp ?? "")) || 0;
 }
 
+/** A restart reports every task the previous process left without a record in
+    one notification: several `<task-id>` lines under one `<status>`, plus a
+    scan marker with this prefix that names no task. */
+const ORPHAN_SUMMARY_PREFIX = "__orphan_summary";
+
 function taskNotifications(text: string): Array<{ id: string; status: string | null }> {
   const trimmed = text.trim();
   if (!trimmed.startsWith("<task-notification")) return [];
   const found: Array<{ id: string; status: string | null }> = [];
   for (const block of trimmed.matchAll(/<task-notification\b[^>]*>([\s\S]*?)<\/task-notification>/g)) {
     const body = block[1] ?? "";
-    const id = body.match(/<task-id>\s*([^<\s]+)\s*<\/task-id>/)?.[1];
-    if (!id) continue;
-    found.push({ id, status: body.match(/<status>\s*([^<]+?)\s*<\/status>/)?.[1] ?? null });
+    const status = body.match(/<status>\s*([^<]+?)\s*<\/status>/)?.[1] ?? null;
+    for (const match of body.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>/g)) {
+      const id = match[1]!;
+      if (!id.startsWith(ORPHAN_SUMMARY_PREFIX)) found.push({ id, status });
+    }
   }
   return found;
 }

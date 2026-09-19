@@ -90,6 +90,28 @@ test("a monitor's event notices end nothing; its status notice or its own timeou
   expect(runningBackgroundTasks([persistent], "claude", T0 + 5 * 3_600_000)).toHaveLength(1);
 });
 
+/* After a restart the harness reports every task the previous process left
+   without a record in one notification, under one status, with a scan marker. */
+function orphanNotice(taskIds: readonly string[]) {
+  return [
+    "<task-notification>",
+    ...taskIds.map((id) => `<task-id>${id}</task-id>`),
+    "<task-id>__orphan_summary__:shell</task-id>",
+    "<status>stopped</status>",
+    `<summary>${taskIds.length} background shell command task(s) from the previous session have no completion record. They have been marked stopped. Task ids: ${taskIds.join(", ")}.</summary>`,
+    "</task-notification>",
+  ].join("\n");
+}
+
+test("one orphan notification ends every task it lists and names no task of its own", () => {
+  const started = [bashStart(T0, "bq1"), bashStart(T0 + 1, "bq2"), bashStart(T0 + 2, "bq3")];
+  const orphaned = { type: "user", timestamp: iso(T0 + 60_000), message: { role: "user", content: orphanNotice(["bq1", "bq2", "bq3"]) } };
+  const ledger = foldBackgroundTaskRecords(emptyBackgroundTaskLedger(), [...started, orphaned]);
+  expect(pendingBackgroundTasks(ledger, T0 + 120_000)).toEqual([]);
+  expect(ledger.ended).toEqual(["bq1", "bq2", "bq3"]);
+  expect(ledger.lastReportedAt).toBe(T0 + 60_000);
+});
+
 test("TaskStop ends the task it names", () => {
   const stop = {
     type: "user",

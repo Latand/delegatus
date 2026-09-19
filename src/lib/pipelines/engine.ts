@@ -1219,6 +1219,10 @@ const DEAD_RUNNING_ATTEMPT_GRACE_MS = 3 * 60_000;
     the harness schedules itself (a wakeup clamps at 3600 s) and a long bench
     or CI wait; parking earlier would lose the work the task is doing. */
 const BACKGROUND_TASK_WAIT_CEILING_MS = 60 * 60_000;
+/** The bound on the whole wait, however often the agent answers in between:
+    a persistent monitor over a source that keeps emitting, or a wakeup the
+    agent keeps re-arming, never lets the silence bound run out. */
+const BACKGROUND_TASK_WAIT_LIMIT_MS = 4 * 60 * 60_000;
 const BACKGROUND_TASK_WAIT_DETAIL_PREFIX = "waiting: ";
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
 /** Attempt states that end a round; a pending cursor over one of these queues a
@@ -2614,9 +2618,11 @@ async function requestStageVerdictOnce(
 
 /**
  * Holds a stage attempt open while its conversation has live background work
- * (#1441), and says so on the lane. The wait is bounded: once the transcript
- * has been silent for {@link BACKGROUND_TASK_WAIT_CEILING_MS} with the work
- * still out, the lane parks naming it. Neither outcome stamps `completedAt`,
+ * (#1441), and says so on the lane. The wait is bounded twice: once the
+ * transcript has been silent for {@link BACKGROUND_TASK_WAIT_CEILING_MS} with
+ * the work still out, or once the wait as a whole has lasted
+ * {@link BACKGROUND_TASK_WAIT_LIMIT_MS}, the lane parks naming the work.
+ * Neither outcome stamps `completedAt`,
  * so the terminal-host reaper leaves the agent and its task running.
  */
 function holdForBackgroundTasks(
@@ -2646,14 +2652,19 @@ function holdForBackgroundTasks(
   /* Any new record — a monitor event the agent answered, a new task — is the
      agent at work, so the silence and its bound start again from there. */
   const since = prior && prior.silentSince === silentSince ? prior.since : now;
-  const until = new Date(unixMs(since) + BACKGROUND_TASK_WAIT_CEILING_MS).toISOString();
+  const openedAt = prior?.openedAt ?? now;
+  const silenceBound = unixMs(since) + BACKGROUND_TASK_WAIT_CEILING_MS;
+  const wholeBound = unixMs(openedAt) + BACKGROUND_TASK_WAIT_LIMIT_MS;
+  const until = new Date(Math.min(silenceBound, wholeBound)).toISOString();
   const named = describeBackgroundTasks(live);
   const tasks = live.map((task) => ({ id: task.id, kind: task.kind }));
   if (unixMs(now) >= unixMs(until)) {
-    attempt.backgroundWait = { since, until, silentSince, tasks };
+    attempt.backgroundWait = { openedAt, since, until, silentSince, tasks };
     park(
       pipeline,
-      `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_CEILING_MS / 60_000} min without a notification; the stage agent and its work were left running`,
+      silenceBound <= wholeBound
+        ? `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_CEILING_MS / 60_000} min without a notification; the stage agent and its work were left running`
+        : `waiting for ${named} exceeded ${BACKGROUND_TASK_WAIT_LIMIT_MS / 3_600_000} h in all without the work reporting; the stage agent and its work were left running`,
       attempt,
     );
     persist();
@@ -2662,12 +2673,13 @@ function holdForBackgroundTasks(
   const detail = `${BACKGROUND_TASK_WAIT_DETAIL_PREFIX}${named}; the stage settles on the turn after it reports, and parks at ${until} if it never does`;
   if (
     !prior
+    || prior.openedAt !== openedAt
     || prior.since !== since
     || prior.silentSince !== silentSince
     || JSON.stringify(prior.tasks) !== JSON.stringify(tasks)
     || pipeline.stateDetail !== detail
   ) {
-    attempt.backgroundWait = { since, until, silentSince, tasks };
+    attempt.backgroundWait = { openedAt, since, until, silentSince, tasks };
     pipeline.stateDetail = detail;
     persist();
   }
