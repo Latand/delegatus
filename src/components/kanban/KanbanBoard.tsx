@@ -75,8 +75,33 @@ export function kanbanLayoutMode(width: number): KanbanLayoutMode {
   return "tabs";
 }
 
+/**
+ * Cross-project mode (#1820). Present ⇒ this board's columns carry the cards
+ * of EVERY project it was fed, not one: the task projection is no longer
+ * fenced to a single project, each card names its own and opens that
+ * project's board, only the cards `keep` admits are shown, and the surfaces
+ * that need one project to write into — «+ Task», «+ Agent», the orchestrator
+ * seat, drafts — are simply not offered. Everything else, including a status
+ * move (it already writes with the task's own `expectedProject`), is the
+ * board a project renders.
+ */
+export interface KanbanOverviewScope {
+  /** Display name per project key, for the label each card carries. */
+  names: Readonly<Record<string, string>>;
+  /** The card's label opens that project's own board. */
+  onOpenProject: (project: string) => void;
+  /** The cards the Overview keeps. Applied exactly where search is applied,
+      so a rejected card leaves the columns and no count. */
+  keep: (card: KanbanCardModel) => boolean;
+}
+
 export interface KanbanBoardProps {
+  /** The board's project. Its identity too: the reader memory, the focus
+      index and the loose reader key on it. The Overview passes the rail's
+      own `__overview__` key and `overview` below. */
   project: string;
+  /** Cross-project Overview (#1820); absent on a project's own board. */
+  overview?: KanbanOverviewScope | null;
   groups: BranchGroup[];
   manual: FileEntry[];
   files: FileEntry[];
@@ -232,7 +257,14 @@ function useBands(props: KanbanBoardProps) {
     previousLayout.current = built;
     return built;
   }, [props.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
-  const projection = useMemo(() => projectTaskWorkflows([...allTasks], pipelines, flows, files, project), [allTasks, pipelines, flows, files, project]);
+  /* The projection's `project` only fences its UNLINKED buckets to one
+     project; omitting it is already the cross-project answer, so the Overview
+     passes nothing rather than calling this once per project. */
+  const projectionProject = props.overview ? undefined : project;
+  const projection = useMemo(
+    () => projectTaskWorkflows([...allTasks], pipelines, flows, files, projectionProject),
+    [allTasks, pipelines, flows, files, projectionProject],
+  );
   const bands = useMemo(
     () => buildTaskBands(layout, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }),
     [layout, allTasks, projection, draftBands, t],
@@ -357,8 +389,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      waits, and a per-second clock would rebuild every card each tick. */
   const modelNow = Math.floor(props.now / 15) * 15;
   const model: KanbanModel = useMemo(
-    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, seat: seatRefs, query, now: modelNow }),
-    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, seatRefs, query, modelNow],
+    () => buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, seat: seatRefs, query, now: modelNow }),
+    [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, seatRefs, query, modelNow],
   );
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
@@ -1874,7 +1906,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [show, t]);
 
   const onboardCount = model.totals.onBoard;
-  const filtering = query.trim().length > 0;
+  /* The Overview narrows permanently, so its columns read «3 of 41» and an
+     empty one says so, exactly as they do under a search. */
+  const searching = query.trim().length > 0;
+  const filtering = searching || Boolean(props.overview);
+  /* What an empty column says depends on WHICH narrowing emptied it: a search
+     the operator typed is advice about the search, the Overview's permanent
+     filter is not (#696 — a filtered-out board and a fruitless search must not
+     render the same screen). Null leaves the column its own empty copy. */
+  const emptyFiltered = searching
+    ? { title: t("kanban.noMatch"), body: t("kanban.noMatchHint") }
+    : props.overview
+      ? { title: t("overview.noneWorking"), body: t("overview.noneWorkingHint") }
+      : null;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
@@ -1938,6 +1982,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const addAgentRef = useRef(props.onAddAgent);
   addAgentRef.current = props.onAddAgent;
   const addAgentToCard = useCallback((card: KanbanCardModel) => addAgentRef.current?.({ id: card.id, task: card.task, title: card.title }), []);
+  /* One stable callback behind the Overview's, so a card's memo never breaks
+     on a fresh arrow from the page above. */
+  const openProjectRef = useRef(props.overview?.onOpenProject);
+  openProjectRef.current = props.overview?.onOpenProject;
+  const openProject = useCallback((project: string) => openProjectRef.current?.(project), []);
   /* The dashboard hands a fresh callback on each of its renders; readers get one that stays the same. */
   const spawnRetryRef = useRef(props.onSpawnRetry);
   spawnRetryRef.current = props.onSpawnRetry;
@@ -1961,6 +2010,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       mode={mode}
       activeTab={tab}
       filtering={filtering}
+      emptyFiltered={emptyFiltered}
       collapsed={collapsed}
       nowMs={modelNow * 1000}
       pendingIds={controller}
@@ -1973,7 +2023,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}
       placement={placement}
-      newTask={status === "inbox" && composingTask ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
+      newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -2005,6 +2055,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
         onAddAgent: props.onAddAgent ? addAgentToCard : undefined,
+        projectNames: props.overview?.names ?? null,
+        onOpenProject: props.overview ? openProject : undefined,
       }}
     />
   ));
@@ -2075,16 +2127,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
           </button>
           {props.viewSwitch ? <span className="view-switch">{props.viewSwitch}</span> : null}
         </div>
-        <div className="bar-create">
-          <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
-            <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
-          </button>
-          {props.onNewAgent ? (
-            <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
-              <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
-            </button>
-          ) : null}
-        </div>
+        {/* Both creation surfaces write into ONE project's board. The Overview
+            has no single project to write into, so it offers neither rather
+            than picking one for the operator — and the slot itself goes with
+            them, so the bar keeps no empty cell where they were (#1820). */}
+        {props.overview && !props.onNewAgent ? null : (
+          <div className="bar-create">
+            {props.overview ? null : (
+              <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
+                <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
+              </button>
+            )}
+            {props.onNewAgent ? (
+              <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
+                <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
+              </button>
+            ) : null}
+          </div>
+        )}
       </header>
 
       <div className="kb-page">
@@ -2224,9 +2284,10 @@ type CardHandlers = Pick<
   | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt"
   | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent"
+  | "projectNames" | "onOpenProject"
 >;
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
@@ -2243,6 +2304,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
   mode: KanbanLayoutMode;
   activeTab: TaskStatus;
   filtering: boolean;
+  /** Title and body an empty column draws while a narrowing hides cards, or null. */
+  emptyFiltered: { title: string; body: string } | null;
   collapsed: ReadonlySet<string>;
   nowMs: number;
   pendingIds: { pending(id: string): boolean };
@@ -2307,8 +2370,8 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, collapsed
         {newTask}
         {empty ? (
           <div className="empty">
-            <strong>{filtering ? t("kanban.noMatch") : t(`kanban.empty.${status}.title`)}</strong>
-            <span>{filtering ? t("kanban.noMatchHint") : t(`kanban.empty.${status}.body`)}</span>
+            <strong>{emptyFiltered ? emptyFiltered.title : t(`kanban.empty.${status}.title`)}</strong>
+            <span>{emptyFiltered ? emptyFiltered.body : t(`kanban.empty.${status}.body`)}</span>
           </div>
         ) : null}
         {active.map(renderCard)}

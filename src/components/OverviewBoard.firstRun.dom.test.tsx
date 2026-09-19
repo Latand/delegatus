@@ -52,6 +52,9 @@ Object.assign(globalThis, {
   sessionStorage: dom.sessionStorage,
   localStorage: dom.localStorage,
   matchMedia: matchMediaStub,
+  /* The board the Overview mounts measures card presence on a frame (#1820). */
+  requestAnimationFrame: (callback: (t: number) => void) => setTimeout(() => callback(0), 0) as unknown as number,
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
 
 function fileEntry(overrides: Partial<FileEntry> = {}): FileEntry {
@@ -103,7 +106,6 @@ function renderBoard(extra: Partial<React.ComponentProps<typeof OverviewBoard>> 
         archivedProjects={new Set()}
         now={2_000}
         onSelectProject={() => {}}
-        onSelectFile={() => {}}
         {...extra}
       />,
     ),
@@ -180,11 +182,12 @@ test("on a phone the same button opens the project switcher sheet, where the cre
   getMobileNav().home();
 });
 
-test("a board with projects on it renders cards, never the first-run panel", () => {
+test("a board with projects on it renders the kanban, never the first-run panel", () => {
   const host = renderBoard({ files: [fileEntry()] });
   expect(panel(host)).toBeNull();
   expect(createButton(host)).toBeNull();
-  expect(host.querySelector('[data-testid="overview-card"]')).not.toBeNull();
+  /* #1820: the Overview's board IS the project board, over every project. */
+  expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
 });
 
 test("an installation whose only project is archived is not a first run", () => {
@@ -196,7 +199,7 @@ test("an installation whose only project is archived is not a first run", () => 
   expect(createButton(host)).toBeNull();
   expect(host.textContent).not.toContain(en["overview.firstRunTitle"]);
   expect(host.textContent).toContain(en["overview.archived"].replace("{count}", "1"));
-  expect(host.querySelector('[data-testid="overview-card"]')).toBeNull();
+  expect(host.querySelector("[data-kanban-board]")).toBeNull();
 });
 
 test("an unreachable catalog keeps its failure notice instead of the first-run panel", () => {

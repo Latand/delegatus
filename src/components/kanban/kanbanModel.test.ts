@@ -8,7 +8,7 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
-import { buildKanbanModel, KANBAN_STATUSES, summarizePipeline } from "./kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, KANBAN_STATUSES, summarizePipeline } from "./kanbanModel";
 
 /* Pure projection tests: invented tasks, transcripts and pipelines, a layout
    built the way the scheme builds it, and the real band projection on top. */
@@ -454,4 +454,51 @@ test("a review-loop pipeline whose only recent work is its reviewer's sorts by t
   ];
   expect(pipelineOrder(pipelines, files, [flow]).map((summary) => summary.pipeline.id)).toEqual(["p-review", "p-other"]);
   expect(pipelineOrder(pipelines, [files[0]!, { ...reviewer, lastAgentWorkAt: null }, other], [flow]).map((summary) => summary.pipeline.id)).toEqual(["p-other", "p-review"]);
+});
+
+/* #1820: the Overview's predicate and the narrowing it rides on. */
+
+test("live work is read from the counters' own evidence: a working member, an owed answer, a stage in flight", () => {
+  const working = file(70, { activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
+  const finished = file(71, { activity: "live", lastTurn: { startedAt: (NOW - 600) * 1000, endedAt: (NOW - 300) * 1000 } });
+  const tasks = [
+    task("busy", "assigned", [working.path]),
+    task("quiet", "assigned", [finished.path]),
+    task("bare", "inbox"),
+    task("piped", "blocked", [], { id: "piped" }),
+  ];
+  const running = pipeline();
+  running.taskIds = ["piped"];
+  const built = model(tasks, [working, finished], { pipelines: [running] });
+  const byId = new Map(KANBAN_STATUSES.flatMap((status) => built.columns[status].cards).map((card) => [card.task!.id, card] as const));
+
+  expect(cardHasLiveWork(byId.get("busy")!)).toBe(true);
+  /* The counter reads the same closed turn and does not count it; neither does
+     the Overview. */
+  expect(byId.get("quiet")!.working).toBe(0);
+  expect(cardHasLiveWork(byId.get("quiet")!)).toBe(false);
+  expect(cardHasLiveWork(byId.get("bare")!)).toBe(false);
+  /* A stage attempt in flight is a worker working, transcript or not. */
+  expect(cardHasLiveWork(byId.get("piped")!)).toBe(true);
+});
+
+test("the filter narrows exactly where search narrows, and no count moves with it", () => {
+  const working = file(72, { activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
+  const tasks = [task("busy", "assigned", [working.path]), task("quiet", "assigned")];
+  const files = [working];
+  const projection = projectTaskWorkflows(tasks, [], [], files);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const built = buildKanbanModel({ bands, tasks, pipelines: [], projection, files, cardFilter: cardHasLiveWork, now: NOW });
+
+  expect(built.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["busy", "quiet"]);
+  expect(built.columns.assigned.shown.map((card) => card.task!.id)).toEqual(["busy"]);
+  expect(built.totals.onBoard).toBe(2);
+  expect(built.columns.assigned.working).toBe(1);
+});
+
+test("each card names its own project, so cards from several can share one column", () => {
+  const mine = file(73, { project: "atlas", activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
+  const tasks = [task("here", "assigned", [mine.path], { project: "atlas" })];
+  const built = model(tasks, [mine]);
+  expect(built.columns.assigned.cards[0]!.project).toBe("atlas");
 });

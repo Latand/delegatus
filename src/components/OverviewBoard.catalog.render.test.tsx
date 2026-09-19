@@ -22,7 +22,6 @@ function board(catalogFailures: number) {
       now={2_000}
       catalogFailures={catalogFailures}
       onSelectProject={() => {}}
-      onSelectFile={() => {}}
     />,
   ).replaceAll("&#x27;", "'");
 }
@@ -50,7 +49,7 @@ test("a genuinely empty installation still reads as empty, with no error", () =>
 
 test("the header title truncates and the subtitle is withheld below 360px", () => {
   const html = board(0);
-  const header = html.slice(0, html.indexOf("grid flex-1"));
+  const header = html.slice(0, html.indexOf('data-testid="overview-body"'));
   /* The fixed-height bar clips the x axis only: its own mobile children are
      44px against this 40px row, and a plain `overflow-hidden` sliced their
      rounded borders on the very surface #701 set out to make usable. */
