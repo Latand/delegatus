@@ -236,7 +236,11 @@ export interface SeatTickItem {
       same child again an hour later under the other heading is the repeat this
       exists to stop. Only child items have any. */
   stateTokens?: readonly string[];
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child";
+  /** `provisioning` is the outcome of the seat's own create call (#1799): the
+      lane it asked for is provisioned and its first stage has launched. It is
+      announced once — see {@link SeatTickProjectState.announcedLanes} — because
+      there is nothing for the seat to close out, only something to know. */
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning";
   id: string;
   label: string;
 }
@@ -439,13 +443,26 @@ export interface SeatTickPipelineInput {
 export interface SeatTickOwnLaneInput {
   id: string;
   title: string;
-  /** What settled: the lane completed, a stage failed (a failed spawn among
-      them), or it parked waiting for a decision. */
-  settled: "completed" | "failed" | "needs_decision";
+  /**
+   * What settled: the lane completed, a stage failed (a failed spawn among
+   * them), or it parked waiting for a decision.
+   *
+   * The two provisioning values are the outcome of the seat's own
+   * `create_pipeline` call (#1799), which is answered before the base is
+   * resolved and therefore before anything is known about whether the lane
+   * can run at all. `provisioned` says the base was fetched, the worktree was
+   * made and the first stage launched; `provisioning-failed` says the fetch or
+   * the worktree failed and the lane parked without ever running a stage,
+   * carrying the reason in {@link detail}.
+   */
+  settled: "completed" | "failed" | "needs_decision" | "provisioned" | "provisioning-failed";
   /** Newest movement instant, or null. The backlog bound is measured from it,
       so a lane the seat settled and left alone for days stops being a reason
       it can never discharge — the same rule an unstarted card lives under. */
   updatedAt: string | null;
+  /** Why a lane that never ran a stage parked (#1799), bounded and redacted by
+      the source. Only `provisioning-failed` carries one. */
+  detail?: string | null;
 }
 
 export interface SeatTickTaskInput {
@@ -690,6 +707,11 @@ export interface SeatTickWakeCommit {
   /** Terminal children this wake names (#1465). A landing records them as
       harvested; a wake that never lands leaves them owed. */
   children: string[];
+  /** The lanes whose provisioning this wake announces (#1799). Recorded by a
+      landing and by nothing else, exactly as the harvested children are: an
+      announcement the delivery layer never delivered told the seat nothing,
+      and the lane stays announceable. */
+  announcedLanes?: string[];
   /** The state tokens of every child line this wake carries (#1783 round two),
       recorded by a landing and by nothing else — a wake the layer never
       delivered showed the seat nothing, and must leave its children offerable
@@ -803,6 +825,11 @@ export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
     which is the failure mode this bound is chosen to have. */
 export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
+/** How many announced lanes a project's row keeps (#1799). Past it the oldest
+    may be announced once more, which is a repeated line rather than a lost
+    obligation — an announcement carries no obligation at all. */
+export const SEAT_TICK_ANNOUNCED_LANES_LIMIT = 64;
+
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
   accounting?: { filename: string; revision: number; gap: string | null };
@@ -904,6 +931,19 @@ export interface SeatTickProjectState {
    * answered "unchanged" would never be told at all.
    */
   childrenShown: string[];
+  /**
+   * Lanes whose provisioning a delivered wake has already announced (#1799),
+   * newest last, bounded to {@link SEAT_TICK_ANNOUNCED_LANES_LIMIT}.
+   *
+   * A provisioned lane is the one own-lane settlement with no obligation
+   * behind it: the seat asked for the lane, the lane is running, and there is
+   * nothing to close out. So it has no discharge of its own, and without this
+   * row it would be a wake reason every interval for as long as the backlog
+   * bound held it — the reason nothing can discharge that the bound exists to
+   * refuse. Announced once, it is never offered again; the lane's later
+   * settlements are unaffected, because they are different settlements.
+   */
+  announcedLanes: string[];
 }
 
 export interface SeatTickCheckInput {
@@ -1106,5 +1146,6 @@ export function emptySeatTickState(): SeatTickProjectState {
     childrenGap: null,
     harvestedChildren: [],
     childrenShown: [],
+    announcedLanes: [],
   };
 }

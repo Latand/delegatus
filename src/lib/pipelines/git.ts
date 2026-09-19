@@ -10,6 +10,19 @@ function failure(step: string, result: ExecResult): { ok: false; error: string }
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
 }
 
+/** The cheap half of {@link resolvePipelineBase}: the branch-name shape, with
+    no repository read and no network at all. Create runs this alone (#1799) so
+    an invalid base branch is still refused before the record is admitted,
+    while the fetch that used to run beside it happens in the controller. */
+export function pipelineBaseBranchError(baseBranch: string | undefined): string | null {
+  return validBaseBranch(baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH) ? null : INVALID_BASE_BRANCH;
+}
+
+const INVALID_BASE_BRANCH = "the pipeline base branch is invalid";
+
+/** The branch a pipeline resolves its base from when the caller named none. */
+export const DEFAULT_PIPELINE_BASE_BRANCH = "main";
+
 function validBaseBranch(value: string): boolean {
   return (
     /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) &&
@@ -26,9 +39,11 @@ function validPipelineBranch(value: string): boolean {
   return validBaseBranch(value);
 }
 
-/* A single-branch fetch of a repository that is already cloned. The bound
-   only has to stop an unanswered connection from holding the caller: the
-   create request, or the provisioning tick with the pipeline mutation held. */
+/* A single-branch fetch of a repository that is already cloned. Since #1799
+   no request and no lease holder waits on it: the create call is answered
+   before the base is resolved, and the controller fetches outside the registry
+   mutation. The bound is what stops an unanswered connection from leaving a
+   lane in `provisioning` for ever. */
 const BASE_FETCH_TIMEOUT = "60s";
 
 /** `--signal=KILL` takes `timeout` down with its command, so a real expiry
@@ -40,15 +55,19 @@ function killedAtBound(result: ExecResult): boolean {
 /** Resolves the exact commit a pipeline starts from. Without `baseRef` this
     is the one remote read an internal pipeline makes: a bounded fetch of
     `origin/<base>`, so the worktree starts from the current base (#360). A
-    remote that cannot answer refuses the creation rather than starting from
-    a stale ref. A pinned `baseRef` never touches the network. */
+    remote that cannot answer parks the lane rather than starting from a stale
+    ref. A pinned `baseRef` never touches the network.
+
+    Since #1799 the fetching form runs only in the controller, outside the
+    registry lease; a request path that still calls this passes a pinned
+    `baseRef`. */
 export function resolvePipelineBase(
   repoDir: string,
   input: { baseBranch?: string; baseRef?: string },
   exec: ExecPort,
 ): PipelineBaseResult {
-  const baseBranch = input.baseBranch?.trim() || "main";
-  if (!validBaseBranch(baseBranch)) return { ok: false, error: "the pipeline base branch is invalid" };
+  const baseBranch = input.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(baseBranch)) return { ok: false, error: INVALID_BASE_BRANCH };
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
     const fetch = exec(

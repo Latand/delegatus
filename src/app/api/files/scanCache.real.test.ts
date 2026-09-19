@@ -526,7 +526,7 @@ test("persisted Claude question state hydrates without transcript reads and stay
   }
 }, 30_000);
 
-test("a persisted Claude result rebuilds recovery evidence while a busy assistant hydrates without reads", async () => {
+test("a persisted Claude result rebuilds recovery evidence, and every rebuilt Claude turn costs exactly one bounded read", async () => {
   const previousTestStateDir = process.env.LLV_STATE_DIR;
   const testStateDir = path.join(sandbox, "durable-claude-result-state");
   const projectDir = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "-repo-claude-result-hydration");
@@ -596,11 +596,21 @@ test("a persisted Claude result rebuilds recovery evidence while a busy assistan
       turn: { state: "terminal", source: "lifecycle" },
     });
     expect(transcriptReads).toBe(1);
+    /* No `result` record behind it, so this transcript's only terminal evidence
+       is the assistant record's own `end_turn` stop reason (issue #1792).
+       That makes it a terminal AUTHORITATIVE Claude turn, the one shape
+       `primeTranscriptTurnEvidence` deliberately refuses to carry across a
+       restart — a persisted snapshot cannot say whether the release hinged on
+       `recoveryReleased`, which the migration coordinator reads to re-impose
+       busy while a live host still owns the transcript. So it costs one
+       bounded tail read here, where before the fix it hydrated as busy for
+       free and wrongly. The reads are still bounded and identity-keyed: the
+       count below rises by exactly one and nothing re-reads twice. */
     expect(transcriptTurnResult(assistantPath, restartedAssistant.size, restartedAssistant.mtime * 1000, "claude")).toMatchObject({
       complete: true,
-      turn: { state: "busy", source: "assistant" },
+      turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-07-16T12:00:01.000Z" },
     });
-    expect(transcriptReads).toBe(1);
+    expect(transcriptReads).toBe(2);
 
     fs.appendFileSync(resultPath, "\n");
     const changed = fs.statSync(resultPath);
@@ -611,7 +621,7 @@ test("a persisted Claude result rebuilds recovery evidence while a busy assistan
       complete: true,
       turn: { state: "terminal", source: "lifecycle" },
     });
-    expect(transcriptReads).toBe(3);
+    expect(transcriptReads).toBe(4);
   } finally {
     fs.openSync = originalOpen;
     fs.closeSync = originalClose;

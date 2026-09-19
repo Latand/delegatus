@@ -61,6 +61,34 @@ test("pipeline collection route mirrors flow GET and POST shapes", async () => {
   unregister();
 });
 
+/* #1799: the HTTP door answers on the same terms the MCP one does — the base
+   is the controller's to resolve, so nothing here waits on a remote. The test
+   would be reaching this repository's real origin if it did. */
+test("pipeline POST without baseRef answers at once with the base unresolved (#1799)", async () => {
+  const unregister = registerPipelineTick(async () => {});
+  const request = new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST",
+    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({
+      task: "answer before the fetch",
+      src: creatorPath,
+      repoDir: process.cwd(),
+      stages: [{ id: "build", kind: "run", prompt: "build", next: null }],
+    }),
+  });
+  const response = await POST(request);
+  expect(response.status).toBe(201);
+  const body = await response.json() as { pipeline: { state: string; baseBranch: string; baseRef: string; lastPassedCommit: string; stateDetail: string | null } };
+  expect(body.pipeline).toMatchObject({
+    state: "provisioning",
+    baseBranch: "main",
+    baseRef: "",
+    lastPassedCommit: "",
+    stateDetail: "resolving the pipeline base and provisioning the worktree",
+  });
+  unregister();
+});
+
 test("pipeline POST returns a persisted draft id for autoStart false", async () => {
   let ticks = 0;
   const unregister = registerPipelineTick(async () => { ticks += 1; });

@@ -33,7 +33,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
-import { conversationTurnLiveness, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
+import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 
 type AdoptedStructuredHost = AdoptedCodexHost | AdoptedClaudeHost;
@@ -563,7 +563,11 @@ function persistedTurnState(
  * to tell it to continue, which is a status word deciding a paid turn on a
  * transcript nobody in this process has managed to read.
  */
-async function refreshStructuredTranscriptState(registry: AgentRegistry, assertActive: () => void = () => {}): Promise<ReadonlySet<string>> {
+async function refreshStructuredTranscriptState(
+  registry: AgentRegistry,
+  assertActive: () => void = () => {},
+  lastEventByHost: Map<string, number | null> = new Map(),
+): Promise<ReadonlySet<string>> {
   const snapshot = registry.readOnlySnapshot();
   const observedAt = new Date().toISOString();
   const candidates = Object.values(snapshot.conversations).flatMap((conversation) => {
@@ -586,6 +590,9 @@ async function refreshStructuredTranscriptState(registry: AgentRegistry, assertA
         if (!candidate) continue;
         const { conversation, generation, hostKey } = candidate;
         const tail = await readStableTailRecords(generation.path);
+        lastEventByHost.set(hostKey, tail.integrity === "complete"
+          ? transcriptEvidenceFromRecords(tail.records, conversation.engine, null).lastEventAt
+          : null);
         if (tail.integrity !== "complete") {
           unreadable.add(hostKey);
           continue;
@@ -669,7 +676,14 @@ async function structuredStartupSignals(
   };
 }
 
-function structuredStartupAdoptionFilter(
+/** Like LLV_HOST_RETIREMENT_IDLE_HOURS, this bounds speculative host residency.
+    Owed work and severed seats bypass this window. Invalid values use six hours. */
+function startupTurnMaxAgeMs(): number {
+  const hours = Number(process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS ?? 6);
+  return (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000;
+}
+
+async function structuredStartupAdoptionFilter(
   registry: AgentRegistry,
   signals: StructuredStartupSignals,
   snapshot: RegistryFile = registry.readOnlySnapshot(),
@@ -678,7 +692,8 @@ function structuredStartupAdoptionFilter(
   unreadableTranscriptHostKeys: ReadonlySet<string> = new Set(),
   settledStageConversationIds: ReadonlySet<string> = new Set(),
   deferredStageConversationIds: ReadonlySet<string> = new Set(),
-): StructuredHostAdoptionFilter {
+  lastEventByHost: Map<string, number | null> = new Map(),
+): Promise<StructuredHostAdoptionFilter> {
   const conversationsByCurrentEntry = new Map(Object.values(snapshot.conversations).flatMap((conversation) => {
     const generation = conversation.generations.at(-1);
     return generation
@@ -690,6 +705,17 @@ function structuredStartupAdoptionFilter(
       || delivery.state === "assigned"
       || delivery.state === "delivery-uncertain")
     .map((delivery) => registry.canonicalConversationId(delivery.conversationId)));
+  // Reuse the refresh's bounded read across both adoption and publication.
+  // An injected refresh or a newly registered host may not have supplied it.
+  for (const [key, conversation] of conversationsByCurrentEntry) {
+    const entry = snapshot.entries[key];
+    if (entry?.status !== "live" || !entry.structuredHost || conversation.supersededBy || lastEventByHost.has(key)) continue;
+    const evidence = await readTranscriptEvidence(conversation.engine, conversation.generations.at(-1)!.path);
+    lastEventByHost.set(key, evidence.lastEventAt);
+  }
+  const now = Date.now();
+  const maxAgeMs = startupTurnMaxAgeMs();
+  const loggedRefusals = new Set<string>();
   return (entry) => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
     if (!conversation) return false;
@@ -733,7 +759,16 @@ function structuredStartupAdoptionFilter(
        resurrect an idle or dead registry host by itself; the registry's live
        process evidence remains the startup liveness gate. */
     const liveHost = entry.status === "live";
-    return liveHost && unfinishedTurn;
+    if (!liveHost || !unfinishedTurn) return false;
+    const key = sessionKeyId(entry.key);
+    const lastEventAt = lastEventByHost.get(key) ?? null;
+    const ageMs = lastEventAt === null ? null : Math.max(0, now - lastEventAt);
+    if (ageMs !== null && ageMs <= maxAgeMs) return true;
+    if (!loggedRefusals.has(key)) {
+      console.warn("[structured hosts] refusing stale turn-claim adoption", { key, ageMs, maxAgeMs });
+      loggedRefusals.add(key);
+    }
+    return false;
   };
 }
 
@@ -904,9 +939,10 @@ export async function adoptStructuredHostsAtStartup(
     completedHosts: 0,
     totalHosts: null,
   });
+  const lastEventByHost = new Map<string, number | null>();
   const unreadableTranscripts = await (dependencies.refreshTranscriptState
     ? dependencies.refreshTranscriptState(registry)
-    : refreshStructuredTranscriptState(registry, assertActive))
+    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost))
     ?? new Set<string>();
   /* Close persists survivors under this same lease. Read after refresh and
      hold admission through launch, demotion and publication, so no awaited
@@ -938,7 +974,7 @@ export async function adoptStructuredHostsAtStartup(
        cannot block the startup recovery path. */
     reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key)) || deferredHostKeys.has(sessionKeyId(entry.key)));
     const signals = await structuredStartupSignals(registry, client);
-    const eligible = structuredStartupAdoptionFilter(
+    const eligible = await structuredStartupAdoptionFilter(
       registry,
       signals,
       registry.readOnlySnapshot(),
@@ -947,6 +983,7 @@ export async function adoptStructuredHostsAtStartup(
       unreadableTranscripts,
       pipelineEvidence.settled,
       pipelineEvidence.deferred,
+      lastEventByHost,
     );
     const shouldAdopt: StructuredHostAdoptionFilter = (entry) => {
       // Let an adopter return the handles it already created. Throwing from
@@ -1116,7 +1153,7 @@ export async function adoptStructuredHostsAtStartup(
       orchestratorHostKeys,
     );
     rememberStructuredStartupRetry(nextAdoptedHosts, orchestratorRecoveries);
-    const finalShouldAdopt = structuredStartupAdoptionFilter(
+    const finalShouldAdopt = await structuredStartupAdoptionFilter(
       registry,
       signals,
       publicationSnapshot,
@@ -1125,7 +1162,9 @@ export async function adoptStructuredHostsAtStartup(
       unreadableTranscripts,
       pipelineEvidence.settled,
       pipelineEvidence.deferred,
+      lastEventByHost,
     );
+    assertActive();
     const finalHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldPublish: StructuredHostAdoptionFilter = (entry) =>
       finalHostKeys.has(sessionKeyId(entry.key)) || finalShouldAdopt(entry);
