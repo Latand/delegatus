@@ -2117,3 +2117,14 @@ test("explicit original-operation fence survives hydration and blocks dispatch w
   expect(claimOutboxDispatch(card, "pending-key")).toBeNull();
   expect(readOutbox(card)[0]?.state).toBe("queued");
 });
+
+
+test("pending then queued observations preserve a server-reported unknown delivery", () => {
+  const receipt = { operationId: "operation-unknown", idempotencyKey: "key-unknown", conversationId: "conversation",
+    kind: "send" as const, status: "uncertain" as const, at: "2026-01-01T00:00:00.000Z", revision: 1 };
+  const original = { id: receipt.idempotencyKey, state: "delivering" as const, deliveryUncertain: true as const, deliveryReceipt: receipt };
+  const pending = { ...original, ...outboxReceiptPatch(original, "pending", { ...receipt, status: "pending", revision: 2 }) };
+  const queued = { ...pending, ...outboxReceiptPatch(pending, "queued", { ...receipt, status: "queued", revision: 3 }) };
+  expect(queued.deliveryUncertain).toBe(true);
+  expect(queued.awaitingTurn).toBeUndefined();
+});
