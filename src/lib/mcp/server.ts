@@ -2705,7 +2705,17 @@ export function createMcpToolService(
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && error.details.code.startsWith("TASK_") ? error.details.code : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
-          settled = failure(
+          // Tools without a downstream recovery reader still preserve an
+          // uncertain dispatch as unknown. Cache that answer under the original
+          // key so replay cannot repeat a possibly executed control.
+          settled = error instanceof McpDispatchUncertainError
+            ? recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "dispatch-uncertain",
+              reason: `${error.message}; execution remains possible, so look up this call under the same clientRequestId; do not repeat it with a new key`,
+              ids: stringIds(error.details),
+            }, false)
+            : failure(
             typedTool,
             requestId,
             taskCode ?? "tool_failed",
@@ -2823,7 +2833,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   link_task_to_pipeline: "Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Viewer conversations with durable ids and transcript paths.",
-  search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns match snippets with speaker, timestamp, transcript path and byte offset. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
+  search_transcripts: "Search indexed user and assistant message bodies across every scanned transcript store, both engines and all accounts. Ask it \"has this been solved before?\" at the start of a task and whenever a problem appears: several phrasings, project-scoped first, then unscoped. Returns newest messages first, with deterministic ties; duplicate bodies use their newest occurrence and undated messages use their indexed file time. Returns match snippets with speaker, timestamp, transcript path and byte offset. Pass nextCursor unchanged to continue the same ordering while new messages are indexed. Read the surrounding turns by passing a hit's transcriptPath (and its timestamp as since) to conversation_messages; byteOffset and lineNumber pin the exact line. project is optional, and empty pages include corpus statistics. Queries never read transcript files.",
   get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",

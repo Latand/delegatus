@@ -1164,6 +1164,12 @@ function openTurnRecords(engine: "codex" | "claude"): Record<string, unknown>[] 
     ];
 }
 
+function recentTurnRecords(engine: "codex" | "claude"): Record<string, unknown>[] {
+  return openTurnRecords(engine).map((record, index) => ({
+    ...record, timestamp: new Date(Date.now() - 60_000 + index * 1_000).toISOString(),
+  }));
+}
+
 function addStructuredRestartConversation(
   registry: AgentRegistry,
   directory: string,
@@ -1181,7 +1187,7 @@ function addStructuredRestartConversation(
 ) {
   const engine = input.engine ?? "codex";
   const artifactPath = path.join(directory, `${input.sessionId}.jsonl`);
-  const transcript = (input.transcriptRecords ?? []).map((record) => JSON.stringify(record)).join("\n") + (input.transcriptSuffix ?? "");
+  const transcript = (input.transcriptRecords ?? (input.turn === "busy" ? recentTurnRecords(engine) : [])).map((record) => JSON.stringify(record)).join("\n") + (input.transcriptSuffix ?? "");
   fs.writeFileSync(artifactPath, input.alignFirstRecordToTailBoundary
     ? `${JSON.stringify({ padding: "before-window" })}\n${transcript}${" ".repeat(128 * 1024 - Buffer.byteLength(transcript))}`
     : transcript);
@@ -1619,6 +1625,72 @@ test("startup adoption boots one live unfinished host across terminal history", 
   expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${liveSessionId}`]);
 
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test.each([
+  [undefined, 72, false],
+  [undefined, 1, true],
+  ["2", 3, false],
+  ["4", 3, true],
+  ["invalid", 72, false],
+] as const)("turn-claim adoption requires a recent real event (window %s, age %sh)", async (windowHours, ageHours, expected) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-turn-age-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const previous = process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS;
+  if (windowHours === undefined) delete process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS;
+  else process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS = windowHours;
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const sessionId = crypto.randomUUID();
+    addStructuredRestartConversation(registry, directory, {
+      engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "inherited-turn",
+      transcriptRecords: [
+        { type: "assistant", timestamp: new Date(Date.now() - ageHours * 3_600_000).toISOString(), message: { content: [{ type: "tool_use", id: "t1", name: "Bash" }] } },
+        { type: "mode", timestamp: new Date().toISOString(), mode: "default" },
+        { type: "last-prompt", lastPrompt: "resume" },
+      ],
+    });
+    expect(await startupAdoptionAttempts(registry)).toEqual(expected ? [`claude:${sessionId}`] : []);
+    if (!expected) expect(log.mock.calls).toContainEqual([
+      "[structured hosts] refusing stale turn-claim adoption",
+      expect.objectContaining({ ageMs: expect.any(Number), maxAgeMs: expect.any(Number) }),
+    ]);
+  } finally {
+    log.mockRestore();
+    if (previous === undefined) delete process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS;
+    else process.env.LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["delivery", "operation", "handoff"] as const)("old turn with owed %s still qualifies for adoption", async (owed) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-old-owed-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const sessionId = crypto.randomUUID();
+    const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
+      engine: "claude", sessionId, status: "live", turn: "busy", transcriptRecords: openTurnRecords("claude"),
+    });
+    if (owed === "delivery") registry.holdDelivery(conversation.id, "owed work", "old-held-work");
+    if (owed === "handoff") {
+      const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+      registry.upsert({ ...entry, pendingAction: "handoff" });
+    }
+    if (owed === "operation") {
+      projectHostedRestart(journal, "claude", conversation.id, sessionId, directory, artifactPath, "running");
+      const operation = journal.executeOperation({
+        kind: "send", operationId: "old-pending-work", idempotencyKey: "old-pending-work", conversationId: conversation.id,
+        text: "owed work", policy: "queue", turnId: null,
+      });
+      expect(operation.receipt.status).toBe("queued");
+    }
+    expect(await startupAdoptionAttempts(registry, runtimeJournalClient(journal))).toEqual([`claude:${sessionId}`]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 /* #1501: the pipeline record outranks a row's unfinished-turn claim. A
@@ -2234,7 +2306,7 @@ test.each(["codex", "claude"] as const)(
       sessionId,
       status: "live",
       turn: "busy",
-      transcriptRecords: openTurnRecords(engine),
+      transcriptRecords: recentTurnRecords(engine),
       transcriptSuffix: "\n",
     });
     const incumbent = Bun.spawn({
@@ -2330,7 +2402,7 @@ test.each(["codex", "claude"] as const)(
       sessionId,
       status: "live",
       turn: "busy",
-      transcriptRecords: openTurnRecords(engine),
+      transcriptRecords: recentTurnRecords(engine),
       transcriptSuffix: "\n",
     });
     registry.rememberMembership(conversation.id, {
@@ -3123,7 +3195,7 @@ test("a busy Codex turn advances after container replacement without operator me
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-interrupted-by-promotion",
-    transcriptRecords: [{ timestamp: "2026-07-20T11:47:00.000Z", payload: { type: "task_started" } }],
+    transcriptRecords: [{ timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_started" } }],
     /* The host below appends to this file, so it has to end on a record
        boundary: without the newline the appended record lands on the same line
        as the first, and the transcript this case is about becomes one nothing
@@ -3139,7 +3211,7 @@ test("a busy Codex turn advances after container replacement without operator me
     send: async (entry: Parameters<FakeEngineHost["send"]>[0]) => {
       const receipt = await FakeEngineHost.prototype.send.call(baseHost, entry);
       fs.appendFileSync(artifactPath, `${JSON.stringify({
-        timestamp: "2026-07-20T11:50:00.000Z",
+        timestamp: new Date(Date.now() - 60_000).toISOString(),
         payload: { type: "user_message", text: entry.text },
       })}\n`);
       return receipt;
@@ -3179,7 +3251,7 @@ test("a busy Codex turn advances after container replacement without operator me
     send: async (entry: Parameters<FakeEngineHost["send"]>[0]) => {
       const receipt = await FakeEngineHost.prototype.send.call(nextBaseHost, entry);
       fs.appendFileSync(artifactPath, `${JSON.stringify({
-        timestamp: "2026-07-20T11:55:00.000Z",
+        timestamp: new Date(Date.now() - 60_000).toISOString(),
         payload: { type: "user_message", text: entry.text },
       })}\n`);
       return receipt;
@@ -3424,7 +3496,7 @@ test("startup adoption reads terminal transcripts before booting production-shap
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-active",
-    transcriptRecords: [{ timestamp: "2026-07-15T10:00:00.000Z", payload: { type: "task_started" } }],
+    transcriptRecords: [{ timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_started" } }],
   });
   for (const engine of ["codex", "claude"] as const) {
     for (let index = 0; index < 10; index += 1) {
@@ -3436,7 +3508,7 @@ test("startup adoption reads terminal transcripts before booting production-shap
         turn: "busy",
         activeTurnRef: `stale-${engine}-${index}`,
         transcriptRecords: engine === "codex"
-          ? [{ timestamp: "2026-07-15T10:00:00.000Z", payload: { type: "task_complete" } }]
+          ? [{ timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete" } }]
           : [claudeTerminalRecord()],
       });
     }
@@ -3494,8 +3566,8 @@ test.each(["codex", "claude"] as const)(
       turn: "terminal",
       activeTurnRef: `fresh-${engine}-turn`,
       transcriptRecords: engine === "codex"
-        ? [{ timestamp: "2026-07-15T10:01:00.000Z", payload: { type: "task_started" } }]
-        : [{ type: "user", timestamp: "2026-07-15T10:01:00.000Z", message: { role: "user", content: [] } }],
+        ? [{ timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_started" } }]
+        : [{ type: "user", timestamp: new Date(Date.now() - 60_000).toISOString(), message: { role: "user", content: [] } }],
     });
 
     expect(await startupAdoptionAttempts(registry)).toEqual([`${engine}:${sessionId}`]);
@@ -3510,12 +3582,12 @@ test("startup keeps a Codex host eligible when the bounded tail cuts off an unma
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "41000000-0000-0000-0000-000000000001";
   const transcriptRecords = [
-    { timestamp: "2026-07-15T10:00:00.000Z", payload: { type: "task_started", turn_id: "turn-1" } },
+    { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_started", turn_id: "turn-1" } },
     {
-      timestamp: "2026-07-15T10:00:01.000Z",
+      timestamp: new Date(Date.now() - 60_000).toISOString(),
       payload: { type: "function_call", call_id: "tool-before-cutoff", arguments: "x".repeat(128 * 1024) },
     },
-    { timestamp: "2026-07-15T10:00:02.000Z", payload: { type: "task_complete", turn_id: "turn-1" } },
+    { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete", turn_id: "turn-1" } },
   ];
   expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("busy");
   addStructuredRestartConversation(registry, directory, {
