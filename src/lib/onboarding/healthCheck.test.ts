@@ -217,6 +217,28 @@ test("one run at a time: a second start answers the running one, and Stop still 
   expect(log).toEqual([`cleanup health01 ${SEAT}`, "result stopped"]);
 });
 
+test("a run that outlives its 5-minute bound fails the row it was on", async () => {
+  /* Every row takes most of its own bound, and the seat then stays busy:
+     the bounds add up to more than the run's five minutes. */
+  const ports = fakePorts({});
+  const t0 = ports.now();
+  const elapsed = () => (ports.now() - t0) / 1000;
+  startHealthCheck({
+    ...ports,
+    seatMaterialized: (id) => elapsed() >= 58 ? { conversationId: id, path: "/seat.jsonl", cwd: "/scratch", project: PROJECT } : null,
+    pipeline: () => (elapsed() < 116
+      ? pipelineWith("running", "spawning", { conversationId: null, agentPath: null })
+      : elapsed() < 250 ? pipelineWith("running", "running") : pipelineWith("completed", "passed")) as Pipeline,
+    receipt: () => ({ state: elapsed() >= 140 ? "prompt-delivered" : "starting", error: null }),
+    seatBusy: () => true,
+  });
+  await settleHealthCheckForTests();
+  const run = currentHealthRun()!;
+  expect(run.state).toBe("failed");
+  expect(run.rows.map((row) => row.state)).toEqual(["passed", "passed", "passed", "failed", "waiting"]);
+  expect(run.rows[3]!.failure?.detail).toContain("5-minute bound");
+});
+
 test("no connected engine starts nothing", () => {
   expect(startHealthCheck(fakePorts({ readiness: "signed-out" }))).toBeNull();
   expect(currentHealthRun()).toBeNull();

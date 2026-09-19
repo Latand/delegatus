@@ -392,7 +392,9 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
   const runDeadline = ports.now() + HEALTH_RUN_BOUND_MS;
   /* Every wait races the Stop button and the whole-run bound. */
   const wait = async (ms: number) => {
-    if (ports.now() >= runDeadline) throw new RunStopped();
+    /* Past the whole-run bound the row in progress fails on its own code;
+       only the Stop button reads as stopped. */
+    if (ports.now() >= runDeadline) throw new Error("the whole check passed its 5-minute bound");
     await Promise.race([ports.sleep(ms), stopped]);
   };
   /** Poll `probe` until it settles or `boundMs` passes; `null` means it did not. */
@@ -523,7 +525,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
       open.state = "failed";
       open.finishedAt = iso(ports.now());
       const code: HealthFailureCode = open.id === "spawn" ? "SPAWN_TIMEOUT" : open.id === "delivery" ? "DELIVERY_FAILED" : open.id === "report" ? "REPORT_TIMEOUT" : open.id === "wake" ? "WAKE_UNDELIVERED" : "SEAT_MISFILED";
-      open.failure = failure(code, ports.redact(`the check itself failed: ${error instanceof Error ? error.message : String(error)}`));
+      open.failure = failure(code, ports.redact(error instanceof Error ? error.message : String(error)));
     }
   } finally {
     try {
