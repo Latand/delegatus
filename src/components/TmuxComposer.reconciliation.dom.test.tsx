@@ -193,7 +193,7 @@ test("a mid-flight queued admission settles the generation and the stale timeout
     /* Queue-first (round-1 P1#1): the submit snapshots this generation's image
        into the durable outbox bubble and clears the composer + tray at once. */
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    await tick();
+    for (let attempt = 0; attempt < 100 && sentImageCounts.length === 0; attempt += 1) await tick();
     expect(sentImageCounts).toEqual([1]);
     expect(textarea.value).toBe("");
     await untilPreviews(0);
@@ -310,9 +310,10 @@ test("a queued admission after remount still clears the persisted generation exa
     expect(sessionStorage.getItem(`llvDraft:${conversationId}`)).toBe("after refresh typing");
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBe(null);
     expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
-    /* Admission after a lost response retains unknown arrival and original recovery. */
-    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBe(true);
-    expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(1);
+    /* The receipt confirms admission and restores the admitted wait. */
+    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
+    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.awaitingTurn).toBe(true);
+    expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(0);
     expect(host.querySelector("[data-receipt-preview]")?.textContent).toBe(prompt);
   } finally {
     flushSync(() => root.unmount());
@@ -398,7 +399,7 @@ test("a refresh resumes a timed-out generation without another send", async () =
     expect(textarea.value).toBe(`${prompt}\nafter refresh typing`);
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
     expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(1);
-    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBe(true);
+    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
   } finally {
     flushSync(() => root.unmount());
     publishReceipts([]);
@@ -504,10 +505,10 @@ test("a delayed receipt reconciles one text-plus-images generation on desktop an
       expect(previews()).toEqual([nextPreview]);
       expect(new Set(sentKeys)).toEqual(new Set([sentKeys[0]!]));
       expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
-      /* Its complete copy is retained, so an unknown fate is re-checked, never re-driven from here. */
+      /* Its admitted operation owns delivery; the complete copy remains available for re-check. */
       expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(0);
       expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
-    expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBe(true);
+      expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
       expect(host.querySelector(`[aria-label="${translate("en", "runtime.receipt.retry")}"]`)).toBeNull();
       if (mobile) {
         expect(form.getAttribute("data-testid")).toBe("bounded-mobile-composer");
@@ -613,7 +614,7 @@ test("only a confirmed retryable failure exposes Retry after a timeout", async (
     /* A CONFIRMED safe failure re-opens it: both the receipt and the retained
        copy offer the operation retry. */
     flushSync(() => publishReceipts([{ ...terminalReceipt("failed", 3), resend: "safe" }]));
-    await tick();
+    for (let attempt = 0; attempt < 100 && !host.querySelector("[data-payload-retry]"); attempt += 1) await tick();
     expect(retries()).toHaveLength(1);
     expect(host.querySelector("[data-payload-retry]")).not.toBeNull();
     expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("failed");

@@ -57,7 +57,8 @@ function publishReceipts(next: RuntimeReceipt[]): void {
   for (const listener of receiptListeners) listener();
 }
 import { TmuxComposer } from "./TmuxComposer";
-import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
+import { readOutbox, resetOutboxForTests, retryOutbox, useOutbox } from "./conversation/outbox";
+import { OutboxBubbles } from "./conversation/OutboxBubbles";
 import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 
@@ -193,6 +194,7 @@ test("late receipt-free legacy success settles live-pane and resume generations 
     const original = `send through delayed ${scenario.name}`;
     const later = `keep this ${scenario.name} draft`;
     const attempts: { key: string; text: string }[] = [];
+    let releaseResponse!: () => void;
     globalThis.fetch = (async (input, init) => {
       if (String(input) === "/api/tmux/targets") {
         return { ok: true, json: async () => ({ targets: { "0": scenario.target } }) } as Response;
@@ -200,7 +202,7 @@ test("late receipt-free legacy success settles live-pane and resume generations 
       if (String(input) !== "/api/tmux") throw new Error(`unexpected request: ${String(input)}`);
       const body = JSON.parse(String(init?.body)) as { clientMessageId: string; text: string };
       attempts.push({ key: body.clientMessageId, text: body.text });
-      await sleep(75);
+      await new Promise<void>(resolve => { releaseResponse = resolve; });
       return {
         ok: true,
         status: 200,
@@ -227,8 +229,9 @@ test("late receipt-free legacy success settles live-pane and resume generations 
       flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
       await sleep(10);
       flushSync(() => textareaProps.onChange({ target: { value: later } }));
-      await sleep(50);
+      await until(() => Boolean(host.querySelector('[data-operation^="composer-unconfirmed:"] > [role="status"]')));
       expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
+      releaseResponse();
       for (let attempt = 0; attempt < 50 && sessionStorage.getItem(`llvPendingSend:${conversationId}`); attempt += 1) {
         await sleep(3);
       }
@@ -576,10 +579,11 @@ test("a late receipt after the window still settles the preserved generation wit
 
     expect(textarea.value).toBe("");
     expect(sentKeys).toHaveLength(1);
-    /* The original receipt replaces the local placeholder but arrival remains unknown. */
+    /* Confirmed admission replaces the local unknown; delivery still waits. */
     expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(0);
     expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(1);
-    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+    expect(readOutbox(conversationId)[0]?.awaitingTurn).toBe(true);
     expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBe(null);
   } finally {
     flushSync(() => root.unmount());
@@ -877,7 +881,7 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
     await untilSendEnabled(host);
     expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(1);
-    expect(retries()).toHaveLength(0);
+    expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
 
     flushSync(() => publishReceipts([{
       operationId: "op-expiry-terminal",
@@ -1265,6 +1269,136 @@ test("a stranded uncertain structured send releases the queue, keeps its payload
     refreshRuntimeImpl = async () => false;
     sessionStorage.clear();
     resetOutboxForTests();
+    host.remove();
+  }
+});
+
+
+function ComposerWithOutbox({ file }: { file: FileEntry }) {
+  const entries = useOutbox(file.conversationId!);
+  return <><OutboxBubbles cardId={file.conversationId!} entries={entries} /><TmuxComposer file={file} /></>;
+}
+
+test.each([
+  ["missing", "retry", "text"], ["disconnected", "retry", "text"], ["missing", "discard", "text"], ["missing", "receipt", "text"],
+  ["missing", "retry", "image"], ["missing", "discard", "image"], ["missing", "pending-receipt", "text"],
+] as const)("%s admission reaches unconfirmed controls and recovers through %s (attachment=%s)", async (transport, recovery, payload) => {
+  const attachment = payload === "image";
+  setLocale("en");
+  const conversationId = `conv-admission-${transport}-${recovery}-${payload}`;
+  const prompt = "preserve this submission";
+  const sends: Parameters<ReturnType<typeof import("./tmuxComposerRuntime").tmuxComposerRuntimeDependencies>["sendRuntimeMessage"]>[0][] = [];
+  const structuredView = {
+    session: { conversationId, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      capabilities: { imageInput: { supported: true } }, recentReceipts: [] },
+    uiState: {}, attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+  let polls = 0;
+  setTmuxComposerRuntimeDependenciesForTests({
+    refreshRuntime: async () => { polls += 1; return false; },
+    useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
+      listener => { receiptListeners.add(listener); return () => { receiptListeners.delete(listener); }; },
+      () => busReceipts, () => busReceipts),
+    useAgentCapabilities: candidate => {
+      const options = { runtimeEnabled: true };
+      return { caps: capabilitiesFor(candidate, structuredView, options), runtime: structuredView,
+        structuredSession: structuredView, runtimeEnabled: true, attachMode: attachModeFor(candidate, structuredView, options) };
+    },
+    sendRuntimeMessage: async options => {
+      sends.push(options);
+      if (sends.length === 1) {
+        if (transport === "disconnected") throw new TypeError("Network disconnected");
+        return new Promise(() => {});
+      }
+      const receipt: RuntimeReceipt = { operationId: "operation-recovered", idempotencyKey: options.idempotencyKey,
+        conversationId, kind: "send", status: "queued", text: options.text,
+        at: new Date().toISOString(), revision: 1 };
+      return { ok: true, receipt, operationId: receipt.operationId };
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async input => {
+    if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    throw new Error(`unexpected request: ${String(input)}`);
+  }) as typeof fetch;
+  sessionStorage.setItem(`llvDraft:${conversationId}`, prompt);
+  const host = document.createElement("div");
+  document.body.append(host);
+  let root = createRoot(host);
+  try {
+    flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
+    await untilSendEnabled(host);
+    if (attachment) {
+      const textarea = host.querySelector("textarea")!;
+      const propsKey = Object.keys(textarea).find(key => key.startsWith("__reactProps$"))!;
+      const props = (textarea as unknown as Record<string, { onPaste(event: unknown): void }>)[propsKey]!;
+      props.onPaste({ clipboardData: { items: [{ type: "image/png",
+        getAsFile: () => new dom.File(["retained-image"], "image.png", { type: "image/png" }) }] }, preventDefault() {} });
+      await until(() => host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length === 1);
+      expect(host.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]')).toHaveLength(1);
+    }
+    flushSync(() => host.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await until(() => Boolean(host.querySelector('[data-operation^="composer-unconfirmed:"]')));
+    expect(sends).toHaveLength(1);
+    expect(polls).toBeGreaterThan(0);
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBe(true);
+    expect(host.querySelector("[data-outbox-status]")?.textContent).toBe(translate("en", "orchPanel.errorUnknownTitle"));
+    expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
+    expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+    // A phone remount preserves the same local recovery authority and key.
+    if (recovery === "discard") {
+      flushSync(() => root.unmount());
+      resetOutboxForTests();
+      root = createRoot(host);
+      flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
+      await until(() => Boolean(host.querySelector("[data-receipt-discard]")));
+      expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+      flushSync(() => host.querySelector<HTMLButtonElement>("[data-receipt-discard]")!.click());
+      await until(() => sessionStorage.getItem(`llvPendingSend:${conversationId}`) === null);
+      expect(readOutbox(conversationId)).toHaveLength(0);
+      expect(sessionStorage.getItem(`llvPendingSend:${conversationId}`)).toBeNull();
+      expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+      expect(sends).toHaveLength(1);
+      expect(host.querySelector("[data-payload-key]")).toBeNull();
+      // Bytes remain recoverable until authoritative fate is known.
+      if (attachment) expect(await retainedImages(conversationId, sends[0]!.idempotencyKey)).toHaveLength(1);
+      return;
+    }
+    if (recovery === "receipt" || recovery === "pending-receipt") {
+      if (recovery === "pending-receipt") {
+        flushSync(() => publishReceipts([{
+          operationId: "operation-late", idempotencyKey: sends[0]!.idempotencyKey,
+          conversationId, kind: "send", status: "pending", text: prompt,
+          at: new Date().toISOString(), revision: 1,
+        }]));
+        await sleep(0);
+      }
+      flushSync(() => publishReceipts([{
+        operationId: "operation-late", idempotencyKey: sends[0]!.idempotencyKey,
+        conversationId, kind: "send", status: "queued", text: prompt,
+        at: new Date().toISOString(), revision: 2,
+      }]));
+      await until(() => readOutbox(conversationId)[0]?.awaitingTurn === true);
+      expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+      expect(readOutbox(conversationId)[0]?.awaitingTurn).toBe(true);
+      expect(sends).toHaveLength(1);
+      expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+      return;
+    }
+    flushSync(() => host.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click());
+    await until(() => sends.length === 2);
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toEqual(sends[0]);
+    await until(() => readOutbox(conversationId)[0]?.awaitingTurn === true);
+    expect(readOutbox(conversationId)[0]).toMatchObject({ awaitingTurn: true, state: "delivering" });
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+    expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+  } finally {
+    flushSync(() => root.unmount());
+    publishReceipts([]);
+    sessionStorage.clear();
+    resetOutboxForTests();
+    globalThis.fetch = originalFetch;
     host.remove();
   }
 });
