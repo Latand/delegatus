@@ -42,12 +42,14 @@ const ACTION: Record<HealthFailureCode, Action> = {
   WAKE_NOT_OWED: "copy",
   WAKE_UNDELIVERED: "copy",
   SEAT_MISFILED: "copy",
+  SEAT_UNREADABLE: "copy",
+  RUN_BOUND: "copy",
 };
 
 /* Failures whose only remedy is a bug report (design §5.2): the footer does
    not tell the user to fix what the copy says they cannot. None of them can be
    the check's first row, so the first-row footer keeps precedence. */
-const REPORT_ONLY: ReadonlySet<HealthFailureCode> = new Set(["DELIVERY_FAILED", "WAKE_NOT_OWED", "WAKE_UNDELIVERED"]);
+const REPORT_ONLY: ReadonlySet<HealthFailureCode> = new Set(["DELIVERY_FAILED", "WAKE_NOT_OWED", "WAKE_UNDELIVERED", "SEAT_UNREADABLE"]);
 
 export function modelLabel(runtime: HealthRuntime): string {
   return ENGINE_MODELS[runtime.engine].find((model) => model.id === runtime.model)?.label ?? runtime.model;
@@ -81,9 +83,11 @@ export function resetTime(iso: string | undefined, locale: string): string {
   return new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-US", { dateStyle: "medium", timeStyle: "short" }).format(at);
 }
 
-async function readJson(response: Response): Promise<(Answer & { error?: string }) | null> {
+type Refusal = { reason: string; code: string | null };
+
+async function readJson(response: Response): Promise<(Answer & { error?: string; code?: string }) | null> {
   try {
-    return (await response.json()) as Answer & { error?: string };
+    return (await response.json()) as Answer & { error?: string; code?: string };
   } catch {
     return null;
   }
@@ -91,16 +95,22 @@ async function readJson(response: Response): Promise<(Answer & { error?: string 
 
 function useHealthCheck() {
   const [answer, setAnswer] = useState<Answer | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Refusal | null>(null);
   const [loaded, setLoaded] = useState(false);
   const runId = answer?.run?.id ?? null;
   const settled = !answer?.run || (answer.run.state !== "running" && answer.run.cleanup.done);
 
-  const read = useCallback(async (id: string | null) => {
+  const read = useCallback(async function read(id: string | null): Promise<void> {
     try {
       const response = await fetch(`/api/onboarding/health${id ? `?run=${encodeURIComponent(id)}` : ""}`);
       const body = await readJson(response);
       if (response.ok && body) setAnswer(body);
+      /* A Viewer that restarted mid-check has forgotten the run, and answers
+         404 for its id for ever. Read again without it: the step falls back to
+         what the server does know, and the poll stops instead of spinning on a
+         run nothing will ever finish. Only a named run resets — a request that
+         simply failed is retried by the next poll. */
+      else if (response.status === 404 && id) await read(null);
     } catch {
       /* A missed poll is retried by the next one. */
     } finally {
@@ -120,9 +130,9 @@ function useHealthCheck() {
       const response = await fetch("/api/onboarding/health", { method: "POST" });
       const body = await readJson(response);
       if (body?.run) setAnswer(body);
-      else setError(body?.error ?? `HTTP ${response.status}`);
+      else setError({ reason: body?.error ?? `HTTP ${response.status}`, code: body?.code ?? null });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError({ reason: reason instanceof Error ? reason.message : String(reason), code: null });
     }
   };
   const stop = async () => {
@@ -211,6 +221,9 @@ function FailureBlock({ run, row, onGoEngines, onLeave, onDetailsOpen }: { run: 
 /** Which closing line a failure gets: the first row has no rows before it, and
     a failure the user cannot fix is not asked to be fixed. */
 function failedFooterKey(failedRow: HealthRow, run: HealthRun): Parameters<TFunction>[0] {
+  /* The whole-run bound belongs to the run, not to the row it happened to
+     stop, and it can stop any row — the first one included. */
+  if (failedRow.failure?.code === "RUN_BOUND") return "onboarding.check.failedFooterBound";
   if (failedRow.id === run.rows[0]?.id) return "onboarding.check.failedFooterFirst";
   if (failedRow.failure && REPORT_ONLY.has(failedRow.failure.code)) return "onboarding.check.failedFooterReport";
   return "onboarding.check.failedFooter";
@@ -307,9 +320,11 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
         {run?.state === "passed" ? <p data-health-summary="passed" className="text-body font-semibold text-success">{t("onboarding.check.allPassed")}</p> : null}
         {failedRow ? <p data-health-summary="failed" className="text-body leading-[1.45] text-secondary">{t(failedFooterKey(failedRow, run!), { row: t(ROW_KEY[failedRow.id]) })}</p> : null}
         {run?.state === "stopped" && run.cleanup.done ? <p data-health-summary="stopped" className="text-body leading-[1.45] text-secondary">{t("onboarding.check.stopped")}</p> : null}
-        {cleaning ? <p className="text-body leading-[1.45] text-muted">{t("onboarding.check.cleaning")}</p> : null}
+        {cleaning ? <p data-health-cleaning="" className="text-body leading-[1.45] text-muted">{t("onboarding.check.cleaning")}</p> : null}
         {run?.cleanup.done && run.cleanup.problems.length ? <p data-health-cleanup-problem="" className="text-label leading-[1.45] text-warning">{t("onboarding.check.cleanupProblem", { problems: run.cleanup.problems.join("; ") })}</p> : null}
-        {error ? <p className="text-label leading-[1.45] text-danger">{t("onboarding.check.startFailed", { reason: error })}</p> : null}
+        {/* A refusal the step has its own sentence for is written in the
+            interface language; anything else quotes what the server said. */}
+        {error ? <p data-health-start-failed="" className="text-label leading-[1.45] text-danger">{error.code === "NO_ENGINE" ? t("onboarding.check.noEngine") : t("onboarding.check.startFailed", { reason: error.reason })}</p> : null}
         <div ref={controls} className="flex flex-wrap gap-2">
           {running
             ? <button type="button" data-health-stop="" onClick={() => void stop()} className={secondary}>{t("onboarding.check.stop")}</button>

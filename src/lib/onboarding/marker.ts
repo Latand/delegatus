@@ -20,7 +20,10 @@ export type OnboardingStepId = typeof ONBOARDING_STEP_IDS[number];
 export type OnboardingStepState = "done" | "skipped" | null;
 
 /** The last health check this install ran (#1876, design §6), written by the
-    check itself; a failed one marks the "Setup guide" menu row. */
+    check itself. Design §6 gives a failed one a `warning` dot on the "Setup
+    guide" menu row; the menu rows belong to slice 1's fence, so this slice
+    records the result and the dot lands with the menu work. Nothing reads the
+    field yet. */
 export type OnboardingLastHealth = { at: string; result: "passed" | "failed" | "stopped" | "running"; failedCode: string | null };
 
 export type OnboardingMarker = {

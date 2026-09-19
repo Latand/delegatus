@@ -93,6 +93,14 @@ test("row 5 names a seat whose key owes a succession, and skips an install with 
   expect(filingVerdict([{ project: PROJECT, displayName: "harbor", misfiledTo: "repo-x" }])).toMatchObject({ kind: "failed", failure: { code: "SEAT_MISFILED", params: { project: "harbor" } } });
 });
 
+test("a seat record that could not be read is its own code, not a misfiling nobody observed", () => {
+  const verdict = filingVerdict(null);
+  expect(verdict).toMatchObject({ kind: "failed", failure: { code: "SEAT_UNREADABLE" } });
+  /* SEAT_MISFILED names a project; this one must not borrow a sentence whose
+     placeholder it cannot fill. */
+  expect(verdict.kind === "failed" && verdict.failure.params).toEqual({});
+});
+
 /* ── The runner, over fake ports ──────────────────────────────────────── */
 
 type Script = {
@@ -244,6 +252,35 @@ test("a run that outlives its 5-minute bound fails the row it was on", async () 
   expect(run.state).toBe("failed");
   expect(run.rows.map((row) => row.state)).toEqual(["passed", "passed", "passed", "failed", "waiting"]);
   expect(run.rows[3]!.failure?.detail).toContain("5-minute bound");
+  /* The bound is its own failure, not the open row's timeout wearing empty
+     params: `RUN_BOUND` needs none, and the engine ones travel anyway so a
+     row-1 bound cannot paint a raw {bin}. */
+  expect(run.rows[3]!.failure).toMatchObject({ code: "RUN_BOUND", params: { engine: "Claude", bin: "claude" } });
+});
+
+test("the whole-run bound while row 1 is open carries the params row 1's sentences name", async () => {
+  let clock = Date.parse("2026-09-20T10:00:00.000Z");
+  /* A launch that hangs for minutes: the whole-run bound passes while row 1 is
+     still open, which is the broken machine this check exists for. */
+  startHealthCheck({
+    ...fakePorts({}),
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; await Promise.resolve(); },
+    spawnSeat: async () => { clock += 6 * 60_000; return { conversationId: SEAT }; },
+    seatMaterialized: () => null,
+  });
+  await settleHealthCheckForTests();
+  const run = currentHealthRun()!;
+  expect(run.rows[0]).toMatchObject({ state: "failed", failure: { code: "RUN_BOUND", params: { engine: "Claude", bin: "claude" } } });
+  expect(run.rows[0]!.failure?.detail).toContain("5-minute bound");
+});
+
+test("an unexpected error on row 5 reads as a record that could not be read", async () => {
+  startHealthCheck({ ...fakePorts({}), seatFilings: () => { throw new Error("seat store unreadable"); } });
+  await settleHealthCheckForTests();
+  const run = currentHealthRun()!;
+  expect(run.state).toBe("failed");
+  expect(run.rows[4]).toMatchObject({ state: "failed", failure: { code: "SEAT_UNREADABLE" } });
 });
 
 test("no connected engine starts nothing", () => {
@@ -370,6 +407,56 @@ test("a cleanup with nothing left over drops its run file at once", async () => 
   await settleHealthCheckForTests();
   expect(currentHealthRun()!.cleanup.problems).toEqual([]);
   expect([...files.keys()]).toEqual([]);
+});
+
+test("the real cleanup keeps the run file its own retry reads, and removes only the tick row", async () => {
+  /* The defect this covers: cleanup used to remove the whole run folder, the
+     run file included, so the second attempt it promises had nothing to read.
+     The real `cleanupHealthRun` runs here — a test that stubs the cleanup port
+     feeds itself its own inputs and cannot see it. */
+  /* The production layout: the state root holds `onboarding/`, and a run's
+     folder under it holds both its run file and its tick row. */
+  const stateRoot = path.join(sandbox, "surviving-run-file");
+  const statePath = (...segments: string[]) => path.join(stateRoot, ...segments);
+  const root = statePath("onboarding");
+  const stateDir = path.join("health-runs", "run00009");
+  /* A pipeline that will not close, and nothing else left to undo. */
+  const input = { stateDir, repoDir: null, seatConversationId: SEAT, project: PROJECT, pipelineId: "health09" };
+  writeHealthRunFile(root, stateDir, { repoDir: input.repoDir, seatConversationId: SEAT, project: PROJECT, pipelineId: input.pipelineId });
+  fs.writeFileSync(path.join(root, stateDir, "seat-tick.json"), "{}\n", "utf8");
+  const { ports } = cleanupPorts({
+    statePath,
+    pipeline: () => ({ id: "health09", state: "completed", project: PROJECT, worktreeDir: "/absent", branch: null, runs: [] }) as unknown as Pipeline,
+    closePipeline: async () => "device or resource busy",
+  });
+
+  const problems = await cleanupHealthRun(input, ports);
+  expect(problems).toEqual(["close the pipeline: device or resource busy"]);
+  /* The tick row goes; the record of what to undo stays, and the sweep still
+     names the run. */
+  expect(fs.existsSync(path.join(root, stateDir, "seat-tick.json"))).toBe(false);
+  expect(readHealthRunFiles(root).map((file) => file.stateDir)).toEqual([stateDir]);
+  expect(readHealthRunFiles(root)[0]).toEqual(input);
+
+  /* The sweep's one retry: cleanup runs again from the file, and then the file
+     goes whatever that attempt did. */
+  const retried: string[] = [];
+  await sweepOrphanedHealthRuns({
+    runFiles: () => readHealthRunFiles(root),
+    cleanup: async (file) => { retried.push(file.stateDir); return cleanupHealthRun(file, ports); },
+    dropRunFile: (dir) => fs.rmSync(path.join(root, dir), { recursive: true, force: true }),
+  });
+  expect(retried).toEqual([stateDir]);
+  expect(readHealthRunFiles(root)).toEqual([]);
+});
+
+test("a cleanup that repeats over an already-cleaned run answers no problems", async () => {
+  const stateDir = path.join("health-runs", "run00010");
+  const statePath = (...segments: string[]) => path.join(sandbox, "idempotent-cleanup", ...segments);
+  const { ports } = cleanupPorts({ statePath });
+  const input = { stateDir, repoDir: null, seatConversationId: SEAT, project: PROJECT, pipelineId: null };
+  expect(await cleanupHealthRun(input, ports)).toEqual([]);
+  expect(await cleanupHealthRun(input, ports)).toEqual([]);
 });
 
 test("a spawn timeout names an agent only when its transcript exists, since only that one has a card", () => {

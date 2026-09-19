@@ -369,10 +369,14 @@ on, so it is a captured state of its own. The note is a sentence where the
 other rows carry one word: on a phone it drops to its own line under the label,
 which keeps the longest row label at one line and the row at two.
 
-The three footer lines are one sentence apart. "Fix that, then run it again"
+The four footer lines are one sentence apart. "Fix that, then run it again"
 is only written under a failure the user can act on; `DELIVERY_FAILED`,
-`WAKE_NOT_OWED` and `WAKE_UNDELIVERED` say to copy the details into a bug
-report, so their footer states where the check stopped and stops there.
+`WAKE_NOT_OWED`, `WAKE_UNDELIVERED` and `SEAT_UNREADABLE` say to copy the
+details into a bug report, so their footer states where the check stopped and
+stops there. `RUN_BOUND` takes a footer of its own, ahead of both: the
+whole-run bound belongs to the run rather than to the row it happened to stop,
+and it is the one failure that can land on the first row as well as any later
+one.
 
 While the check runs, no control on the screen is filled: the step's own button
 is "Stop" and the footer's "Open the board" steps back to a border, so the
@@ -776,11 +780,19 @@ detail), a sentence of what happened and a sentence of what to do.
 | 4 | `WAKE_NOT_OWED` | The stage finished, and the wake check found nothing to tell the orchestrator. The finished lane and the seat are filed under different projects. / Етап завершився, але перевірка не знайшла, про що повідомити оркестратора. Завершений конвеєр і оркестратор записані в різних проєктах. | This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage. / Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу. | Copy details |
 | 4 | `WAKE_UNDELIVERED` | The wake was sent and did not reach the orchestrator. / Пробудження надіслано, але воно не дійшло до оркестратора. | Copy the details into a bug report. / Скопіюйте подробиці в повідомлення про помилку. | Copy details |
 | 5 | `SEAT_MISFILED` | The orchestrator of "{project}" is filed under another key than its pipelines, so it will not be woken. / Оркестратор проєкту «{project}» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть. | The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report. / Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку. | Copy details |
+| 5 | `SEAT_UNREADABLE` | The Viewer could not read the record of your orchestrators, so this row could not be checked. / Viewer не зміг прочитати запис про ваших оркестраторів, тому цей рядок не перевірено. | Restart the Viewer and run the check again. If it repeats, copy the details into a bug report. / Перезапустіть Viewer і запустіть перевірку знову. Якщо повториться, скопіюйте подробиці в повідомлення про помилку. | Copy details |
+| any | `RUN_BOUND` | The whole check passed its 5-minute limit while this row was still running. / Уся перевірка вичерпала свої 5 хвилин, поки цей рядок ще виконувався. | Run it again when the machine is less busy. If it stops here again, copy the details into a bug report. / Запустіть її знову, коли комп'ютер буде менш завантажений. Якщо вона знову спиниться тут, скопіюйте подробиці в повідомлення про помилку. | Copy details |
 
 "Copy details" copies the code, both project keys where relevant, the tick
 record's verdict and detail, and the Viewer version, passed through
 `redactMonitorText`; it contains no account handle, token or home path, so it
 is safe to paste into a public issue.
+
+`SEAT_UNREADABLE` is row 5's other outcome and never `SEAT_MISFILED`: when the
+seat record cannot be read at all, nothing is known to be misfiled, and the
+misfiling sentence names a project the Viewer never learned. `RUN_BOUND` is
+what the whole-run bound raises, on whichever row was open when it passed —
+including row 1, where a launch that hangs for minutes puts it.
 
 `SEAT_MISFILED` promises a repair. That repair is #1874's fix, on `main`
 since: a key a folder has moved on from is recorded as an alias on scan, at

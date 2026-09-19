@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -13,6 +13,11 @@ const dom = new Window({ url: "http://localhost/" });
 const RUNTIME = { engine: "claude", model: "haiku", effort: "low" };
 const row = (id: string, state: string, failure: unknown = null) => ({ id, state, startedAt: state === "waiting" ? null : "2026-09-20T10:00:00.000Z", finishedAt: state === "waiting" ? null : "2026-09-20T10:00:04.000Z", failure, note: null });
 let answer: unknown = { runtime: RUNTIME, run: null };
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+/* What each request answers. The default serves `answer` at 200; a test that
+   cares which URL was asked, or about a status, replaces it. */
+const serveAnswer = () => json(answer);
+let respond: (url: string) => Response = serveAnswer;
 Object.assign(globalThis, {
   IS_REACT_ACT_ENVIRONMENT: true,
   window: dom,
@@ -23,7 +28,7 @@ Object.assign(globalThis, {
   Event: dom.Event,
   MouseEvent: dom.MouseEvent,
   localStorage: dom.localStorage,
-  fetch: () => Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } })),
+  fetch: (url: unknown) => Promise.resolve(respond(String(url))),
 });
 
 const { CheckStep, resetTime } = await import("./CheckStep");
@@ -37,15 +42,29 @@ const runOf = (state: string, rows: unknown[]): { answer: { runtime: typeof RUNT
 });
 const fail = (code: string, extra: Record<string, unknown> = {}) => ({ code, params: { engine: "Claude", bin: "claude" }, detail: "d", agentPath: null, accountId: null, ...extra });
 
-afterAll(() => { void dom.happyDOM.close(); });
+afterAll(async () => { await unmount(); void dom.happyDOM.close(); });
+afterEach(() => { respond = serveAnswer; });
 
 let ownsPrimary: boolean | null = null;
+/* One step at a time: a step left mounted keeps its own 1-second poll running
+   into the next test, and a test that counts requests would count those too. */
+let mounted: { root: ReturnType<typeof createRoot>; host: HTMLElement } | null = null;
+
+async function unmount(): Promise<void> {
+  const previous = mounted;
+  if (!previous) return;
+  mounted = null;
+  await act(async () => { previous.root.unmount(); });
+  previous.host.remove();
+}
 
 async function render(): Promise<HTMLElement> {
+  await unmount();
   ownsPrimary = null;
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
+  mounted = { root, host };
   await act(async () => {
     root.render(<CheckStep noEngine={false} onGoEngines={() => {}} onLeave={() => {}} onSkip={() => {}} onOwnsPrimary={(owns) => { ownsPrimary = owns; }} />);
   });
@@ -180,6 +199,62 @@ test("after a failure, running it again is the one accent action and the footer 
   const host = await render();
   expect(host.querySelector<HTMLElement>("[data-health-start]")?.className).toContain("bg-accent");
   expect(ownsPrimary).toBe(true);
+});
+
+test("a Viewer that forgot the run stops polling and offers the check again", async () => {
+  /* The restart this slice exists to survive: the process forgets the run, so
+     `?run=<id>` answers 404 for ever. The step used to keep the stale running
+     answer, spin its loader and poll that 404 once a second until a reload. */
+  const running = runOf("running", [row("spawn", "passed"), row("delivery", "running"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  running.run.cleanup = { done: false, problems: [] };
+  let namedReads = 0;
+  let restarted = false;
+  respond = (url) => {
+    if (!url.includes("run=")) return json(restarted ? { runtime: RUNTIME, run: null } : running);
+    namedReads += 1;
+    restarted = true;
+    return json({ error: "no such health check run" }, 404);
+  };
+  const host = await render();
+  expect(host.querySelector<HTMLElement>("[data-health-check]")?.dataset.healthCheck).toBe("running");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_200)); });
+  expect(namedReads).toBe(1);
+  expect(host.querySelector<HTMLElement>("[data-health-check]")?.dataset.healthCheck).toBe("idle");
+  expect(host.querySelector("[data-health-stop]")).toBeNull();
+  expect(host.querySelector("[data-health-start]")?.textContent).toBe("Run the check");
+  /* And the poll is gone, not merely quiet for one tick. */
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_200)); });
+  expect(namedReads).toBe(1);
+});
+
+test("a poll that simply fails keeps the run and keeps polling", async () => {
+  const running = runOf("running", [row("spawn", "passed"), row("delivery", "running"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  running.run.cleanup = { done: false, problems: [] };
+  let namedReads = 0;
+  respond = (url) => {
+    if (!url.includes("run=")) return json(running);
+    namedReads += 1;
+    /* A transient failure, not a run the server has forgotten. */
+    return json({ error: "upstream unavailable" }, 503);
+  };
+  const host = await render();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_200)); });
+  expect(namedReads).toBeGreaterThan(1);
+  expect(host.querySelector<HTMLElement>("[data-health-check]")?.dataset.healthCheck).toBe("running");
+});
+
+test("a refused start is written in the interface language when the step has a sentence for it", async () => {
+  answer = { runtime: RUNTIME, run: null };
+  const host = await render();
+  /* The server refuses because no engine is connected any more. */
+  respond = () => json({ error: "Connect an engine first: no engine can start an agent on this machine.", code: "NO_ENGINE" }, 409);
+  await act(async () => { host.querySelector<HTMLElement>("[data-health-start]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(host.querySelector("[data-health-start-failed]")?.textContent).toBe("Connect an engine first (step 1).");
+
+  /* A refusal it has no sentence for quotes the server instead of swallowing it. */
+  respond = () => json({ error: "the check is already running elsewhere" }, 409);
+  await act(async () => { host.querySelector<HTMLElement>("[data-health-start]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(host.querySelector("[data-health-start-failed]")?.textContent).toBe("Could not start the check: the check is already running elsewhere");
 });
 
 test("the reset time follows the interface language, date and hour:minute", () => {

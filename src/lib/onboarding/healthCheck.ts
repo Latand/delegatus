@@ -65,6 +65,8 @@ export const HEALTH_FAILURE_CODES = [
   "WAKE_NOT_OWED",
   "WAKE_UNDELIVERED",
   "SEAT_MISFILED",
+  "SEAT_UNREADABLE",
+  "RUN_BOUND",
 ] as const;
 export type HealthFailureCode = typeof HEALTH_FAILURE_CODES[number];
 
@@ -143,6 +145,11 @@ export function cheapestHealthRuntime(readiness: Record<RoleEngine, EngineReadin
 
 const ENGINE_BIN: Record<RoleEngine, string> = { claude: "claude", codex: "codex" };
 
+/** The values every row-1 sentence names, so no copy renders a raw `{bin}`. */
+function engineParams(runtime: HealthRuntime): Record<string, string> {
+  return { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
+}
+
 function failure(code: HealthFailureCode, detail: string, extra: Partial<Omit<HealthFailure, "code" | "detail">> = {}): HealthFailure {
   return { code, detail, params: extra.params ?? {}, agentPath: extra.agentPath ?? null, accountId: extra.accountId ?? null };
 }
@@ -150,7 +157,7 @@ function failure(code: HealthFailureCode, detail: string, extra: Partial<Omit<He
 /** An engine that cannot run a launch, as the row 1 failure it is. */
 export function readinessFailure(runtime: HealthRuntime, readiness: EngineReadiness): HealthFailure | null {
   if (readiness === "connected") return null;
-  const params = { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
+  const params = engineParams(runtime);
   return readiness === "cli-missing"
     ? failure("CLI_MISSING", `engine readiness: ${readiness}`, { params })
     : failure("ENGINE_NOT_CONNECTED", `engine readiness: ${readiness}`, { params });
@@ -179,7 +186,7 @@ export function stageSpawnVerdict(
 ): { kind: "passed" } | { kind: "pending" } | { kind: "failed"; failure: HealthFailure } {
   const attempt = healthAttempt(pipeline);
   if (attempt?.conversationId && attempt.agentPath && transcriptExists(attempt.agentPath)) return { kind: "passed" };
-  const params = { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
+  const params = engineParams(runtime);
   const limited = (attempt?.usageLimitedAccounts ?? []).filter((entry) => !entry.engine || entry.engine === runtime.engine);
   if (limited.length) {
     const reset = limited.map((entry) => entry.resetsAt).filter((at): at is number => typeof at === "number").sort((a, b) => a - b)[0];
@@ -253,7 +260,8 @@ export type SeatFiling = { project: string; displayName: string; misfiledTo: str
 
 /** Row 5: every active seat whose key owes a succession is misfiled. */
 export function filingVerdict(seats: readonly SeatFiling[] | null): { kind: "passed" } | { kind: "skipped" } | { kind: "failed"; failure: HealthFailure } {
-  if (seats === null) return { kind: "failed", failure: failure("SEAT_MISFILED", "the orchestrator seat record could not be read") };
+  /* Not `SEAT_MISFILED`: nothing was read, so nothing is known to be misfiled. */
+  if (seats === null) return { kind: "failed", failure: failure("SEAT_UNREADABLE", "the orchestrator seat record could not be read") };
   if (!seats.length) return { kind: "skipped" };
   const misfiled = seats.filter((seat) => seat.misfiledTo !== null);
   if (!misfiled.length) return { kind: "passed" };
@@ -328,6 +336,12 @@ function freshRows(): HealthRow[] {
 }
 
 class RunStopped extends Error {}
+
+/** The whole-run bound, thrown by whichever wait meets it: it belongs to the
+    run, not to the row it happened to stop, and reads as its own failure. */
+class RunBoundPassed extends Error {
+  constructor() { super("the whole check passed its 5-minute bound"); }
+}
 
 type ActiveRun = { run: HealthRun; stop: () => void; stopped: boolean; done: Promise<void> };
 type HealthStore = { active: ActiveRun | null; last: HealthRun | null; sweeping: Promise<void> | null };
@@ -455,9 +469,9 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
   const runDeadline = ports.now() + HEALTH_RUN_BOUND_MS;
   /* Every wait races the Stop button and the whole-run bound. */
   const wait = async (ms: number) => {
-    /* Past the whole-run bound the row in progress fails on its own code;
-       only the Stop button reads as stopped. */
-    if (ports.now() >= runDeadline) throw new Error("the whole check passed its 5-minute bound");
+    /* Past the whole-run bound the row in progress fails, on the bound's own
+       code; only the Stop button reads as stopped. */
+    if (ports.now() >= runDeadline) throw new RunBoundPassed();
     await Promise.race([ports.sleep(ms), stopped]);
   };
   /** Poll `probe` until it settles or `boundMs` passes; `null` means it did not. */
@@ -480,7 +494,7 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
   try {
     record({});
     const { runtime } = run;
-    const agentParams = { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
+    const agentParams = engineParams(runtime);
 
     /* 1. Two agents start: the test orchestrator, then the stage it launches. */
     begin("spawn");
@@ -592,8 +606,16 @@ async function executeHealthCheck(run: HealthRun, ports: HealthCheckPorts, stopp
       const open = run.rows.find((entry) => entry.state === "running") ?? run.rows[0]!;
       open.state = "failed";
       open.finishedAt = iso(ports.now());
-      const code: HealthFailureCode = open.id === "spawn" ? "SPAWN_TIMEOUT" : open.id === "delivery" ? "DELIVERY_FAILED" : open.id === "report" ? "REPORT_TIMEOUT" : open.id === "wake" ? "WAKE_UNDELIVERED" : "SEAT_MISFILED";
-      open.failure = failure(code, ports.redact(error instanceof Error ? error.message : String(error)));
+      /* An unexpected error reads as the open row's own bound; row 5 reads it
+         as a record that could not be read, which is the only way it throws.
+         The params every one of those sentences names travel with it, or the
+         step paints a raw `{bin}`. */
+      const code: HealthFailureCode = error instanceof RunBoundPassed ? "RUN_BOUND"
+        : open.id === "spawn" ? "SPAWN_TIMEOUT"
+          : open.id === "delivery" ? "DELIVERY_FAILED"
+            : open.id === "report" ? "REPORT_TIMEOUT"
+              : open.id === "wake" ? "WAKE_UNDELIVERED" : "SEAT_UNREADABLE";
+      open.failure = failure(code, ports.redact(error instanceof Error ? error.message : String(error)), { params: engineParams(run.runtime) });
     }
   } finally {
     try {
@@ -900,7 +922,10 @@ export async function cleanupHealthRun(input: HealthCleanupInput, ports: Cleanup
   const paths = [...stagePaths, ...(seatPath ? [seatPath] : [])];
   if (project && paths.length) await step("archive the conversations", () => ports.archive(project, paths));
   if (project) await step("hide the task cards", () => ports.hideTaskCards(project));
-  await step("remove the run's tick row", () => fs.rmSync(ports.statePath("onboarding", input.stateDir), { recursive: true, force: true }));
+  /* The tick row alone. The run file sits in the same folder and is this run's
+     own record of what it made: a sweep that retries a cleanup which could not
+     finish reads it, and `dropRunFile` takes the folder once nothing is left. */
+  await step("remove the run's tick row", () => fs.rmSync(ports.statePath("onboarding", input.stateDir, "seat-tick.json"), { force: true }));
   return problems;
 }
 

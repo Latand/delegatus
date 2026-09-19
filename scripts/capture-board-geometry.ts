@@ -537,9 +537,10 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  * connected, the menu rows, the mapping opened alone, and a dismissal that
  * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
  * running, passed, the pass a new install ends on (no orchestrator, so row 5
- * is skipped), a pass whose cleanup could not finish, stopped, and each of the
- * eleven failures at its row, with the machine detail opened on the last one,
- * the check's answers served from records so no agent is spawned. Each capture is measured in the live DOM:
+ * is skipped), a pass whose cleanup could not finish, a poll that lands while
+ * the cleanup is still running, stopped, a start the server refuses, and each
+ * of the thirteen failures at its row, with the machine detail opened on the
+ * last one, the check's answers served from records so no agent is spawned. Each capture is measured in the live DOM:
  * the dialog inside the viewport, no horizontal overflow, no clipped role
  * label (the two longest Ukrainian ones by name) or footer button, and 44 px
  * targets on the phone.
@@ -673,6 +674,8 @@ function measureOnboarding(phone: boolean) {
       }),
       note: dialog.querySelector("[data-health-note]")?.textContent ?? null,
       cleanupProblem: dialog.querySelector("[data-health-cleanup-problem]")?.textContent ?? null,
+      cleaning: dialog.querySelector("[data-health-cleaning]")?.textContent ?? null,
+      startFailed: dialog.querySelector("[data-health-start-failed]")?.textContent ?? null,
       /* Everything the failure block paints, for stray markdown marks. */
       failureAll: dialog.querySelector("[data-health-failure]")?.textContent ?? null,
       actionLabel: dialog.querySelector("[data-health-action]")?.textContent ?? null,
@@ -718,18 +721,23 @@ const HEALTH_FAILURES: readonly { code: string; row: typeof HEALTH_ROW_IDS[numbe
   { code: "WAKE_NOT_OWED", row: "wake" },
   { code: "WAKE_UNDELIVERED", row: "wake" },
   { code: "SEAT_MISFILED", row: "filing", params: { project: "harbor" } },
+  /* Both reach the step with no params at all: the seat record that could not
+     be read, and the whole-run bound tripping while row 1 is still open. */
+  { code: "SEAT_UNREADABLE", row: "filing" },
+  { code: "RUN_BOUND", row: "spawn", params: { engine: "Claude", bin: "claude" } },
 ];
 
 /* "noSeat" is the pass a new install ends on: it has no orchestrator, so row 5
    is skipped with its note. "cleanupProblem" is a pass whose cleanup could not
-   finish. */
-type HealthState = "idle" | "running" | "passed" | "noSeat" | "cleanupProblem" | "stopped" | { failed: typeof HEALTH_FAILURES[number] };
+   finish, and "cleaning" is the same pass on a poll that landed between the run
+   settling and the end of cleanup. */
+type HealthState = "idle" | "running" | "passed" | "noSeat" | "cleanupProblem" | "cleaning" | "stopped" | { failed: typeof HEALTH_FAILURES[number] };
 
 function healthAnswer(state: HealthState): unknown {
   if (state === "idle") return { runtime: HEALTH_RUNTIME, run: null };
   const at = (seconds: number) => new Date(Date.parse("2100-01-02T10:00:00.000Z") + seconds * 1000).toISOString();
   const failedAt = typeof state === "object" ? HEALTH_ROW_IDS.indexOf(state.failed.row) : -1;
-  const passed = state === "passed" || state === "noSeat" || state === "cleanupProblem";
+  const passed = state === "passed" || state === "noSeat" || state === "cleanupProblem" || state === "cleaning";
   const rows = HEALTH_ROW_IDS.map((id, index) => {
     const rowState = passed ? (state === "noSeat" && id === "filing" ? "skipped" : "passed")
       : state === "running" ? (index < 2 ? "passed" : index === 2 ? "running" : "waiting")
@@ -745,7 +753,7 @@ function healthAnswer(state: HealthState): unknown {
   const problems = state === "cleanupProblem" ? ["worktree: device or resource busy", "task card: the board did not answer"] : [];
   return {
     runtime: HEALTH_RUNTIME,
-    run: { id: "capture1", state: runState, startedAt: at(0), finishedAt: runState === "running" ? null : at(50), runtime: HEALTH_RUNTIME, rows, cleanup: { done: runState !== "running", problems }, version: "0.0.0" },
+    run: { id: "capture1", state: runState, startedAt: at(0), finishedAt: runState === "running" ? null : at(50), runtime: HEALTH_RUNTIME, rows, cleanup: { done: runState !== "running" && state !== "cleaning", problems }, version: "0.0.0" },
   };
 }
 
@@ -998,7 +1006,12 @@ async function captureOnboarding(): Promise<void> {
 
           /* 9. The Check step, one frame per state its run can be in. */
           let health: unknown = healthAnswer("idle");
-          await page.route("**/api/onboarding/health*", (route) => route.fulfill({ json: health }));
+          /* A start the server refuses, when a frame asks for one; every GET
+             answers the state being captured. */
+          let healthStart: { status: number; json: unknown } | null = null;
+          await page.route("**/api/onboarding/health*", (route) => route.request().method() === "POST" && healthStart
+            ? route.fulfill({ status: healthStart.status, json: healthStart.json })
+            : route.fulfill({ json: health }));
           await page.click("[data-onboarding-primary]");
           /* `within` tells two frames of the same run state apart, so a frame is
              never shot before its own answer has rendered. */
@@ -1045,15 +1058,45 @@ async function captureOnboarding(): Promise<void> {
             must(Boolean(r.health?.cleanupProblem), `${tag}: a cleanup that could not finish says nothing`);
             must(/next time|наступного разу/.test(r.health?.cleanupProblem ?? ""), `${tag}: the cleanup line gives no next step: ${r.health?.cleanupProblem}`);
           }, "[data-health-cleanup-problem]");
+          /* Between the run settling and the end of cleanup: every poll that
+             lands in that window shows this line. */
+          await checkFrame("check-cleaning", healthAnswer("cleaning"), "passed", (r) => {
+            must(Boolean(r.health?.cleaning), `${tag}: a run still cleaning up says nothing`);
+            must(r.health?.cleanupProblem === null, `${tag}: a cleanup still running already reports a problem`);
+          }, "[data-health-cleaning]");
           await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
             must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
             must(r.health!.rows.slice(1).every((entry) => entry.endsWith("=notRun")), `${tag}: after Stop the rows that never ran read ${r.health?.rows.join(" ")}`);
           });
+          /* A start the server refuses (no engine connected): the step says so
+             where it would have shown a run. */
+          health = healthAnswer("idle");
+          healthStart = { status: 409, json: { error: "Connect an engine first: no engine can start an agent on this machine.", code: "NO_ENGINE" } };
+          await openStep("agents");
+          await page.waitForSelector("[data-agent-mapping]");
+          await openStep("check");
+          await page.waitForSelector('[data-health-check="idle"]');
+          await page.click("[data-health-start]");
+          await page.waitForSelector("[data-health-start-failed]");
+          await shot("check-start-refused", (r) => {
+            must(Boolean(r.health?.startFailed), `${tag}: a refused start says nothing`);
+            must(!r.health!.startFailed!.includes("{"), `${tag}: the refusal line paints a placeholder: ${r.health?.startFailed}`);
+            must(r.health?.rows.length === 5, `${tag}: a refused start left ${r.health?.rows.length ?? 0} rows`);
+            /* A refusal the step has its own sentence for is read in the
+               interface language, never as the server's English one. */
+            const own = locale === "uk" ? "Спершу підключіть рушій (крок 1)." : "Connect an engine first (step 1).";
+            must(r.health?.startFailed === own, `${tag}: the refusal reads "${r.health?.startFailed}", expected "${own}"`);
+          });
+          healthStart = null;
+
           for (const failed of HEALTH_FAILURES) {
             const code = failed.code;
             await checkFrame(`check-${failed.name ?? code.toLowerCase().replace(/_/g, "-")}`, healthAnswer({ failed }), "failed", (r) => {
               must(r.health?.failure === code, `${tag}: expected failure ${code}, the step shows ${r.health?.failure}`);
-              must(Boolean(r.health?.failureText) && !r.health!.failureText!.includes("{"), `${tag} ${code}: unfilled sentence "${r.health?.failureText}"`);
+              /* The whole block, not its first paragraph: the sentence that
+                 says what to do carries `{bin}` and is the one that was left
+                 unsubstituted. */
+              must(Boolean(r.health?.failureText) && !r.health!.failureAll!.includes("{"), `${tag} ${code}: unfilled sentence "${r.health?.failureAll}"`);
               must(!r.health!.failureAll!.includes("`"), `${tag} ${code}: markdown backticks painted in "${r.health?.failureAll}"`);
               const index = HEALTH_ROW_IDS.indexOf(failed.row);
               must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);

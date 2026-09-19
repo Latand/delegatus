@@ -3706,6 +3706,7 @@ export const en = {
   "onboarding.check.failedFooter": "The check stopped at “{row}”. Fix that, then run it again: the rows before it passed.",
   "onboarding.check.failedFooterFirst": "The check stopped at “{row}”. Fix that, then run it again.",
   "onboarding.check.failedFooterReport": "The check stopped at “{row}”. The rows before it passed.",
+  "onboarding.check.failedFooterBound": "The check ran out of its 5-minute limit at “{row}”. Run it again when the machine is less busy.",
   "onboarding.check.stopped": "The check was stopped. Everything it made has been removed.",
   "onboarding.check.cleaning": "Cleaning up the scratch pipeline and agents…",
   "onboarding.check.cleanupProblem": "Could not undo everything: {problems}. The Viewer clears what is left the next time this check opens or runs. If the next run says the same, copy this line into a bug report.",
@@ -3743,4 +3744,8 @@ export const en = {
   "onboarding.check.code.WAKE_UNDELIVERED.todo": "Copy the details into a bug report.",
   "onboarding.check.code.SEAT_MISFILED.happened": "The orchestrator of “{project}” is filed under another key than its pipelines, so it will not be woken.",
   "onboarding.check.code.SEAT_MISFILED.todo": "The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.",
+  "onboarding.check.code.SEAT_UNREADABLE.happened": "The Viewer could not read the record of your orchestrators, so this row could not be checked.",
+  "onboarding.check.code.SEAT_UNREADABLE.todo": "Restart the Viewer and run the check again. If it repeats, copy the details into a bug report.",
+  "onboarding.check.code.RUN_BOUND.happened": "The whole check passed its 5-minute limit while this row was still running.",
+  "onboarding.check.code.RUN_BOUND.todo": "Run it again when the machine is less busy. If it stops here again, copy the details into a bug report.",
 } satisfies Dictionary;

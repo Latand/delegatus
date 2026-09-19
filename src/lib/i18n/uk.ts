@@ -3612,6 +3612,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.check.failedFooter": "Перевірка зупинилась на «{row}». Виправте це й запустіть знову: попередні кроки пройшли.",
   "onboarding.check.failedFooterFirst": "Перевірка зупинилась на «{row}». Виправте це й запустіть знову.",
   "onboarding.check.failedFooterReport": "Перевірка зупинилась на «{row}». Попередні кроки пройшли.",
+  "onboarding.check.failedFooterBound": "Перевірка вичерпала свої 5 хвилин на кроці «{row}». Запустіть її знову, коли комп'ютер буде менш завантажений.",
   "onboarding.check.stopped": "Перевірку зупинено. Усе, що вона створила, прибрано.",
   "onboarding.check.cleaning": "Прибираємо тимчасовий конвеєр і агентів…",
   "onboarding.check.cleanupProblem": "Не вдалося все прибрати: {problems}. Viewer прибере залишки, коли ця перевірка наступного разу відкриється або запуститься. Якщо після наступного запуску напис той самий, скопіюйте цей рядок у повідомлення про помилку.",
@@ -3649,4 +3650,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.check.code.WAKE_UNDELIVERED.todo": "Скопіюйте подробиці в повідомлення про помилку.",
   "onboarding.check.code.SEAT_MISFILED.happened": "Оркестратор проєкту «{project}» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.",
   "onboarding.check.code.SEAT_MISFILED.todo": "Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.",
+  "onboarding.check.code.SEAT_UNREADABLE.happened": "Viewer не зміг прочитати запис про ваших оркестраторів, тому цей рядок не перевірено.",
+  "onboarding.check.code.SEAT_UNREADABLE.todo": "Перезапустіть Viewer і запустіть перевірку знову. Якщо повториться, скопіюйте подробиці в повідомлення про помилку.",
+  "onboarding.check.code.RUN_BOUND.happened": "Уся перевірка вичерпала свої 5 хвилин, поки цей рядок ще виконувався.",
+  "onboarding.check.code.RUN_BOUND.todo": "Запустіть її знову, коли комп'ютер буде менш завантажений. Якщо вона знову спиниться тут, скопіюйте подробиці в повідомлення про помилку.",
 };
