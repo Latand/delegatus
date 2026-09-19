@@ -2718,7 +2718,13 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
      other answer carries its length, which is how a caller sees it is there. */
   const verbose = args.verbose === true;
   const echoPrompt = verbose || change.monitorPrompt !== undefined;
-  const { monitorPrompt: storedPrompt, ...settingsWithoutPrompt } = settings;
+  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  /* The same rule for the other repeats: the stored reason is carried once,
+     under `effective`, unless an expiry has already set the two apart, and the
+     defaults block and the fence sentence are a verbose read's. */
+  const compactSettings = storedReason === effective.reason ? settingsWithoutPrompt : { ...settingsWithoutPrompt, reason: storedReason };
+  const fenceAnswer = seatTickFenceAnswer(project, effective.wakeIntervalMs, now);
+  if (!verbose && fenceAnswer.fence) delete fenceAnswer.fenceDetail;
   return redactPayload({
     project,
     changed,
@@ -2726,7 +2732,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings: verbose ? settings : settingsWithoutPrompt,
+    settings: verbose ? settings : compactSettings,
     /* The stored note in full and its length (#1450), so a seat can check what
        persisted against what it sent without reading the file. The wake shows
        only a marked preview of a long note; this is the whole of it. */
@@ -2744,14 +2750,14 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     },
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
-    defaults: defaultSeatTickSettings(project),
+    ...(verbose ? { defaults: defaultSeatTickSettings(project) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
        answer that said everything was fine: the fence lived in the accounting
        row and no surface carried it. This says which attempt holds the
        project's wakes, since when and when it lapses on its own. */
-    ...seatTickFenceAnswer(project, effective.wakeIntervalMs, now),
+    ...fenceAnswer,
   });
 }
 
@@ -2875,8 +2881,8 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
   const snapshot = agentRegistry().readOnlySnapshot();
   return {
     accounts: {
-      claude: listClaudeAccounts().map((account) => ({ accountId: account.id, label: account.label })),
-      codex: listCodexAccounts().map((account) => ({ accountId: account.id, label: account.label })),
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),

@@ -278,7 +278,6 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   expect(all.accounts[0]).toEqual({
     engine: "claude",
     accountId: "claude-a",
-    label: "Account A",
     active: true,
     fresh: true,
     plan: "max",
@@ -290,6 +289,10 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   /* An account never observed says so rather than inventing zero usage. */
   expect(all.accounts[1]).toMatchObject({ accountId: "claude-b", fresh: false, session: null, weekly: null, tiers: [] });
   for (const account of all.accounts) expect(bytes(account)).toBeLessThan(400);
+  /* The label is free text the operator typed when adding the account, so it
+     may hold an email or a handle; the account id is the only identity here. */
+  for (const account of all.accounts) expect(account).not.toHaveProperty("label");
+  expect(JSON.stringify(all)).not.toContain("Account A");
 
   const codex = await bindings.account_limits({ clientRequestId: "limits-codex", engine: "codex" }) as { accounts: Array<{ accountId: string }> };
   expect(codex.accounts.map((account) => account.accountId)).toEqual(["codex-a"]);

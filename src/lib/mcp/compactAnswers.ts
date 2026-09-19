@@ -184,7 +184,7 @@ export type AccountLimitEngine = "claude" | "codex";
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
   accountId?: string;
-  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; label: string }>>;
+  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string }>>;
   active: Record<AccountLimitEngine, string | null>;
   observations: Record<AccountLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>;
   now: number;
@@ -213,8 +213,9 @@ export function accountLimitRows(input: AccountLimitsInput) {
       const limits = observation?.limits ?? null;
       return {
         engine,
+        /* No label: it is free text the operator typed and may name a person;
+           the account id is the one identity this answer carries. */
         accountId: account.accountId,
-        label: account.label,
         active: input.active[engine] === account.accountId,
         /* Whether the observation is recent enough for the automatic switch to
            act on — the same test the accounts panel draws "stale" from. */
