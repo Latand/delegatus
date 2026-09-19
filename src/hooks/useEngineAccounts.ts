@@ -1011,6 +1011,16 @@ const stores: Record<Engine, EngineAccountsStore> = {
   claude: createEngineAccountsStore("claude"),
 };
 
+/** Drops both engine stores back to their pre-read state. Test-only: a store
+    reads `/api/accounts` once per process (the first subscriber, see
+    `subscribe`), so a case that needs its own payload — a selection that is
+    signed out, for one (#1795) — cannot get it by answering the fetch
+    differently. Product code never calls this. */
+export function resetEngineAccountsStoresForTests(): void {
+  stores.claude = createEngineAccountsStore("claude");
+  stores.codex = createEngineAccountsStore("codex");
+}
+
 /** Shared per-engine account state for the Switchboard, limits footer, and the
     unified Accounts panel. Every surface of one engine reads one singleton. */
 export function useEngineAccounts(engine: Engine): EngineAccountsState {
