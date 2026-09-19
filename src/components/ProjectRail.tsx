@@ -17,6 +17,7 @@ import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./Director
 import { FlipRow } from "./FlipRow";
 import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, Loader2, MoreHorizontal } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
+import { openOnboarding } from "./onboarding/useOnboarding";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
@@ -421,6 +422,24 @@ function RailHeaderMenu() {
             <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
             <PushBell onStatus={onPushStatus} />
           </div>
+          {/* #1876: the setup guide and its agent mapping, reachable again. */}
+          <div className="my-1 border-t border-border" />
+          <button
+            type="button"
+            data-rail-menu-setup-guide=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("guide"); }}
+          >
+            {t("onboarding.menu.guide")}
+          </button>
+          <button
+            type="button"
+            data-rail-menu-agent-mapping=""
+            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => { setOpen(false); openOnboarding("mapping"); }}
+          >
+            {t("onboarding.menu.mapping")}
+          </button>
         </div>
       ) : null}
     </div>

@@ -1419,13 +1419,19 @@ async function createPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     /* #1026: a rejected create carries every violated constraint with its field
        and expected shape, so an agent composing its first pipeline reads the
        whole contract from one answer — the same list an HTTP caller receives. */
+    /* #1876: an engine nobody is signed in to answers with its code and the
+       two ways out, so an agent relays the choice instead of retrying. */
+    if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.violations?.length ? new McpToolRefusal(message, { violations: result.violations }) : new Error(message);
   }
   if (result.pipeline.state !== "draft") requestPipelineTick();
   /* #1845: an acknowledgement, never the record. The record echoed the spec,
      every stage prompt and every composed role scaffold back to the caller that
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
-  return redactPayload(pipelineAcknowledgement(result.pipeline));
+  return redactPayload({
+    ...pipelineAcknowledgement(result.pipeline),
+    ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+  });
 }
 
 async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -1440,6 +1446,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     const message = result.error ?? "could not update pipeline";
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
+    if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     throw result.close ? new McpToolRefusal(message, { close: result.close }) : new Error(message);
   }
   if (PIPELINE_CONTROLLER_ACTIONS.has(action)) requestPipelineTick();

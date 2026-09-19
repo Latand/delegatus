@@ -5,6 +5,7 @@ import { getPipeline, patchPipeline, type PipelineCloseReport } from "@/lib/pipe
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { PIPELINE_ACTIONS, type PatchPipelineRequest, type Pipeline, type PipelineAction, type PipelineGraphEdit, type PipelineGuardErrorCode, type PipelineGuardField, type PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
@@ -16,7 +17,9 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy";
+  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED;
+  /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
+  details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
       so the identical request may be repeated. */
   retryable?: true;
@@ -69,6 +72,7 @@ export async function PATCH(
       ...(result.code ? { code: result.code } : {}),
       ...(result.field ? { field: result.field } : {}),
       ...(result.path ? { path: result.path } : {}),
+      ...(result.details ? { details: result.details } : {}),
       /* #1026: a draft stage edit runs the same batched stage validation the
          create path does, so its caller gets the same field-level list. */
       ...(result.violations?.length ? { violations: result.violations } : {}),
