@@ -77,6 +77,29 @@ test("a host writing normally is working", () => {
   })).state).toBe("working");
 });
 
+test.each([false, true])("adoption sidecars cannot make an inherited message working (post-launch message: %s)", async (wroteMessage) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-liveness-adoption-"));
+  try {
+    const pathname = path.join(directory, "session.jsonl");
+    const messageAt = wroteMessage ? NOW - 10_000 : NOW - 3 * 24 * 60 * MINUTE;
+    fs.writeFileSync(pathname, [
+      { type: "assistant", timestamp: new Date(messageAt).toISOString(), message: { content: [{ type: "tool_use", id: "t1", name: "Bash" }] } },
+      { type: "mode", mode: "default", timestamp: new Date(NOW).toISOString() },
+      { type: "last-prompt", lastPrompt: "resume" },
+    ].map((record) => JSON.stringify(record)).join("\n") + "\n");
+    fs.utimesSync(pathname, NOW / 1_000, NOW / 1_000);
+    const transcriptTail = await readTranscriptEvidence("claude", pathname);
+    const decision = decideTurnLiveness(evidence({
+      transcriptTail,
+      host: { launchedAt: NOW - MINUTE, cpuMs: 0 },
+    }));
+    expect(decision.state).toBe(wroteMessage ? "working" : "unknown");
+    expect(decision.lastEvent).toEqual({ kind: "tool-call", at: messageAt });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("the #1281 specimen — nothing written and no CPU since its own launch — is severed", () => {
   const decision = decideTurnLiveness(evidence({
     /* The last transcript event is the pre-redeploy tool result, before this
