@@ -3423,3 +3423,51 @@ test("full and summary files representations never share ETags or cached bodies"
   const fullAgain = await GET(new Request("http://localhost/api/files"));
   expect((await fullAgain.json()).readProjection).toBeUndefined();
 });
+
+/* #1814: every projection build costs a worker process of about a gigabyte on
+   production, so a burst of polls over a corpus nobody has touched has to be
+   answered by one build. `loadFlows` runs exactly once per built
+   representation, which makes it the build counter. */
+test("a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build", async () => {
+  scannedFiles = [file("/sessions/burst.jsonl")];
+  let builds = 0;
+  flowsStore = () => { builds += 1; return []; };
+
+  const concurrent = await Promise.all(
+    Array.from({ length: 6 }, () => GET(new Request("http://127.0.0.1/api/files"))),
+  );
+  expect(builds).toBe(1);
+  expect(concurrent.filter((response) => response.headers.get("x-llv-files-projection-cache") === "miss")).toHaveLength(1);
+  expect(concurrent.every((response) => response.status === 200)).toBe(true);
+  const etags = new Set(concurrent.map((response) => response.headers.get("etag")));
+  expect(etags.size).toBe(1);
+
+  const sequential: Response[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    sequential.push(await GET(new Request("http://127.0.0.1/api/files")));
+  }
+  expect(builds).toBe(1);
+  expect(sequential.map((response) => response.headers.get("x-llv-files-projection-cache")))
+    .toEqual(["hit", "hit", "hit", "hit", "hit", "hit"]);
+  expect(new Set(sequential.map((response) => response.headers.get("etag")))).toEqual(etags);
+});
+
+test("a project-scoped burst keeps its own representation without rebuilding the unscoped one", async () => {
+  scannedFiles = [file("/sessions/burst-scoped.jsonl")];
+  let builds = 0;
+  flowsStore = () => { builds += 1; return []; };
+
+  const unscoped = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(builds).toBe(1);
+
+  const scoped = await Promise.all(
+    Array.from({ length: 4 }, () => GET(new Request("http://127.0.0.1/api/files?path=%2Fsessions%2Fburst-scoped.jsonl"))),
+  );
+  expect(builds).toBe(2);
+  expect(scoped.every((response) => response.status === 200)).toBe(true);
+
+  const unscopedAgain = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(builds).toBe(2);
+  expect(unscopedAgain.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  expect(unscopedAgain.headers.get("etag")).toBe(unscoped.headers.get("etag"));
+});
