@@ -57,6 +57,9 @@ const PROJECTION_STATE_FILES = [
      the projection. Without it the ask would appear, and clear, only when some
      unrelated store happened to move. */
   "bridge-reports.json",
+  /* A state database fallback or a refused backup (#1870 slice 10) shows in
+     `systemHealth.storage` on the next poll, not after some other store moves. */
+  "storage-incidents.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;

@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
+import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
 import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
@@ -1503,14 +1504,19 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite MCP receipts require the Bun runtime");
-    this.db = new sqlite.Database(filename, { create: true, strict: true });
+    /* Bound to the file at its name: a receipt store the activation fallback
+       replaced is reopened (with its schema), never written through the moved
+       handle. The journal mode cannot change inside a transaction, so these
+       pragmas run before the schema transaction. */
+    this.db = openCurrentDatabase(filename, () => {
+      const db = new sqlite.Database(filename, { create: true, strict: true });
+      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
+      return db;
+    }, { reopened: () => this.initializeSchema() });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
-    /* The journal mode cannot change inside a transaction, so these run
-       before the schema transaction below. */
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA auto_vacuum = INCREMENTAL;");
     this.initializeSchema();
     this.importLegacyFile(options.legacyFilePath);
     this.db.exec("BEGIN IMMEDIATE");
