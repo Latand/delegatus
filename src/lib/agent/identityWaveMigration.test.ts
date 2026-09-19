@@ -42,6 +42,9 @@ function durableStateTree(root: string): string[] {
       entries.push(`symlink:${relative}:${fs.readlinkSync(current)}`);
       return;
     }
+    /* SQLite's WAL index is shared memory mapped to a file: any reader
+       updates its read marks, and nothing in it is durable. */
+    if (relative.endsWith(".sqlite-shm")) return;
     entries.push(`file:${relative}:${fs.readFileSync(current).toString("base64")}`);
   };
   visit(root, "");
@@ -106,18 +109,14 @@ function seedPlaceholderRegistry(directory: string, filename: string): { seeded:
 }
 
 /** The state a `sqlite`-mode writer leaves behind and is still holding open:
-    the store after its first-boot import, the published identity descriptor
-    and the revision-stamped rollback mirror. The mirror is re-serialized
-    pretty-printed so that any writer construction, which rewrites the mirror
-    in its own compact form, shows up as changed bytes. */
+    the store after its first-boot import and the published identity
+    descriptor. The JSON it imported is kept renamed; there is no mirror. */
 function seedPublishedSqliteState(directory: string, stateDirectory: string): { filename: string; store: AgentRegistry } {
   const filename = path.join(stateDirectory, "agent-registry.json");
   seedPlaceholderRegistry(directory, filename);
   const store = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
   publishRegistryBackendIdentity(filename, "sqlite", defaultRegistrySqliteFilename(filename));
-  const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as { _sqliteRevision?: unknown };
-  expect(Number.isInteger(mirror._sqliteRevision)).toBe(true);
-  fs.writeFileSync(filename, `${JSON.stringify(mirror, null, 2)}\n`);
+  expect(fs.existsSync(filename)).toBe(false);
   return { filename, store };
 }
 
@@ -513,7 +512,7 @@ test("a production-shaped dry-run with default dependencies constructs no regist
   }
 });
 
-test("a dry-run under a published SQLite backend previews the stamped mirror without opening the store", () => {
+test("a dry-run under a published SQLite backend previews the store read-only", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-wave-sqlite-dry-run-"));
   try {
     withProductionShapedDryRun(directory, undefined, (stateDirectory) => {
@@ -532,24 +531,19 @@ test("a dry-run under a published SQLite backend previews the stamped mirror wit
   }
 });
 
-test("a dry-run under a SQLite backend refuses an unstamped or absent rollback mirror", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-wave-sqlite-dry-run-refusal-"));
+test("a dry-run under a SQLite backend never previews a JSON file left beside the store", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-wave-sqlite-dry-run-json-"));
   try {
     withProductionShapedDryRun(directory, undefined, (stateDirectory) => {
       const { filename, store } = seedPublishedSqliteState(directory, stateDirectory);
-      const mirror = JSON.parse(fs.readFileSync(filename, "utf8")) as Record<string, unknown>;
-      delete mirror._sqliteRevision;
-      fs.writeFileSync(filename, `${JSON.stringify(mirror)}\n`);
-      const unstamped = durableStateTree(stateDirectory);
+      /* An older release's mirror with nothing to retitle in it. */
+      fs.writeFileSync(filename, `${JSON.stringify({ version: 2, entries: {}, receipts: {} })}\n`);
+      const before = durableStateTree(stateDirectory);
 
-      expect(() => runIdentityWaveMigrationAtStartup()).toThrow(RegistryReadError);
-      expect(() => runIdentityWaveMigrationAtStartup()).toThrow(/carries no SQLite revision stamp/);
-      expect(durableStateTree(stateDirectory)).toEqual(unstamped);
+      const result = runIdentityWaveMigrationAtStartup();
 
-      fs.rmSync(filename);
-      const absent = durableStateTree(stateDirectory);
-      expect(() => runIdentityWaveMigrationAtStartup()).toThrow(/rollback mirror is absent/);
-      expect(durableStateTree(stateDirectory)).toEqual(absent);
+      expect(result).toMatchObject({ dryRun: true, retitled: 1 });
+      expect(durableStateTree(stateDirectory)).toEqual(before);
       expect(constructedRegistrySingleton()).toBeNull();
       expect(store.snapshot().identityMigrations[IDENTITY_WAVE_MIGRATION]).toBeUndefined();
     });

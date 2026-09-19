@@ -7,7 +7,6 @@ import { createTranscriptHostObserver } from "./agent/transcriptHost";
 import { procBackend } from "./proc";
 import { agentProcesses, readStructuredHostStamp } from "./scanner/process";
 import { buildResourceSnapshot, lastResourceBuildDiagnostic, lastResourceTargetRefs, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type ResourceWorkerFileObservation, type StructuredHostRecord } from "./resources";
-import { overlayResourceSessionTitles } from "./session/titleProjection";
 import { captureTmuxAttachReferences, panePidMap, tmuxServerPid } from "./tmux";
 import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry } from "./types";
 
@@ -105,7 +104,6 @@ async function collect(message: unknown): Promise<void> {
     return;
   }
   try {
-    overlayResourceSessionTitles(request.files as FileEntry[]);
     const conversationByPath = new Map(request.files.flatMap((entry) => entry.conversationId ? [[entry.path, entry.conversationId] as const] : []));
     const readHosts = createTranscriptHostObserver({
       listFiles: async () => request.files as FileEntry[],
