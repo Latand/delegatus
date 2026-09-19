@@ -2063,7 +2063,7 @@ function ProjectDashboardView({
               aria-label={t("search.open")}
               title={t("search.open")}
               onClick={onOpenSearch}
-              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_1_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_8_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Search className="h-[15px] w-[15px] shrink-0" aria-hidden />
               <span className="min-w-0 truncate">{t("search.open")}</span>

@@ -1421,7 +1421,8 @@ async function headerMain(): Promise<void> {
       const quietMenu = await quietPage.evaluate(readMenu);
       await quietPage.screenshot({ path: path.join(OUT_DIR, `header-${tag}-quiet-more.png`), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
       checkMenu(`${tag} quiet`, quietMenu);
-      must(quietMenu.groups.some((group) => group.name === "project") && quietMenu.rows.length >= 5, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
+      /* Sound (two rows), Archive, Delete; this leaf's message search sits in the bar's find slot. */
+      must(quietMenu.groups.some((group) => group.name === "project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
       report[`${tag}:quiet`] = { menu: quietMenu };
       await quiet.close();
     }

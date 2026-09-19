@@ -250,7 +250,7 @@ export function DashboardBar({ lead, status, find, view, create, trail }: {
       data-bar-tier={wide ? "wide" : "narrow"}
       className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card pl-4 pr-[236px]"
     >
-      <div className="flex min-w-0 shrink items-center gap-2" data-bar-group="where">{lead(wide)}</div>
+      <div className="flex shrink items-center gap-2" data-bar-group="where">{lead(wide)}</div>
       {status}
       <span aria-hidden className="min-w-0 flex-1" />
       {find}

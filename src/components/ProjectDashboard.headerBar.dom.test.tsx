@@ -489,8 +489,11 @@ test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did 
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
   expect(bar(host).getAttribute("data-bar-tier")).toBe("narrow");
-  /* The project name keeps a floor, so it never truncates to nothing. */
+  /* The project name keeps a floor, so it never truncates to nothing, and the search gives way first. */
   expect(bar(host).querySelector("h1")!.className).toContain("min-w-12");
+  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
+  expect(css).toMatch(/\.kb \.bar \.search \{[^}]*flex: 1 8 240px/);
+  expect(css).not.toMatch(/\.kb \.bar \.bar-lead \{[^}]*min-width: 0/);
 });
 
 test("uk: the switch and the working count read in Ukrainian", () => {
