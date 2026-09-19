@@ -35,6 +35,7 @@ process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks, saveTasks } = await import("@/lib/tasks/store");
+const { persistedTaskRows, persistedTaskState } = await import("@/lib/tasks/storeFixture");
 expect(TASKS_FILE.startsWith(sandbox + path.sep)).toBe(true);
 
 async function protocol() {
@@ -89,7 +90,7 @@ test("an unsupported board value is refused, never accepted and dropped", async 
     const created = (await p.client.callTool({ name: "create_task", arguments: {
       clientRequestId: "board-refusal-create", project: "fixture-project", text: "refusal",
     } })).structuredContent as { task: { id: string } };
-    const before = fs.readFileSync(TASKS_FILE, "utf8");
+    const before = persistedTaskState(TASKS_FILE);
     for (const value of ["archived", "", null, 1]) {
       const refused = (await p.client.callTool({ name: "update_task", arguments: {
         clientRequestId: `board-refusal-${String(value)}`, taskId: created.task.id, board: value,
@@ -98,7 +99,7 @@ test("an unsupported board value is refused, never accepted and dropped", async 
       expect(refused.details?.field).toBe("board");
     }
     /* Nothing was written by any of them. */
-    expect(fs.readFileSync(TASKS_FILE, "utf8")).toBe(before);
+    expect(persistedTaskState(TASKS_FILE)).toBe(before);
   } finally { await p.close(); }
 });
 

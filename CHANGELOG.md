@@ -7,6 +7,24 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- The task board is stored in SQLite (`state.sqlite`, collection `tasks`)
+  instead of `tasks.json`. A write commits only the tasks it changed, in one
+  transaction, so a crash can no longer leave a zero-filled or half-written
+  board. On first start the existing `tasks.json` is imported and verified by
+  row count and digest, then kept as `tasks.json.imported-<release>`; a
+  directory with a README takes its place (#1870).
+- A `tasks.json` that cannot be parsed at all (empty, NUL-filled or truncated)
+  is kept as `tasks.json.unreadable-<time>` and the board starts empty with a
+  logged incident, instead of every task request failing.
+
+### Downgrading
+- A version older than this one cannot read the SQLite board and fails on the
+  `tasks.json` directory, naming the path. Upgrade again to recover. Replacing
+  the directory with the `tasks.json.imported-*` copy also works, but loses
+  task changes made since the upgrade. Deployed releases rolled back through
+  the release fence get a fresh `tasks.json` written for them automatically.
+
 ## [1.2.0] — 2026-09-19
 
 ### Added

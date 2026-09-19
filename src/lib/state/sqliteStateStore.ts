@@ -244,6 +244,19 @@ function openDatabase(filename: string): Database {
             owner_start_identity TEXT,
             acquired_at INTEGER NOT NULL
           );
+          CREATE TABLE IF NOT EXISTS state_imports (
+            collection TEXT PRIMARY KEY REFERENCES state_collections(collection) ON DELETE CASCADE,
+            source_name TEXT NOT NULL,
+            source_sha256 TEXT,
+            source_bytes INTEGER NOT NULL,
+            row_count INTEGER NOT NULL,
+            row_digest TEXT NOT NULL,
+            gap TEXT,
+            release TEXT,
+            imported_at TEXT NOT NULL,
+            mirror_sha256 TEXT,
+            mirror_revision INTEGER
+          );
         `);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
@@ -386,6 +399,178 @@ export function initializeStateCollections(
       }
     }
     throw new FileTransactionBusyError("state migration is busy");
+  } finally {
+    db.close();
+  }
+}
+
+/** Evidence of one legacy file's first-boot import (#1870). */
+export interface StateImportRecord {
+  collection: string;
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  rowCount: number;
+  rowDigest: string;
+  gap: string | null;
+  release: string | null;
+  importedAt: string;
+  mirrorSha256: string | null;
+  mirrorRevision: number | null;
+}
+
+export interface StateImportRow {
+  key: string;
+  value: unknown;
+  controllerActive: boolean;
+}
+
+export class StateImportVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StateImportVerificationError";
+  }
+}
+
+type StateImportDbRow = {
+  collection: string;
+  source_name: string;
+  source_sha256: string | null;
+  source_bytes: number;
+  row_count: number;
+  row_digest: string;
+  gap: string | null;
+  release: string | null;
+  imported_at: string;
+  mirror_sha256: string | null;
+  mirror_revision: number | null;
+};
+
+function stateImportRecord(row: StateImportDbRow): StateImportRecord {
+  return {
+    collection: row.collection,
+    sourceName: row.source_name,
+    sourceSha256: row.source_sha256,
+    sourceBytes: row.source_bytes,
+    rowCount: row.row_count,
+    rowDigest: row.row_digest,
+    gap: row.gap,
+    release: row.release,
+    importedAt: row.imported_at,
+    mirrorSha256: row.mirror_sha256,
+    mirrorRevision: row.mirror_revision,
+  };
+}
+
+/** sha256 over each row's value_json in row order, one line per row. */
+export function stateRowDigest(valueJsons: readonly string[]): string {
+  const hash = crypto.createHash("sha256");
+  for (const valueJson of valueJsons) hash.update(valueJson).update("\n");
+  return hash.digest("hex");
+}
+
+function selectStateImport(db: Database, collection: string): StateImportRecord | null {
+  const row = db.query<StateImportDbRow, [string]>("SELECT * FROM state_imports WHERE collection = ?").get(collection);
+  return row ? stateImportRecord(row) : null;
+}
+
+/** The import evidence for a collection, or null before its import commits. */
+export function readStateImport(filename: string, collection: string): StateImportRecord | null {
+  if (!fs.existsSync(filename)) return null;
+  const db = connectReadonlyDatabase(filename);
+  try {
+    return selectStateImport(db, collection);
+  } catch (error) {
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Import a legacy store's rows as a new collection in one `BEGIN IMMEDIATE`
+ * transaction. The rows are read back inside the transaction and their count
+ * and digest compared with what the caller parsed; a mismatch rolls back and
+ * leaves the database unmarked. An existing import record makes this a no-op,
+ * checked after the write lock is held, so concurrent importers import once.
+ */
+export function importStateCollection(filename: string, input: {
+  collection: string;
+  schemaVersion: number;
+  migrationId: string;
+  rows: readonly StateImportRow[];
+  sourceName: string;
+  sourceSha256: string | null;
+  sourceBytes: number;
+  gap: string | null;
+  release: string | null;
+  /** Test seam: runs inside the transaction after the rows are written. */
+  beforeVerify?: (execute: (sql: string, ...bindings: SQLQueryBindings[]) => void) => void;
+}): { imported: boolean; record: StateImportRecord } {
+  const encoded = input.rows.map((row) => ({ ...row, valueJson: JSON.stringify(row.value) }));
+  const seen = new Set<string>();
+  for (const row of encoded) {
+    if (!row.key || seen.has(row.key)) throw new Error(`duplicate or empty ${input.collection} import key: ${row.key}`);
+    seen.add(row.key);
+  }
+  const expectedDigest = stateRowDigest(encoded.map((row) => row.valueJson));
+  const db = openDatabase(filename);
+  try {
+    const outcome = withImmediateTransaction(db, `${input.collection} import is busy`, () => {
+      assertSqliteWriteAuthority(filename);
+      const held = selectStateImport(db, input.collection);
+      if (held) return { imported: false, record: held };
+      if (db.query("SELECT 1 FROM state_collections WHERE collection = ?").get(input.collection)) {
+        throw new StateImportVerificationError(`${input.collection} collection exists without import evidence`);
+      }
+      const revision = encoded.length > 0 ? 1 : 0;
+      const importedAt = new Date().toISOString();
+      db.query(`
+        INSERT INTO state_collections(collection, schema_version, revision, migration_id, imported_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(input.collection, input.schemaVersion, revision, input.migrationId, importedAt);
+      const insert = db.query(`
+        INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      encoded.forEach((row, index) => {
+        insert.run(input.collection, row.key, row.valueJson, index, revision, row.controllerActive ? 1 : 0);
+      });
+      input.beforeVerify?.((sql, ...bindings) => { db.query(sql).run(...bindings); });
+      const stored = db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+      ).all(input.collection).map((row) => row.value_json);
+      const storedDigest = stateRowDigest(stored);
+      if (stored.length !== encoded.length || storedDigest !== expectedDigest) {
+        throw new StateImportVerificationError(
+          `${input.collection} import verification failed: ${stored.length}/${encoded.length} rows, digest mismatch=${storedDigest !== expectedDigest}`,
+        );
+      }
+      db.query(`
+        INSERT INTO state_imports(collection, source_name, source_sha256, source_bytes, row_count, row_digest, gap, release, imported_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(input.collection, input.sourceName, input.sourceSha256, input.sourceBytes, encoded.length,
+        storedDigest, input.gap, input.release, importedAt);
+      assertSqliteWriteAuthority(filename);
+      return { imported: true, record: selectStateImport(db, input.collection)! };
+    });
+    secureDatabaseFiles(filename);
+    return outcome;
+  } finally {
+    db.close();
+  }
+}
+
+/** Record the rollback mirror last written for a collection. Evidence only, so
+    it is written during a release fence, when collection writes are refused. */
+export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
+  const db = connectDatabase(filename);
+  try {
+    withImmediateTransaction(db, `${collection} import is busy`, () => {
+      db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
+        .run(mirrorSha256, mirrorRevision, collection);
+    });
   } finally {
     db.close();
   }

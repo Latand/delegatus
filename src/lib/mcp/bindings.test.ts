@@ -3589,17 +3589,18 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
     const created = await service.callTool("create_task", { clientRequestId: "binding-position-create", project: "fixture-project", text: "task" });
     if (!created.ok) throw new Error(created.error);
-    const before = fs.readFileSync(TASKS_FILE, "utf8");
+    const before = persistedTaskState(TASKS_FILE);
     const missing = await service.callTool("update_task", { clientRequestId: "binding-missing-guard", taskId: created.taskId, pos: { x: 0, y: 0 } });
     const invalid = [];
     for (const [index, pos] of [null, {}, { x: 1 }, { x: Infinity, y: 1 }, { x: 0, y: NaN }].entries()) {
       invalid.push(await service.callTool("create_task", { clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos }));
     }
-    console.log(JSON.stringify({ missing, invalid, unchanged: fs.readFileSync(TASKS_FILE, "utf8") === before }));
+    console.log(JSON.stringify({ missing, invalid, unchanged: persistedTaskState(TASKS_FILE) === before }));
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();

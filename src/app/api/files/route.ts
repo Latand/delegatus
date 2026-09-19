@@ -48,7 +48,6 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "tasks.json",
   "project-aliases.json",
   "project-curation.json",
   "worktree-map.json",
@@ -105,6 +104,7 @@ function projectionBaseKey(
     pinOverlayPaths: scan.pinOverlayPaths ?? [],
     stores: [
       ...PROJECTION_STATE_FILES.map(stateFileSignature),
+      hotStateSignature("tasks", "tasks.json"),
       hotStateSignature("flows", "flows.json"),
       hotStateSignature("pipelines", "pipelines.json"),
       hotStateSignature("workflows", "workflows.json"),

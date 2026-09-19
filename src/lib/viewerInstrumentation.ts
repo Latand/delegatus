@@ -325,6 +325,10 @@ export async function checkpointHotStateRollbackMirrorsForDemotion(): Promise<Ho
   const flowRevision = await flows.checkpointFlowRollbackMirrorForDemotionAsync();
   const pipelineRevisions = await pipelines.checkpointPipelineRollbackMirrorsForDemotionAsync();
   const workflowRevision = await workflows.checkpointWorkflowRollbackMirrorForDemotionAsync();
+  /* Stores moved by #1870 record their mirror in `state_imports`, not in the
+     checkpoint record older adapters parse. */
+  const { checkpointLegacyCollectionMirrorsForDemotion } = await import("@/lib/state/legacyCollections");
+  await checkpointLegacyCollectionMirrorsForDemotion();
   return {
     flows: flowRevision,
     pipelines: pipelineRevisions.pipelines,
@@ -761,6 +765,8 @@ export async function registerViewerRuntime(): Promise<void> {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     const authority = await initializeHotStateStoresAtStartup(boundary);
+    const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+    await ensureLegacyCollectionsImported();
     let activatedAuthority: HotStateAuthority | null = null;
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
