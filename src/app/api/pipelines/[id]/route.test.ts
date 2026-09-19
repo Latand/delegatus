@@ -113,7 +113,7 @@ test("pipeline GET returns 404 for an unknown id", async () => {
 });
 
 test("pipeline GET record matches the same id in the collection response", async () => {
-  const collection = await (await GET_COLLECTION()).json() as { pipelines: Array<{ id: string }> };
+  const collection = await (await GET_COLLECTION(new NextRequest("http://127.0.0.1/api/pipelines"))).json() as { pipelines: Array<{ id: string }> };
   const response = await GET(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1"),
     { params: Promise.resolve({ id: "pipeline-1" }) },

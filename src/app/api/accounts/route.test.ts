@@ -132,12 +132,13 @@ for (const kind of ["legacy", "managed"] as const) {
     const id = kind === "legacy" ? "default" : account.id;
     const read = spyOn(credentialStore, "readClaudeCredentials").mockReturnValue({ state: "unknown" });
     const providerStatus = spyOn(realClaudeLoginPorts, "status").mockResolvedValue({ loggedIn: true, method: "oauth", email: null, plan: "max" });
-    const providerLimits = spyOn(limits, "fetchClaudeLimits");
+    // The quota probe reads Claude usage through the shared snapshot (#1849).
+    const providerLimits = spyOn(limits, "readClaudeAccountLimits");
     try {
       for (const authenticated of [true, false]) {
         providerLimits.mockResolvedValue({
-          data: null, source: authenticated ? "live" : "unavailable",
-          reason: authenticated ? null : "oauth-reauthentication-required",
+          data: null, observedAt: null,
+          provenance: { source: authenticated ? "live" : "unavailable", reason: authenticated ? null : "oauth-reauthentication-required", staleSince: null },
         });
         const response = await refresh(new NextRequest("http://127.0.0.1/api/accounts/claude/limits", {
           method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id }),

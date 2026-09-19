@@ -18,8 +18,10 @@ import { forgetCachedLimits } from "@/lib/limits";
  * one named account right now and records the result where the controller
  * records its own — the registry's durable quota observation — so the accounts
  * dialog, the capacity gate every spawn consults, and the limits footer all
- * see the reading taken at that moment. The short-lived `/api/limits` cache
- * for the account is dropped too, so the footer's next poll goes live.
+ * see the reading taken at that moment. A Claude read goes through the
+ * snapshot `/api/limits` answers from (issue #1849), so the footer already
+ * holds it; a Codex account's short-lived `/api/limits` cache is dropped, so
+ * the footer's next poll goes live.
  */
 
 /** Which reader took the observation, for the quota telemetry line. */
@@ -42,7 +44,9 @@ export type LimitsRefreshResult =
    controller's cycle; the controller keeps its own. */
 const LIVE_READ_BOOT_ID = crypto.randomUUID();
 
-/** Records a live observation durably and drops the account's limits cache. */
+/** Records a live observation durably and, for Codex, drops the account's
+    limits cache. Dropping a Claude entry would discard the very read this
+    observation came from, and send the footer back to the provider. */
 export function recordLiveObservation(
   observation: QuotaObservation,
   accountKind: "legacy" | "managed",
@@ -51,7 +55,7 @@ export function recordLiveObservation(
   const registry = deps.registry ?? agentRegistry();
   const durable = durableQuotaObservation(observation, LIVE_READ_BOOT_ID);
   registry.recordQuotaObservation(durable);
-  forgetCachedLimits(observation.engine, observation.accountId);
+  if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
   logQuotaEvent({
     engine: observation.engine,
     accountId: observation.accountId,
@@ -71,7 +75,7 @@ export async function refreshAccountLimits(engine: MigrationEngine, accountId: s
   if (!account) return { kind: "unknown_account" };
   try {
     const observation = await Promise.race([
-      probe.probe(engine, account, now),
+      probe.probe(engine, account, now, { force: true }),
       probeTimeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
     ]);
     return { kind: "refreshed", account, observation: recordLiveObservation(observation, account.kind, deps) };

@@ -88,11 +88,15 @@ test("GET /api/runtime/deployments returns an empty live ledger with runtime-hos
   expect(methods).toEqual(["snapshot"]);
 });
 
-test("GET /api/runtime/deployments preserves limit ordering for a working host", async () => {
-  const deployments = ["one", "two", "three"].map((suffix) => ({
+/* #1845 defect C: the snapshot orders deployments by id, a random UUID, so the
+   last `limit` of it was an arbitrary window. The newest starts come first. */
+test("GET /api/runtime/deployments answers the newest deployments first, whatever their ids sort as (#1845)", async () => {
+  const deployments = [["0a11", 19], ["ffdf", 9], ["ff40", 1]].map(([suffix, day]) => ({
     deploymentId: `deployment_${suffix}`,
     phase: "succeeded",
     revision: "a".repeat(40),
+    createdAt: `2026-09-${String(day).padStart(2, "0")}T09:00:00.000Z`,
+    updatedAt: `2026-09-${String(day).padStart(2, "0")}T09:04:00.000Z`,
   }));
   await serveRuntime({ deployments });
 
@@ -101,7 +105,7 @@ test("GET /api/runtime/deployments preserves limit ordering for a working host",
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     count: 2,
-    deployments: deployments.slice(-2),
+    deployments: [deployments[0], deployments[1]],
     runtimeHostRequests: runtimeHostRequestHealth(),
   });
 });
@@ -111,6 +115,8 @@ test("GET /api/runtime/deployments leaves an omitted limit unbounded for the jou
     deploymentId: `deployment_${index + 1}`,
     phase: "succeeded",
     revision: "f".repeat(40),
+    createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
+    updatedAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString(),
   }));
   await serveRuntime({ deployments });
 
@@ -119,7 +125,7 @@ test("GET /api/runtime/deployments leaves an omitted limit unbounded for the jou
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     count: deployments.length,
-    deployments,
+    deployments: [...deployments].reverse(),
     runtimeHostRequests: runtimeHostRequestHealth(),
   });
 });

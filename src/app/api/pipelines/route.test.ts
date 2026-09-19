@@ -17,6 +17,7 @@ fs.writeFileSync(creatorPath, "{}\n");
 const { GET, POST } = await import("./route");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+const collectionRequest = (query = "") => new NextRequest(`http://127.0.0.1/api/pipelines${query}`);
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
 agentRegistry().ensureConversation("codex", creatorPath, null);
 
@@ -31,7 +32,7 @@ afterAll(() => {
 test("pipeline collection route mirrors flow GET and POST shapes", async () => {
   let ticks = 0;
   const unregister = registerPipelineTick(async () => { ticks += 1; });
-  expect(await (await GET()).json()).toEqual({ pipelines: [] });
+  expect(await (await GET(collectionRequest())).json()).toEqual({ pipelines: [] });
   const request = new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
     headers: { host: "127.0.0.1", "content-type": "application/json" },
@@ -59,6 +60,30 @@ test("pipeline collection route mirrors flow GET and POST shapes", async () => {
   await Promise.resolve();
   expect(ticks).toBe(1);
   unregister();
+});
+
+/* #1845 defect B: the collection GET read no query at all, so a project filter
+   answered every pipeline of every project — 5 MB — and a project with no
+   pipelines answered the same 5 MB rather than nothing. */
+test("pipeline collection GET honours the list filters and refuses a parameter it does not read (#1845)", async () => {
+  const unfiltered = await (await GET(collectionRequest())).json() as { pipelines: Array<{ id: string; project: string; state: string }> };
+  expect(unfiltered.pipelines.length).toBeGreaterThan(0);
+  const project = unfiltered.pipelines[0]!.project;
+
+  const mine = await (await GET(collectionRequest(`?project=${encodeURIComponent(project)}`))).json() as typeof unfiltered;
+  expect(mine.pipelines.map((pipeline) => pipeline.id)).toEqual(unfiltered.pipelines.filter((pipeline) => pipeline.project === project).map((pipeline) => pipeline.id));
+  /* Whole records still, for a caller that reads runs and verdicts. */
+  expect(mine.pipelines[0]).toHaveProperty("stages");
+  expect(mine.pipelines[0]).toHaveProperty("runs");
+
+  expect(await (await GET(collectionRequest("?project=nonexistent-x"))).json()).toEqual({ pipelines: [] });
+  const open = await (await GET(collectionRequest(`?project=${encodeURIComponent(project)}&state=open&limit=1`))).json() as typeof unfiltered;
+  expect(open.pipelines).toHaveLength(1);
+  expect(["completed", "closed"]).not.toContain(open.pipelines[0]!.state);
+
+  const refused = await GET(collectionRequest("?projct=typo"));
+  expect(refused.status).toBe(400);
+  expect((await refused.json() as { error: string }).error).toContain("projct");
 });
 
 /* #1799: the HTTP door answers on the same terms the MCP one does — the base
@@ -172,7 +197,7 @@ test("pipeline POST returns the stable admission payload without creating a reco
       field: "repoDir",
       path: plainDir,
     });
-    expect((await GET()).status).toBe(200);
+    expect((await GET(collectionRequest())).status).toBe(200);
   } finally {
     fs.rmSync(plainDir, { recursive: true, force: true });
   }

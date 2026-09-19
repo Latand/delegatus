@@ -83,6 +83,7 @@ export const MCP_TOOL_NAMES = [
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
+  "account_limits",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -2823,10 +2824,11 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
     "`publication` defaults to internal: stages and reviews settle on the Viewer's own attempts, verdicts and exact local revisions, and nothing is pushed or read from GitHub while the pipeline runs. The one remote read is the time-bounded fetch of `origin/<baseBranch>` a pipeline created or started without `baseRef` needs, and the controller makes it AFTER this call is answered: the pipeline comes back in `provisioning` with its base unresolved, and a fetch that fails parks it with the reason. A pipeline pinned to `baseRef` never touches the network. Pass remote-branch only when the pipeline must publish its branch; reviews then launch and settle only on the published head.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
+    "An accepted create answers an acknowledgement: `pipelineId`, `state`, `stateDetail`, `cursor`, `taskIds`, `branch`, each stage's `{id, engine, model, effort}`, `stageDigests` and `graphDigest`. It never echoes the spec, prompts or role scaffolds you sent; get_pipeline reads the full record.",
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "Apply a supported action to an existing pipeline. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "Apply a supported action to an existing pipeline. Every accepted action answers an acknowledgement — pipelineId, state, cursor, closedAt, stageDigests and graphDigest — plus `close` for a close and `graphEdit` for a graph edit; get_pipeline reads the full record. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so an edit never changes a running attempt and applies from the next one, as the returned graphEdit states (effect, appliesFromAttempt). Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Three fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], and a one-or-two-sentence summary.",
@@ -2846,20 +2848,20 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with a fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
   deploy_exact_sha: "Deploy one full commit SHA of the Agent Log Viewer application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Viewer project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host.",
-  get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit.",
+  get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. With no option it returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Viewer board, durable placement, and the selected project's hidden conversation count.",
   list_flows: "List durable implement-review flows.",
   get_flow: "Read one implement-review flow by durable id.",
   flow_action: "Apply a supported action to an implement-review flow. agent-decision durably submits an owner decision for one exact revision, HEAD, round, turn and optional pipeline stage attempt. Use submit-review, continue-fixing, stop or completed with a reason. Accepted decisions await authoritative completion of that same turn. Replay the original clientRequestId to recover its receipt. completed records a comment outcome and never grants review approval.",
-  list_pipelines: "List durable pipelines as bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated.",
+  list_pipelines: "List durable pipelines as bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Viewer conversations. interrupt, kill, resume, compact, and dialog-key accept one conversation by id, transcript path, or selected-card reference. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Viewer state currently visible to the operator.",
   list_tasks: "List durable board tasks. Agent-facing `details` is truncated on this answer (`detailsTruncated: true` marks a cut row), since its answers are already large: read the whole field with get_task, and never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
-  deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments.",
+  deployment_status: "Read Viewer deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record.",
   resources: "Read system and Viewer-owned agent resource usage.",
   conversation_migration: "Reseat, retry, roll back or cancel a conversation account migration, or withdraw an account switch the queue has not claimed yet.",
-  agent_activity: "Read agent liveness: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls.",
+  agent_activity: "Read agent liveness: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline} and drops the transcript paths, host detail and the selection and timing reports.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     "Move the operator's one active Viewer to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were.",
@@ -2883,15 +2885,17 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
     "`enabled: false` stops every wake for that project until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
     "A `reason` in your own words is required whenever the settings leave the default, and it is what the board card shows: a tick that has gone quiet with nothing saying why cannot be told apart from a tick that broke. Restoring the default needs no reason.",
-    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it, and read the record back rather than trusting the echo. It is redacted before it is stored and refused, never cut, when it is over the limit the error names; the reply carries the stored note in full with `monitorPromptLength`, and a wake shows only a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
+    "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it. It is redacted before it is stored and refused, never cut, when it is over the limit the error names. The call that writes it answers with the stored note in full; every other answer carries only `monitorPromptLength`, and `verbose: true` reads the stored note back in full (in `monitorPrompt`, `settings` and `effective`), and a wake shows only a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
     "A project nobody has configured runs on the defaults, which are exactly the behaviour the tick has always had.",
+    "The answer carries each fact once: the reason under `effective` (and under `settings` only when an expiry has set the two apart), and a standing fence as the `fence` object. `verbose: true` adds the stored reason under `settings`, the `defaults` block, and `fenceDetail`, the fence restated as one sentence.",
   ].join(" "),
   account_project_binding: [
     "List, add and remove the bindings that decide which accounts a project's work may run on. `action` is list (the default), add or remove; add and remove need `engine`, `accountId` and `project`.",
-    "Every answer is a READ of the record: an add or a remove returns the bindings re-read from the store after the write, and a mutation the re-read does not show is refused rather than reported ok. Do not trust an echo — read `bindings` back.",
+    "Every answer is a READ of the record. A list answers the whole binding table. An add or a remove answers the row it changed — `engine`, `accountId`, `project`, `changed`, and `bound` re-read from the store after the write — with that project's allowed accounts for that engine; a mutation the re-read does not show is refused rather than reported ok.",
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   rotate_orchestrator: "Explicitly hand a project's orchestrator seat to a fresh successor: bounded handoff (predecessor transcript reference, open tasks, optional notes), atomic designation switch, manager-authority-only revocation of the predecessor, bidirectional lineage. Callable from any session, including the seat rotating itself; the answer and the durable record both name who triggered it. Never triggered automatically.",
 };
 
@@ -3236,6 +3240,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   get_pipeline: z.object({
     clientRequestId: clientRequestIdSchema,
     pipelineId: entityIdSchema,
+    stageId: z.string().min(1).optional()
+      .describe("Answer only this stage and one of its attempts: verdict, findings, summary, conversation, error. No prompts or transcripts."),
+    attempt: z.number().int().positive().optional()
+      .describe("With stageId: the attempt number to read. Defaults to the stage's latest attempt."),
+    compact: z.boolean().optional()
+      .describe("true: the list_pipelines compact row plus stageDigests and graphDigest."),
   }).passthrough(),
   board_snapshot: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3274,9 +3284,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   list_pipelines: z.object({
     clientRequestId: clientRequestIdSchema,
     project: z.string().optional(),
-    state: z.string().optional(),
+    state: z.string().optional()
+      .describe("A pipeline state, or \"open\" for every state but completed and closed."),
     includeClosed: z.boolean().optional(),
     limit: boundedNumericInput("list_pipelines", "limit"),
+    compact: z.boolean().optional()
+      .describe("true: each row is id, task (first line), state, cursor, stateDetail and per stage {id, latestAttempt: {n, state, verdict}}."),
   }).passthrough(),
   conversation_action: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3333,6 +3346,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     deploymentId: z.string().min(1).optional(),
     operationId: z.string().min(1).optional(),
     limit: boundedNumericInput("deployment_status", "limit"),
+    compact: z.boolean().optional()
+      .describe("true: each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}."),
   }).passthrough(),
   resources: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3355,6 +3370,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stallAfterMs: boundedNumericInput("agent_activity", "stallAfterMs")
       .describe("Silence under a live host that counts as a stall. A dead host over an open turn is always stalled."),
     limit: boundedNumericInput("agent_activity", "limit"),
+    compact: z.boolean().optional()
+      .describe("true: each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}."),
   }).passthrough(),
   lifecycle_events: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3436,7 +3453,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
     action: z.enum(["list", "add", "remove"]).optional()
-      .describe("list (default) reads the record; add and remove change it and answer with the record read back."),
+      .describe("list (default) reads the whole record; add and remove change it and answer with the changed row read back."),
     engine: z.enum(["claude", "codex"]).optional()
       .describe("Engine the account belongs to. Required to add or remove."),
     accountId: z.string().trim().min(1).optional()
@@ -3458,12 +3475,19 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Why, in your own words. Required whenever the settings leave the default; it is what the board card shows."),
     monitorPrompt: z.string().trim().min(1).nullable().optional()
       .describe("Your own additional prompt for this project's monitor: what every later scheduler-fired wake should look at, appended to the reasons and items the tick derives. Send a new one to replace it, null to clear it. Redacted before it is stored; refused, not truncated, when over the limit. The reply carries the stored note in full plus monitorPromptLength. It never changes whether or when a wake is sent, and needs no reason."),
+    verbose: z.boolean().optional()
+      .describe("true: carry the stored monitorPrompt in full. Otherwise only the call that writes it echoes it, and every answer carries monitorPromptLength."),
+  }).passthrough(),
+  account_limits: z.object({
+    clientRequestId: clientRequestIdSchema,
+    engine: z.enum(["claude", "codex"]).optional().describe("Only this engine's accounts."),
+    accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
 };
 
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
-    instructions: "Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Viewer action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row.",
+    instructions: "Use clientRequestId on every call. Reuse it only when replaying the same logical operation. Your conversation is already linked to a board task. If that task still carries its placeholder title, make your first Viewer action update_task with refine: { text } — a short human title (3–10 words) on the first line and at most two concise sentences, describing the work you were given. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.",
   });
   for (const toolName of MCP_TOOL_NAMES) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
