@@ -445,6 +445,31 @@ test("SQLite health exposes the authoritative revision and no mirror, without co
   expect(second.headers.get("x-llv-files-projection-cache")).toBe("hit");
 });
 
+test("a state database incident reaches systemHealth.storage on the next read (#1870)", async () => {
+  scannedFiles = [];
+  const first = await GET(new Request("http://127.0.0.1/api/files"));
+  const warm = await GET(new Request("http://127.0.0.1/api/files"));
+  expect((await first.json() as { systemHealth: Record<string, unknown> }).systemHealth).not.toHaveProperty("storage");
+  expect(warm.headers.get("x-llv-files-projection-cache")).toBe("hit");
+  const incident = {
+    kind: "database-restored",
+    database: "state.sqlite",
+    at: new Date().toISOString(),
+    message: "restored from the backup taken at 2026-09-19T10:00:00.000Z",
+    corruptFiles: ["state.sqlite.corrupt-2026-09-19T10-30-00-000Z"],
+    backup: "state-2026-09-19T10-00-00-000Z.sqlite",
+    backupAt: "2026-09-19T10:00:00.000Z",
+    backupAgeMs: 1_800_000,
+    detail: "SQLITE_CORRUPT",
+  };
+  fs.writeFileSync(path.join(stateDir, "storage-incidents.json"), JSON.stringify({ version: 1, incidents: [incident] }));
+
+  const refreshed = await GET(new Request("http://127.0.0.1/api/files"));
+
+  expect(refreshed.headers.get("x-llv-files-projection-cache")).toBe("miss");
+  expect((await refreshed.json() as { systemHealth: { storage?: unknown } }).systemHealth.storage).toEqual({ incidents: [incident] });
+});
+
 test("a cross-process SQLite pipeline commit invalidates a warm files projection", async () => {
   scannedFiles = [];
   savePipelines([]);

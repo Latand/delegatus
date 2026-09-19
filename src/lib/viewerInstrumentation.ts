@@ -743,6 +743,23 @@ export async function completeViewerRuntimeActivation(
   steps.publishViewerReleaseReady();
 }
 
+/** Check every state database before a store opens one (#1870 slice 10):
+    a damaged one is replaced by its newest good backup, or starts empty. The
+    returned `start` raises the board cards and arms the backup timer once the
+    release is ready. A failure here never blocks activation. */
+export async function checkStateDatabasesBeforeStores(
+  stateDirectory: string,
+): Promise<{ start(ownsTraffic: () => boolean): void }> {
+  try {
+    const { checkStateDatabasesAtActivation, startStateDurability } = await import("@/lib/state/durability");
+    const incidents = checkStateDatabasesAtActivation(stateDirectory);
+    return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
+  } catch (error) {
+    console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));
+    return { start: () => {} };
+  }
+}
+
 /** The full node-runtime startup sequence `src/instrumentation.ts` defers to. */
 export async function registerViewerRuntime(): Promise<void> {
   discardWakatimeEnvironmentCredential();
@@ -771,6 +788,7 @@ export async function registerViewerRuntime(): Promise<void> {
   await activateViewerRuntimeWhenCurrent(async () => {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
+    const durability = await checkStateDatabasesBeforeStores(hotStateDirectory);
     const authority = await initializeHotStateStoresAtStartup(boundary);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
@@ -802,6 +820,7 @@ export async function registerViewerRuntime(): Promise<void> {
         if (activatedAuthority) markViewerReleaseReady(hotStateDirectory, activatedAuthority);
       },
     });
+    durability.start(isCurrent);
   }, isCurrent, {
     fenceRequest: () => {
       const revision = releaseRevision();

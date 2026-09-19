@@ -30,6 +30,7 @@ import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
 import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
 import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
+import { fsyncPath } from "@/lib/state/durableJson";
 import { withoutWakatimeCredential } from "@/lib/wakatime/credential";
 
 import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, type ResourcesPayload } from "./types";
@@ -1253,8 +1254,10 @@ function persistObservation(observation: ResourceObservation<CollectedResources>
     const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
     if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) throw new Error("resource observation exceeded durable size limit");
     writeFileSync(temporary, serialized, { mode: 0o600 });
+    fsyncPath(temporary);
     renameSync(temporary, filename);
     chmodSync(filename, 0o600);
+    fsyncPath(path.dirname(filename));
     return true;
   } catch (error) {
     if (temporary) {

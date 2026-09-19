@@ -27,6 +27,7 @@ import {
   ROLLED_BACK_MIGRATION_DELIVERY_REASON,
 } from "@/lib/accounts/migration/intentLiveness";
 import { procBackend } from "@/lib/proc";
+import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { reconcileDeadStructuredRegistryHosts } from "@/lib/runtime/registry";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
@@ -1006,17 +1007,13 @@ export async function runReaperCycle(options: {
     actuate: (agent) => actuateCandidate(registry, options.files, state, agent, options.actuation),
     journal: appendJournal,
   });
-  atomicWrite(REPORT_FILE(), completed);
+  writeJsonDurably(REPORT_FILE(), completed);
   return completed;
 }
 
 export function readReaperReport(): ReaperReport | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(REPORT_FILE(), "utf8")) as ReaperReport;
-    return parsed && Array.isArray(parsed.agents) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = readJsonCache(REPORT_FILE()) as ReaperReport | undefined;
+  return parsed && typeof parsed === "object" && Array.isArray(parsed.agents) ? parsed : null;
 }
 
 export async function buildReaperReportOnDemand(): Promise<ReaperReport> {

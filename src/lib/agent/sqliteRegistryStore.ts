@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { Database as BunDatabase } from "bun:sqlite";
 
+import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
@@ -200,8 +202,13 @@ export class SqliteAgentRegistryStore {
     this.onRevisionQuery = options.onRevisionQuery;
     this.mcpGrantPolicy = options.mcpGrantPolicy;
     if (options.readOnly) {
-      this.db = new Database(filename, { readonly: true, strict: true });
-      this.db.exec("PRAGMA busy_timeout = 5000");
+      /* Bound to the file at its name like the writer below, so a preview
+         held across a fallback restore reads the registry that now carries it. */
+      this.db = openCurrentDatabase(filename, () => {
+        const db = new Database(filename, { readonly: true, strict: true });
+        db.exec("PRAGMA busy_timeout = 5000");
+        return db;
+      });
       const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
       if (!table || !this.imported()) {
         this.db.close();
@@ -209,21 +216,26 @@ export class SqliteAgentRegistryStore {
       }
       return;
     }
-    this.db = new Database(filename, { create: true, strict: true });
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS registry_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS registry_rows (
-        collection TEXT NOT NULL,
-        row_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        row_order INTEGER NOT NULL,
-        PRIMARY KEY(collection, row_key)
-      );
-    `);
+    /* Bound to the file at its name: a registry the activation fallback
+       replaced is reopened, never written through the moved handle. */
+    this.db = openCurrentDatabase(filename, () => {
+      const db = new Database(filename, { create: true, strict: true });
+      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS registry_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS registry_rows (
+          collection TEXT NOT NULL,
+          row_key TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          row_order INTEGER NOT NULL,
+          PRIMARY KEY(collection, row_key)
+        );
+      `);
+      return db;
+    });
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
       this.db.exec(`

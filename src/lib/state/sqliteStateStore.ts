@@ -6,6 +6,7 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { procBackend } from "@/lib/proc";
 
+import { openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
 import {
   hotStatePreparingWriterReady,
@@ -168,14 +169,21 @@ function assertSqliteInitializationAuthority(filename: string, allowFencedExisti
   throw new FileTransactionBusyError("hot state migration is waiting for release promotion");
 }
 
+/* Every connection stays bound to the file at its name: a database the
+   activation fallback replaced is reopened, never written through the moved
+   handle (currentDatabase.ts). */
 function connectDatabase(filename: string): Database {
+  return openCurrentDatabase(filename, () => connectRawDatabase(filename));
+}
+
+function connectRawDatabase(filename: string): Database {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const Database = sqliteDatabase();
   const db = new Database(filename, { create: true, strict: true });
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       try {
-        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+        db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
         if (!isBusyError(error)) throw error;
@@ -191,6 +199,10 @@ function connectDatabase(filename: string): Database {
 
 function connectReadonlyDatabase(filename: string): Database {
   readonlyConnectionCount += 1;
+  return openCurrentDatabase(filename, () => connectRawReadonlyDatabase(filename));
+}
+
+function connectRawReadonlyDatabase(filename: string): Database {
   const Database = sqliteDatabase();
   const db = new Database(filename, { readonly: true, strict: true });
   db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON;");
@@ -198,7 +210,11 @@ function connectReadonlyDatabase(filename: string): Database {
 }
 
 function openDatabase(filename: string): Database {
-  const db = connectDatabase(filename);
+  return openCurrentDatabase(filename, () => openRawDatabase(filename));
+}
+
+function openRawDatabase(filename: string): Database {
+  const db = connectRawDatabase(filename);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       try {

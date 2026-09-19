@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 
 import {
   HandoffQueue,
@@ -25,26 +26,31 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite handoff queue requires the Bun runtime");
-    this.db = new sqlite.Database(filename, { create: true, strict: true });
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS handoff_rows (
-        operation_id TEXT PRIMARY KEY,
-        conversation_id TEXT,
-        row_order INTEGER NOT NULL,
-        value_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS handoff_history (
-        operation_id TEXT PRIMARY KEY,
-        conversation_id TEXT NOT NULL,
-        row_order INTEGER NOT NULL,
-        value_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS handoff_draining_generations (
-        generation TEXT PRIMARY KEY,
-        row_order INTEGER NOT NULL
-      );
-    `);
+    /* Bound to the file at its name: a queue the activation fallback set
+       aside is reopened, never written through the moved handle. */
+    this.db = openCurrentDatabase(filename, () => {
+      const db = new sqlite.Database(filename, { create: true, strict: true });
+      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864;");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS handoff_rows (
+          operation_id TEXT PRIMARY KEY,
+          conversation_id TEXT,
+          row_order INTEGER NOT NULL,
+          value_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS handoff_history (
+          operation_id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          row_order INTEGER NOT NULL,
+          value_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS handoff_draining_generations (
+          generation TEXT PRIMARY KEY,
+          row_order INTEGER NOT NULL
+        );
+      `);
+      return db;
+    });
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(handoff_rows)").all();

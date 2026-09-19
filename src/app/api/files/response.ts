@@ -44,6 +44,8 @@ import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import type { FilesResponse, ProjectCatalogEntry, StuckDelivery } from "@/lib/types";
+import { stateDir } from "@/lib/configDir";
+import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
@@ -849,6 +851,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     mirrorCheckpointAtMs: registryDiagnostics.mirrorCheckpointAtMs,
     mirrorDirty: registryDiagnostics.mirrorDirty,
   };
+  const storageIncidents = readStorageIncidents(stateDir());
   const effectiveProjectAliases = { ...projectAliases.aliases };
   for (const [source, target] of consolidated.projectRemap) {
     delete effectiveProjectAliases[target];
@@ -891,7 +894,11 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     tasks: tasks.tasks,
-    systemHealth: { tmux: routeDependencies.tmuxEndpointHealth(), registry: registryHealth },
+    systemHealth: {
+      tmux: routeDependencies.tmuxEndpointHealth(),
+      registry: registryHealth,
+      ...(storageIncidents.length ? { storage: { incidents: storageIncidents } } : {}),
+    },
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),
     ...(pipelinesError ? { pipelinesError } : {}),
