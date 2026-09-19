@@ -200,6 +200,8 @@ const EMPTY_FLOWS: Flow[] = [];
 const EMPTY_PIPELINES: Pipeline[] = [];
 const EMPTY_MAP: ReadonlyMap<string, string> = new Map();
 const NO_READERS: readonly OpenReader[] = [];
+/** Parts of the board's root that belong to the Viewer, where the board answers no key. */
+const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
@@ -1463,7 +1465,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      const inBoard = Boolean(target && rootRef.current?.contains(target) && !target.closest(".kb-aside"));
+      /* The bar's two ends and the island slot hold the Viewer's own controls (the project, its
+         accounts, the panel toggles, ⋯ and the attention island): the board's keys stay out of
+         them, as they stay out of the aside, so `/` and `u` mean there what they mean outside. */
+      const inBoard = Boolean(target && rootRef.current?.contains(target) && !target.closest(VIEWER_OWNED));
       if (event.key === "/") {
         /* Outside the board `/` stays the Viewer's global search. Inside it,
            it finds a task, and the Viewer's window listener must not open

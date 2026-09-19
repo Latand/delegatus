@@ -20,6 +20,7 @@ import type { ReactNode } from "react";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { FileEntry } from "@/lib/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
@@ -79,6 +80,8 @@ let boards: Record<string, BoardProjectStateV1> = {};
 let tmuxCalls: Array<Record<string, unknown>> = [];
 let searches = 0;
 let boardWrites = 0;
+let taskPatches: Array<{ id: string; status: unknown }> = [];
+let boardTasks: BoardTask[] = [];
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1,
   revision: 0,
@@ -137,6 +140,14 @@ const OVERRIDES: Record<string, unknown> = {
       boards[body.project] = next;
       return { ok: true, status: 200, json: async () => ({ ok: true, applied: true, board: next }), text: async () => "" };
     }
+    if (url.startsWith("/api/tasks/") && method === "PATCH") {
+      const id = decodeURIComponent(url.slice("/api/tasks/".length));
+      const body = JSON.parse(String(init?.body)) as { status?: unknown };
+      taskPatches.push({ id, status: body.status });
+      const current = boardTasks.find((task) => task.id === id)!;
+      const task = { ...current, ...body, revision: `task-v1:rev-${taskPatches.length + 1}` };
+      return { ok: true, status: 200, json: async () => ({ task }), text: async () => "" };
+    }
     if (url.startsWith("/api/account-project-bindings")) {
       const body = { project: PROJECT, engines: { claude: { restricted: true, allowed: [{ accountId: "acct-a", label: "Account A" }], carrying: [], outsidePool: [] } } };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
@@ -185,6 +196,8 @@ beforeEach(() => {
   tmuxCalls = [];
   searches = 0;
   boardWrites = 0;
+  taskPatches = [];
+  boardTasks = [];
   dom.localStorage.clear();
   resetSelectionSessionsForTest();
 });
@@ -240,7 +253,7 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
         flows={[]}
         pipelines={[]}
         workflows={[]}
-        tasks={[]}
+        tasks={boardTasks}
         project={PROJECT}
         loaded
         openNonce={0}
@@ -615,4 +628,66 @@ test("Tab reaches the attention island right after ⋯, where it is drawn, on bo
   await settle();
   expect(host.querySelectorAll("[data-test-island]")).toHaveLength(1);
   expect(afterMore()?.hasAttribute("data-island-first")).toBe(true);
+});
+
+test("`/` and `u` keep their meaning on the Viewer's controls the bar brought into the board", async () => {
+  island = (
+    <div data-test-island="">
+      <button type="button" data-island-first="">waiting</button>
+    </div>
+  );
+  boardTasks = [{
+    id: "t1", project: PROJECT, text: "Write the release notes", status: "inbox", placement: "unplaced", assignments: [],
+    createdAt: "2026-09-14T10:00:00.000Z", updatedAt: "2026-09-14T10:00:00.000Z", revision: "task-v1:rev-1",
+  } as unknown as BoardTask];
+  /* The Viewer's window listener, as far as this case needs it: a `/` that reaches the window
+     unclaimed is the Viewer's to answer. */
+  let slashesReachingViewer = 0;
+  const viewer = (event: KeyboardEvent) => { if (event.key === "/" && !event.defaultPrevented) slashesReachingViewer += 1; };
+  dom.addEventListener("keydown", viewer as never);
+  try {
+    const host = mount();
+    expect(await waitFor(() => host.querySelector('.card[data-id="task:t1"]') !== null)).toBe(true);
+    await settle();
+    const cardSearch = host.querySelector("[data-kanban-search]") as HTMLElement;
+    const press = (target: HTMLElement, key: string) => {
+      target.focus();
+      flushSync(() => target.dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as never));
+    };
+
+    /* A move leaves an undoable receipt, so a `u` the board wrongly claims has something to undo. */
+    const card = host.querySelector('.card[data-id="task:t1"]') as HTMLElement;
+    press(card, "]");
+    expect(await waitFor(() => taskPatches.length === 1)).toBe(true);
+    await settle();
+
+    const more = bar(host).querySelector("[data-bar-more]") as HTMLElement;
+    const toggle = bar(host).querySelector("[data-task-panel-toggle]") as HTMLElement;
+    const islandButton = host.querySelector("[data-island-first]") as HTMLElement;
+    for (const target of [more, toggle, islandButton]) {
+      const before = slashesReachingViewer;
+      press(target, "/");
+      expect(dom.document.activeElement === (cardSearch as never)).toBe(false);
+      expect(slashesReachingViewer).toBe(before + 1);
+      press(target, "u");
+      await settle();
+      expect(taskPatches).toHaveLength(1);
+    }
+    /* A row inside the open ⋯ is the Viewer's too. */
+    const row = openMore(host).querySelector('[data-testid="dash-search"]') as HTMLElement;
+    const before = slashesReachingViewer;
+    press(row, "/");
+    expect(slashesReachingViewer).toBe(before + 1);
+
+    /* On the board itself both keys are still the board's. */
+    const moved = host.querySelector('.card[data-id="task:t1"]') as HTMLElement;
+    press(moved, "/");
+    expect(dom.document.activeElement === (host.querySelector("[data-kanban-search]") as never)).toBe(true);
+    expect(slashesReachingViewer).toBe(before + 1);
+    flushSync(() => dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "u", bubbles: true, cancelable: true }) as never));
+    expect(await waitFor(() => taskPatches.length === 2)).toBe(true);
+    expect(taskPatches[1]!.status).toBe("inbox");
+  } finally {
+    dom.removeEventListener("keydown", viewer as never);
+  }
 });

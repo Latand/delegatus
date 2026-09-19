@@ -168,40 +168,19 @@ export function ArchiveProjectButton({
   files,
   allowEmpty = false,
   onArchive,
-  compact = false,
   rowClassName,
 }: {
   files: FileEntry[];
   allowEmpty?: boolean;
   onArchive: () => void;
-  compact?: boolean;
-  /** Drawn as a row of the desktop bar's ⋯ menu (#1801), in these classes. */
-  rowClassName?: string;
+  /** Drawn as a row of the bar's ⋯ menu (#1801), in these classes. */
+  rowClassName: string;
 }) {
   const { t } = useLocale();
-  const isMobile = useIsMobile();
   if ((!files.length && !allowEmpty) || files.some((file) => file.proc === "running" || file.activity === "live")) return null;
-  if (rowClassName !== undefined) {
-    return (
-      <button type="button" className={rowClassName} data-project-archive="" onClick={() => { onArchive(); gotoOverview(); }}>
-        <Archive className="h-[15px] w-[15px]" aria-hidden /> {t("trash.toArchive")}
-      </button>
-    );
-  }
   return (
-    <button
-      type="button"
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-canvas font-semibold text-muted hover:border-accent/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        isMobile ? "min-h-11 px-3 text-[13px]" : compact ? "p-1 text-[11px]" : "px-2 py-0.5 text-[11px]"
-      }`}
-      aria-label={t("trash.toArchive")}
-      title={t("trash.toArchive")}
-      onClick={() => {
-        onArchive();
-        gotoOverview();
-      }}
-    >
-      <Archive className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden /> {compact && !isMobile ? null : t("trash.toArchive")}
+    <button type="button" className={rowClassName} data-project-archive="" onClick={() => { onArchive(); gotoOverview(); }}>
+      <Archive className="h-[15px] w-[15px]" aria-hidden /> {t("trash.toArchive")}
     </button>
   );
 }
@@ -215,8 +194,8 @@ export function DeleteProjectButton({ project, files, available, rowClassName }:
   project: string;
   files: FileEntry[];
   available: boolean;
-  /** Drawn as a danger row of the desktop bar's ⋯ menu (#1801); the confirm opens in place. */
-  rowClassName?: string;
+  /** Drawn as a danger row of the bar's ⋯ menu (#1801); the confirm opens in place. */
+  rowClassName: string;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -264,7 +243,7 @@ export function DeleteProjectButton({ project, files, available, rowClassName }:
 
   if (confirming) {
     return (
-      <span className={`inline-flex shrink-0 items-center gap-1 rounded-[10px] border border-danger/30 bg-danger-soft px-1.5 py-0.5 text-[11px] ${rowClassName !== undefined ? "flex-wrap" : ""}`}>
+      <span className="inline-flex shrink-0 flex-wrap items-center gap-1 rounded-[10px] border border-danger/30 bg-danger-soft px-1.5 py-0.5 text-[11px]">
         <span className="px-0.5 font-semibold text-danger">
           {t("trash.confirmDelete", { count: targets?.length ?? 0 })}
         </span>
@@ -290,31 +269,12 @@ export function DeleteProjectButton({ project, files, available, rowClassName }:
       </span>
     );
   }
-  if (rowClassName !== undefined) {
-    return (
-      <>
-        <button type="button" className={`${rowClassName} text-danger`} data-project-delete="" disabled={busy} onClick={() => void prepare()}>
-          <Trash2 className="h-[15px] w-[15px]" aria-hidden /> {busy ? "…" : t("trash.deleteProject")}
-        </button>
-        {error ? <span className="px-2 text-[11px] font-semibold text-danger">{error}</span> : null}
-      </>
-    );
-  }
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5">
-      <button
-        type="button"
-        className={`inline-flex items-center justify-center rounded-full border border-border bg-canvas text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-          isMobile ? "h-11 w-11" : "p-1"
-        }`}
-        aria-label={t("trash.deleteProject")}
-        title={t("trash.deleteProject")}
-        disabled={busy}
-        onClick={() => void prepare()}
-      >
-        {busy ? <span className="text-[10px] font-bold">…</span> : <Trash2 className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />}
+    <>
+      <button type="button" className={`${rowClassName} text-danger`} data-project-delete="" disabled={busy} onClick={() => void prepare()}>
+        <Trash2 className="h-[15px] w-[15px]" aria-hidden /> {busy ? "…" : t("trash.deleteProject")}
       </button>
-      {error ? <span className="max-w-[180px] truncate text-[10.5px] font-semibold text-danger">{error}</span> : null}
-    </span>
+      {error ? <span className="px-2 text-[11px] font-semibold text-danger">{error}</span> : null}
+    </>
   );
 }

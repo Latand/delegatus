@@ -20,8 +20,9 @@
  * both views, hover that never takes the accent, no undo or redo anywhere, and
  * ⋯ rules only between groups that drew a row, the last control 16 px clear of
  * the island, and the same bar spanning the Tasks panel when it is open, with
- * the panel's header clear of the island, and a real Tab from ⋯ landing on the
- * island — at 2540, 1850 and 1280 px in en and
+ * the panel's header clear of the island, a real Tab from ⋯ landing on the
+ * island, and the open ⋯ menu and accounts panel painted above the island and
+ * its toast — at 2540, 1850 and 1280 px in en and
  * uk, light and dark, under a 21-character project name — and the phone's 52 px
  * bar in the same four.
  *
@@ -1288,6 +1289,35 @@ function readMenu() {
 
 type MenuReading = ReturnType<typeof readMenu>;
 
+/**
+ * Runs inside the page: whether an open surface (the ⋯ menu, or the Claude accounts panel) is
+ * the topmost paint at every point of a grid over it, and whether the attention island (or its
+ * toast) overlaps it at all — the island sat later in the same stacking context and once
+ * painted over the menu's right end.
+ */
+function readOnTop(which: string) {
+  const element = which === "menu"
+    ? document.querySelector("[data-bar-more-menu]")
+    : [...document.querySelectorAll('[role="dialog"]')].find((node) => /Claude/.test(node.getAttribute("aria-label") ?? "")) ?? null;
+  if (!element) return { found: false, points: 0, covered: [] as string[], overlapsIsland: false };
+  const r = element.getBoundingClientRect();
+  const covered: string[] = [];
+  let points = 0;
+  for (let i = 0; i < 8; i += 1) for (let j = 0; j < 8; j += 1) {
+    const x = r.x + 3 + ((r.width - 6) * i) / 7;
+    const y = r.y + 3 + ((r.height - 6) * j) / 7;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    points += 1;
+    const top = document.elementFromPoint(x, y);
+    if (top && !element.contains(top)) covered.push(`${Math.round(x)},${Math.round(y)} ${top.tagName.toLowerCase()}${top.closest("[data-attention-island], [data-attention-toast]") ? " (island)" : ""}`);
+  }
+  /* The toast is drawn outside the island's own element, so both are measured. */
+  const boxes = [...document.querySelectorAll("[data-attention-island], [data-attention-island] *, [data-attention-toast], [data-attention-toast] *")]
+    .map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
+  const overlapsIsland = boxes.some((box) => box.x < r.x + r.width && box.x + box.width > r.x && box.y < r.y + r.height && box.y + box.height > r.y);
+  return { found: true, points, covered, overlapsIsland };
+}
+
 async function headerMain(): Promise<void> {
   const { tasks, reviewers } = seedHome();
   writeQuietProject();
@@ -1416,6 +1446,9 @@ async function headerMain(): Promise<void> {
       });
       if (panel) await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-accounts.png`), clip: { x: Math.max(0, panel.rect.x - 24), y: 0, width: Math.min(width - Math.max(0, panel.rect.x - 24), panel.rect.w + 48), height: Math.min(900, panel.rect.y + panel.rect.h + 16) } });
       must(panel !== null && ["Main", "Account B", "Account C"].every((label) => panel.text.includes(label)) && /\d+\s?%/.test(panel.text), `${tag}: the Claude accounts panel does not list three accounts with usage`);
+      const accountsOnTop = await page.evaluate(readOnTop, "accounts");
+      must(accountsOnTop.found && accountsOnTop.covered.length === 0, `${tag}: the accounts panel is painted over at ${accountsOnTop.covered.slice(0, 3).join("; ")}`);
+      report[`${tag}:accountsOnTop`] = accountsOnTop;
       await page.keyboard.press("Escape");
       await page.mouse.click(width / 2, 600);
       await page.waitForTimeout(200);
@@ -1426,6 +1459,9 @@ async function headerMain(): Promise<void> {
       /* Narrow, the account rows arrive with their own read of the project's bindings. */
       if (!wide) await page.waitForSelector('[data-bar-more-menu] [data-account-switch-engine="codex"]', { timeout: 15_000 }).catch(() => {});
       menu = await page.evaluate(readMenu);
+      const menuOnTop = await page.evaluate(readOnTop, "menu");
+      must(menuOnTop.found && menuOnTop.covered.length === 0, `${tag}: the ⋯ menu is painted over at ${menuOnTop.covered.slice(0, 3).join("; ")}`);
+      report[`${tag}:menuOnTop`] = menuOnTop;
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-more.png`), clip: { x: Math.max(0, menu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, menu.rect.x - 40), menu.rect.w + 80), height: menu.rect.y + menu.rect.h + 16 } });
       const checkMenu = (label: string, reading: MenuReading) => {
         must(reading.rect.x + reading.rect.w <= width, `${label}: the ⋯ menu runs off the right edge`);

@@ -4,6 +4,7 @@ import { Bot, ListTodo, MoreHorizontal, Plus } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
+import { Z } from "@/components/layers";
 import { useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
 
@@ -235,7 +236,7 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
           aria-label={t("dash.more")}
           data-bar-more-menu=""
           onKeyDown={(event) => { handleOverlayEscape(event, close); }}
-          className={`absolute right-0 top-full z-50 mt-1 flex w-64 flex-col rounded-control border border-border bg-card p-1 shadow-2 ${MENU_RULES}`}
+          className={`absolute right-0 top-full ${Z.popover} mt-1 flex w-64 flex-col rounded-control border border-border bg-card p-1 shadow-2 ${MENU_RULES}`}
         >
           {rows(close)}
         </div>
