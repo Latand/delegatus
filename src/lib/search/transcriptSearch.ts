@@ -26,7 +26,7 @@ export interface TranscriptSearchItem {
   speaker: TranscriptSpeaker;
   /** Number of indexed occurrences collapsed into this result. */
   duplicateCount: number;
-  /** Unix seconds, or null when the transcript record carried no valid timestamp. */
+  /** Unix seconds; undated records use the file time captured when first indexed. */
   timestamp: number | null;
   transcriptPath: string;
   byteOffset: number;
@@ -94,10 +94,9 @@ type FileIdentityRow = {
     cost more than the query. */
 type HitRow = [
   id: number,
-  score: number,
   speaker: TranscriptSpeaker,
   bodyHash: string,
-  timestamp: number | null,
+  timestamp: number,
   transcriptPath: string,
 ];
 
@@ -109,11 +108,9 @@ type TranscriptFileRow = {
 
 interface RankedHit {
   id: number;
-  score: number;
   speaker: TranscriptSpeaker;
-  timestamp: number | null;
+  timestamp: number;
   transcriptPath: string;
-  mtimeMs: number;
 }
 
 /** One result row: the newest occurrence of a body, and how many the index
@@ -129,7 +126,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 2;
+const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 3;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
 
 function normalizedBodyHash(body: string): string {
@@ -165,7 +162,20 @@ function migrateSearchSchema(db: Database): void {
       if (messages.length < TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE) break;
       lastId = messages.at(-1)!.id;
     }
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
+    if (!columns.some((column) => column.name === "sort_timestamp")) {
+      db.exec(`
+        ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL;
+        UPDATE transcript_messages SET sort_timestamp = COALESCE(timestamp,
+          (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path));
+      `);
+    }
     db.exec(`
+      CREATE TABLE IF NOT EXISTS transcript_search_sequence (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1), last_id INTEGER NOT NULL
+      );
+      INSERT OR IGNORE INTO transcript_search_sequence VALUES
+        (1, (SELECT COALESCE(MAX(id), 0) FROM transcript_messages));
       CREATE INDEX IF NOT EXISTS transcript_messages_body_hash
         ON transcript_messages(speaker, body_hash);
       PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
@@ -441,27 +451,48 @@ export async function indexTranscriptSources(
       filesRead += 1;
       db.exec("BEGIN IMMEDIATE");
       try {
-        removeTranscript(db, source.path);
-        db.query(
-          "INSERT INTO transcript_files(path, size, mtime_ms, project, engine, messages_count, indexed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-        ).run(source.path, source.size, source.mtimeMs, source.project, source.engine, Math.floor(Date.now() / 1_000));
+        // Retain unchanged rows when a transcript grows: their IDs and undated
+        // fallback times belong to existing paging snapshots. New IDs never reuse
+        // deleted IDs, including after a complete prune of the index.
+        db.query(`
+          INSERT INTO transcript_files(path, size, mtime_ms, project, engine, messages_count, indexed_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?)
+          ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms,
+            project = excluded.project, engine = excluded.engine, indexed_at = excluded.indexed_at
+        `).run(source.path, source.size, source.mtimeMs, source.project, source.engine, Math.floor(Date.now() / 1_000));
+        let lastId = db.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()!.last_id;
+        const existing = db.query<{ id: number; speaker: string; timestamp: number | null; byte_offset: number; line_number: number; body: string }, [string, number]>(
+          "SELECT id, speaker, timestamp, byte_offset, line_number, body FROM transcript_messages WHERE transcript_path = ? AND message_index = ?",
+        );
+        const insert = db.query(`
+          INSERT INTO transcript_messages(id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
         let messageIndex = 0;
         for await (const message of readMessages(source)) {
-          const inserted = db.query(
-            "INSERT INTO transcript_messages(transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-          ).get(
-            source.path,
-            messageIndex,
-            message.speaker,
-            message.timestamp,
-            message.byteOffset,
-            message.lineNumber,
-            message.body,
-            normalizedBodyHash(message.body),
-          ) as { id: number };
-          db.query("INSERT INTO transcript_messages_fts(rowid, body) VALUES (?, ?)").run(inserted.id, message.body);
+          const prior = existing.get(source.path, messageIndex);
+          if (prior && prior.body === message.body && prior.speaker === message.speaker
+            && prior.timestamp === message.timestamp && prior.byte_offset === message.byteOffset
+            && prior.line_number === message.lineNumber) {
+            messageIndex += 1;
+            continue;
+          }
+          if (prior) {
+            db.query("DELETE FROM transcript_messages_fts WHERE rowid = ?").run(prior.id);
+            db.query("DELETE FROM transcript_messages WHERE id = ?").run(prior.id);
+          }
+          const id = ++lastId;
+          insert.run(id, source.path, messageIndex, message.speaker, message.timestamp,
+            message.byteOffset, message.lineNumber, message.body, normalizedBodyHash(message.body),
+            message.timestamp ?? source.mtimeMs / 1000);
+          db.query("INSERT INTO transcript_messages_fts(rowid, body) VALUES (?, ?)").run(id, message.body);
           messageIndex += 1;
         }
+        db.query(`DELETE FROM transcript_messages_fts WHERE rowid IN (
+          SELECT id FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?
+        )`).run(source.path, messageIndex);
+        db.query("DELETE FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?").run(source.path, messageIndex);
+        db.query("UPDATE transcript_search_sequence SET last_id = ? WHERE singleton = 1").run(lastId);
         db.query("UPDATE transcript_files SET messages_count = ? WHERE path = ?").run(messageIndex, source.path);
         db.exec("COMMIT");
         messagesIndexed += messageIndex;
@@ -499,11 +530,9 @@ function ftsQuery(query: string): string | null {
   return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
 }
 
-/* Every filter that changes WHICH rows the ordered result set contains is part
-   of the cursor's scope: an offset minted against "my messages" addresses a
-   different row sequence than the same offset over every speaker, so replaying
-   one cursor under the other scope would silently page through the wrong
-   corpus. A scope mismatch is rejected, not reinterpreted. */
+/* Cursors bind the query and filters, a high-water message ID, and the last
+   (effective timestamp, ID) sort key. Indexing later arrivals cannot change the
+   duplicate representatives or insert backfilled messages into this traversal. */
 function cursorScope(query: string, project: string | undefined, speaker: TranscriptSpeaker | undefined): string {
   return crypto.createHash("sha256")
     .update(query)
@@ -515,25 +544,30 @@ function cursorScope(query: string, project: string | undefined, speaker: Transc
     .slice(0, 16);
 }
 
-function encodeCursor(offset: number, scope: string): string {
-  return Buffer.from(JSON.stringify({ version: 1, offset, scope })).toString("base64url");
+interface SearchCursor {
+  version: 2;
+  scope: string;
+  throughId: number;
+  timestamp: number;
+  id: number;
 }
 
-function decodeCursor(value: string | null | undefined, scope: string): number {
-  if (!value) return 0;
+function encodeCursor(hit: RankedHit, throughId: number, scope: string): string {
+  return Buffer.from(JSON.stringify({ version: 2, throughId, timestamp: hit.timestamp, id: hit.id, scope })).toString("base64url");
+}
+
+function decodeCursor(value: string | null | undefined, scope: string): SearchCursor | null {
+  if (!value) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as {
-      version?: unknown;
-      offset?: unknown;
-      scope?: unknown;
-    };
-    if (parsed.version !== 1
-      || !Number.isSafeInteger(parsed.offset)
-      || (parsed.offset as number) < 1
-      || parsed.scope !== scope) throw new InvalidTranscriptSearchCursorError();
-    return parsed.offset as number;
-  } catch (error) {
-    if (error instanceof InvalidTranscriptSearchCursorError) throw error;
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as SearchCursor;
+    if (parsed.version !== 2 || parsed.scope !== scope
+      || !Number.isSafeInteger(parsed.throughId) || parsed.throughId < 1
+      || !Number.isSafeInteger(parsed.id) || parsed.id < 1 || parsed.id > parsed.throughId
+      || typeof parsed.timestamp !== "number" || !Number.isFinite(parsed.timestamp)) {
+      throw new InvalidTranscriptSearchCursorError();
+    }
+    return parsed;
+  } catch {
     throw new InvalidTranscriptSearchCursorError();
   }
 }
@@ -580,20 +614,40 @@ function transcriptFiles(db: Database, paths: ReadonlySet<string>): Map<string, 
   return files;
 }
 
-/* Newest transcript generation first, then newest message, then highest id.
-   This order picks which occurrence represents a replayed body (a resumed
-   rollout retains the original message timestamp, so the transcript mtime is
-   what identifies the newest generation) and breaks ties between equal bm25
-   scores. */
-function newerFirst(a: RankedHit, b: RankedHit): number {
-  return b.mtimeMs - a.mtimeMs
-    || (b.timestamp ?? 0) - (a.timestamp ?? 0)
-    || b.id - a.id;
+/** Effective message time descending, then the persistent row ID descending. */
+function newerFirst(a: Pick<RankedHit, "timestamp" | "id">, b: Pick<RankedHit, "timestamp" | "id">): number {
+  return b.timestamp - a.timestamp || b.id - a.id;
 }
 
-/* bm25 is negative and lower is better, so ascending score is best first. */
-function bestFirst(a: CollapsedHit, b: CollapsedHit): number {
-  return a.newest.score - b.newest.score || newerFirst(a.newest, b.newest);
+/** A worst-first heap retains only limit + 1 groups. Common terms still need a
+    linear match scan for exact collapse/counts, but never a full result sort. */
+function newestPage(groups: Iterable<CollapsedHit>, cursor: SearchCursor | null, limit: number): CollapsedHit[] {
+  const heap: CollapsedHit[] = [];
+  const compare = (a: CollapsedHit, b: CollapsedHit) => newerFirst(a.newest, b.newest);
+  for (const group of groups) {
+    if (cursor && newerFirst(group.newest, cursor) <= 0) continue;
+    if (heap.length < limit) {
+      heap.push(group);
+      let child = heap.length - 1;
+      while (child > 0) {
+        const parent = (child - 1) >>> 1;
+        if (compare(heap[parent], heap[child]) >= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        child = parent;
+      }
+    } else if (compare(group, heap[0]) < 0) {
+      heap[0] = group;
+      let parent = 0;
+      while (parent * 2 + 1 < heap.length) {
+        let child = parent * 2 + 1;
+        if (child + 1 < heap.length && compare(heap[child + 1], heap[child]) > 0) child += 1;
+        if (compare(heap[parent], heap[child]) >= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        parent = child;
+      }
+    }
+  }
+  return heap.sort(compare);
 }
 
 function pageItems(
@@ -637,24 +691,16 @@ function pageItems(
 }
 
 /**
- * Ranking happens here rather than in SQL, and on purpose (#1429).
+ * Scan the FTS match set once, collapse by speaker/body in memory, and select
+ * at most limit + 1 groups with a heap. Cost: O(M + G log L), with O(M + G)
+ * match/group storage and O(L) ranking storage (L <= 101); only page rows get
+ * snippets. No corpus-wide join or full group sort. The file lookup and read
+ * transaction preserve the bounded hydration introduced in #1429.
  *
- * The previous shape — a window function over the joined match set to collapse
- * duplicates, a second `COUNT(*)` over the same join for the total, and a
- * re-scan of the match set to attach snippets — cost, on a 250k-message index,
- * 1.5 s for a word in a third of the messages and 0.4 s for the operator's own
- * messages alone, most of it in one place: the join to `transcript_files` by
- * path, ~5 µs for every one of a hundred thousand matched rows, paid twice.
- *
- * Now one match scan reads the six columns ranking needs; the files a page can
- * name are read once; duplicate collapsing, the total and the page order are
- * computed in memory in exactly the order the SQL used (bm25, then newest
- * transcript, newest message, highest id); and snippets are cut for the page's
- * rows only. Same rows, same order, same snippets, same totals — pinned by the
- * differential test against the old SQL — at roughly a third of the time.
- *
- * All of it runs inside one read transaction, so the passes see one snapshot
- * even while the background indexer commits between them.
+ * A cursor fences later indexed rows before collapse. Unchanged rows survive
+ * append/reindex, so new occurrences cannot move an existing group across the
+ * cursor. Deleted or edited messages leave the result set; this is not an
+ * archive of removed transcript content.
  */
 export function searchTranscripts(options: {
   query: string;
@@ -673,23 +719,26 @@ export function searchTranscripts(options: {
       if (!query) return { items: [], nextCursor: null, total: 0, stats };
       const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
       const scope = cursorScope(query, options.project, options.speaker);
-      const offset = decodeCursor(options.cursor, scope);
+      const cursor = decodeCursor(options.cursor, scope);
+      const throughId = cursor?.throughId ?? db.query<{ last_id: number }, []>(
+        "SELECT last_id FROM transcript_search_sequence WHERE singleton = 1",
+      ).get()!.last_id;
       const hits = db.query(`
-        SELECT transcript_messages_fts.rowid, bm25(transcript_messages_fts), m.speaker, m.body_hash, m.timestamp, m.transcript_path
+        SELECT transcript_messages_fts.rowid, m.speaker, m.body_hash, m.sort_timestamp, m.transcript_path
         FROM transcript_messages_fts
         JOIN transcript_messages AS m ON m.id = transcript_messages_fts.rowid
-        WHERE transcript_messages_fts MATCH ?${options.speaker ? " AND m.speaker = ?" : ""}
-      `).values(...(options.speaker ? [query, options.speaker] : [query])) as HitRow[];
+        WHERE transcript_messages_fts MATCH ? AND m.id <= ?${options.speaker ? " AND m.speaker = ?" : ""}
+      `).values(...(options.speaker ? [query, throughId, options.speaker] : [query, throughId])) as HitRow[];
       const paths = new Set<string>();
-      for (const hit of hits) paths.add(hit[5]);
+      for (const hit of hits) paths.add(hit[4]);
       const files = transcriptFiles(db, paths);
       const groups = new Map<string, CollapsedHit>();
-      for (const [id, score, speaker, bodyHash, timestamp, transcriptPath] of hits) {
+      for (const [id, speaker, bodyHash, timestamp, transcriptPath] of hits) {
         const file = files.get(transcriptPath);
         /* A message whose transcript row is gone, or outside the requested
            project, is not a result — the inner join used to drop it. */
         if (!file || (options.project && file.project !== options.project)) continue;
-        const hit: RankedHit = { id, score, speaker, timestamp, transcriptPath, mtimeMs: file.mtime_ms };
+        const hit: RankedHit = { id, speaker, timestamp, transcriptPath };
         const key = `${speaker}\0${bodyHash}`;
         const group = groups.get(key);
         if (!group) {
@@ -699,13 +748,13 @@ export function searchTranscripts(options: {
         group.duplicateCount += 1;
         if (newerFirst(hit, group.newest) < 0) group.newest = hit;
       }
-      const ranked = [...groups.values()].sort(bestFirst);
-      const total = ranked.length;
-      const items = pageItems(db, query, ranked.slice(offset, offset + limit), files);
-      const nextOffset = offset + items.length;
+      const ranked = newestPage(groups.values(), cursor, limit + 1);
+      const total = groups.size;
+      const page = ranked.slice(0, limit);
+      const items = pageItems(db, query, page, files);
       return {
         items,
-        nextCursor: nextOffset < total ? encodeCursor(nextOffset, scope) : null,
+        nextCursor: ranked.length > limit ? encodeCursor(page.at(-1)!.newest, throughId, scope) : null,
         total,
         stats,
       };
