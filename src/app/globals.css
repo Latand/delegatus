@@ -582,6 +582,19 @@ body {
     0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent);
 }
 
+/* The scheme's task scene stops every node animation with
+   `animation: none !important` while the camera is a layout (`SchemeBoard`).
+   There the blink cannot run, so the ring has to stand on the declaration
+   alone — against whatever the node or band already wears. Same reasoning as
+   the reduced-motion block below, in the one other place where the animation
+   is not there to carry it, and scoped to that scene so it can cost the blink
+   nothing anywhere else. */
+[data-atomic-task-layout] [data-attention-pulse][data-attention-pulse] {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
+}
+
 /* Positioning is the one thing this decoration may not touch. A scheme node
    and a task band are `position: absolute` and are placed by `left/top` or a
    transform; forcing `position: relative` on them drops them into normal flow
@@ -596,12 +609,24 @@ body {
 
 /* Reduced motion keeps the same duration and the same loudness, held steady:
    what is being communicated is "this one", and a blink is only one way to
-   say it. */
+   say it.
+
+   The ring is `!important` HERE and nowhere else. With the blink running, the
+   animation's own box-shadow outranks every ordinary rule the surface wears,
+   whatever its specificity — which is why the mark reads on a card and on a
+   reader pane alike. With the blink refused there is no animation to do that,
+   and a surface that dresses itself more specifically than an attribute
+   (`.kb .reader-full .reader.conv` carries four classes) simply kept its own
+   shadow: the operator was handed to a pane with nothing lit on it. Weight is
+   the whole of the problem, so it is settled here rather than by counting
+   attribute repetitions until the next surface out-dresses them — and it
+   cannot cost the blink anything, because where the blink plays this block
+   does not apply. */
 @media (prefers-reduced-motion: reduce) {
   [data-attention-pulse][data-attention-pulse] {
     animation: none;
     box-shadow:
       0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
-      0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent);
+      0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent) !important;
   }
 }

@@ -112,16 +112,18 @@ test("the real timer clears the mark without anything being clicked", async () =
  * The stylesheet's own rules for the mark, read out of `globals.css` so this
  * probes what actually ships rather than a copy of it.
  */
-function pulseRules(): string {
+function pulseRules(): string[] {
   const css = fs.readFileSync("src/app/globals.css", "utf8");
-  const rules = css.match(/\[data-attention-pulse[^{]*\{[^}]*\}/g) ?? [];
-  expect(rules.length).toBeGreaterThan(1);
-  return rules.join("\n");
+  /* Every rule the mark takes part in, including the ones that qualify it
+     with the scene or the motion preference it answers. */
+  const rules = css.match(/[^\n{}]*\[data-attention-pulse[^{]*\{[^}]*\}/g)?.map((rule) => rule.trim()) ?? [];
+  expect(rules.length).toBeGreaterThan(2);
+  return rules;
 }
 
 function withPulseStylesheet(): void {
   const style = dom.document.createElement("style");
-  style.textContent = pulseRules();
+  style.textContent = pulseRules().join("\n");
   dom.document.head.appendChild(style);
 }
 
@@ -164,7 +166,7 @@ test("the ring stands on its own where the scene has stopped every animation", (
      `animation: none !important` while the camera is a layout. A pulse that
      lived only in the keyframes would land there and show nothing at all, so
      the ring is declared as well as animated. */
-  const rules = pulseRules();
+  const rules = pulseRules().join("\n");
   const base = rules.match(/\[data-attention-pulse\]\[data-attention-pulse\]\s*\{[^}]*\}/)?.[0] ?? "";
   expect(base).toContain("animation: attention-arrival-pulse");
   expect(base).toContain("box-shadow:");
@@ -172,6 +174,15 @@ test("the ring stands on its own where the scene has stopped every animation", (
   expect(base).not.toContain("position:");
   const lift = rules.match(/\[data-attention-pulse="lift"\]\[data-attention-pulse="lift"\]\s*\{[^}]*\}/)?.[0] ?? "";
   expect(lift).toContain("position: relative");
+
+  /* Where no animation can carry the ring — the task scene, and a refused
+     motion preference — it has to outrank whatever the surface already wears.
+     A reader pane dresses itself with four classes; an attribute cannot win
+     that on weight, and the operator was handed a pane with nothing lit. */
+  const scene = pulseRules().find((rule) => rule.startsWith("[data-atomic-task-layout]")) ?? "";
+  expect(scene).toContain("!important");
+  const reduced = pulseRules().find((rule) => rule.includes("animation: none")) ?? "";
+  expect(reduced).toContain("!important");
 });
 
 test("a conversation no card holds pulses the reader pane it was opened in", () => {

@@ -2,27 +2,128 @@
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx",
   "values": "invented",
-  "phoneWidth": "the phone shell is chat-only (it withholds its device id), so 390x844 draws no handoff and no pulse; the narrow board is the phone-width surface one can land on",
   "desktop-light-no-preference": {
     "viewport": {
       "width": 1440,
       "height": 900
     },
-    "card": "task:t-longtitle",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "board": "kanban",
+    "card": {
+      "resolution": "exact",
+      "selector": ".card[data-id=\"task\\:t-export\"]",
+      "before": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "attention-arrival-pulse",
+          "duration": "0.85s",
+          "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.530663 0.0339188 -0.206729 / 0.22029) 0px 0px 24.1449px 7.07246px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
     },
-    "during": {
-      "animation": "attention-arrival-pulse",
-      "duration": "0.85s",
-      "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.440488) 0px 0px 0px 4.94634px, oklab(0.530663 0.0339187 -0.206729 / 0.251317) 0px 0px 23.1902px 6.59512px"
+    "cleared": {
+      "landed": {
+        "x": 553,
+        "y": 649,
+        "w": 454,
+        "h": 250
+      },
+      "neighbour": {
+        "x": 260,
+        "y": 618,
+        "w": 256,
+        "h": 160
+      },
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "pane": {
+      "resolution": "reader",
+      "selector": "[data-kanban-reader][data-reader-path=\"\\/repo\\/export-review\\.jsonl\"]",
+      "before": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(20, 20, 30, 0.16) 0px 8px 32px 0px, rgba(20, 20, 30, 0.06) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "attention-arrival-pulse",
+          "duration": "0.85s",
+          "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.530663 0.0339188 -0.206729 / 0.22029) 0px 0px 24.1449px 7.07246px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
+    },
+    "paneCleared": {
+      "landed": {
+        "x": 170,
+        "y": 24,
+        "w": 1100,
+        "h": 852
+      },
+      "neighbour": null,
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(20, 20, 30, 0.16) 0px 8px 32px 0px, rgba(20, 20, 30, 0.06) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     }
   },
   "desktop-light-reduce": {
@@ -30,21 +131,123 @@
       "width": 1440,
       "height": 900
     },
-    "card": "task:t-longtitle",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "board": "kanban",
+    "card": {
+      "resolution": "exact",
+      "selector": ".card[data-id=\"task\\:t-export\"]",
+      "before": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
     },
-    "during": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px"
+    "cleared": {
+      "landed": {
+        "x": 553,
+        "y": 649,
+        "w": 454,
+        "h": 250
+      },
+      "neighbour": {
+        "x": 260,
+        "y": 618,
+        "w": 256,
+        "h": 160
+      },
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "pane": {
+      "resolution": "reader",
+      "selector": "[data-kanban-reader][data-reader-path=\"\\/repo\\/export-review\\.jsonl\"]",
+      "before": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(20, 20, 30, 0.16) 0px 8px 32px 0px, rgba(20, 20, 30, 0.06) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
+    },
+    "paneCleared": {
+      "landed": {
+        "x": 170,
+        "y": 24,
+        "w": 1100,
+        "h": 852
+      },
+      "neighbour": null,
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(20, 20, 30, 0.16) 0px 8px 32px 0px, rgba(20, 20, 30, 0.06) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     }
   },
   "desktop-dark-no-preference": {
@@ -52,21 +255,123 @@
       "width": 1440,
       "height": 900
     },
-    "card": "task:t-longtitle",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "board": "kanban",
+    "card": {
+      "resolution": "exact",
+      "selector": ".card[data-id=\"task\\:t-export\"]",
+      "before": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "attention-arrival-pulse",
+          "duration": "0.85s",
+          "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.686886 0.0401993 -0.166043 / 0.22029) 0px 0px 24.1449px 7.07246px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
     },
-    "during": {
-      "animation": "attention-arrival-pulse",
-      "duration": "0.85s",
-      "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.466453) 0px 0px 0px 4.75161px, oklab(0.686886 0.0401993 -0.166043 / 0.268194) 0px 0px 22.6709px 6.33547px"
+    "cleared": {
+      "landed": {
+        "x": 553,
+        "y": 649,
+        "w": 454,
+        "h": 250
+      },
+      "neighbour": {
+        "x": 260,
+        "y": 618,
+        "w": 256,
+        "h": 160
+      },
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "pane": {
+      "resolution": "reader",
+      "selector": "[data-kanban-reader][data-reader-path=\"\\/repo\\/export-review\\.jsonl\"]",
+      "before": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(0, 0, 0, 0.55) 0px 8px 32px 0px, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "attention-arrival-pulse",
+          "duration": "0.85s",
+          "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.392623) 0px 0px 0px 5.30533px, oklab(0.686886 0.0401993 -0.166043 / 0.220205) 0px 0px 24.1476px 7.07377px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
+    },
+    "paneCleared": {
+      "landed": {
+        "x": 170,
+        "y": 24,
+        "w": 1100,
+        "h": 852
+      },
+      "neighbour": null,
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(0, 0, 0, 0.55) 0px 8px 32px 0px, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     }
   },
   "desktop-dark-reduce": {
@@ -74,109 +379,284 @@
       "width": 1440,
       "height": 900
     },
-    "card": "task:t-longtitle",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "board": "kanban",
+    "card": {
+      "resolution": "exact",
+      "selector": ".card[data-id=\"task\\:t-export\"]",
+      "before": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 553,
+          "y": 649,
+          "w": 454,
+          "h": 250
+        },
+        "neighbour": {
+          "x": 260,
+          "y": 618,
+          "w": 256,
+          "h": 160
+        },
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
     },
-    "during": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px"
+    "cleared": {
+      "landed": {
+        "x": 553,
+        "y": 649,
+        "w": 454,
+        "h": 250
+      },
+      "neighbour": {
+        "x": 260,
+        "y": 618,
+        "w": 256,
+        "h": 160
+      },
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "pane": {
+      "resolution": "reader",
+      "selector": "[data-kanban-reader][data-reader-path=\"\\/repo\\/export-review\\.jsonl\"]",
+      "before": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "rgba(0, 0, 0, 0.55) 0px 8px 32px 0px, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+          "position": "relative"
+        }
+      },
+      "during": {
+        "landed": {
+          "x": 170,
+          "y": 24,
+          "w": 1100,
+          "h": 852
+        },
+        "neighbour": null,
+        "paint": {
+          "animation": "none",
+          "duration": "0s",
+          "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px",
+          "position": "relative"
+        },
+        "mark": "on"
+      }
+    },
+    "paneCleared": {
+      "landed": {
+        "x": 170,
+        "y": 24,
+        "w": 1100,
+        "h": 852
+      },
+      "neighbour": null,
+      "paint": {
+        "animation": "none",
+        "duration": "0s",
+        "shadow": "rgba(0, 0, 0, 0.55) 0px 8px 32px 0px, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px",
+        "position": "relative"
+      },
+      "mark": null
     }
   },
-  "narrow-light-no-preference": {
+  "phone-light-no-preference": {
     "viewport": {
-      "width": 700,
+      "width": 390,
       "height": 844
     },
-    "card": "task:t-disk",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
-    },
-    "during": {
-      "animation": "attention-arrival-pulse",
-      "duration": "0.85s",
-      "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.440335) 0px 0px 0px 4.94749px, oklab(0.530663 0.0339187 -0.206729 / 0.251218) 0px 0px 23.1933px 6.59665px"
-    },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "board": "mobile2",
+    "rows": 12,
+    "handoff": "the phone withholds its device id and never follows a handoff",
+    "mark": {
+      "before": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(138, 95, 0) 3px 0px 0px 0px inset, rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+      },
+      "during": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.372121) 0px 0px 0px 5.45909px, oklab(0.530663 0.0339188 -0.206729 / 0.206879) 0px 0px 24.5576px 7.27879px",
+        "animation": "attention-arrival-pulse",
+        "mark": "lift"
+      },
+      "after": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(138, 95, 0) 3px 0px 0px 0px inset, rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+      }
     }
   },
-  "narrow-light-reduce": {
+  "phone-light-reduce": {
     "viewport": {
-      "width": 700,
+      "width": 390,
       "height": 844
     },
-    "card": "task:t-disk",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
-    },
-    "during": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px"
-    },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    "board": "mobile2",
+    "rows": 12,
+    "handoff": "the phone withholds its device id and never follows a handoff",
+    "mark": {
+      "before": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(138, 95, 0) 3px 0px 0px 0px inset, rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+      },
+      "during": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px",
+        "animation": "none",
+        "mark": "lift"
+      },
+      "after": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(138, 95, 0) 3px 0px 0px 0px inset, rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+      }
     }
   },
-  "narrow-dark-no-preference": {
+  "phone-dark-no-preference": {
     "viewport": {
-      "width": 700,
+      "width": 390,
       "height": 844
     },
-    "card": "task:t-disk",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
-    },
-    "during": {
-      "animation": "attention-arrival-pulse",
-      "duration": "0.85s",
-      "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.466293) 0px 0px 0px 4.7528px, oklab(0.686886 0.0401993 -0.166043 / 0.268091) 0px 0px 22.6741px 6.33707px"
-    },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "board": "mobile2",
+    "rows": 12,
+    "handoff": "the phone withholds its device id and never follows a handoff",
+    "mark": {
+      "before": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(224, 174, 69) 3px 0px 0px 0px inset, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+      },
+      "during": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.392754) 0px 0px 0px 5.30435px, oklab(0.686886 0.0401993 -0.166043 / 0.22029) 0px 0px 24.1449px 7.07246px",
+        "animation": "attention-arrival-pulse",
+        "mark": "lift"
+      },
+      "after": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(224, 174, 69) 3px 0px 0px 0px inset, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+      }
     }
   },
-  "narrow-dark-reduce": {
+  "phone-dark-reduce": {
     "viewport": {
-      "width": 700,
+      "width": 390,
       "height": 844
     },
-    "card": "task:t-disk",
-    "before": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
-    },
-    "during": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px"
-    },
-    "after": {
-      "animation": "none",
-      "duration": "0s",
-      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    "board": "mobile2",
+    "rows": 12,
+    "handoff": "the phone withholds its device id and never follows a handoff",
+    "mark": {
+      "before": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(224, 174, 69) 3px 0px 0px 0px inset, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+      },
+      "during": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px",
+        "animation": "none",
+        "mark": "lift"
+      },
+      "after": {
+        "box": {
+          "x": 12,
+          "y": 178,
+          "w": 366,
+          "h": 56
+        },
+        "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(224, 174, 69) 3px 0px 0px 0px inset, rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+      }
     }
-  }
+  },
+  "failures": []
 }

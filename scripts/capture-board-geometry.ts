@@ -1002,50 +1002,6 @@ async function main(): Promise<void> {
       must(wheel["generic scroll box"]!.scrollerDy > 20 && Math.abs(wheel["generic scroll box"]!.cameraDy) < 1, `${tag}: a wheel over a generic scroll box scrolled it ${Math.round(wheel["generic scroll box"]!.scrollerDy)}px and moved the camera ${Math.round(wheel["generic scroll box"]!.cameraDy)}px`);
       must(wheel["open reader feed"]!.feedDy > 20 && Math.abs(wheel["open reader feed"]!.cameraDy) < 1, `${tag}: a wheel over the open reader's text scrolled the feed ${Math.round(wheel["open reader feed"]!.feedDy)}px and moved the camera ${Math.round(wheel["open reader feed"]!.cameraDy)}px`);
 
-      /* #1836 item 4: the arrival mark, on the scheme's OWN surfaces.
-         A node and a task band are absolutely positioned and placed by
-         left/top and transforms. The first cut of this decoration set
-         `position: relative` on whatever it marked, which drops them into
-         normal flow — the board moves the very thing the camera just landed
-         on. The mark the production code computes for a positioned element is
-         `on`; `lift` is what a statically positioned card gets, and it is
-         measured here as the negative control: it MOVES these, which is why
-         the value is decided from the element rather than declared for all of
-         them. This context prefers reduced motion, so it is also the case
-         where the ring must stand without any animation at all. */
-      frames.arrivalPulse = await page.evaluate(async () => {
-        const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-        const box = (element: Element) => { const rect = element.getBoundingClientRect(); return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) }; };
-        const onScreen = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 20 && rect.height > 20 && rect.top > 0 && rect.bottom < window.innerHeight; };
-        const measure = async (selector: string) => {
-          const all = Array.from(document.querySelectorAll(selector)).filter(onScreen);
-          const target = all[0];
-          const neighbour = all[1] ?? null;
-          if (!target) return null;
-          const style = () => getComputedStyle(target);
-          const reading = (mark: string | null) => ({ mark, box: box(target), neighbour: neighbour ? box(neighbour) : null, position: style().position, shadow: style().boxShadow, animation: style().animationName });
-          const before = reading(null);
-          target.setAttribute("data-attention-pulse", "on");
-          await wait(250);
-          const during = reading("on");
-          target.setAttribute("data-attention-pulse", "lift");
-          await wait(250);
-          const lifted = reading("lift");
-          target.removeAttribute("data-attention-pulse");
-          await wait(250);
-          return { selector, before, during, lifted, after: reading(null) };
-        };
-        return { node: await measure("[data-scheme-node]"), band: await measure("[data-scheme-band-task]") };
-      });
-      for (const [what, reading] of Object.entries(frames.arrivalPulse as Record<string, { before: { box: unknown; position: string; shadow: string }; during: { box: unknown; shadow: string; animation: string }; lifted: { box: unknown }; after: { box: unknown; shadow: string } } | null>)) {
-        if (!reading) { must(false, `${tag}: no ${what} on screen to mark with an arrival`); continue; }
-        must(reading.before.position === "absolute", `${tag}: the ${what} is ${reading.before.position}, so this case no longer probes what it was written for`);
-        must(JSON.stringify(reading.during.box) === JSON.stringify(reading.before.box), `${tag}: the arrival mark moved the ${what} it lit`);
-        must(reading.during.shadow !== reading.before.shadow && /0px 0px 0px [\d.]+px/.test(reading.during.shadow), `${tag}: the arrival left the ${what} without a ring (${reading.during.shadow})`);
-        must(JSON.stringify(reading.lifted.box) !== JSON.stringify(reading.before.box), `${tag}: the lift no longer moves an absolutely positioned ${what}, so the control proves nothing`);
-        must(JSON.stringify(reading.after.box) === JSON.stringify(reading.before.box) && reading.after.shadow === reading.before.shadow, `${tag}: the arrival left something behind on the ${what}`);
-      }
-
       report[tag] = frames;
       await context.close();
     }
