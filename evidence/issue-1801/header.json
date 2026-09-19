@@ -1,5 +1,5 @@
 {
-  "commit": "17dae34bfcd600639a3e5277edc0cb59f8a996a7",
+  "commit": "e7c7969aebf4bf97c2d93092a9115ce53ca858a6",
   "2540-en-light": {
     "bars": 1,
     "bar": {
@@ -126,9 +126,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 2258.515625,
+      "x": 2251.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -149,7 +149,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -186,6 +186,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -247,7 +251,7 @@
         "w": 201.875,
         "h": 32
       },
-      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -273,9 +277,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 2258.515625,
+        "x": 2251.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -493,9 +497,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 2258.515625,
+      "x": 2251.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -516,7 +520,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 workingHidden 2BoardConversationsTaskAgentOrchestratorTasks7Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -553,6 +557,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -614,7 +622,7 @@
         "w": 201.875,
         "h": 32
       },
-      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -640,9 +648,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 2258.515625,
+        "x": 2251.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -860,9 +868,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 2258.515625,
+      "x": 2251.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -883,7 +891,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -920,6 +928,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -981,7 +993,7 @@
         "w": 180.578125,
         "h": 32
       },
-      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -1007,9 +1019,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 2258.515625,
+        "x": 2251.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -1227,9 +1239,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 2258.515625,
+      "x": 2251.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -1250,7 +1262,7 @@
       "[data-hidden-pill]": true,
       "[data-account-switch-engine] > button": true
     },
-    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+    "texts": "harbor-ledger-serviceClaudeMainCodexMain5 працюютьПриховані 2ДошкаРозмовиЗадачаАгентОркестраторЗадачі7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "wide",
     "plus": [
@@ -1287,6 +1299,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -1348,7 +1364,7 @@
         "w": 180.578125,
         "h": 32
       },
-      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -1374,9 +1390,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 2258.515625,
+        "x": 2251.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -1571,9 +1587,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 1568.515625,
+      "x": 1561.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -1592,7 +1608,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 working27",
+    "texts": "harbor-ledger-service5 working27Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1621,6 +1637,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -1696,7 +1716,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "texts": "harbor-ledger-service22 branches runningSearch7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -1722,9 +1742,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 1568.515625,
+        "x": 1561.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -1919,9 +1939,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 1568.515625,
+      "x": 1561.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -1940,7 +1960,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 working27",
+    "texts": "harbor-ledger-service5 working27Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1969,6 +1989,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -2044,7 +2068,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "texts": "harbor-ledger-service22 branches runningSearch7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -2070,9 +2094,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 1568.515625,
+        "x": 1561.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -2267,9 +2291,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 1568.515625,
+      "x": 1561.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -2288,7 +2312,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюють27",
+    "texts": "harbor-ledger-service5 працюють27Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2317,6 +2341,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -2392,7 +2420,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -2418,9 +2446,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 1568.515625,
+        "x": 1561.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -2615,9 +2643,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 1568.515625,
+      "x": 1561.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -2636,7 +2664,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюють27",
+    "texts": "harbor-ledger-service5 працюють27Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2665,6 +2693,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -2740,7 +2772,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -2766,9 +2798,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 1568.515625,
+        "x": 1561.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -2963,9 +2995,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 998.515625,
+      "x": 991.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -2984,7 +3016,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 working27",
+    "texts": "harbor-ledger-service5 working27Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3013,6 +3045,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -3088,7 +3124,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "texts": "harbor-ledger-service22 branches runningSearch7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -3114,9 +3150,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 998.515625,
+        "x": 991.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -3311,9 +3347,9 @@
     },
     "islandText": "Needs you 3Next",
     "toast": {
-      "x": 998.515625,
+      "x": 991.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -3332,7 +3368,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 working27",
+    "texts": "harbor-ledger-service5 working27Needs you 3NextDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3361,6 +3397,10 @@
       16
     ],
     "islandClearance": 19.953125,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 waiting"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -3436,7 +3476,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "texts": "harbor-ledger-service22 branches runningSearch7Needs you 3NextDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -3462,9 +3502,9 @@
       "overflow": 0,
       "islandClearance": 19.953125,
       "toast": {
-        "x": 998.515625,
+        "x": 991.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -3659,9 +3699,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 998.515625,
+      "x": 991.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.530663 0.0339187 -0.206729 / 0.1)",
@@ -3680,7 +3720,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюють27",
+    "texts": "harbor-ledger-service5 працюють27Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3709,6 +3749,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(28, 28, 34)",
@@ -3784,7 +3828,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -3810,9 +3854,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 998.515625,
+        "x": 991.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
@@ -4007,9 +4051,9 @@
     },
     "islandText": "Чекають 3Далі",
     "toast": {
-      "x": 998.515625,
+      "x": 991.15625,
       "y": 54,
-      "w": 265.484375,
+      "w": 272.84375,
       "h": 62
     },
     "pressedFill": "oklab(0.686886 0.0401993 -0.166043 / 0.1)",
@@ -4028,7 +4072,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюють27",
+    "texts": "harbor-ledger-service5 працюють27Чекають 3ДаліDecisionDecide: Merge the two migrations?",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -4057,6 +4101,10 @@
       16
     ],
     "islandClearance": 30.484375,
+    "tabAfterMore": {
+      "inIsland": true,
+      "label": "3 чекають"
+    },
     "hover": {
       "before": {
         "color": "rgb(232, 232, 236)",
@@ -4132,7 +4180,7 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7Чекають 3ДаліDecisionDecide: Merge the two migrations?",
       "name": {
         "x": 264,
         "y": 13.375,
@@ -4158,9 +4206,9 @@
       "overflow": 0,
       "islandClearance": 30.484375,
       "toast": {
-        "x": 998.515625,
+        "x": 991.15625,
         "y": 54,
-        "w": 265.484375,
+        "w": 272.84375,
         "h": 62
       },
       "panelUnderToast": {
