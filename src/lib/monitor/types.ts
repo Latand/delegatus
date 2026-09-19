@@ -225,6 +225,17 @@ export interface SeatTickItem {
       latest state, and a landing acknowledges every row behind it: what the
       seat was shown, it was shown all of. */
   outcomeIds?: readonly string[];
+  /** What a landing records about a child line, so the next wake can tell
+      whether anything has changed since (#1783 round two).
+
+      A harvest line settles two of them: the state it shows — its latest owed
+      outcome, so a child that ends another turn carries a different one and is
+      offered again — and the child's own last record, which is what a STALL
+      line shows. A child whose host died over an open turn is both at once,
+      and a seat shown it as a finished worker has been shown it; offering the
+      same child again an hour later under the other heading is the repeat this
+      exists to stop. Only child items have any. */
+  stateTokens?: readonly string[];
   kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child";
   id: string;
   label: string;
@@ -248,6 +259,11 @@ export interface SeatTickSkippedChildren {
       scanner root, or gone from disk — so their outcome can never be read or
       harvested, whoever is seated. */
   unreadable: number;
+  /** Children in exactly the state a landed wake already showed this seat
+      (#1783 round two). Nothing about them has moved since — no later record
+      in the transcript, no newly owed outcome — so listing them again asks
+      for the answer the seat has already given. */
+  unchanged: number;
 }
 
 export type SeatTickVerdict =
@@ -589,6 +605,21 @@ export interface SeatTickChildInput {
       conversations with one instant, which is what made the #1749 age test a
       no-op against children whose work ended weeks earlier. */
   terminalAt: string | null;
+  /** The instant of the last record of this child's transcript, from the same
+      read that decided {@link SeatTickChildInput.transcript}, and present on
+      every projection — running, terminal or unknown.
+
+      It exists because {@link SeatTickChildInput.terminalAt} is null for a
+      child the registry still records mid-turn (#1783 round two). A worker
+      whose host died in August leaves a turn open for ever: the conversation
+      row says `busy`, no terminal instant is ever written, and the age test
+      read a null and excluded nothing — three such children, last written to
+      on the 24th of August, reached a wake to a seat designated on the 18th of
+      September. The transcript is appended to by the child and by nothing
+      else, so this is the child's own clock whatever its turn record says, and
+      it is what the age test falls back on. Absent only when the transcript
+      could not be resolved, which is the case above it. */
+  lastRecordAt?: string | null;
   /** Whether the Viewer can resolve this child's transcript at all (#1783):
       `unresolvable` is a path outside every scanner root, or one no longer on
       disk. Such a child can never be read or harvested by any seat, so it is
@@ -659,6 +690,11 @@ export interface SeatTickWakeCommit {
   /** Terminal children this wake names (#1465). A landing records them as
       harvested; a wake that never lands leaves them owed. */
   children: string[];
+  /** The state tokens of every child line this wake carries (#1783 round two),
+      recorded by a landing and by nothing else — a wake the layer never
+      delivered showed the seat nothing, and must leave its children offerable
+      exactly as #1465 requires of the harvest. */
+  shownChildren?: string[];
 }
 
 /**
@@ -760,6 +796,13 @@ export type SeatTickRetirementReason = "seat-superseded" | "unresolved-age";
     quietly re-creating. */
 export const SEAT_TICK_RETIRED_WAKE_LIMIT = 20;
 
+/** State tokens one project's row remembers having shown its seat (#1783
+    round two). A wake carries at most {@link SeatTickPolicy.itemsPerWake}
+    children and up to two tokens each, so this is several wakes' worth; past
+    it the oldest token is evicted and that child may be offered once more,
+    which is the failure mode this bound is chosen to have. */
+export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
+
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
   accounting?: { filename: string; revision: number; gap: string | null };
@@ -837,6 +880,30 @@ export interface SeatTickProjectState {
   /** Legacy conversation-only acknowledgment evidence. The v3 store imports
       it into separate rows and keeps this transient compatibility field empty. */
   harvestedChildren: string[];
+  /**
+   * The state each child was in when a landed wake last showed it to this seat
+   * (#1783 round two), one token per child and at most
+   * {@link SEAT_TICK_CHILDREN_SHOWN_LIMIT} of them.
+   *
+   * It is the third clause of the one eligibility test both child paths share,
+   * and the stall path is why it is kept at all. A harvest line discharges
+   * itself: the landing acknowledges the owed outcomes behind it, and the
+   * gather stops offering them. A stalled child has nothing to acknowledge — a
+   * host that died over an open turn leaves that turn open for ever — so before
+   * this, every wake for as long as the record stood carried the same dead
+   * child again.
+   *
+   * It is THIS seat's, and the epoch is around the record rather than inside
+   * its tokens: `seatTickStateForEpoch` keeps only the fields that are the
+   * project's rather than the seat's, so a check that observes a rotation reads
+   * this one empty, and the stall memory beside it empty too — the successor
+   * re-observes the stall on its first check and is told on its second, the way
+   * its predecessor was. Carried across a rotation instead, this record would
+   * silence precisely the child it exists for: a dead host over an open turn
+   * writes no further record, so the token never changes and a successor
+   * answered "unchanged" would never be told at all.
+   */
+  childrenShown: string[];
 }
 
 export interface SeatTickCheckInput {
@@ -1038,5 +1105,6 @@ export function emptySeatTickState(): SeatTickProjectState {
     pullRequestGap: null,
     childrenGap: null,
     harvestedChildren: [],
+    childrenShown: [],
   };
 }

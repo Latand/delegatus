@@ -120,6 +120,12 @@ function child(over: Partial<SeatTickChildInput> = {}): SeatTickChildInput {
     status: "running",
     outcome: null,
     terminalAt: null,
+    /* Every projected child carries the instant of its own last transcript
+       record (#1783 round two), terminal or not: a child the registry still
+       records mid-turn has no terminal instant and never will, so this is the
+       only clock the age test can read for it. A child with none is one whose
+       transcript the Viewer could not resolve at all. */
+    lastRecordAt: new Date(NOW - MINUTE).toISOString(),
     activity: null,
     ...over,
   };

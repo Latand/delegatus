@@ -179,7 +179,13 @@ test("an outstanding wake with no operation id is a registry-held one, and survi
   const file = path.join(SANDBOX, "held-wake.json");
   const { operationId: _operationId, ...held } = row.outstandingWake;
   fs.writeFileSync(file, JSON.stringify({ version: 1, projects: { viewer: { ...row, outstandingWake: held } } }));
-  expect(readSeatTickState("viewer", file).outstandingWake).toEqual({ ...row.outstandingWake, operationId: null });
+  /* And a plan written before #1783 round two records no showing, which is
+     what lets the next wake offer its children rather than hold one back. */
+  expect(readSeatTickState("viewer", file).outstandingWake).toEqual({
+    ...row.outstandingWake,
+    operationId: null,
+    commit: { ...row.outstandingWake.commit, shownChildren: [] },
+  });
 });
 
 test("a hand-edited commit plan keeps only reason kinds the tick knows", () => {

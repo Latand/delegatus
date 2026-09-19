@@ -6,6 +6,7 @@ import { statePath } from "@/lib/configDir";
 
 import {
   emptySeatTickState,
+  SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickOutstandingWake,
@@ -61,6 +62,10 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     /* A plan written before the harvest existed names no child, and a landing
        credited from it harvests nothing — the safe direction. */
     children: conversationIds(raw.children),
+    /* Same direction for the showings (#1783 round two): a plan from before
+       they existed records none, so the next wake is free to offer its
+       children again rather than silently holding one back. */
+    shownChildren: conversationIds(raw.shownChildren),
   };
 }
 
@@ -220,6 +225,9 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent on every row from before #1465, and absent reads as empty: a
        project's children are all owed until a delivered wake names them. */
     harvestedChildren: conversationIds(raw.harvestedChildren),
+    /* Absent on every row from before #1783 round two, and absent reads as
+       empty: a seat that has been shown nothing is offered everything. */
+    childrenShown: conversationIds(raw.childrenShown).slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT),
   };
 }
 
@@ -243,10 +251,14 @@ function readFile(filePath: string): SeatTickStateFile {
  * The row a check should start from.
  *
  * A seat epoch that moved means a rotation happened: the successor inherits the
- * clock but none of the predecessor's JUDGEMENT, so its stall memory, its
- * retry-guard counters and the reasons it was last woken for start empty. That
- * is the whole handover — the incoming seat is ticking without anyone
- * configuring it, and it is not carrying a record of wakes it never received.
+ * clock but none of the predecessor's JUDGEMENT, so its stall memory, the record
+ * of which children a landed wake showed it (#1783 round two), its retry-guard
+ * counters and the reasons it was last woken for start empty. That is the whole
+ * handover — the incoming seat is ticking without anyone configuring it, and it
+ * is not carrying a record of wakes it never received. The showings matter most
+ * for the child that can never change again, a host dead over an open turn:
+ * carried across the rotation, its token would answer "unchanged" to every
+ * successor for ever and the stall would be told to nobody.
  *
  * Three things are not the seat's, and survive:
  *
