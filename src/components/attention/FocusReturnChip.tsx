@@ -18,14 +18,47 @@ export interface FocusReturnChipProps {
   arrival?: string;
 }
 
-export function FocusReturnChip({ onReturn, precise, t, arrival }: FocusReturnChipProps) {
-  const label = precise ? t("attention.return") : t("attention.returnLine");
+/** Where the attention cluster sits: beside the rendered dock, in the board's
+    own chrome column. The store holds the preferred dock width; its CSS
+    viewport clamp is applied too, so resizing the window keeps the cluster
+    beside the dock rather than under it. */
+function useClusterLeft(): string {
   const inset = useLeftShellInset();
-  // The store holds the preferred dock width. Apply its CSS viewport clamp too,
-  // so resizing the window keeps this cluster beside the rendered dock.
-  const left = inset > 0
+  return inset > 0
     ? `calc(${RAIL_WIDTH + 12}px + max(${MIN_WIDTH}px, min(${inset - RAIL_WIDTH}px, calc(100vw - ${RESERVED_BESIDE_DOCK}px))))`
     : `${RAIL_WIDTH + 12}px`;
+}
+
+/**
+ * A lane the board drew from a row the server pushed and then turned out not
+ * to hold (#1836 item 1): the placeholder is already gone, and this says why.
+ *
+ * Deliberately not a control. Nothing is owed in reply — the board is already
+ * showing the truth — so it stands in the same column as the arrival line, for
+ * the same bounded moment, and then takes itself off.
+ */
+export function LaneWithdrawnNote({ text }: { text: string }) {
+  const left = useClusterLeft();
+  return (
+    <div
+      data-scheme-ui
+      style={{ left, maxWidth: `min(28rem, calc(100vw - ${left} - 12px))` }}
+      className="pointer-events-none absolute top-[100px] z-40 flex flex-col items-start gap-2"
+    >
+      <div
+        data-testid="attention-lane-withdrawn"
+        role="status"
+        className="rounded-[10px] border border-border bg-card/95 px-3 py-2 text-sm text-primary shadow-1 [overflow-wrap:anywhere]"
+      >
+        {text}
+      </div>
+    </div>
+  );
+}
+
+export function FocusReturnChip({ onReturn, precise, t, arrival }: FocusReturnChipProps) {
+  const label = precise ? t("attention.return") : t("attention.returnLine");
+  const left = useClusterLeft();
   return (
     // AttentionHost mounts at the Viewer root, outside the board's flex column.
     <div

@@ -2481,6 +2481,7 @@ export const en = {
   "attention.arrival": "Orchestrator moved you here: {reason}",
   "attention.return": "Back to where you were",
   "attention.returnLine": "Go back to where you were",
+  "attention.laneWithdrawn": "“{title}” was never created — the lane has been taken off the board.",
 
   /* Mobile v2 shell (issue #1439, lane 1): the one bar, the banner slot, the
      sheet and receipt primitives, the project switcher and the board menu.
