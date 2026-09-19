@@ -1449,6 +1449,14 @@ async function headerMain(): Promise<void> {
       await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
       await page.waitForTimeout(1_000);
       const open = await page.evaluate(readHeader);
+      /* The island's toast is a floating card, 360 px wide, that stays until dismissed; it lies over
+         whatever sits under the island, and a 280 px panel cannot avoid it. The island itself must
+         not cover the panel; with the toast dismissed, the panel's header takes every click. */
+      const underToast = await page.evaluate(readTaskPanel);
+      if (await page.locator("[data-attention-toast-dismiss]").count()) {
+        await page.click("[data-attention-toast-dismiss]");
+        await page.waitForTimeout(300);
+      }
       const taskPanel = await page.evaluate(readTaskPanel);
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-tasks-open.png`), clip: { x: 0, y: 0, width, height: 160 } });
       must(open.bars === 1 && open.bar !== null && near(open.bar.h, 48, 0.5) && !open.wrap, `${tag} tasks open: the bar is ${open.bar?.h}px tall${open.wrap ? ", wrapping" : ""}`);
@@ -1460,7 +1468,7 @@ async function headerMain(): Promise<void> {
       must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
       for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
       await page.click("[data-task-panel-toggle]");
-      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, panel: taskPanel } };
+      report[tag] = { ...reading, gaps, islandClearance, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
       await context.close();
 
       /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */
