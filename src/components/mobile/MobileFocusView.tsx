@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "@/components/icons";
 import { TaskSheet, type TaskSheetView } from "@/components/tasks/TaskSheet";
 import { taskRelationsByPath } from "@/components/tasks/taskRelations";
-import { accountIdFromPath, DEFAULT_ACCOUNT_ID } from "@/lib/accounts/badge";
+import { accountIdFromPath } from "@/lib/accounts/badge";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
@@ -741,6 +741,40 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 }
 
 /**
+ * The identity half of a bar meta line: the engine mark, the model with its
+ * reasoning tier, and the account the conversation runs on.
+ *
+ * One cell for both title cells — a conversation's own and a review round's —
+ * because a round opened from the board said only «working 6:44» while the
+ * sheet it opens changes exactly these three things (#1795).
+ *
+ * The model and its tier are ONE reading and do not yield: sharing the line's
+ * slack with the account cut both halves («opus · hi… · @ sp…»). The account is
+ * the elastic cell, so a long account id loses its tail and the model never
+ * does; the state phrase before them still outranks everything.
+ */
+function ChatIdentity({ file }: { file: FileEntry }) {
+  const { t } = useLocale();
+  const badge = engineBadge(file);
+  const model = file.model
+    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
+    : badge.label;
+  /* Read off the live transcript path, as every other account surface reads it.
+     The legacy home is named too — «default» is the answer to «which account is
+     this», and the runtime sheet answers it with the same word. */
+  const account = accountIdFromPath(file.path);
+  return (
+    <>
+      <span aria-hidden className="shrink-0 text-muted">·</span>
+      <ChatEngineMark file={file} />
+      <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
+      <span aria-hidden className="shrink-0 text-muted">·</span>
+      <span data-mobile2-chat-account className="min-w-0 truncate" title={account}>@ {account}</span>
+    </>
+  );
+}
+
+/**
  * The bar's title cell for a conversation (§3.2, §4.2): the title on one line,
  * and under it the meta line — the dot, the state phrase, the engine mark, the
  * model and its reasoning tier, and `stage k/n` when this conversation is its
@@ -754,11 +788,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
-  const badge = engineBadge(file);
-  const model = file.model
-    ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
-    : badge.label;
-  const account = accountIdFromPath(file.path);
   return (
     <span
       data-mobile2-chat-title
@@ -769,25 +798,12 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
       <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
         {cleanTitle(renamed ?? file.title, 90)}
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         {offline ? null : (
           <>
-            <span aria-hidden className="shrink-0 text-muted">·</span>
-            <ChatEngineMark file={file} />
-            <span className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
-            {/* Which account this conversation runs on (#1795): the operator
-                could read the model and the tier here but never the account,
-                and the phone has no card header to carry the badge. The legacy
-                home names no managed account, so it stays out, exactly as the
-                desktop badge leaves it out. */}
-            {account === DEFAULT_ACCOUNT_ID ? null : (
-              <>
-                <span aria-hidden className="shrink-0 text-muted">·</span>
-                <span data-mobile2-chat-account className="min-w-0 truncate" title={account}>@ {account}</span>
-              </>
-            )}
+            <ChatIdentity file={file} />
             {stage?.current ? (
               <>
                 <span aria-hidden className="shrink-0 text-muted">·</span>
@@ -837,13 +853,16 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
       <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
         {entry.label}
       </span>
-      <span className="flex min-w-0 items-center gap-1 text-label font-medium leading-tight text-secondary">
+      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
         {bits ? (
           <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
         ) : (
           <span data-mobile2-chat-state className="min-w-0 truncate">{entry.meta}</span>
         )}
+        {/* The round on screen is a conversation like any other: it says which
+            model, tier and account the sheet on this surface would change. */}
+        {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (
           <WakeupChip key={wakeupChipKey(entry.file.pendingWakeup)} wakeup={entry.file.pendingWakeup} interactive={false} className="ml-0.5" />

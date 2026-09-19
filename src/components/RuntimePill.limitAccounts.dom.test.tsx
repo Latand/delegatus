@@ -53,17 +53,26 @@ const ACCOUNTS = [
 const calls: { url: string; body: unknown }[] = [];
 const realFetch = globalThis.fetch;
 
+/** The account future launches use. A select moves it and the next read of the
+    accounts payload answers with it, exactly as the server does — otherwise a
+    refresh right after the tap puts the old answer back and the sheet's mark
+    for it looks stuck. */
+let active = "acct-one";
+
 beforeEach(() => {
   setLocale("en");
   calls.length = 0;
+  active = "acct-one";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : (input as URL).toString());
-    calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+    calls.push({ url, body });
     if (url === "/api/accounts") {
-      return new Response(JSON.stringify({ claude: { active: "acct-one", accounts: ACCOUNTS, migration: null, autoBalance: null } }), {
+      return new Response(JSON.stringify({ claude: { active, accounts: ACCOUNTS, migration: null, autoBalance: null } }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
+    if (url.endsWith("/api/accounts/claude/active") && body?.mode === "select" && typeof body.id === "string") active = body.id;
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 });
@@ -180,15 +189,19 @@ test("with no limit the account group is still there, naming the account the con
   expect(group).not.toBeNull();
   /* It says which account this conversation runs on, in the group's own head… */
   expect(group!.querySelector("[data-runtime-sheet-account-current]")!.textContent).toContain("acct-two");
-  /* …and the row for that account is the marked, inert one, with every other
-     authenticated account a one-tap select. */
+  /* …its row carries the same word, and the account the NEXT message will go
+     to — a different fact, held by the accounts store — is the checked, inert
+     one. Every other authenticated account is a one-tap select, this
+     conversation's own included: moving back has to be reachable too. */
   const listed = rows();
   expect(listed.map((row) => row.getAttribute("data-runtime-sheet-account"))).toEqual(["acct-two", "acct-one", "acct-three"]);
   expect(listed.map((row) => row.getAttribute("data-runtime-account-state")))
     .toEqual(["current", "ready", "needs-sign-in"]);
+  expect(listed.map((row) => row.getAttribute("data-runtime-account-next"))).toEqual([null, "true", null]);
   expect(listed[0]!.textContent).toContain("current");
-  expect(listed[0]!.disabled).toBe(true);
-  expect(listed[1]!.disabled).toBe(false);
+  expect(listed[0]!.disabled).toBe(false);
+  expect(listed[1]!.textContent).toContain("next message");
+  expect(listed[1]!.disabled).toBe(true);
   /* And the chip is the ordinary model · reasoning face, unchanged. */
   expect(host.querySelector("[data-runtime-pill]")!.textContent).toContain("· high");
   await act(async () => root.unmount());
@@ -208,6 +221,15 @@ test("tapping another authenticated account with no limit sends the same select 
   const select = calls.find((call) => call.url.endsWith("/api/accounts/claude/active"));
   expect(select).toBeTruthy();
   expect(select!.body).toMatchObject({ id: "acct-two", mode: "select" });
+  /* And the tap SHOWS: the mark for where the next message goes moves onto the
+     row that was tapped, and that row stops offering a second identical tap
+     (#1795 critique P1 — one select left, and nothing on screen changed). */
+  const after = rows();
+  expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-two")!.getAttribute("data-runtime-account-next")).toBe("true");
+  expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-one")!.getAttribute("data-runtime-account-next")).toBeNull();
+  expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-two")!.disabled).toBe(true);
+  /* The conversation still runs where it always ran: that mark does not move. */
+  expect(after.find((row) => row.getAttribute("data-runtime-sheet-account") === "acct-one")!.textContent).toContain("current");
   await act(async () => root.unmount());
 });
 

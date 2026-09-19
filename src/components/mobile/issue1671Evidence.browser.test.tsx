@@ -43,7 +43,8 @@ const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.ski
 const OUT = path.resolve(".artifacts/issue-1671");
 const EVIDENCE = path.resolve("evidence/issue-1671");
 /** The fixture's running conversation, under its managed account's home. */
-const RUNNING_PATH = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
+const runningPath = (account: string) => `/state/agent-log-viewer/shared/accounts/claude/${account}/projects/atlas/running.jsonl`;
+const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
 
@@ -503,6 +504,14 @@ browserTest("#1671 at phone width: real touches on the real Viewer, in both sche
  * `.artifacts/issue-1795/`, which is not committed.
  */
 const SHEET_OUT = path.resolve(".artifacts/issue-1795");
+/* Both phone widths, the short one the critique rendered at, and a 15-character
+   account id — the width that took the model and its tier down with it. */
+const SHEET_CASES = [
+  { viewport: { width: 390, height: 844 }, account: "spare" },
+  { viewport: { width: 430, height: 932 }, account: "spare" },
+  { viewport: { width: 390, height: 600 }, account: "spare" },
+  { viewport: { width: 390, height: 844 }, account: "review-relief-2" },
+] as const;
 const SHEET_EVIDENCE = path.resolve("evidence/issue-1795");
 
 interface Containing { tag: string; marks: string[]; reasons: string[]; rect: Rect }
@@ -554,7 +563,35 @@ const reachable = (page: Page, selector: string, within: string) => page.evaluat
     deck mounts on its own perspective stage. */
 const REVIEW_ROW_PREFIX = translate("en", "mobile2.chat.reviewOf", { title: "" }).trim();
 
-async function sheetSurface(context: BrowserContext, base: string, surface: "pane-on-board" | "conversation-view" | "round-deck-on-board") {
+/** What the bar's meta line actually says, cell by cell, and whether any cell
+    is showing less than its text — the line the account was crowding out. */
+const headerReading = (page: Page) => page.evaluate(() => {
+  const cell = (selector: string) => {
+    const element = document.querySelector(selector);
+    if (!element) return null;
+    const box = element.getBoundingClientRect();
+    return {
+      text: element.textContent ?? "",
+      width: Math.round(box.width * 10) / 10,
+      /* Chromium rounds a truncating box down by up to a pixel. */
+      cut: element.scrollWidth > element.clientWidth + 1,
+    };
+  };
+  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
+  return {
+    line: line ? { width: Math.round(line.getBoundingClientRect().width * 10) / 10, text: line.textContent ?? "" } : null,
+    state: cell("[data-mobile2-chat-state]"),
+    model: cell("[data-mobile2-chat-model]"),
+    account: cell("[data-mobile2-chat-account]"),
+  };
+});
+
+async function sheetSurface(
+  context: BrowserContext,
+  base: string,
+  surface: "pane-on-board" | "conversation-view" | "round-deck-on-board",
+  account = "spare",
+) {
   const page = await context.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -567,8 +604,8 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   if (surface === "pane-on-board" || surface === "round-deck-on-board") {
     /* Exactly the operator's route: the board, then the conversation opened
        from it, which the board mounts inside its own shell. */
-    await page.goto(`${base}/${surface === "round-deck-on-board" ? "?deck=1" : ""}#p=atlas`);
-    const row = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${RUNNING_PATH}"]`;
+    await page.goto(`${base}/?account=${account}${surface === "round-deck-on-board" ? "&deck=1" : ""}#p=atlas`);
+    const row = `[data-mobile2-board] [data-mobile2-swipe-row="conversation:${runningPath(account)}"]`;
     await page.waitForSelector(row, { timeout: 20_000 });
     await pause(page, 600);
     /* The row is below the fold under ten parked lanes: scroll to it, then tap
@@ -594,13 +631,20 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
     }
   } else {
     /* The conversation on its own, deep-linked, with no board under it. */
-    await page.goto(`${base}/#c=conversation_running`);
+    await page.goto(`${base}/?account=${account}#c=conversation_running`);
   }
   await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
   await pause(page, 600);
 
   /* What `fixed` is measured against here, with the sheet still closed. */
   const ancestors = await containingBlocks(page, "[data-runtime-pill]");
+  /* …and what the bar says while nothing covers it. */
+  const header = await headerReading(page);
+  await shot("header");
+  check("the header names the state, the model with its tier, and the account", Boolean(header.state && header.model && header.account));
+  check("the state phrase is whole", header.state?.cut === false);
+  check("the model and its tier are whole", header.model?.cut === false);
+  check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
   await tap(page, cdp, "[data-runtime-pill]");
   await pause(page, 400);
   await shot("sheet");
@@ -627,6 +671,7 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   const accountRows = await page.evaluate(() => [...document.querySelectorAll("[data-runtime-sheet-account]")].map((row) => ({
     id: row.getAttribute("data-runtime-sheet-account"),
     state: row.getAttribute("data-runtime-account-state"),
+    next: row.getAttribute("data-runtime-account-next"),
     disabled: (row as HTMLButtonElement).disabled,
   })));
   const namesAccount = await page.evaluate(() => document.querySelector("[data-runtime-sheet-account-current]")?.textContent ?? "");
@@ -643,8 +688,9 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   check("its close control is on screen and hittable", Boolean(close?.inside && close.hitOwn));
   check("the account group is on screen", Boolean(accounts?.inside && accounts.hitOwn));
   check("the first model row is on screen", Boolean(firstModelRow?.inside && firstModelRow.hitOwn));
-  check("the account the conversation runs on is named", namesAccount.includes("spare"));
-  check("the account it runs on is the marked, inert row", accountRows.some((row) => row.id === "spare" && row.state === "current" && row.disabled));
+  check("the account the conversation runs on is named", namesAccount.includes(account));
+  check("the account it runs on is the marked row, and holds the next message until another is picked",
+    accountRows.some((row) => row.id === account && row.state === "current" && row.next === "true" && row.disabled));
   check("another authenticated account is a one-tap select", accountRows.some((row) => row.id === "relief" && row.state === "ready" && !row.disabled));
   check("a signed-out account keeps its sign-in row", accountRows.some((row) => row.id === "dormant" && row.state === "needs-sign-in"));
 
@@ -672,10 +718,41 @@ async function sheetSurface(context: BrowserContext, base: string, surface: "pan
   const afterChange = await recorded();
   check("a real change still sends its reconfigure", afterChange.runtimeRequests.length > afterReselect.runtimeRequests.length);
   await shot("after-change");
+
+  /* Picking another account has to SHOW: one select leaves, and the mark for
+     where the next message goes moves onto the row that was tapped, while the
+     row naming where the conversation RUNS stays where it was (critique P1). */
+  const readyRow = "[data-runtime-sheet-account][data-runtime-account-state=\"ready\"]";
+  const pickedId = await page.evaluate((sel) => document.querySelector(sel!)?.getAttribute("data-runtime-sheet-account") ?? "", readyRow);
+  await touch(cdp, [await centre(page, readyRow)]);
+  await pause(page, 700);
+  const afterPick = await recorded();
+  const picked = await page.evaluate(() => ({
+    rows: [...document.querySelectorAll("[data-runtime-sheet-account]")].map((row) => ({
+      id: row.getAttribute("data-runtime-sheet-account"),
+      state: row.getAttribute("data-runtime-account-state"),
+      next: row.getAttribute("data-runtime-account-next"),
+      disabled: (row as HTMLButtonElement).disabled,
+    })),
+    head: document.querySelector("[data-runtime-sheet-account-current]")?.textContent ?? "",
+  }));
+  await shot("after-account-pick");
+  check("picking an account sends exactly one select", afterPick.accountSelects.length === 1);
+  check("the picked account is marked as the one the next message uses",
+    picked.rows.some((row) => row.id === pickedId && row.next === "true" && row.disabled));
+  check("no other row claims the next message",
+    picked.rows.filter((row) => row.next === "true").length === 1);
+  check("the account the conversation runs on still says so",
+    picked.head.includes(account) && picked.rows.some((row) => row.state === "current"));
+
   check("no page errors", pageErrors.length === 0);
 
   await page.close();
-  return { surface, ancestors, geometry, title, close, accounts, firstModelRow, accountRows, namesAccount, changedTo: changed, pageErrors, failures };
+  return {
+    surface, account, viewportAccountPick: { pickedId, ...picked, selects: afterPick.accountSelects },
+    ancestors, header, geometry, title, close, accounts, firstModelRow, accountRows, namesAccount,
+    changedTo: changed, pageErrors, failures,
+  };
 }
 
 async function popoverSurface(context: BrowserContext, base: string) {
@@ -715,13 +792,13 @@ browserTest("#1795: the runtime sheet covers the phone from every surface, close
   const results: unknown[] = [];
   const failures: { surface: string; failures: string[]; pageErrors: string[] }[] = [];
   try {
-    for (const viewport of VIEWPORTS) {
+    for (const { viewport, account } of SHEET_CASES) {
       for (const surface of ["pane-on-board", "round-deck-on-board", "conversation-view"] as const) {
         const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
         try {
-          const result = await sheetSurface(context, fixtureBase, surface);
+          const result = await sheetSurface(context, fixtureBase, surface, account);
           results.push({ viewport, ...result });
-          if (result.failures.length) failures.push({ surface: `${viewport.width}-${surface}`, failures: result.failures, pageErrors: result.pageErrors });
+          if (result.failures.length) failures.push({ surface: `${viewport.width}x${viewport.height}-${account}-${surface}`, failures: result.failures, pageErrors: result.pageErrors });
         } finally {
           await context.close();
         }

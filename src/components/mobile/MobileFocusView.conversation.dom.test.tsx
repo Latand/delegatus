@@ -238,11 +238,17 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(state.className).toContain("shrink-0");
   expect(state.className).toContain("whitespace-nowrap");
   expect(state.className).toContain("text-success");
-  /* The model and its reasoning tier are what give way first. */
-  const model = state.parentElement!.querySelector(".truncate") as unknown as HTMLElement;
+  /* The model and its reasoning tier are ONE reading and are not cut to make
+     room for the account beside them (#1795): the account is the cell that
+     gives way. */
+  const model = state.parentElement!.querySelector("[data-mobile2-chat-model]") as unknown as HTMLElement;
   expect(model.textContent).toContain("Opus");
   expect(model.textContent).toContain("high");
-  expect(model.className).toContain("min-w-0");
+  expect(model.className).toContain("shrink-0");
+  expect(model.className).toContain("whitespace-nowrap");
+  const accountCell = state.parentElement!.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
+  expect(accountCell.className).toContain("min-w-0");
+  expect(accountCell.className).toContain("truncate");
   expect(dom.document.querySelector("[data-mobile2-chat-stage]")?.textContent).toBe("stage 2/2");
   /* The engine rides the line as a MARK, never as a word (§3.2): spelling it
      out is what made the strip read "Claude · Claude · Claude", and the model
@@ -255,8 +261,9 @@ test("the bar carries the title on one line and a meta line under it, with `stag
 
 /* #1795: the phone had no card header to carry the account badge, so nothing
    on the phone said which account a conversation was running on — the meta
-   line does now, read off the transcript path like every other surface. */
-test("the meta line names the managed account the conversation runs on, and stays quiet for the legacy home", async () => {
+   line does now, read off the transcript path like every other surface, and it
+   names the legacy home too, with the same word the runtime sheet uses. */
+test("the meta line names the account the conversation runs on, managed or the legacy home", async () => {
   const managed = entry({
     path: "/state/agent-log-viewer/shared/accounts/claude/spare/projects/demo/managed.jsonl",
     title: "Rebuild the board status projection",
@@ -274,13 +281,14 @@ test("the meta line names the managed account the conversation runs on, and stay
   /* It yields before the state phrase does, like the model beside it. */
   expect((account as unknown as HTMLElement).className).toContain("min-w-0");
 
-  /* The legacy home names no managed account, and the line stays as it was. */
+  /* The legacy home is an answer too, and the sheet gives the same one. */
+  dom.document.body.replaceChildren();
   const { host: second } = browser();
   const legacy = createMobileNav(second);
   detach = legacy.attach();
   mount(legacy, [stageConversation], stageConversation.path);
   await settle();
-  expect(dom.document.querySelectorAll("[data-mobile2-chat-account]").length).toBe(1);
+  expect(dom.document.querySelector("[data-mobile2-chat-account]")?.textContent).toBe("@ default");
 });
 
 test("offline is screen-level: the meta line says so instead of the last state, and drops the identity", async () => {

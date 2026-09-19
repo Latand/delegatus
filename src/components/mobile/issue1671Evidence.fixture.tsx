@@ -74,8 +74,11 @@ const pipelines = [
 
 /* The running conversation lives under a managed account home, the way a real
    transcript of a managed account does, so the surfaces that name the account
-   (#1795) have a real one to name rather than the legacy default. */
-const RUNNING_PATH = "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl";
+   (#1795) have a real one to name rather than the legacy default. The id is
+   `?account=` so one page can be asked for a long one, which is what crowds a
+   390 px meta line. */
+const ACCOUNT = new URLSearchParams(location.search).get("account") || "spare";
+const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/projects/atlas/running.jsonl`;
 
 /* With the deck asked for (#1795 below), the running conversation is the round
    under review, and says so the way a reviewer transcript does. */
@@ -142,6 +145,9 @@ Object.assign(window, { evidence });
 class QuietEventSource { addEventListener() {} removeEventListener() {} close() {} }
 Object.assign(window, { EventSource: QuietEventSource });
 
+/** The account future launches use; a select moves it, as on the server. */
+let activeAccount = ACCOUNT;
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -179,9 +185,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/accounts") {
     return json({
       claude: {
-        active: "spare",
+        active: activeAccount,
         accounts: [
-          { id: "spare", label: "spare", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
+          { id: ACCOUNT, label: ACCOUNT, kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
           { id: "relief", label: "relief", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null },
           { id: "dormant", label: "dormant", kind: "managed", authPresent: false, authHealth: "signed_out", loginPending: false, loginState: "idle", deviceAuth: null },
         ],
@@ -191,7 +197,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/accounts/claude/active" && method === "POST") {
-    evidence.accountSelects.push({ engine: "claude", body: JSON.parse(String(init?.body ?? "null")) });
+    const body = JSON.parse(String(init?.body ?? "null")) as { id?: string; mode?: string } | null;
+    evidence.accountSelects.push({ engine: "claude", body });
+    /* The server answers every later read with the account that was picked. */
+    if (body?.mode === "select" && typeof body.id === "string") activeAccount = body.id;
     return json({ ok: true });
   }
   if (url.pathname === "/api/tmux" && method === "POST") {

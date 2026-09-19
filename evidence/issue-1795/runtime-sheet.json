@@ -5,7 +5,62 @@
       "height": 844
     },
     "surface": "pane-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:41·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:41",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -63,16 +118,19 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
@@ -87,6 +145,40 @@
       "height": 844
     },
     "surface": "round-deck-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [
       {
         "tag": "div",
@@ -102,6 +194,27 @@
         }
       }
     ],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:43·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:43",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -159,16 +272,19 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
@@ -183,7 +299,62 @@
       "height": 844
     },
     "surface": "conversation-view",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:40·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:40",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -241,16 +412,19 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
@@ -265,7 +439,62 @@
       "height": 932
     },
     "surface": "pane-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [],
+    "header": {
+      "line": {
+        "width": 237.2,
+        "text": "working 6:41·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:41",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 39.8,
+        "cut": false
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -323,16 +552,19 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
@@ -347,6 +579,40 @@
       "height": 932
     },
     "surface": "round-deck-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [
       {
         "tag": "div",
@@ -362,6 +628,27 @@
         }
       }
     ],
+    "header": {
+      "line": {
+        "width": 237.2,
+        "text": "working 6:43·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:43",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 39.8,
+        "cut": false
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -419,16 +706,19 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
@@ -443,7 +733,62 @@
       "height": 932
     },
     "surface": "conversation-view",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
     "ancestors": [],
+    "header": {
+      "line": {
+        "width": 237.2,
+        "text": "working 6:40·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:40",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 39.8,
+        "cut": false
+      }
+    },
     "geometry": {
       "portalledToBody": true,
       "backdrop": {
@@ -501,20 +846,891 @@
       {
         "id": "spare",
         "state": "current",
+        "next": "true",
         "disabled": true
       },
       {
         "id": "relief",
         "state": "ready",
+        "next": null,
         "disabled": false
       },
       {
         "id": "dormant",
         "state": "needs-sign-in",
+        "next": null,
         "disabled": false
       }
     ],
     "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 600
+    },
+    "surface": "pane-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:41·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:41",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 600
+      },
+      "card": {
+        "x": 0,
+        "y": 120,
+        "width": 390,
+        "height": 480
+      },
+      "viewport": {
+        "width": 390,
+        "height": 600
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 144,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 144,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 196,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 377,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 600
+    },
+    "surface": "round-deck-on-board",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [
+      {
+        "tag": "div",
+        "marks": [],
+        "reasons": [
+          "perspective: 1200px"
+        ],
+        "rect": {
+          "x": 0,
+          "y": 52,
+          "width": 390,
+          "height": 548
+        }
+      }
+    ],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:43·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:43",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 600
+      },
+      "card": {
+        "x": 0,
+        "y": 120,
+        "width": 390,
+        "height": 480
+      },
+      "viewport": {
+        "width": 390,
+        "height": 600
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 144,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 144,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 196,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 377,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 600
+    },
+    "surface": "conversation-view",
+    "account": "spare",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "spare",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on spare",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:40·opus · high·@ spare"
+      },
+      "state": {
+        "text": "working 6:40",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ spare",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 600
+      },
+      "card": {
+        "x": 0,
+        "y": 120,
+        "width": 390,
+        "height": 480
+      },
+      "viewport": {
+        "width": 390,
+        "height": 600
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 144,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 144,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 196,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 377,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "spare",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on spare",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "pane-on-board",
+    "account": "review-relief-2",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "review-relief-2",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on review-relief-2",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:42·opus · high·@ review-relief-2"
+      },
+      "state": {
+        "text": "working 6:42",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ review-relief-2",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "review-relief-2",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on review-relief-2",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "round-deck-on-board",
+    "account": "review-relief-2",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "review-relief-2",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on review-relief-2",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [
+      {
+        "tag": "div",
+        "marks": [],
+        "reasons": [
+          "perspective: 1200px"
+        ],
+        "rect": {
+          "x": 0,
+          "y": 52,
+          "width": 390,
+          "height": 792
+        }
+      }
+    ],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:43·opus · high·@ review-relief-2"
+      },
+      "state": {
+        "text": "working 6:43",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ review-relief-2",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "review-relief-2",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on review-relief-2",
+    "changedTo": "Fable",
+    "pageErrors": [],
+    "failures": []
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "surface": "conversation-view",
+    "account": "review-relief-2",
+    "viewportAccountPick": {
+      "pickedId": "relief",
+      "rows": [
+        {
+          "id": "review-relief-2",
+          "state": "current",
+          "next": null,
+          "disabled": false
+        },
+        {
+          "id": "relief",
+          "state": "ready",
+          "next": "true",
+          "disabled": true
+        },
+        {
+          "id": "dormant",
+          "state": "needs-sign-in",
+          "next": null,
+          "disabled": false
+        }
+      ],
+      "head": "runs on review-relief-2",
+      "selects": [
+        {
+          "engine": "claude",
+          "body": {
+            "id": "relief",
+            "mode": "select"
+          }
+        }
+      ]
+    },
+    "ancestors": [],
+    "header": {
+      "line": {
+        "width": 197.2,
+        "text": "working 6:40·opus · high·@ review-relief-2"
+      },
+      "state": {
+        "text": "working 6:40",
+        "width": 62.3,
+        "cut": false
+      },
+      "model": {
+        "text": "opus · high",
+        "width": 53.8,
+        "cut": false
+      },
+      "account": {
+        "text": "@ review-relief-2",
+        "width": 32.3,
+        "cut": true
+      }
+    },
+    "geometry": {
+      "portalledToBody": true,
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "card": {
+        "x": 0,
+        "y": 168.8125,
+        "width": 390,
+        "height": 675.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "coversViewport": true,
+      "scrollsInsideItself": true
+    },
+    "title": {
+      "x": 12,
+      "y": 192.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "close": {
+      "x": 338,
+      "y": 192.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accounts": {
+      "x": 12,
+      "y": 244.8125,
+      "width": 366,
+      "height": 152.5,
+      "inside": true,
+      "hitOwn": true
+    },
+    "firstModelRow": {
+      "x": 12,
+      "y": 425.8125,
+      "width": 366,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "accountRows": [
+      {
+        "id": "review-relief-2",
+        "state": "current",
+        "next": "true",
+        "disabled": true
+      },
+      {
+        "id": "relief",
+        "state": "ready",
+        "next": null,
+        "disabled": false
+      },
+      {
+        "id": "dormant",
+        "state": "needs-sign-in",
+        "next": null,
+        "disabled": false
+      }
+    ],
+    "namesAccount": "runs on review-relief-2",
     "changedTo": "Fable",
     "pageErrors": [],
     "failures": []

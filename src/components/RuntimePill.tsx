@@ -1089,22 +1089,30 @@ function AccountSection({ t, engine, account, limit }: {
       </div>
       {ordered.map((option) => {
         const blocked = limit !== null && option.id === limit.accountId;
-        const current = !blocked && option.id === account;
+        /* Two different facts, and the sheet was only telling one of them: where
+           this conversation RUNS (its transcript's account) and where the NEXT
+           message goes (the account the engine launches from, which the select
+           below moves). A tap that moved the second one changed nothing on
+           screen while only the first was marked (#1795 critique P1). */
+        const current = option.id === account;
+        const next = !blocked && option.id === state.active;
         const authenticated = option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
         const signInReachable = !authenticated && engine === "claude";
-        const inert = blocked || current || (!authenticated && !signInReachable);
+        /* Already the target, or walled, or unreachable: nothing to send. */
+        const inert = blocked || next || (!authenticated && !signInReachable);
         return (
           <button
             key={option.id}
             type="button"
             data-runtime-sheet-account={option.id}
             data-runtime-account-state={blocked ? "limit" : current ? "current" : authenticated ? "ready" : "needs-sign-in"}
+            data-runtime-account-next={next ? "true" : undefined}
             disabled={inert || state.mutation !== null}
             aria-disabled={inert || undefined}
             aria-label={blocked
               ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
-              : current
-                ? t("mobile2.composer.accountCurrentAria", { account: option.label })
+              : next
+                ? t("mobile2.composer.accountNextAria", { account: option.label })
                 : authenticated
                   ? t("mobile2.composer.accountReadyAria", { account: option.label })
                   : t("mobile2.composer.accountSignInAria", { account: option.label })}
@@ -1116,17 +1124,23 @@ function AccountSection({ t, engine, account, limit }: {
               else void state.retryLogin(option.id);
             }}
             className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-100 ${
-              inert ? "text-secondary" : "text-primary active:bg-sunken"
-            } ${current ? "text-primary" : ""}`}
+              blocked || (!authenticated && !signInReachable) ? "text-secondary" : "text-primary"
+            } ${inert ? "" : "active:bg-sunken"}`}
           >
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            {/* Where the conversation runs, wherever that row ends up. */}
+            {current ? (
+              <span className="shrink-0 text-label font-semibold text-muted" data-runtime-account-current-tag>
+                {t("mobile2.composer.accountCurrent")}
+              </span>
+            ) : null}
             {blocked ? (
               <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-caption font-bold text-warning">
                 {reset === null ? t("mobile2.composer.accountLimitBadge") : t("mobile2.composer.accountLimitBadgeAt", { time: reset })}
               </span>
-            ) : current ? (
+            ) : next ? (
               <>
-                <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountCurrent")}</span>
+                <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
                 <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
               </>
             ) : authenticated ? (
