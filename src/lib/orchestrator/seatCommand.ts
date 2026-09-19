@@ -33,7 +33,14 @@ import {
   type HandoffDigestRequest,
   type HandoffParts,
 } from "./handoffDigest";
-import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery, orchestratorMandateStale } from "./prompt";
+import {
+  ORCHESTRATOR_PROMPT_VERSION,
+  ORCHESTRATOR_SYSTEM_PROMPT,
+  orchestratorMandateForDelivery,
+  orchestratorMandateStale,
+  orchestratorMandateWithRoleTable,
+  orchestratorRoleTable,
+} from "./prompt";
 import {
   abandonStillbornOrchestratorSeat,
   activeOrchestratorSeats,
@@ -800,6 +807,7 @@ async function runOrchestratorSeatRequest(
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
+      roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
       conversationId: target.conversationId,
@@ -834,9 +842,11 @@ async function runOrchestratorSeatRequest(
       /* Derived, never minted: a retry after a lost response reuses the same
          id and the delivery receipts answer it instead of delivering twice. */
       clientMessageId: `orchmandate_${clientRequestId}`,
-      /* On a pending replay the ORIGINAL intent's mandate is what completes:
-         a retry that recomposed its text must not deliver a second variant. */
-      text: orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, loadRoleDefinitionsOrDefaults()),
+      /* The intent's recorded mandate and role table are what completes: a
+         pending replay whose caller recomposed its text, or whose registry
+         changed since the first attempt, must not deliver a second variant
+         under the same clientMessageId. */
+      text: orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null),
     });
     if (!delivery.ok) {
       const error = delivery.error ?? "mandate delivery failed";
@@ -903,6 +913,7 @@ async function runOrchestratorSeatRequest(
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
+    roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
     engine: resolvedRuntime.value.config.engine,
@@ -929,10 +940,11 @@ async function runOrchestratorSeatRequest(
       },
     };
   }
-  /* A pending replay spawns the ORIGINAL intent's mandate: the spawn receipt is
-     matched by clientAttemptId AND request digest, so a recomposed retry would
+  /* A pending replay spawns the ORIGINAL intent's mandate and role table: the
+     spawn receipt is matched by clientAttemptId AND request digest, so a
+     recomposed retry, or one rendered from a registry edited since, would
      otherwise conflict with its own first attempt. */
-  const spawnMandate = orchestratorMandateForDelivery(begun.kind === "replay" ? begun.seat.mandate : mandate, loadRoleDefinitionsOrDefaults());
+  const spawnMandate = orchestratorMandateWithRoleTable(begun.seat.mandate, begun.seat.roleTable ?? null);
 
   const spawnFields = ["cwd", "effort", "fast", "accountId", "images", "roleParams", "allowSubagents"] as const;
   const spawnRuntime = begun.kind === "replay"

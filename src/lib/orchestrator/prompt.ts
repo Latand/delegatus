@@ -372,6 +372,14 @@ const DELIVERED_DIRECTIVES: readonly { marker: string; directive: string }[] = [
     pass the live registry; the built-in presets are only the fallback for a
     caller that has none to read. */
 export function orchestratorMandateForDelivery(mandate: string, roles: readonly RoleDefinition[] = ROLE_DEFAULTS): string {
+  return orchestratorMandateWithRoleTable(mandate, orchestratorRoleTable(roles));
+}
+
+/** Delivery with an already rendered role table. A pending seat intent replays
+    the table its first attempt recorded, so the retried text stays
+    byte-identical to the first attempt whatever the registry says now; null
+    is a pending intent recorded before tables existed, which was sent none. */
+export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   const withoutShippedDeploys = mandate
     .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
     .split(SHIPPED_DEPLOYS_SECTION).join("");
@@ -379,5 +387,5 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     (text, { marker, directive }) => (text.includes(marker) ? text : `${text}\n\n${directive}`),
     withoutRoleTable(withoutShippedDeploys),
   );
-  return `${withDirectives}\n\n${orchestratorRoleTable(roles)}`;
+  return roleTable === null ? withDirectives : `${withDirectives}\n\n${roleTable}`;
 }
