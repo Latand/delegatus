@@ -1283,6 +1283,9 @@ test.each([
   ["missing", "retry", "text"], ["disconnected", "retry", "text"], ["missing", "discard", "text"], ["missing", "receipt", "text"],
   ["missing", "retry", "image"], ["missing", "discard", "image"], ["missing", "pending-receipt", "text"],
   ["missing", "refused-retry", "text"],
+  ["disconnected", "discard", "text"], ["disconnected", "receipt", "text"],
+  ["disconnected-admitted", "retry", "text"], ["disconnected", "retry", "image"],
+  ["uncertain-http", "retry", "text"], ["receiptless-ok", "retry", "text"],
 ] as const)("%s admission reaches unconfirmed controls and recovers through %s (attachment=%s)", async (transport, recovery, payload) => {
   const attachment = payload === "image";
   setLocale("en");
@@ -1295,6 +1298,7 @@ test.each([
     uiState: {}, attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
   } as unknown as RuntimeSessionView;
   let polls = 0;
+  const admitted = new Map<string, RuntimeReceipt>();
   setTmuxComposerRuntimeDependenciesForTests({
     refreshRuntime: async () => { polls += 1; return false; },
     useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
@@ -1305,22 +1309,34 @@ test.each([
       return { caps: capabilitiesFor(candidate, structuredView, options), runtime: structuredView,
         structuredSession: structuredView, runtimeEnabled: true, attachMode: attachModeFor(candidate, structuredView, options) };
     },
-    sendRuntimeMessage: async options => {
-      sends.push(options);
-      if (sends.length === 1) {
-        if (transport === "disconnected") throw new TypeError("Network disconnected");
-        return new Promise(() => {});
-      }
-      if (recovery === "refused-retry") return { ok: false, status: 403, error: "pre-admission refusal", delivery: "refused" };
-      const receipt: RuntimeReceipt = { operationId: "operation-recovered", idempotencyKey: options.idempotencyKey,
-        conversationId, kind: "send", status: "queued", text: options.text,
-        at: new Date().toISOString(), revision: 1 };
-      return { ok: true, receipt, operationId: receipt.operationId };
-    },
   });
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async input => {
+  // Exercise the production sendRuntimeMessage/postCommand normalization. A
+  // rejection above that helper misses the result the composer actually sees.
+  globalThis.fetch = (async (input, init) => {
     if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    if (String(input) === "/api/runtime/send") {
+      const options = JSON.parse(String(init?.body)) as typeof sends[number];
+      sends.push(options);
+      const admit = () => {
+        if (!admitted.has(options.idempotencyKey)) admitted.set(options.idempotencyKey, {
+          operationId: `operation-recovered-${admitted.size}`, idempotencyKey: options.idempotencyKey,
+          conversationId, kind: "send", status: "queued", text: options.text,
+          at: new Date().toISOString(), revision: 1,
+        });
+        return admitted.get(options.idempotencyKey)!;
+      };
+      if (sends.length === 1) {
+        if (transport === "disconnected-admitted") admit();
+        if (transport === "disconnected" || transport === "disconnected-admitted") throw new TypeError("Network disconnected");
+        if (transport === "uncertain-http") return Response.json({ error: "admission unknown", delivery: "uncertain" }, { status: 503 });
+        if (transport === "receiptless-ok") return Response.json({});
+        return new Promise<Response>(() => {});
+      }
+      if (recovery === "refused-retry") return Response.json({ error: "pre-admission refusal", delivery: "refused" }, { status: 403 });
+      const receipt = admit();
+      return Response.json({ receipt, operationId: receipt.operationId }, { status: 202 });
+    }
     throw new Error(`unexpected request: ${String(input)}`);
   }) as typeof fetch;
   sessionStorage.setItem(`llvDraft:${conversationId}`, prompt);
@@ -1347,6 +1363,7 @@ test.each([
     expect(host.querySelector("[data-outbox-status]")?.textContent).toBe(translate("en", "orchPanel.errorUnknownTitle"));
     expect(host.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
     expect(host.querySelector("[data-receipt-discard]")).not.toBeNull();
+    if (transport === "disconnected-admitted") expect(admitted.size).toBe(1);
     // A phone remount preserves the same local recovery authority and key.
     if (recovery === "discard") {
       flushSync(() => root.unmount());
@@ -1402,6 +1419,7 @@ test.each([
     expect(readOutbox(conversationId)[0]).toMatchObject({ awaitingTurn: true, state: "delivering" });
     expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
     expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+    expect(admitted.size).toBe(1);
   } finally {
     flushSync(() => root.unmount());
     publishReceipts([]);

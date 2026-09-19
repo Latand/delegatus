@@ -2946,6 +2946,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
     const responseEpoch = legacyResponseEpoch.current;
     let admissionRequest: Promise<ComposerSendResult> | null = null;
+    const reconcileUnconfirmedAdmission = (lateReceipt?: Promise<RuntimeReceipt | null>) => {
+      if (settledSendKeys.current.has(clientMessageId)) return;
+      markOutboxUnknown();
+      persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
+        entry.key === clientMessageId ? { ...entry, reconciling: true } : entry));
+      startReceiptReconciliation(clientMessageId, lateReceipt);
+    };
     try {
       /* The wire fence (#1538): stamped on the durable entry in the same tick
          the request is created, before anything can await. A reload while the
@@ -3144,7 +3151,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             await refreshPayloads();
           }
         }
-        else if (possiblyAccepted && outboxId) markOutboxUnknown();
+        // postCommand normalizes a failed fetch into a result. It needs the
+        // same bounded recovery as a request that throws or never answers.
+        else if (possiblyAccepted && outboxId) reconcileUnconfirmedAdmission();
         else settleOutbox("failed", failure);
         setStatus({ kind: "err", text: failure });
         return;
@@ -3177,7 +3186,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           }
           return;
         }
-        markOutboxUnknown();
+        reconcileUnconfirmedAdmission();
         return;
       }
       settleLegacySuccess(json);
@@ -3194,9 +3203,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
             ? t("composer.admissionTimedOut")
             : t("common.serverUnavailable"),
         });
-        markOutboxUnknown();
-        persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
-          entry.key === clientMessageId ? { ...entry, reconciling: true } : entry));
         const lateReceipt = admissionRequest?.then((result) => {
           const receipt = result.receipt;
           if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
@@ -3216,7 +3222,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           setReconcilingSend(receiptReconciliations.current.size > 0);
           return null;
         });
-        startReceiptReconciliation(clientMessageId, lateReceipt);
+        reconcileUnconfirmedAdmission(lateReceipt);
       }
     } finally {
       setBusy(false);

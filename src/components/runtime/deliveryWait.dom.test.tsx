@@ -145,24 +145,28 @@ test("#1213 the composer's own unconfirmed row says so, and never claims a turn 
   /* `composer-unconfirmed:<key>` is the composer's local row for a send whose
      admission it never saw confirmed. «Waiting for the agent to finish its
      turn» would assert the very admission that is unknown. */
+  const actions: string[] = [];
   const view = mount(
     <RuntimeComposerReceipts
-      receipts={[receipt({ operationId: "composer-unconfirmed:msg-1213", status: "uncertain" })]}
+      receipts={[receipt({ operationId: "composer-unconfirmed:msg-1213", status: "uncertain",
+        admittedAt: undefined, reason: t("composer.deliveryUnconfirmed"), resend: "verify-first" })]}
       nowMs={at(PAST_BOUND_MS)}
-      onRetry={noop}
+      localRecoveryKeys={new Set(["msg-1213"])}
+      onRetry={(receipt, mode) => actions.push(`retry:${receipt.idempotencyKey}:${mode}`)}
+      onDiscard={receipt => actions.push(`discard:${receipt.idempotencyKey}`)}
       onEdit={noop}
     />,
   );
   const details = open(view.host);
-  const chip = details.querySelector("[data-receipt-status]")!;
-  expect(chip.getAttribute("data-receipt-wait")).toBe("unconfirmed-admission");
-  expect(chip.textContent).toContain(t("runtime.receipt.admissionUnconfirmed", {
-    waited: t("runtime.receipt.waitedMin", { n: PAST_BOUND_MIN }),
-  }));
-  expect(chip.textContent).not.toContain(t("runtime.receipt.awaitingTurnFor", {
+  expect(details.querySelector('[role="status"]')?.textContent).toBe(t("orchPanel.errorUnknownTitle"));
+  expect(details.querySelector("[data-receipt-uncertain-why]")?.textContent).toBe(t("composer.deliveryUnconfirmed"));
+  expect(details.textContent).not.toContain(t("runtime.receipt.awaitingTurnFor", {
     waited: t("runtime.receipt.waitedMin", { n: PAST_BOUND_MIN }),
   }));
   expect(details.querySelector(".animate-pulse")).toBeNull();
+  details.querySelector<HTMLButtonElement>("[data-receipt-uncertain-retry]")!.click();
+  details.querySelector<HTMLButtonElement>("[data-receipt-discard]")!.click();
+  expect(actions).toEqual(["retry:msg-1213:uncertain", "discard:msg-1213"]);
   view.cleanup();
 });
 
