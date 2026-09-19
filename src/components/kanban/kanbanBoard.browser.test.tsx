@@ -5403,6 +5403,292 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
   }, 900_000);
 });
 
+describe("#1836 where the view was just taken", () => {
+  /*
+   * Rendered evidence for the arrival (#1836), in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`, against the production stylesheet, in
+   * Chromium — desktop and 390x844, light and dark, both motion preferences.
+   *
+   * The arrival is DRIVEN, not imitated: the page runs the real focus
+   * transaction, asks the board's own index what it drew the anchor as, and
+   * hands that to the real `startArrivalPulse` — the same three calls
+   * `AttentionHost` makes. A driver that set the attribute itself would
+   * photograph the stylesheet and prove nothing about what gets marked.
+   *
+   * What only a browser settles, and is gated here:
+   *   - the mark paints a ring the card does not otherwise carry, so the
+   *     landed card is findable at a glance beside its neighbours;
+   *   - it is a blink (a running animation) by default and a STEADY highlight
+   *     of the same strength under reduced motion, never nothing;
+   *   - it moves NOTHING: the landed element and its neighbour occupy exactly
+   *     the same boxes while it plays;
+   *   - it takes itself off, leaving the card exactly as it was;
+   *   - a conversation no card holds is landed in its own reader pane, and
+   *     that pane is what lights up.
+   *
+   * 390x844 is the phone, and the phone is recorded rather than gated for the
+   * handoff itself: mobile is chat-only by design — it withholds its device id
+   * and never follows a handoff (`src/lib/attention/service.ts`) — so what is
+   * measured there is the decoration the operator would see, on the surface
+   * that width actually draws.
+   *
+   * The scheme's own surfaces (an absolutely positioned node and task band)
+   * are not drawn by this fixture; their geometry is settled in the board
+   * geometry driver, `scripts/capture-board-geometry.ts`, and their positioning
+   * contract in `arrivalPulse.dom.test.tsx`.
+   *
+   * Geometry goes to `evidence/issue-1836/arrival-pulse.json`; frames to
+   * `.artifacts/issue-1836/`, which is not committed.
+   */
+  type PulseEvidence = {
+    focus: {
+      bus: { board(): { index: { pulseSelectorFor?(key: string): string | null } } | null };
+      runFocusTransaction(request: unknown, bus: unknown, options: unknown): Promise<{ resolution: string; moved: boolean }>;
+      startArrivalPulse(selectors: Array<string | null>, options?: { durationMs?: number }): { cancel(): void };
+      cancelArrivalPulse(): void;
+    };
+  };
+
+  /** One arrival, exactly as the host performs it: the transaction, the board's
+      own answer for what it drew, and the mark. Returns what the page can only
+      say from inside itself — the boxes and the paint, before, during, after. */
+  const arrive = (page: Page, path: string, intent: "show" | "open", neighbour: string | null) => page.evaluate(async ([target, wanted, near]) => {
+    const { bus, runFocusTransaction, startArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const paint = (element: Element | null) => {
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      return { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position };
+    };
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const result = await runFocusTransaction({
+      id: `attention_pulse_${wanted}`,
+      target: { kind: "conversation", path: target },
+      frameAtCreation: { project: "atlas", rect: { x: 0, y: 0, w: 0, h: 0 }, boardRevision: null },
+      intent: wanted,
+      zoom: "inspect",
+    }, bus, { timeoutMs: 8_000 });
+    await wait(400);
+
+    const selector = bus.board()?.index.pulseSelectorFor?.(target) ?? null;
+    const landed = selector ? document.querySelector(selector) : null;
+    const other = near ? document.querySelector(near) : null;
+    const before = { landed: box(landed), neighbour: box(other), paint: paint(landed) };
+    startArrivalPulse([selector]);
+    /* Past the card's own box-shadow transition, so what is measured and
+       photographed is the pulse rather than the way into it. */
+    await wait(300);
+    const during = { landed: box(landed), neighbour: box(other), paint: paint(landed), mark: landed?.getAttribute("data-attention-pulse") ?? null };
+    return { resolution: result.resolution, selector, before, during };
+  }, [path, intent, neighbour] as const);
+
+  /** The mark comes off, and the page says what it left behind. */
+  const settlePulse = (page: Page, selector: string | null, neighbour: string | null) => page.evaluate(async ([sel, near]) => {
+    const { cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    cancelArrivalPulse();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const landed = sel ? document.querySelector(sel) : null;
+    const other = near ? document.querySelector(near) : null;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const style = landed ? getComputedStyle(landed) : null;
+    return {
+      landed: box(landed),
+      neighbour: box(other),
+      paint: style ? { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position } : null,
+      mark: landed?.getAttribute("data-attention-pulse") ?? null,
+    };
+  }, [selector, neighbour] as const);
+
+  browserTest("the landed card blinks, holds steady under reduced motion, moves nothing, and leaves nothing behind", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const IMPLEMENTER = "/repo/export-impl.jsonl";
+    const REVIEWER = "/repo/export-review.jsonl";
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+    };
+    const failures: string[] = [];
+    try {
+      for (const [surface, viewport] of [["desktop", VIEWPORT], ["phone", { width: 390, height: 844 }]] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const motion of ["no-preference", "reduce"] as const) {
+            const label = `${surface}-${scheme}-${motion}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose`, viewport, scheme, "en", motion);
+            try {
+              const kanban = await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 }).then(() => true).catch(() => false);
+              const board = await page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none"));
+              if (!kanban) {
+                /* The phone. Mobile is chat-only for a handoff, so there is no
+                   arrival to gate — what is recorded is the surface that width
+                   draws, and the decoration on it, which is what the operator
+                   would have to see at a glance. */
+                const rows = await page.$$eval("[data-mobile2-row], .card[data-id]", (nodes) => nodes.length);
+                const mark = await page.evaluate(async () => {
+                  const { startArrivalPulse, cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+                  const row = document.querySelector("[data-mobile2-row], .card[data-id]");
+                  if (!row) return null;
+                  const rect = () => { const box = row.getBoundingClientRect(); return { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) }; };
+                  const shadow = () => getComputedStyle(row).boxShadow;
+                  const before = { box: rect(), shadow: shadow() };
+                  startArrivalPulse(["[data-mobile2-row], .card[data-id]"]);
+                  await new Promise((resolve) => setTimeout(resolve, 300));
+                  const during = { box: rect(), shadow: shadow(), animation: getComputedStyle(row).animationName, mark: row.getAttribute("data-attention-pulse") };
+                  cancelArrivalPulse();
+                  await new Promise((resolve) => setTimeout(resolve, 200));
+                  return { before, during, after: { box: rect(), shadow: shadow() } };
+                });
+                await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
+                if (mark) {
+                  if (mark.during.shadow === mark.before.shadow) failures.push(`${label}: the mark painted no ring at 390x844`);
+                  if (JSON.stringify(mark.during.box) !== JSON.stringify(mark.before.box)) failures.push(`${label}: the mark moved the row it lit`);
+                  if (motion === "no-preference" && mark.during.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${mark.during.animation})`);
+                  if (motion === "reduce" && mark.during.animation !== "none") failures.push(`${label}: reduced motion still animates (${mark.during.animation})`);
+                  if (mark.after.shadow !== mark.before.shadow) failures.push(`${label}: the mark left something behind`);
+                }
+                evidence[label] = { viewport, board, rows, handoff: "the phone withholds its device id and never follows a handoff", mark };
+                if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+                continue;
+              }
+
+              /* A conversation a card holds: the card is what lights up, and
+                 its neighbour must not stir. */
+              const neighbour = "[data-kanban-board] .card[data-id] ~ .card[data-id]";
+              const card = await arrive(page, IMPLEMENTER, "show", neighbour);
+              await page.screenshot({ path: path.join(out, `${label}-card.png`) });
+              const cleared = await settlePulse(page, card.selector, neighbour);
+              if (card.resolution === "lost") failures.push(`${label}: the handoff found nowhere to land`);
+              if (!card.selector) failures.push(`${label}: the board answered no selector for the landed card`);
+              if (!card.during.paint || card.during.paint.shadow === card.before.paint?.shadow) failures.push(`${label}: the mark painted no ring`);
+              if (JSON.stringify(card.during.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the mark moved the card it lit`);
+              if (JSON.stringify(card.during.neighbour) !== JSON.stringify(card.before.neighbour)) failures.push(`${label}: the mark moved the neighbouring card`);
+              if (motion === "no-preference" && card.during.paint?.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${card.during.paint?.animation})`);
+              if (motion === "reduce" && card.during.paint?.animation !== "none") failures.push(`${label}: reduced motion still animates (${card.during.paint?.animation})`);
+              if (motion === "reduce" && !/0px 0px 0px [\d.]+px/.test(card.during.paint?.shadow ?? "")) failures.push(`${label}: reduced motion left no ring`);
+              if (cleared.mark !== null) failures.push(`${label}: the mark outlived the pulse`);
+              if (cleared.paint?.shadow !== card.before.paint?.shadow) failures.push(`${label}: the card did not go back to what it was`);
+              if (JSON.stringify(cleared.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the card ended somewhere else`);
+
+              /* A conversation NO card holds: it is opened in its own reader,
+                 and that pane is the thing the operator is being pointed at. */
+              const pane = await arrive(page, REVIEWER, "open", null);
+              await page.screenshot({ path: path.join(out, `${label}-reader.png`) });
+              const paneCleared = await settlePulse(page, pane.selector, null);
+              if (!pane.selector?.includes("data-reader-path")) failures.push(`${label}: the board answered ${pane.selector} for a conversation no card holds`);
+              if (pane.during.paint?.shadow === pane.before.paint?.shadow) failures.push(`${label}: the reader pane was not lit`);
+              if (JSON.stringify(pane.during.landed) !== JSON.stringify(pane.before.landed)) failures.push(`${label}: the mark moved the reader pane`);
+              if (paneCleared.mark !== null) failures.push(`${label}: the reader pane stayed lit`);
+
+              evidence[label] = { viewport, board, card, cleared, pane, paneCleared };
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally { await context.close(); }
+          }
+        }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/arrival-pulse.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("#1836 the phone draws a lane the moment the server admits it", () => {
+  /*
+   * The phone board at 390x844, in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`. The fixture's `/api/files` scan never
+   * carries the admitted lane; only `/api/attention` hands it out, as the rows
+   * the server holds. So a lane on this board came from the push.
+   *
+   * Gated: the pipelines row counts the lane, the pipelines list names it,
+   * the phone never names a device or posts anything (it stays chat-only for
+   * a handoff), and a lane the server then drops leaves the list again.
+   *
+   * Geometry and counts go to `evidence/issue-1836/phone-admitted-lane.json`;
+   * frames to `.artifacts/issue-1836/`, which is not committed.
+   */
+  type LaneEvidence = {
+    admitLane(title: string): void;
+    admitted: unknown;
+    attentionCalls: Array<{ url: string; method: string }>;
+  };
+  const TITLE = "A lane just created";
+
+  browserTest("the admitted lane is on the phone board before any scan carries it, and leaves when dropped", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+    };
+    const failures: string[] = [];
+    const viewport = { width: 390, height: 844 };
+    const pipelinesRow = "[data-mobile2-row='pipelines']";
+    const poll = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const label = `phone-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, scheme, "en");
+        try {
+          await page.waitForSelector("[data-mobile2-board]", { timeout: 20_000 });
+          const rowText = () => page.$eval(pipelinesRow, (node) => node.textContent ?? "").catch(() => null);
+          const before = await rowText();
+          await page.screenshot({ path: path.join(out, `${label}-before.png`) });
+
+          await page.evaluate((title) => (window as unknown as { evidence: LaneEvidence }).evidence.admitLane(title), TITLE);
+          const admittedAt = Date.now();
+          await poll(page);
+          let during = before;
+          while (Date.now() - admittedAt < 5_000 && during === before) {
+            await page.waitForTimeout(100);
+            during = await rowText();
+          }
+          const drawnAfterMs = Date.now() - admittedAt;
+          await page.screenshot({ path: path.join(out, `${label}-admitted.png`) });
+          if (during === before) failures.push(`${label}: the pipelines row did not count the admitted lane (${before})`);
+
+          await page.click(pipelinesRow);
+          const listed = await page.waitForFunction((title) => document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-list.png`) });
+          if (!listed) failures.push(`${label}: the pipelines list does not name the admitted lane`);
+
+          /* The server drops it: refused, or never materialized. */
+          await page.evaluate(() => { (window as unknown as { evidence: LaneEvidence }).evidence.admitted = null; });
+          await poll(page);
+          const gone = await page.waitForFunction((title) => !document.body.textContent?.includes(title), TITLE, { timeout: 5_000 }).then(() => true).catch(() => false);
+          await page.screenshot({ path: path.join(out, `${label}-withdrawn.png`) });
+          if (!gone) failures.push(`${label}: the dropped lane stayed on the list`);
+
+          const calls = await page.evaluate(() => (window as unknown as { evidence: LaneEvidence }).evidence.attentionCalls);
+          if (calls.length === 0) failures.push(`${label}: the phone never read the admitted rows`);
+          if (calls.some((call) => call.method !== "GET")) failures.push(`${label}: the phone posted to the attention record`);
+          if (calls.some((call) => call.url.includes("deviceId="))) failures.push(`${label}: the phone named a device`);
+
+          evidence[label] = { viewport, pipelinesRow: { before, during }, drawnAfterMs, listed, withdrawn: gone, attentionCalls: calls };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/phone-admitted-lane.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
 describe("#1834 the card's collapsed Details row", () => {
   /*
    * Rendered evidence for the agent-context split (#1834), in the real Viewer

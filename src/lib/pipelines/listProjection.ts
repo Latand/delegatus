@@ -50,8 +50,14 @@ const MAX_ROW_TEXT = 400;
     synchronous walk to release the loop. */
 const YIELD_EVERY_ROWS = 25;
 
+/** `state: "open"` selects every state a lane can still move from (#1845). */
+export const PIPELINE_OPEN_STATE = "open";
+
+const TERMINAL_PIPELINE_STATES: ReadonlySet<string> = new Set<PipelineState>(["completed", "closed"]);
+
 export type PipelineListFilter = {
   project?: string | null;
+  /** A pipeline state, or `open` for every non-terminal one. */
   state?: string | null;
   includeClosed?: boolean;
   limit?: number | null;
@@ -151,7 +157,7 @@ export function selectPipelineListRecords(
   const selected: Pipeline[] = [];
   for (const pipeline of pipelines) {
     if (project && pipeline.project !== project) continue;
-    if (state && pipeline.state !== state) continue;
+    if (state === PIPELINE_OPEN_STATE ? TERMINAL_PIPELINE_STATES.has(pipeline.state) : state && pipeline.state !== state) continue;
     if (!includeClosed && pipeline.state === "closed") continue;
     /* Hidden is settled for listing purposes (#1274): a lane the operator
        discarded is not in flight, and a listing that reported it as active
@@ -239,6 +245,55 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
   };
 }
 
+/** The compact row (#1845): what a seat polling its lanes reads — which lane,
+    where it stands, and how each stage's latest attempt ended. Everything else
+    on the card is one `get_pipeline` away. */
+export type PipelineCompactRow = {
+  id: string;
+  /** First line of the title, clamped. */
+  task: string;
+  state: PipelineState;
+  cursor: { stageId: string; state: PipelineCursorState } | null;
+  /** Clamped. */
+  stateDetail: string | null;
+  stages: Array<{
+    id: string;
+    latestAttempt: { n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
+  }>;
+};
+
+const COMPACT_TASK_CHARS = 120;
+const COMPACT_DETAIL_CHARS = 200;
+
+export function clampLine(value: string | null | undefined, limit: number): string | null {
+  if (typeof value !== "string") return null;
+  const line = value.split("\n", 1)[0]!.trim();
+  return line.length <= limit ? line : `${line.slice(0, limit)}…`;
+}
+
+export function clampChars(value: string | null | undefined, limit: number): string | null {
+  if (typeof value !== "string") return null;
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
+  const pipeline: Pipeline = record.runs ? record : { ...record, runs: [] };
+  return {
+    id: pipeline.id,
+    task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
+    state: pipeline.state,
+    cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
+    stateDetail: clampChars(pipeline.stateDetail, COMPACT_DETAIL_CHARS),
+    stages: (pipeline.stages ?? []).map((stage) => {
+      const attempt = latestOperationalStageAttempt(pipeline, stage.id);
+      return {
+        id: stage.id,
+        latestAttempt: attempt ? { n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null } : null,
+      };
+    }),
+  };
+}
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => { setTimeout(resolve, 0); });
 }
@@ -256,6 +311,22 @@ export async function projectPipelineListRows(
   filter: PipelineListFilter,
   options: PipelineListProjectionOptions = {},
 ): Promise<PipelineListRow[]> {
+  return projectPipelineRows(filter, options, pipelineListRow);
+}
+
+/** The same page as {@link projectPipelineListRows}, as compact rows. */
+export async function projectPipelineCompactRows(
+  filter: PipelineListFilter,
+  options: PipelineListProjectionOptions = {},
+): Promise<PipelineCompactRow[]> {
+  return projectPipelineRows(filter, options, pipelineCompactRow);
+}
+
+async function projectPipelineRows<Row>(
+  filter: PipelineListFilter,
+  options: PipelineListProjectionOptions,
+  project: (pipeline: Pipeline) => Row,
+): Promise<Row[]> {
   const checkpoint = options.checkpoint ?? (() => {});
   checkpoint();
   const hot = (options.source ?? loadPipelinesForList)();
@@ -266,13 +337,13 @@ export async function projectPipelineListRows(
     : hot;
   checkpoint();
   const selected = selectPipelineListRecords(records, filter);
-  const rows: PipelineListRow[] = [];
+  const rows: Row[] = [];
   for (const pipeline of selected) {
     if (rows.length > 0 && rows.length % YIELD_EVERY_ROWS === 0) {
       await yieldToEventLoop();
       checkpoint();
     }
-    rows.push(pipelineListRow(pipeline));
+    rows.push(project(pipeline));
   }
   return rows;
 }

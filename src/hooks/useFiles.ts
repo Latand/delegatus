@@ -107,6 +107,10 @@ export interface FilesClientCache {
   /** Drop a local overlay (a failed optimistic mutation) — the server snapshot
       is authoritative again. */
   revertPipeline(id: string): void;
+  /** Layer one task row over the server snapshot without a refetch (#1836).
+      Held only until a scan requested after the apply carries the row, exactly
+      as a confirmed pipeline echo is. */
+  applyTask(task: BoardTask): void;
   /** Layer a freshly admitted launch conversation (the client-built
       `spawn:<launchId>` card, issue #919) over the server snapshot without a
       refetch, so the board renders the live window the moment the spawn receipt
@@ -220,6 +224,13 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
      roll an applied edit back. `pipeline: null` hides a locally deleted draft. */
   const pipelineOverlays = new Map<string, { pipeline: Pipeline | null; minGeneration: number }>();
   let serverPipelines: readonly Pipeline[] = EMPTY.pipelines;
+  /* Task rows the client learned of outside the scan (#1836): a lane the
+     server admitted and pushed with an attention request, whose card the
+     board must draw before the fourteen-second corpus scan carries it. Same
+     lifetime rule as a confirmed pipeline echo — the first complete scan
+     requested after the apply is authoritative and retires the row. */
+  const taskOverlays = new Map<string, { task: BoardTask; minGeneration: number }>();
+  let serverTasks: readonly BoardTask[] = EMPTY.tasks;
   /* Freshly admitted launch conversations (issue #919), keyed by their
      `spawn:<launchId>` path. Composed under the server rows: any row the server
      carries for the same path or the same conversation wins, so the transcript
@@ -252,11 +263,32 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     return composed;
   };
 
-  const withPipelineOverlays = (data: FilesData): FilesData => (pipelineOverlays.size
-    ? { ...data, pipelines: pipelinesWithOverlays(data.pipelines) }
-    /* No overlay: the representation itself is the answer, identity intact,
-       so a consumer reading an unchanged scope sees an unchanged object. */
-    : data);
+  const tasksWithOverlays = (tasks: readonly BoardTask[]): BoardTask[] => {
+    if (!taskOverlays.size) return [...tasks];
+    const seen = new Set<string>();
+    const composed = tasks.map((task) => {
+      const entry = taskOverlays.get(task.id);
+      if (!entry) return task;
+      seen.add(task.id);
+      return entry.task;
+    });
+    for (const [id, entry] of taskOverlays) {
+      if (!seen.has(id)) composed.push(entry.task);
+    }
+    return composed;
+  };
+
+  const withPipelineOverlays = (data: FilesData): FilesData => {
+    /* No overlay of either kind: the representation itself is the answer,
+       identity intact, so a consumer reading an unchanged scope sees an
+       unchanged object. */
+    if (!pipelineOverlays.size && !taskOverlays.size) return data;
+    return {
+      ...data,
+      ...(pipelineOverlays.size ? { pipelines: pipelinesWithOverlays(data.pipelines) } : {}),
+      ...(taskOverlays.size ? { tasks: tasksWithOverlays(data.tasks) } : {}),
+    };
+  };
 
   const withSpawnedOverlays = (data: FilesData): FilesData => {
     if (!spawnedOverlays.size) return data;
@@ -355,16 +387,25 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     snapshot = { ...snapshot, pipelines: pipelinesWithOverlays(serverPipelines) };
   };
 
+  const composeTasks = () => {
+    snapshot = { ...snapshot, tasks: tasksWithOverlays(serverTasks) };
+  };
+
   /** A completed server snapshot from `generation` reflects every overlay whose
       minGeneration it reaches — those overlays retire; younger ones re-apply. */
   const settleServerPipelines = (generation: number, complete: boolean) => {
     serverPipelines = snapshot.pipelines;
+    serverTasks = snapshot.tasks;
     if (complete) {
       for (const [id, entry] of pipelineOverlays) {
         if (entry.minGeneration <= generation) pipelineOverlays.delete(id);
       }
+      for (const [id, entry] of taskOverlays) {
+        if (entry.minGeneration <= generation) taskOverlays.delete(id);
+      }
     }
     if (pipelineOverlays.size) composePipelines();
+    if (taskOverlays.size) composeTasks();
   };
 
   const trimRepresentations = () => {
@@ -624,6 +665,13 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     publish(undefined, "urgent");
   };
 
+  const applyTask = (task: BoardTask) => {
+    if (disposed) return;
+    taskOverlays.set(task.id, { task, minGeneration: requestedGeneration + 1 });
+    composeTasks();
+    publish(undefined, "urgent");
+  };
+
   const applySpawnedConversation = (file: FileEntry) => {
     if (disposed) return;
     spawnedOverlays.delete(file.path);
@@ -657,7 +705,7 @@ export function createFilesClientCache(fetcher: FilesFetcher): FilesClientCache 
     listeners.clear();
   };
 
-  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applySpawnedConversation, dispose };
+  return { read: () => withCatalogFailures(withSpawnedOverlays(snapshot)), readScope: exactScopeSnapshot, revalidate, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -678,6 +726,17 @@ export function resetFilesClientCacheForTests(): void {
  */
 export function applyPipelineSnapshot(pipeline: Pipeline, confirmed: boolean): void {
   flushSync(() => filesClientCache.applyPipeline(pipeline, confirmed));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
+}
+
+/**
+ * Apply a task row the client learned of outside the scan — the record the
+ * server pushed with an attention request (#1836) — so the board draws its
+ * card in the same frame. The next complete scan is authoritative and retires
+ * the overlay; a row the server no longer carries goes away with it.
+ */
+export function applyTaskSnapshot(task: BoardTask): void {
+  flushSync(() => filesClientCache.applyTask(task));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
 }
 

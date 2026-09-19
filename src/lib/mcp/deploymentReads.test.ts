@@ -98,7 +98,7 @@ function installLedger(
   db.exec(`
     CREATE TABLE entities (
       kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
-      state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL,
+      state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL, updated_at INTEGER,
       PRIMARY KEY(kind, id)
     );
     CREATE TABLE viewer_deployments (
@@ -623,17 +623,18 @@ test("a null response body is classified by status instead of crashing the read"
   }
 });
 
-test("ledger fallback matches control ordering and tail limits even when legacy update order opposes ids", async () => {
+/* #1845 defect C: ids are random UUIDs, so the id-ordered tail both the route
+   and this fallback used to answer named an arbitrary window. Newest start
+   first, whichever source answers. */
+test("ledger fallback answers the newest deployments first, whatever order their ids sort in (#1845)", async () => {
+  const started = (day: number) => `2026-09-${String(day).padStart(2, "0")}T09:00:00.000Z`;
   const deployments = [
-    deployment("deployment_a"),
-    deployment("deployment_b"),
-    deployment("deployment_c"),
+    { ...deployment("deployment_ff40"), createdAt: started(1), updatedAt: started(1) },
+    { ...deployment("deployment_0a11"), createdAt: started(18), updatedAt: started(18) },
+    { ...deployment("deployment_ffdf"), createdAt: started(9), updatedAt: started(9) },
+    { ...deployment("deployment_1b22"), createdAt: started(19), updatedAt: started(19) },
   ];
-  installLedger([
-    { id: deployments[0]!.deploymentId, value: deployments[0], updatedAt: 300 },
-    { id: deployments[1]!.deploymentId, value: deployments[1], updatedAt: 100 },
-    { id: deployments[2]!.deploymentId, value: deployments[2], updatedAt: 200 },
-  ]);
+  installLedger(deployments.map((value, index) => ({ id: value.deploymentId, value, updatedAt: 400 - index * 100 })));
   const control: ViewerControlDependencies = {
     async get() {
       throw new McpToolRefusal("Method Not Allowed", { error: "Method Not Allowed", status: 405 });
@@ -648,8 +649,58 @@ test("ledger fallback matches control ordering and tail limits even when legacy 
     limit: 2,
   })).toEqual({
     count: 2,
-    deployments: deployments.slice(-2),
+    deployments: [deployments[3], deployments[1]],
   });
+});
+
+test("deployment_status orders a control list newest first and compact rows stay small (#1845)", async () => {
+  const started = (day: number) => `2026-09-${String(day).padStart(2, "0")}T09:00:00.000Z`;
+  const full = (id: string, day: number, terminal: boolean) => ({
+    ...deployment(id),
+    idempotencyKey: `key-${id}`,
+    requestedRevision: "a".repeat(40),
+    terminal,
+    phase: terminal ? "succeeded" : "verifying",
+    candidate: { revision: "a".repeat(40), image: `viewer:${id}`, container: `viewer-${id}` },
+    previous: { revision: "b".repeat(40), image: "viewer:previous", container: "viewer-previous" },
+    mcpRuntime: { tools: Array.from({ length: 40 }, (_value, index) => `tool_${index}_with_a_realistic_name`) },
+    health: Array.from({ length: 6 }, (_value, index) => ({ check: `probe-${index}`, ok: true, at: started(day), detail: "answered 200 in 41 ms" })),
+    error: null,
+    owner: { pid: 4242, startIdentity: "start-identity" },
+    createdAt: started(day),
+    updatedAt: started(day).replace("09:00", "09:04"),
+    revisionNumber: 7,
+  });
+  const listed = [full("deployment_ff40", 1, true), full("deployment_0a11", 19, false), full("deployment_ffdf", 9, true)];
+  const control: ViewerControlDependencies = {
+    async get(pathname: string) {
+      if (pathname.startsWith("/api/runtime/deployments/")) return listed[2]!;
+      return { count: listed.length, deployments: listed };
+    },
+    async post() {
+      throw new Error("unexpected control write");
+    },
+  };
+  const tool = viewerMcpBindings(undefined, control);
+  const verbose = await tool.deployment_status({ clientRequestId: "deployment-newest" }) as { deployments: Array<{ deploymentId: string }> };
+  expect(verbose.deployments.map((row) => row.deploymentId)).toEqual(["deployment_0a11", "deployment_ffdf", "deployment_ff40"]);
+
+  const compact = await tool.deployment_status({ clientRequestId: "deployment-compact", compact: true }) as { deployments: unknown[] };
+  expect(compact.deployments[0]).toEqual({
+    deploymentId: "deployment_0a11",
+    phase: "verifying",
+    sha: "a".repeat(40),
+    terminal: false,
+    startedAt: started(19),
+    finishedAt: null,
+    error: null,
+  });
+  expect(compact.deployments[1]).toMatchObject({ finishedAt: started(9).replace("09:00", "09:04") });
+  for (const row of compact.deployments) expect(Buffer.byteLength(JSON.stringify(row))).toBeLessThan(300);
+
+  /* The by-id read still answers the whole record. */
+  const byId = await tool.deployment_status({ clientRequestId: "deployment-by-id", deploymentId: "deployment_ffdf" }) as { deployment: unknown };
+  expect(byId.deployment).toEqual(listed[2]);
 });
 
 test("an unreadable ledger terminates fallback with explicit evidence and zero runtime-socket calls", async () => {

@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 
+import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
@@ -672,7 +673,10 @@ const evidence = {
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
      arrival without a server behind the offer. */
-  focus: { bus: focusHandoffBus, runFocusTransaction },
+  /* `startArrivalPulse` is here for the same reason: a driver that set the
+     attribute itself would photograph the stylesheet and prove nothing about
+     the code that decides WHAT to mark and how (#1836 item 4). */
+  focus: { bus: focusHandoffBus, runFocusTransaction, startArrivalPulse, cancelArrivalPulse },
   /* Transcript reads for this path fail, as a broken route would. */
   failLogsFor: null as string | null,
   /* A write another client made to a task, arriving on the next task read:
@@ -807,6 +811,20 @@ const evidence = {
     window.dispatchEvent(new Event("llv:files-changed"));
     window.dispatchEvent(new Event("llv:pipelines-changed"));
   },
+  /* #1836: a lane the server has admitted that the corpus scan does not carry
+     yet. `/api/attention` hands it out as the pushed rows; `/api/files` never
+     does, so a board that draws it drew it from the push. */
+  admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
+  /* Every `/api/attention` call, as the page made it. */
+  attentionCalls: [] as Array<{ url: string; method: string }>,
+  admitLane(title: string) {
+    evidence.admitted = {
+      pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+      task: task("t-admitted", "assigned", title, "", 0),
+    };
+  },
 };
 Object.assign(window, { evidence });
 
@@ -880,6 +898,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.pathname === "/api/attention") {
+    evidence.attentionCalls.push({ url: url.pathname + url.search, method });
+    if (method !== "GET") return json({ error: "unsupported in the evidence fixture" }, 400);
+    const echoed = (url.searchParams.get("echoes") ?? "").split(",").filter(Boolean);
+    const admitted = evidence.admitted;
+    const withdrawn = echoed.filter((id) => id !== admitted?.pipeline.id).map((id) => ({ id, reason: "never-materialized" }));
+    const records = admitted || withdrawn.length
+      ? { pipelines: admitted ? [admitted.pipeline] : [], tasks: admitted ? [admitted.task] : [], withdrawn }
+      : null;
+    if (!url.searchParams.get("deviceId")) return json({ ok: true, records });
+    return json({ ok: true, rootId: "root-fixture", offer: null, live: [], expired: [], records });
   }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (url.pathname === "/api/board") {
