@@ -9,13 +9,17 @@ import type { CreatePipelineRequest, Pipeline, PipelineRepoPreflightErrorCode, P
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineValidationViolation } from "@/lib/pipelines/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode;
+  code?: PipelineRepoPreflightErrorCode | SpawnRejectionCode | "store_busy";
+  /** #1766: set when the registry lock refused before anything was admitted, so
+      the caller may repeat the identical request without risking a duplicate. */
+  retryable?: true;
   field?: "repoDir";
   path?: string;
   /** #1026: every violated create-time constraint, each with its field and the
@@ -95,6 +99,12 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     if (result.pipeline.state !== "draft") requestPipelineTick();
     return NextResponse.json({ ok: true, pipeline: result.pipeline }, { status: 201 });
   } catch (error) {
+    /* #1766: the registry lock was never taken, so no pipeline was created.
+       Say so, and say the same request may be repeated — a 500 leaves a caller
+       guessing whether a pipeline exists. */
+    if (error instanceof StoreBusyBeforeAdmissionError) {
+      return NextResponse.json({ error: error.message, code: "store_busy", retryable: true }, { status: 503 });
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
