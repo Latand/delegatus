@@ -1,9 +1,8 @@
 "use client";
 
-import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Redo2, Search, Undo2, UserRound } from "lucide-react";
+import { Archive, Bot, Columns3, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { useBoardActionHistory } from "@/hooks/useBoardActionHistory";
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
 import { FavoritesProvider, type FavoritesApi } from "./favorites/FavoritesContext";
 import { resolveFavoriteRows } from "./favorites/favoriteRows";
@@ -22,7 +21,6 @@ import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import type { Workflow } from "@/lib/workflows/types";
 
-import { BoardHistoryControls } from "./BoardHistoryControls";
 import { createFocusEdgeGate } from "./focusRequestEdge";
 import { useMobileInlineCatalog } from "./mobile/MobileInlineCatalog";
 import { deriveOrchestratorPanelState, resolveSeatFile } from "./orchestrator/seatState";
@@ -92,7 +90,7 @@ import { ArchiveRestore } from "./icons";
 import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { SoundToggle } from "./SoundToggle";
-import { BAR_MENU_ROW, BarMenuSeparator, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
+import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -271,9 +269,11 @@ function ProjectViewTabs({
     <div
       data-project-view-tabs
       data-bar-control=""
-      className="inline-flex h-8 shrink-0 items-center gap-0.5 rounded-control border border-border bg-card p-[2px] shadow-1"
+      className="inline-flex h-8 shrink-0 items-stretch overflow-hidden rounded-control border border-border bg-card shadow-1"
     >
-      {modes.map((mode) => (
+      {/* The segments fill the group edge to edge, split by one rule, so the group's border
+          is the switch's visible edge and its neighbours sit 8 / 16 px from it. */}
+      {modes.map((mode, index) => (
         <button
           key={mode}
           type="button"
@@ -282,9 +282,9 @@ function ProjectViewTabs({
           onClick={() => onChange(mode)}
           aria-label={labelOf(mode)}
           title={compact ? labelOf(mode) : undefined}
-          className={`inline-flex h-[26px] items-center justify-center gap-1.5 rounded-[6px] text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            compact ? "w-8" : "px-2.5"
-          } ${value === mode ? "bg-accent/10 text-accent" : "bg-transparent text-secondary hover:text-primary"}`}
+          className={`inline-flex items-center justify-center gap-1.5 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+            compact ? "w-8" : "px-3"
+          } ${index > 0 ? "border-l border-border" : ""} ${value === mode ? "bg-accent/10 text-accent" : "bg-transparent text-secondary hover:bg-well hover:text-primary"}`}
         >
           {iconOf(mode)}
           {compact ? null : labelOf(mode)}
@@ -470,7 +470,6 @@ function ProjectDashboardView({
   /* Per-project, device-local undo/redo log of recent board actions (issue
      #184). v1 records card closes; undo reopens the last-closed card through the
      shared restore path, redo closes it again. */
-  const history = useBoardActionHistory(project);
   const prefs = useMemo<ColumnPrefs>(
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
@@ -1334,7 +1333,7 @@ function ProjectDashboardView({
     openSwitchboardFile(file);
   };
 
-  /* The raw close, shared by an explicit user close and a history redo. */
+  /* The raw close behind an explicit user close. */
   const applyClose = (path: string) => {
     /* Card dismissal owns presentation only. Runtime termination stays on the
        conversation's explicit process control: a child can share its root's
@@ -1354,11 +1353,6 @@ function ProjectDashboardView({
        so the saved view is the authority again — the same retirement the
        Схема/Список control performs, from the other end of the gesture. */
     if (path === openedConversation) setOpenedConversation(null);
-    /* Record the close in the undo log before applying it, capturing the current
-       title for the undo tooltip. Redo replays through `applyClose` directly, so
-       it never re-records and the log stays a single linear trail. */
-    const title = projectCatalog.get(path)?.title ?? files.find((file) => file.path === path)?.title ?? "";
-    history.record({ kind: "close", path, title });
     /* Closing a card is the explicit dismissal a finished-but-unread outcome
        needs (#1244): it takes effect at once, and restoring the card later
        brings back a read result rather than a fresh unread one. */
@@ -1573,45 +1567,6 @@ function ProjectDashboardView({
     }
     openBoardRow(file);
   };
-
-  /* Undo a close: reopen the card through the shared restore path so #199's
-     durable membership rebinds it to its pipeline/review zone automatically. When
-     the file entry is known we go through `openSwitchboardFile` (same role-based
-     placement + focus as an explicit open); otherwise we lift the tombstone
-     directly so a card whose transcript is momentarily absent still comes back. */
-  const onUndo = () => {
-    const entry = history.undo();
-    if (entry === null || entry.kind !== "close") return;
-    const file = projectCatalog.get(entry.path) ?? files.find((item) => item.path === entry.path);
-    if (file) openSwitchboardFile(file);
-    else board.restore(entry.path, "manual");
-  };
-  const onRedo = () => {
-    const entry = history.redo();
-    if (entry === null || entry.kind !== "close") return;
-    applyClose(entry.path);
-  };
-  /* Keep the keyboard handler pointed at the latest closures without re-binding
-     the listener every render. */
-  const undoRedoRef = useRef({ onUndo, onRedo });
-  undoRedoRef.current = { onUndo, onRedo };
-  useEffect(() => {
-    if (project === null) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== "z") return;
-      /* Never steal Ctrl+Z from a text field — the composer and rename inputs own
-         their own undo. */
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      event.preventDefault();
-      if (event.shiftKey) undoRedoRef.current.onRedo();
-      else undoRedoRef.current.onUndo();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [project]);
 
   const statusBits: string[] = [];
   if (liveCount) {
@@ -1947,13 +1902,6 @@ function ProjectDashboardView({
       },
       { kind: "divider", key: "d2" },
     );
-    if (history.canUndo || history.canRedo) {
-      /* Board history stays here until the receipts of later lanes carry the
-         inverse of a close on the phone (issue #184, #1054 review). */
-      if (history.canUndo) entries.push({ kind: "row", key: "undo", icon: <Undo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.undo"), onSelect: () => { mobileNav.closeSheet(); onUndo(); } });
-      if (history.canRedo) entries.push({ kind: "row", key: "redo", icon: <Redo2 className="h-[18px] w-[18px]" aria-hidden />, label: t("board.redo"), onSelect: () => { mobileNav.closeSheet(); onRedo(); } });
-      entries.push({ kind: "divider", key: "d3" });
-    }
     entries.push(
       {
         kind: "custom",
@@ -2003,13 +1951,13 @@ function ProjectDashboardView({
   /* The header bar's two ends (#1801, docs/design/board-header.md), shared by the Board's bar and
      the other leaves' bar. Lead: where am I — the project and, when the bar is wide, its account
      switches (#1331). Trail: the two panel toggles and the ⋯ menu, which holds message search
-     (on the Board, whose find field filters cards), sound, undo/redo, archive, delete and, when
-     narrow, the account switches. */
+     (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
+     row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
   const openTaskCount = projectTasks.filter((task) => task.status !== "done").length;
   const barLead = (wide: boolean) => (
     <>
       <h1 className="min-w-0 max-w-[220px] truncate text-[13.5px] font-bold" title={projectName}>{projectName}</h1>
-      {wide ? <ProjectAccounts project={project} /> : null}
+      {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
     </>
   );
   const barTrail = (wide: boolean, withSearch: boolean) => (
@@ -2026,39 +1974,30 @@ function ProjectDashboardView({
         rows={(close) => (
           <>
             {withSearch && onOpenSearch ? (
-              <>
+              <BarMenuGroup name="search">
                 <button type="button" className={BAR_MENU_ROW} data-testid="dash-search" onClick={() => { close(); onOpenSearch(); }}>
                   <Search className="h-[15px] w-[15px]" aria-hidden /> {t("search.open")}
                 </button>
-                <BarMenuSeparator />
-              </>
+              </BarMenuGroup>
             ) : null}
-            <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
-            <BarMenuSeparator />
-            <BoardHistoryControls
-              variant="menu"
-              rowClassName={BAR_MENU_ROW}
-              canUndo={history.canUndo}
-              canRedo={history.canRedo}
-              undoEntry={history.undoEntry}
-              redoEntry={history.redoEntry}
-              onUndo={onUndo}
-              onRedo={onRedo}
-            />
-            <BarMenuSeparator />
-            {archived ? (
-              <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
-                <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
-              </button>
-            ) : (
-              <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
-            )}
-            <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
             {wide ? null : (
-              <div className="flex flex-wrap gap-1 px-1 pt-1 empty:hidden" data-bar-menu-accounts="">
-                <ProjectAccounts project={project} />
-              </div>
+              <BarMenuGroup name="accounts">
+                <ProjectAccounts project={project} appearance="menu" />
+              </BarMenuGroup>
             )}
+            <BarMenuGroup name="sound">
+              <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
+            <BarMenuGroup name="project">
+              {archived ? (
+                <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                  <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
+                </button>
+              ) : (
+                <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+              )}
+              <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
           </>
         )}
       />
@@ -2133,6 +2072,7 @@ function ProjectDashboardView({
           view={(wide) => (boardReady && listAvailable
             ? <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />
             : null)}
+          create={(wide) => (boardReady && listAvailable ? <BarCreateGroup wide={wide} reserve /> : null)}
           trail={(wide) => barTrail(wide, false)}
         />
       )}

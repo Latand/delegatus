@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ListTodo, MoreHorizontal } from "lucide-react";
+import { Bot, ListTodo, MoreHorizontal, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { useLocale } from "@/lib/i18n";
@@ -13,8 +13,10 @@ import { handleOverlayEscape } from "@/lib/overlay";
  * one spacer, find, view, create, panels, more, and the Viewer's attention
  * island in the right reserve. Every control is 32 px in one of three variants:
  * outlined, pressed (`aria-pressed="true"`), and the quiet icon of the ⋯
- * trigger. The kanban board draws the bar with its own groups in the middle;
- * the leaves without a board draw the same bar here, with the same two ends.
+ * trigger. Hover only strengthens the border, so pressed stays the one
+ * accent-coloured state. The kanban board draws the bar with its own groups in
+ * the middle; the leaves without a board draw the same bar here, with the same
+ * two ends.
  */
 
 /** At or above this bar width the controls carry their labels and the account switches sit in
@@ -24,10 +26,12 @@ export const BAR_WIDE_MIN = 1600;
 
 export const BAR_CONTROL =
   "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control border px-3 text-[12px] font-semibold shadow-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-export const BAR_OUTLINED = "border-border bg-card text-primary hover:border-accent/45 hover:text-accent";
+export const BAR_OUTLINED = "border-border bg-card text-primary hover:border-strong";
 export const BAR_PRESSED = "border-accent/45 bg-accent/10 text-accent";
 const BAR_QUIET =
   "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-transparent text-secondary transition-colors hover:border-border hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+const BAR_ICON = "h-[15px] w-[15px] shrink-0";
 
 /** A row of the ⋯ menu. */
 export const BAR_MENU_ROW =
@@ -47,6 +51,69 @@ export function useBarWide(ref: RefObject<HTMLElement | null>): boolean {
     return () => observer.disconnect();
   }, [ref]);
   return wide;
+}
+
+/**
+ * The create group: `+ Task` and `+ Agent`, or one `+` opening a two-row menu
+ * when the bar is narrow. `reserve` draws the same group invisible and inert on
+ * the leaves that create nothing (Conversations), so the view switch and
+ * everything right of it keep their x when the operator changes view.
+ */
+export function BarCreateGroup({ wide, task, agent, onMenu, menuOpen = false, reserve = false }: {
+  wide: boolean;
+  task?: { onClick: () => void; expanded: boolean } | null;
+  agent?: { onClick: () => void; disabled: boolean } | null;
+  /** Narrow: opens the create menu under the `+`. */
+  onMenu?: (anchor: HTMLElement) => void;
+  menuOpen?: boolean;
+  reserve?: boolean;
+}) {
+  const { t } = useLocale();
+  const control = `${BAR_CONTROL} ${BAR_OUTLINED} disabled:cursor-not-allowed disabled:opacity-50`;
+  if (reserve) {
+    return (
+      <div className="invisible flex shrink-0 items-center gap-2" data-bar-group="create" data-bar-create-reserve="" aria-hidden inert>
+        {wide ? (
+          <>
+            <span className={control}><Plus className={BAR_ICON} aria-hidden />{t("dash.task")}</span>
+            <span className={control}><Plus className={BAR_ICON} aria-hidden />{t("dash.agent")}</span>
+          </>
+        ) : <span className={`${control} w-8 px-0`}><Plus className={BAR_ICON} aria-hidden /></span>}
+      </div>
+    );
+  }
+  return (
+    <div className="flex shrink-0 items-center gap-2" data-bar-group="create">
+      {wide || !onMenu ? (
+        <>
+          {task ? (
+            <button type="button" className={control} data-new-task="" data-bar-control="" aria-label={t("dash.newTask")} aria-expanded={task.expanded} onClick={task.onClick}>
+              <Plus className={BAR_ICON} aria-hidden />{t("dash.task")}
+            </button>
+          ) : null}
+          {agent ? (
+            <button type="button" className={control} data-new-agent="" data-bar-control="" aria-label={t("dash.newConvo")} disabled={agent.disabled} onClick={agent.onClick}>
+              <Plus className={BAR_ICON} aria-hidden />{t("dash.agent")}
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <button
+          type="button"
+          className={`${control} w-8 px-0`}
+          data-bar-create=""
+          data-bar-control=""
+          aria-label={t("dash.create")}
+          title={t("dash.create")}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(event) => onMenu(event.currentTarget)}
+        >
+          <Plus className={BAR_ICON} aria-hidden />
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** The two panel switches: the orchestrator dock and the task panel. Icon only (with the count) when narrow. */
@@ -69,7 +136,7 @@ export function BarPanelToggles({ wide, orchestrator, tasks }: {
           data-bar-control=""
           className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
         >
-          <Bot className="h-[15px] w-[15px]" aria-hidden />
+          <Bot className={BAR_ICON} aria-hidden />
           {wide ? t("orchPanel.title") : null}
         </button>
       ) : null}
@@ -83,7 +150,7 @@ export function BarPanelToggles({ wide, orchestrator, tasks }: {
         data-bar-control=""
         className={`${BAR_CONTROL} ${tasks.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
       >
-        <ListTodo className="h-[15px] w-[15px]" aria-hidden />
+        <ListTodo className={BAR_ICON} aria-hidden />
         {wide ? t("tasks.panelTitle") : null}
         {tasks.count ? <span className="font-normal text-muted tabular-nums">{tasks.count}</span> : null}
       </button>
@@ -131,7 +198,7 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
         onClick={() => setOpen((was) => !was)}
         className={`${BAR_QUIET} ${open ? "border-border bg-well text-primary" : ""}`}
       >
-        <MoreHorizontal className="h-[15px] w-[15px]" aria-hidden />
+        <MoreHorizontal className={BAR_ICON} aria-hidden />
       </button>
       {open ? (
         <div
@@ -139,7 +206,7 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
           aria-label={t("dash.more")}
           data-bar-more-menu=""
           onKeyDown={(event) => { handleOverlayEscape(event, close); }}
-          className="absolute right-0 top-full z-50 mt-1 flex w-64 flex-col gap-0.5 rounded-control border border-border bg-card p-1 shadow-2"
+          className={`absolute right-0 top-full z-50 mt-1 flex w-64 flex-col rounded-control border border-border bg-card p-1 shadow-2 ${MENU_RULES}`}
         >
           {rows(close)}
         </div>
@@ -148,21 +215,29 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
   );
 }
 
-/** A thin rule between groups of ⋯ rows. */
-export function BarMenuSeparator() {
-  return <div role="separator" className="my-0.5 h-px bg-border" />;
+/* A rule sits only between two groups that both drew a row: a group whose rows
+   all stood down (Archive and Delete while agents run, accounts on a quiet
+   project) is empty and hidden, and never leaves a rule behind. */
+const MENU_RULES =
+  "[&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:mt-1 [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:border-t [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:border-border [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:pt-1";
+
+/** One group of ⋯ rows. */
+export function BarMenuGroup({ name, children }: { name: string; children: ReactNode }) {
+  return <div role="group" data-bar-menu-group={name} className="flex flex-col gap-0.5 empty:hidden">{children}</div>;
 }
 
 /**
  * The same bar on the leaves the kanban board does not draw (Conversations, the
  * empty project, the loading skeleton): the project's two ends around this
- * leaf's status line, its one search and the view switch.
+ * leaf's status line, its one search, the view switch and the create group's
+ * reserve.
  */
-export function DashboardBar({ lead, status, find, view, trail }: {
+export function DashboardBar({ lead, status, find, view, create, trail }: {
   lead: (wide: boolean) => ReactNode;
   status: ReactNode;
   find: ReactNode;
   view: (wide: boolean) => ReactNode;
+  create: (wide: boolean) => ReactNode;
   trail: (wide: boolean) => ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -179,7 +254,8 @@ export function DashboardBar({ lead, status, find, view, trail }: {
       <span aria-hidden className="min-w-0 flex-1" />
       {find}
       <div className="flex shrink-0 items-center gap-2 empty:hidden" data-bar-group="view">{view(wide)}</div>
-      <div className="flex shrink-0 items-center gap-2" data-bar-group="trail">{trail(wide)}</div>
+      {create(wide)}
+      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(wide)}</div>
     </div>
   );
 }

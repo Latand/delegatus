@@ -25,7 +25,7 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
-import { BAR_WIDE_MIN } from "@/components/ProjectBar";
+import { BAR_WIDE_MIN, BarCreateGroup } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -2183,33 +2183,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
             than picking one for the operator — and the slot itself goes with
             them, so the bar keeps no empty cell where they were (#1820).
             Narrow, the two are one `+` with a two-row menu. */}
-        {props.overview && !props.onNewAgent ? null : barWide || props.overview ? (
-          <div className="bar-create bar-group" data-bar-group="create">
-            {props.overview ? null : (
-              <button type="button" className="btn" data-new-task="" aria-label={t("dash.newTask")} aria-expanded={composingTask} onClick={openNewTask}>
-                <span className="plus" aria-hidden="true">+</span> {t("dash.task")}
-              </button>
-            )}
-            {props.onNewAgent ? (
-              <button type="button" className="btn" data-new-agent="" aria-label={t("dash.newConvo")} disabled={!loaded} onClick={props.onNewAgent}>
-                <span className="plus" aria-hidden="true">+</span> {t("dash.agent")}
-              </button>
-            ) : null}
-          </div>
-        ) : (
-          <div className="bar-create bar-group" data-bar-group="create">
-            <button
-              type="button"
-              className="btn icon"
-              data-bar-create=""
-              aria-label={t("dash.create")}
-              title={t("dash.create")}
-              aria-haspopup="menu"
-              aria-expanded={menu.open?.value.kind === "create" || composingTask}
-              onClick={(event) => menu.setOpen({ anchor: event.currentTarget, value: { kind: "create" } })}
-            >
-              <span className="plus" aria-hidden="true">+</span>
-            </button>
+        {props.overview && !props.onNewAgent ? null : (
+          <div className="bar-slot">
+            <BarCreateGroup
+              wide={barWide || Boolean(props.overview)}
+              task={props.overview ? null : { onClick: openNewTask, expanded: composingTask }}
+              agent={props.onNewAgent ? { onClick: props.onNewAgent, disabled: !loaded } : null}
+              onMenu={props.overview ? undefined : (anchor) => menu.setOpen({ anchor, value: { kind: "create" } })}
+              menuOpen={menu.open?.value.kind === "create" || composingTask}
+            />
           </div>
         )}
         {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}

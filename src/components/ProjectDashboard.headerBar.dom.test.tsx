@@ -6,8 +6,10 @@
  * island, «N tasks on the board» beside «Tasks N»), carried two search
  * affordances, and a view switch whose pressed segment the board's button
  * reset painted exactly like the other. These cases hold the bar to: one bar,
- * every fact once, one search, a switch that marks its side, and every control
- * that existed still reachable (in the bar or behind its ⋯).
+ * every fact once, one search, a switch that marks its side and stays put when
+ * the view changes, and every control that existed still reachable (in the bar
+ * or behind its ⋯) except Undo and Redo, which the operator took out of the
+ * header (a kanban undo is #1856).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -74,6 +76,7 @@ let PROJECT = "selection-contract-0";
 let boards: Record<string, BoardProjectStateV1> = {};
 let tmuxCalls: Array<Record<string, unknown>> = [];
 let searches = 0;
+let boardWrites = 0;
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1,
   revision: 0,
@@ -124,6 +127,7 @@ const OVERRIDES: Record<string, unknown> = {
         const project = new URL(url, "http://x").searchParams.get("project")!;
         return { ok: true, status: 200, json: async () => ({ ok: true, board: boards[project] ?? emptyBoard() }), text: async () => "" };
       }
+      boardWrites += 1;
       const body = JSON.parse(String(init?.body)) as { project: string; mutations?: BoardMutationV1[] };
       const current = boards[body.project] ?? emptyBoard();
       const reduced = applyBoardMutations(current, body.mutations ?? []);
@@ -175,6 +179,8 @@ beforeEach(() => {
   boards = { [PROJECT]: seededBoard() };
   tmuxCalls = [];
   searches = 0;
+  boardWrites = 0;
+  dom.localStorage.clear();
   resetSelectionSessionsForTest();
 });
 afterEach(() => {
@@ -343,12 +349,17 @@ test("every control the two bars held is still reachable, wide", async () => {
 
   const menu = openMore(host);
   const rows = text(menu);
-  for (const label of [en["search.open"], en["sound.mute"], en["sound.settings"], en["board.undoNothing"], en["board.redoNothing"], en["trash.toArchive"], en["trash.deleteProject"]]) {
+  for (const label of [en["search.open"], en["sound.mute"], en["sound.settings"], en["trash.toArchive"], en["trash.deleteProject"]]) {
     expect({ label, found: rows.includes(label) }).toEqual({ label, found: true });
   }
-  expect((menu.querySelector("[data-board-undo]") as HTMLButtonElement).disabled).toBe(true);
-  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it. */
+  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it; in the bar it
+     is an outlined control like its neighbours, 8 px from the next. */
   expect(menu.querySelector("[data-account-switch-engine]")).toBeNull();
+  const account = inBar.querySelector("[data-account-switch-engine] button") as HTMLElement;
+  expect(account.getAttribute("data-account-switch-appearance")).toBe("bar");
+  expect(account.className).toContain("rounded-control");
+  expect(account.className).toContain("bg-card");
+  expect((inBar.querySelector("[data-project-accounts]") as HTMLElement).className).toContain("gap-2");
   /* Sound levels open in place, inside the menu. */
   click(menu.querySelector('[data-testid="sound-settings-trigger"]'));
   expect(menu.querySelector('[data-testid="sound-settings"]')).not.toBeNull();
@@ -374,8 +385,102 @@ test("narrow, the bar keeps one row: icons, one + with both creators, and the ac
   expect(text(create)).toContain(en["dash.newTask"]);
   expect(text(create)).toContain(en["dash.newConvo"]);
 
+  /* In ⋯ the account switch is one menu row per engine, never a pill. */
   const menu = openMore(host);
   expect(await waitFor(() => menu.querySelector("[data-account-switch-engine]") !== null)).toBe(true);
+  const row = menu.querySelector("[data-account-switch-engine] button") as HTMLElement;
+  expect(row.getAttribute("data-account-switch-appearance")).toBe("menu");
+  expect(row.className).toContain("w-full");
+  expect(row.closest("[data-bar-menu-group]")!.getAttribute("data-bar-menu-group")).toBe("accounts");
+});
+
+test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {
+  /* A closed card in the device-local log, which used to light the undo row. */
+  dom.localStorage.setItem(
+    `llvBoardHistory:${PROJECT}`,
+    JSON.stringify({ entries: [{ kind: "close", path: "/gamma", title: "Gamma" }], cursor: 1 }),
+  );
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  const menu = openMore(host);
+  expect(host.querySelector("[data-board-undo], [data-board-redo]")).toBeNull();
+  expect(text(bar(host))).not.toMatch(/undo|redo/i);
+  expect(text(menu)).not.toMatch(/undo|redo/i);
+
+  const writes = boardWrites;
+  flushSync(() => dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }) as never));
+  await settle();
+  expect(boardWrites).toBe(writes);
+});
+
+test("⋯ draws no rule next to a group with nothing in it", async () => {
+  /* A running conversation stands Archive and Delete down, which used to leave a rule under the last row. */
+  const host = mount([running(), betaOf()]);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  const menu = openMore(host);
+  expect(menu.querySelector('[role="separator"]')).toBeNull();
+  const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
+  expect(project.childNodes).toHaveLength(0);
+  expect(project.className).toContain("empty:hidden");
+  /* The rules are drawn by the menu between non-empty groups only. */
+  const rules = (menu.className.match(/\[[^ ]*\]:border-t/g) ?? []);
+  expect(rules).toHaveLength(1);
+  expect(rules[0]).toContain("[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)");
+});
+
+test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {
+  for (const width of [2292, 1032]) {
+    barWidth = width;
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+    const order = (root: HTMLElement) => Array.from(root.querySelectorAll("[data-bar-group]"))
+      .map((element) => element.getAttribute("data-bar-group"))
+      .filter((group) => group === "view" || group === "create" || group === "panels" || group === "more");
+    const boardCreate = bar(host).querySelector('[data-bar-group="create"]') as HTMLElement;
+    const boardControls = Array.from(boardCreate.querySelectorAll("button")).map((element) => [element.className, text(element)]);
+    expect(order(bar(host))).toEqual(["view", "create", "panels", "more"]);
+
+    click(host.querySelector('button[data-view-tab="list"]'));
+    expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
+    await settle();
+    const listBar = bar(host);
+    expect(order(listBar)).toEqual(["view", "create", "panels", "more"]);
+    const reserve = listBar.querySelector("[data-bar-create-reserve]") as HTMLElement;
+    expect(reserve.getAttribute("aria-hidden")).toBe("true");
+    expect(reserve.hasAttribute("inert")).toBe(true);
+    expect(reserve.className).toContain("invisible");
+    /* Same controls, same classes, same words: the same width, so nothing right of the spacer moves. */
+    expect(Array.from(reserve.children).map((element) => [element.className, text(element)])).toEqual(boardControls);
+    expect(reserve.querySelector("button")).toBeNull();
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+    PROJECT = `${PROJECT}-narrow`;
+    boards = { [PROJECT]: seededBoard() };
+    resetSelectionSessionsForTest();
+  }
+});
+
+test("hover never paints a control in the accent, and + is an icon in the control's own colour", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  for (const selector of ["[data-new-task]", "[data-new-agent]", "[data-task-panel-toggle]", "[data-orchestrator-toggle]"]) {
+    const control = bar(host).querySelector(selector) as HTMLElement;
+    expect({ selector, accentHover: /hover:(text|border)-accent/.test(control.className) }).toEqual({ selector, accentHover: false });
+  }
+  for (const selector of ["[data-new-task]", "[data-new-agent]"]) {
+    const control = bar(host).querySelector(selector) as HTMLElement;
+    expect(control.querySelector("svg")).not.toBeNull();
+    expect(control.querySelector(".plus")).toBeNull();
+    expect(text(control).trim().startsWith("+")).toBe(false);
+  }
 });
 
 test("uk: the switch and the working count read in Ukrainian", () => {

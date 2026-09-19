@@ -1098,8 +1098,10 @@ export function Viewer() {
           /* On a project, top-[10px] centres the 28px island in the board's one
              48px header bar (#1801), whose right 236px are reserved for it. The
              Overview keeps its 40px title row above its board bar, so there
-             top-12 parks it in that bar's reserve instead, clear of the row. */
-          <div className={`pointer-events-none fixed right-4 ${project === OVERVIEW ? "top-12" : "top-[10px]"} z-50 flex flex-col items-end gap-2`}>
+             top-12 parks it in that bar's reserve instead, clear of the row.
+             On a project the 16px gap drops the toast to y 54, clear of the
+             bar's bottom border at 48. */
+          <div className={`pointer-events-none fixed right-4 ${project === OVERVIEW ? "top-12 gap-2" : "top-[10px] gap-4"} z-50 flex flex-col items-end`}>
             {attentionBadge}
             {toastFile ? (
               <AttentionToast
