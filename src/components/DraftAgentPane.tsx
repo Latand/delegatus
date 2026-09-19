@@ -121,6 +121,13 @@ function fetchRoleCatalog(): Promise<RoleCatalogItem[] | null> {
   return roleCatalogRequest;
 }
 
+/** Replace the session's catalog with the one a mapping save answered (#1876),
+    so the next draft opens on the runtime the install just chose. */
+export function replaceRoleCatalog(roles: RoleCatalogItem[]): void {
+  roleCatalogCache = roles;
+  roleCatalogRequest = Promise.resolve(roles);
+}
+
 /** The shared /api/roles catalog (agent drafts + stage placeholders),
     session-cached: later mounts render the catalog synchronously. */
 export function useRoleCatalog(): RoleCatalogItem[] {
@@ -454,17 +461,21 @@ export function DraftAgentPane({
     setRoleParams(next);
     const selected = roles.find((role) => role.id === roleId);
     if (selected?.id !== "builder") return;
+    /* The variants come from the catalog, so the install's agent mapping
+       (#1876) reaches the draft exactly as it reaches the registry. */
     if (next.domain === "frontend") {
-      setEngine(BUILDER_FRONTEND_CONFIG.engine);
-      setModel(BUILDER_FRONTEND_CONFIG.model);
-      setEffort(BUILDER_FRONTEND_CONFIG.effort);
+      const frontend = selected.variants?.frontend ?? BUILDER_FRONTEND_CONFIG;
+      setEngine(frontend.engine);
+      setModel(frontend.model);
+      setEffort(frontend.effort);
       setSpeed("");
       return;
     }
     if (next.mode === "apply-fixes") {
-      setEngine(BUILDER_APPLY_FIXES_CONFIG.engine);
-      setModel(BUILDER_APPLY_FIXES_CONFIG.model);
-      setEffort(BUILDER_APPLY_FIXES_CONFIG.effort);
+      const fixes = selected.variants?.["apply-fixes"] ?? BUILDER_APPLY_FIXES_CONFIG;
+      setEngine(fixes.engine);
+      setModel(fixes.model);
+      setEffort(fixes.effort);
       return;
     }
     /* Plain/general mode falls back to the server-merged config so a saved

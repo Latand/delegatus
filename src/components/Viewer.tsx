@@ -29,6 +29,7 @@ import { buildMobileAttentionQueue } from "./attention/attentionQueue";
 import { MobileAttentionSheet } from "./attention/MobileAttentionSheet";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
+import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
@@ -1198,6 +1199,9 @@ export function Viewer() {
           one opens, and its state is pure same-document React state — no hash,
           no history entry, no snapshot. */}
       <ArtifactPreviewHost mobile={isMobile} />
+      {/* #1876: the setup guide. Opens by itself on a first run and from the
+          menus' "Setup guide" and "Agent mapping" rows. */}
+      <OnboardingHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
           because the card unmounts on board navigation while the call keeps
