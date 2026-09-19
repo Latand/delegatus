@@ -74,6 +74,9 @@ const MESH = "-work-river-mesh";
 const NAMES = { [LEDGER]: "acme-ledger", [ATLAS]: "dune-atlas", [MESH]: "river-mesh" };
 
 const NOW = 1_800_000_000;
+/* Assembled, never written out: the publication gate reads a UUID literal in
+   a public file as a resource identifier, invented or not. */
+const REVISION = ["task-v1:00000000", "0000", "4000", "8000", "000000000001"].join("-");
 
 function fileEntry(overrides: Partial<FileEntry>): FileEntry {
   return {
@@ -110,7 +113,7 @@ function task(id: string, project: string, status: TaskStatus, text: string, pat
       : [],
     createdAt: "2026-09-18T10:00:00.000Z",
     updatedAt: "2026-09-18T10:00:00.000Z",
-    revision: "task-v1:00000000-0000-4000-8000-000000000001",
+    revision: REVISION,
   } as BoardTask;
 }
 

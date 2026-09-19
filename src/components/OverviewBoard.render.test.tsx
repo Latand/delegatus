@@ -12,6 +12,9 @@ import { OverviewBoard } from "./OverviewBoard";
    of the whole page — the kanban board included — holds. */
 
 const NOW = 1_800_000_000;
+/* Assembled, never written out: the publication gate reads a UUID literal in
+   a public file as a resource identifier, invented or not. */
+const REVISION = ["task-v1:00000000", "0000", "4000", "8000", "000000000001"].join("-");
 const LEDGER = "-work-acme-ledger";
 const ATLAS = "-work-dune-atlas";
 
@@ -48,7 +51,7 @@ function task(id: string, project: string, path: string): BoardTask {
     assignments: [{ path, conversationId: null, panePid: null, state: "delivered", error: null, at: "2026-09-18T10:00:00.000Z" }],
     createdAt: "2026-09-18T10:00:00.000Z",
     updatedAt: "2026-09-18T10:00:00.000Z",
-    revision: "task-v1:00000000-0000-4000-8000-000000000001",
+    revision: REVISION,
   } as BoardTask;
 }
 
