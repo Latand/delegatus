@@ -617,5 +617,7 @@ test("narrow Conversations: a short search label and only the live count, so onl
   const status = text(host.querySelector('[data-project-bar] [data-bar-group="status"]'));
   expect(status).toMatch(/running/);
   expect(status).not.toMatch(/tree/);
+  /* Short now, it holds its width; the name is what gives way. */
+  expect((host.querySelector('[data-project-bar] [data-bar-group="status"]') as HTMLElement).className).toContain("shrink-0");
   expect(uk["dash.searchShort"]).toBe("Пошук");
 });

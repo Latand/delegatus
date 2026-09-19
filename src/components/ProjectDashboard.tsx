@@ -2067,7 +2067,7 @@ function ProjectDashboardView({
             /* Issue #696: the header borrows the affirmative idle line only
                when the catalog is actually known. Under a failing fetch it
                names the failure, exactly as the overview board does. */
-            <span data-bar-group="status" className={`min-w-16 shrink truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
+            <span data-bar-group="status" className={`${wide || !narrowStatus ? "min-w-16 shrink" : "shrink-0"} truncate whitespace-nowrap text-[12px] ${catalogFailures > 0 ? "font-semibold text-danger" : "text-secondary"}`}>
               {catalogFailures > 0
                 ? t("catalog.unreachable")
                 : (wide ? (statusBits.length ? statusBits.join(" · ") : null) : narrowStatus) ?? (statusBits[0] ?? t("common.nothingRunning"))}
