@@ -4880,7 +4880,7 @@ test("one child with a failed and a finished turn is one line carrying its lates
   expect(outcomes.every((row) => row.status === "acknowledged")).toBe(true);
 });
 
-test("a child whose transcript the Viewer cannot resolve is counted, never listed (#1783)", async () => {
+test("a finished child whose transcript the Viewer cannot resolve is listed with why, and harvested once (#1783, #1881)", async () => {
   const fixture = childFixture("unresolvable-transcript");
   const unscanned = fixture.spawn({ title: "worker outside the roots", turn: "terminal", terminalAt: ago(fixture, 20), transcript: "outside-roots" });
   const gone = fixture.spawn({ title: "worker whose transcript is gone", turn: "terminal", terminalAt: ago(fixture, 20), transcript: "missing" });
@@ -4891,13 +4891,14 @@ test("a child whose transcript the Viewer cannot resolve is counted, never liste
     pipelines: [ownLane(fixture)],
   });
   const record = await runSeatTickCheck(fixture.project, rig.deps);
-  /* No child reason at all: neither of these is work any seat can do. */
-  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
+  /* The registry's turn state says both finished, and that is the seat's to
+     know whether or not a word of either can be read (#1881). */
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"], items: 3 });
   const text = rig.sent[0]!.text;
-  expect(text).not.toContain(unscanned.id);
-  expect(text).not.toContain(gone.id);
-  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
-  expect(fixture.acknowledged()).toEqual([]);
+  expect(text).toContain(`${unscanned.id} — worker outside the roots — spawned child finished, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(text).toContain(`${gone.id} — worker whose transcript is gone — spawned child finished, transcript not readable: the transcript file is no longer on disk`);
+  expect(text).not.toContain("cannot resolve their transcript");
+  expect(fixture.acknowledged().sort()).toEqual([unscanned.id, gone.id].sort());
 });
 
 test("a child a delivered wake showed is not shown again until it ends another turn (#1783)", async () => {
@@ -5023,7 +5024,7 @@ test("a child whose last record predates the seat by weeks is skipped on the har
   expect(fixture.acknowledged()).toEqual([]);
 });
 
-test("a child whose transcript the Viewer cannot resolve is skipped on the harvest and on the stall path (#1783)", async () => {
+test("an unreadable child is listed when it finished and named once when it stalled (#1783, #1881)", async () => {
   const fixture = childFixture("unresolvable-child-both-paths");
   /* Spawned an hour ago — nothing about either of these is old — and neither
      transcript is one this Viewer can read: one is outside every scanner root,
@@ -5036,17 +5037,23 @@ test("a child whose transcript the Viewer cannot resolve is skipped on the harve
 
   const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
   const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
-  await runSeatTickCheck(fixture.project, first.deps);
+  expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"] });
   expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
+  /* The ended turn is owed and listed with its reason (#1881). The open turn
+     under a dead host is not work, and is named beside the agenda with why. */
+  const shown = first.sent[0]!.text;
+  expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder this Viewer scans`);
+  expect(shown).toContain(`- ${stalled.id} — vanished worker: the transcript file is no longer on disk`);
+  expect(fixture.acknowledged()).toEqual([owed.id]);
 
+  /* Named once: the next wake neither lists nor names either of them. */
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
   const record = await runSeatTickCheck(fixture.project, second.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled"], items: 1 });
   const text = second.sent[0]!.text;
   expect(text).not.toContain(owed.id);
   expect(text).not.toContain(stalled.id);
-  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
-  expect(fixture.acknowledged()).toEqual([]);
+  expect(text).toContain("(2 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
 });
 
 test("a failure this seat's own worker had an hour ago is listed, once (#1783)", async () => {

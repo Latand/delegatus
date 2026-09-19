@@ -61,7 +61,7 @@ test("the skipped-child summary describes the children, not an outcome they may 
      neither owes an outcome. Each line says what is true of the CHILD, and
      each count is a count of children. */
   expect(text).toContain("(3 spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)");
-  expect(text).toContain("(2 spawned child(ren) not listed: the Viewer cannot resolve their transcript, so no seat can read them.)");
+  expect(text).toContain("(2 more spawned child(ren) whose transcript the Viewer cannot resolve, named by a later wake.)");
   expect(text).toContain("(1 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
   expect(text).not.toContain("their outcomes predate");
   expect(text).not.toContain("harvest their outcome");

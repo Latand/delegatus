@@ -76,6 +76,7 @@ import {
   type SeatTickSignalInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
+  type SeatTickTranscriptGap,
 } from "./types";
 
 /**
@@ -1176,13 +1177,37 @@ const DISCOVERY_PAGE = 20;
  *
  * The roots are passed in, read once per check: enumerating them walks the
  * account homes, and this runs once per projected child.
+ *
+ * Containment is asked of the path as recorded AND of the file it resolves to
+ * (#1881). A transcript recorded through a link into a root — the shared
+ * Claude store behind an account's `projects`, a dotfile manager's
+ * `~/.claude` — is the same file, and a prefix test on the text alone called
+ * it outside every root, so a child that had just finished was never offered.
+ * When it cannot be read, the reason travels with it: a count of unreadable
+ * children with no reason attached is what left #1881 undiagnosable.
  */
-function transcriptRecordAt(transcriptPath: string, roots: readonly string[]): string | null {
-  if (!roots.some((root) => transcriptPath === root || transcriptPath.startsWith(root.endsWith(path.sep) ? root : root + path.sep))) return null;
-  try {
-    const stat = fs.statSync(transcriptPath);
-    return stat.isFile() ? new Date(stat.mtimeMs).toISOString() : null;
-  } catch { return null; }
+function transcriptRecordAt(transcriptPath: string, roots: SeatTickTranscriptRoots): { record: string; reason: null } | { record: null; reason: SeatTickTranscriptGap } {
+  const inside = (candidate: string, list: readonly string[]) => list.some((root) => candidate === root || candidate.startsWith(root.endsWith(path.sep) ? root : root + path.sep));
+  let stat: fs.Stats;
+  try { stat = fs.statSync(transcriptPath); } catch {
+    return { record: null, reason: inside(transcriptPath, roots.recorded) ? "missing" : "outside-roots" };
+  }
+  if (!stat.isFile()) return { record: null, reason: "missing" };
+  if (!inside(transcriptPath, roots.recorded)) {
+    let real: string;
+    try { real = fs.realpathSync(transcriptPath); } catch { return { record: null, reason: "missing" }; }
+    if (!inside(real, roots.resolved)) return { record: null, reason: "outside-roots" };
+  }
+  return { record: new Date(stat.mtimeMs).toISOString(), reason: null };
+}
+
+/** The scanner roots once per check, as listed and as they resolve on disk. */
+interface SeatTickTranscriptRoots { recorded: readonly string[]; resolved: readonly string[] }
+
+function transcriptRoots(): SeatTickTranscriptRoots {
+  const recorded = scanRootEntries().map(([, root]) => root);
+  const resolved = recorded.flatMap((root) => { try { return [fs.realpathSync(root)]; } catch { return []; } });
+  return { recorded, resolved };
 }
 
 /** The registry entries that could be hosting this child, by every session key
@@ -1220,7 +1245,7 @@ function projectChild(
   edge: SpawnLineageEdge,
   project: string,
   now: number,
-  roots: readonly string[],
+  roots: SeatTickTranscriptRoots,
 ): ProjectedChild | null {
   if (edge.source !== "viewer-spawn") return null;
   const childId = lookup.canonicalConversationId(edge.childConversationId);
@@ -1247,7 +1272,8 @@ function projectChild(
      (#1783): its recorded terminal instant, else the last record of its
      transcript. A transcript the Viewer cannot resolve says so here and is
      never offered as harvestable work. */
-  const record = generation ? transcriptRecordAt(generation.path, roots) : null;
+  const read = generation ? transcriptRecordAt(generation.path, roots) : { record: null, reason: "no-transcript" as const };
+  const record = read.record;
   const settledAt = conversation?.turn.terminalAt ?? record;
   /* `lastRecordAt` rides on EVERY branch below, terminal or not (#1783 round
      two). A child whose host died over an open turn never gets a terminal
@@ -1257,11 +1283,17 @@ function projectChild(
      that child has. */
   /* One line for the pair the same read produced, and the publication gate is
      why: a line that begins `transcript:` reads as a quoted transcript key. */
-  const base = {
+  /* The reason rides beside an unreadable transcript and the path beside a
+     readable one (#1881): the first is what the wake names, the second is
+     where the controller reads the child's final message from once a wake is
+     going out. Neither is read here. */
+  const base: Omit<SeatTickChildInput, "status" | "outcome" | "terminalAt"> = {
     conversationId: childId,
     title,
     activity: null,
     lastRecordAt: record, transcript: record === null ? "unresolvable" as const : "readable" as const,
+    ...(read.reason ? { transcriptReason: read.reason } : generation && conversation ? { transcriptPath: generation.path, engine: conversation.engine } : {}),
+    spawnedAt: edge.createdAt,
   };
   const createdAt = edge.createdAt;
   /* A launch that failed or conflicted before it ran: terminal, outcome
@@ -1270,7 +1302,8 @@ function projectChild(
     /* A launch that failed before it ran has no transcript and needs none: the
        receipt is the whole record, and its instant is the receipt's own, so
        the transcript test does not apply to it (#1783). */
-    return { input: { ...base, transcript: "readable", status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
+    const { transcriptReason: _none, ...launched } = base;
+    return { input: { ...launched, transcript: "readable", status: "terminal", outcome: "failed", terminalAt: receipt.rejection?.rejectedAt ?? receipt.createdAt }, turn, hosted, createdAt };
   }
   if (!conversation) return { input: { ...base, status: "unknown", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   if (turn === "terminal") {
@@ -1364,7 +1397,7 @@ async function childWork(
   const children: SeatTickChildInput[] = [];
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
-  const roots = scanRootEntries().map(([, root]) => root);
+  const roots = transcriptRoots();
   const classify = (page: SeatChildrenPage, id: string) => {
     const edge = page.file.lineageEdges[id];
     if (!edge) return null;
@@ -1549,12 +1582,16 @@ async function childWork(
          `terminalAt: null` then, and 130 of the 209 owed rows on the board
          this was filed from carry exactly that — a null the age test cannot
          test. The child as it stands now is what the test must read. */
-      const { terminalAt, lastRecordAt, transcript } = projected.input;
+      const { terminalAt, lastRecordAt, transcript, transcriptReason, transcriptPath, engine, spawnedAt } = projected.input;
+      const { transcriptReason: _frozen, transcriptPath: _frozenPath, ...frozen } = outcome.input;
       children.push({
-        ...outcome.input,
+        ...frozen,
         terminalAt,
         lastRecordAt,
         transcript,
+        ...(transcriptReason ? { transcriptReason } : {}),
+        ...(transcriptPath ? { transcriptPath, engine } : {}),
+        ...(spawnedAt ? { spawnedAt } : {}),
         ...(child.harvestedEpoch === undefined ? {} : { harvestedEpoch: child.harvestedEpoch }),
       });
     }
