@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
-import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
+import { accountLiveSessionKind, liveAccountConversationIds, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
 import { agentRegistry, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
 
 export type { ManagedAccountEngine };
-export type AccountRemovalBlocker = "live_sessions" | "current_conversations";
+export type AccountRemovalBlocker = "live_sessions" | "queued_pin" | "current_conversations";
 
 export type AccountInventoryArtifact =
   | { path: string; classification: "owned"; history: boolean }
@@ -484,8 +484,9 @@ export function accountRemovalBlockers(
   options: AccountLivenessOptions = {},
 ): AccountRemovalBlocker[] {
   const snapshot = agentRegistry().readOnlySnapshot();
+  const live = accountLiveSessionKind(snapshot, engine, accountId, options);
   return [
-    ...(accountHasLiveSessions(snapshot, engine, accountId, options) ? ["live_sessions" as const] : []),
+    ...(live ? [live] : []),
     ...(liveAccountConversationIds(snapshot, engine, accountId, options).length > 0 ? ["current_conversations" as const] : []),
   ];
 }

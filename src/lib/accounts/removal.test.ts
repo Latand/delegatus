@@ -298,8 +298,14 @@ test("an aged queued pin blocks every account until its durable receipt settles"
   }, "queued for account capacity");
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner!);
 
-  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual(["live_sessions"]);
-  expect(accountRemovalBlockers("claude", "other", DAYS_LATER)).toEqual(["live_sessions"]);
+  /* The dialog names a queued pin apart from a running agent (#1857). */
+  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers("claude", "other", DAYS_LATER)).toEqual(["queued_pin"]);
+
+  /* Anything genuinely running outranks the queued pin. */
+  beginLegacySpawnFixture(store, { engine: "claude", cwd: "/repo", accountId: "work" });
+  expect(accountRemovalBlockers("claude", "work")).toEqual(["live_sessions"]);
+  expect(accountRemovalBlockers("claude", "other")).toEqual(["queued_pin"]);
 });
 
 /* Production shape of issue #1595: launch receipts pinned to an account, left
