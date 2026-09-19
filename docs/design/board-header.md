@@ -10,7 +10,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 2. **One control height: 32 px**, radius `--radius-control` (8 px), 12 px / 600 text, 15 px icons. Three variants only: *outlined* (card fill, default border), *pressed* (`aria-pressed="true"`: accent-soft fill, accent text, accent/45 border; used by the view switch segments, Orchestrator, Tasks), *quiet icon* (32 × 32, no border until hover; only inside the `⋯` menu trigger). No pills, no 26/27/28 px controls, no tinted one-offs. Dark theme uses the same tokens; nothing is colour-coded by hand.
 3. **The one loud element is the attention island** (`AttentionIsland`, fenced, untouched). It stays the only warning-coloured thing in the bar. Its mount in `Viewer.tsx` moves from `fixed right-4 top-12` to `top-[10px]` so its 28 px pill centres in the 48 px bar; the bar keeps the existing 236 px right reserve for it.
 4. **One search in the bar: the task field.** It filters this board's cards by card title, description, member conversation titles and pipeline task text (`searchText`, all columns; unchanged behaviour). The message search (`search.open`, shortcut `/`, unchanged) leaves the bar and becomes the first row of the `⋯` menu. On the conversations view, which has no task filter, the same slot shows the message-search field-shaped button instead, so either view shows exactly one search.
-5. **View switch**: two 32 px segments inside one outlined 32 px group, the selected one in the *pressed* variant. Icon + label when the bar is ≥ 1200 px wide, icon only below (label stays as `aria-label` and tooltip).
+5. **View switch**: two 32 px segments inside one outlined 32 px group, the selected one in the *pressed* variant. Icon + label when the bar is ≥ 1600 px wide, icon only below (label stays as `aria-label` and tooltip).
 6. **Every fact once** — see §3.
 7. **Phone (390) is unchanged.** Under 640 px the desktop rows are not rendered; the phone already has one 52 px `MobileShell` bar: project title, `⚠ n` (hidden at zero), search, `⋯`. It already meets the requirement; this lane touches nothing there.
 
@@ -18,13 +18,13 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 
 | # | Purpose | Holds | Notes |
 |---|---|---|---|
-| 1 | where am I | project name (truncates, max 220 px); account switches (`ProjectAccounts`) | accounts collapse into `⋯` below 1200 px |
+| 1 | where am I | project name (truncates, max 220 px); account switches (`ProjectAccounts`) | accounts collapse into `⋯` below 1600 px |
 | 2 | what is happening | `● N working` (green dot), or the existing red `catalog.unreachable` / `kanban.filesFailed` text | plain text |
 | — | one elastic spacer | | the only empty stretch in the bar |
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
 | 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | |
-| 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1200 px |
-| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1200 px |
+| 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1600 px |
+| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1600 px |
 | 7 | more | `⋯` menu | §4 |
 | 8 | what needs me | attention island, in the 236 px reserve | far right, where it already lives |
 
@@ -41,7 +41,7 @@ Gaps: 8 px inside a group, 16 px between groups. Bar padding 16 px left, 236 px 
 
 ## 4. The `⋯` menu (one menu, `KanbanMenu` row pattern; en / uk)
 
-Search your messages ( / ) — Пошук моїх повідомлень ( / ) · Mute sound / Sound levels (existing labels) · Undo / Redo — Скасувати / Повторити (disabled rows when empty, with the existing entry title) · Archive project or Restore from archive · Delete project (danger row, existing confirm) · below 1200 px also: one row per engine account switch, opening the existing account popover.
+Search your messages ( / ) — Пошук моїх повідомлень ( / ) · Mute sound / Sound levels (existing labels) · Undo / Redo — Скасувати / Повторити (disabled rows when empty, with the existing entry title) · Archive project or Restore from archive · Delete project (danger row, existing confirm) · below 1600 px also: one row per engine account switch, opening the existing account popover.
 
 Nothing else moves. Trigger label: More actions — Більше дій (`mobile2.bar.more` wording reused under a desktop key).
 
@@ -94,7 +94,7 @@ Not rendered: account pills, undo/redo and the non-zero island (the synthetic ho
 ## 8. Build notes
 
 - `KanbanBoard` `.bar` becomes the bar: it already owns query, hidden tray, create. `ProjectDashboard` stops rendering its `h-10` row on the board leaf and passes two nodes, `barLead` (groups 1) and `barTrail` (groups 6–7); on the conversations leaf it renders the same two nodes in its own 48 px row with the branches/trees line and the message-search button. Exempt the slots from the `.kb button` reset the way `.seat *` is, or restyle the switch with `.kb` classes; either way the pressed state must survive the reset.
-- Delete `.kb[data-mode="scroll"|"tabs"] .bar` wrap rules, `flex-wrap`, the `order` rules and the −220 px margin. The tier follows the bar's own width (`ResizeObserver` already present, threshold 1200 px).
+- Delete `.kb[data-mode="scroll"|"tabs"] .bar` wrap rules, `flex-wrap`, the `order` rules and the −220 px margin. The tier follows the bar's own width (`ResizeObserver` already present, threshold 1600 px). The tabbed face (board under 768 px, a narrow desktop window outside this lane's three widths) is the one place the groups may wrap: one row there cannot hold them beside the 252 px of padding and island reserve.
 - `Viewer.tsx`: island `top-12` → `top-[10px]`. No edits under `src/components/attention/`, `src/lib/attention/`, `src/lib/mcp/`, the pipeline data layer, or the limits code.
 - Evidence: a case in `scripts/capture-board-geometry.ts` asserting at 2540 and 1280, en and uk, light and dark: header height 48, every control 32 px high (island 28), no two rects intersect, pressed segment's fill differs from the other, `+` controls hit-testable (`elementFromPoint`). Phone: bar still 52 px.
 
@@ -103,3 +103,7 @@ Not rendered: account pills, undo/redo and the non-zero island (the synthetic ho
 - `/` focusing the task field, matching issue numbers, per-column match counts, sticky search (#1801 item 4): conflicts with the existing `/` message-search shortcut; needs its own decision.
 - Orchestrator placement and collapse, column expand (items 2, 3): #1841.
 - A project-scoped waiting count beside the global island: would be a second counter; the cards already mark who waits.
+
+## Build correction: the tier threshold is 1600 px, not 1200
+
+Measured while building: labelled, with two account switches, the groups need about 1 300 px plus the bar's 16 px left padding and 236 px island reserve. A bar between 1200 and ~1550 px in the labelled tier runs past its own box, so the wide tier starts at 1600 px of bar (a 1850 px viewport with the rail). 2540 is wide and 1280 narrow either way; the evidence adds a 1850 px case and checks the bar never overflows.

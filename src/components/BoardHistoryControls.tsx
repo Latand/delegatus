@@ -20,6 +20,9 @@ interface BoardHistoryControlsProps {
   redoEntry: BoardHistoryEntry | null;
   onUndo: () => void;
   onRedo: () => void;
+  /** `menu`: two rows of the desktop bar's ⋯ menu (#1801), shown disabled while the log is empty. */
+  variant?: "island" | "menu";
+  rowClassName?: string;
 }
 
 /**
@@ -40,6 +43,8 @@ export function BoardHistoryControls({
   redoEntry,
   onUndo,
   onRedo,
+  variant = "island",
+  rowClassName = "",
 }: BoardHistoryControlsProps) {
   const { t } = useLocale();
 
@@ -55,6 +60,21 @@ export function BoardHistoryControls({
   const icon = "h-4 w-4";
   const base =
     "flex items-center justify-center text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent disabled:cursor-default disabled:text-muted disabled:opacity-40 disabled:hover:text-muted";
+
+  if (variant === "menu") {
+    return (
+      <div role="group" aria-label={t("board.historyGroup")} className="flex flex-col gap-0.5">
+        <button type="button" className={rowClassName} onClick={onUndo} disabled={!canUndo} aria-label={undoLabel} title={undoLabel} data-board-undo="">
+          <Undo2 className="h-[15px] w-[15px] shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{undoLabel}</span>
+        </button>
+        <button type="button" className={rowClassName} onClick={onRedo} disabled={!canRedo} aria-label={redoLabel} title={redoLabel} data-board-redo="">
+          <Redo2 className="h-[15px] w-[15px] shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{redoLabel}</span>
+        </button>
+      </div>
+    );
+  }
 
   /* Desktop: the segmented pair, hidden until the log is non-empty (finding 2).
      No overflow-hidden clip so the Hint bubbles can escape; the transparent

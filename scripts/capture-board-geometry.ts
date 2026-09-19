@@ -7,6 +7,11 @@
  *
  *   bun run build && bun scripts/capture-board-geometry.ts
  *
+ * With BOARD_CAPTURE_CASE=header it measures the project board's one header
+ * bar instead (#1801): one 48 px bar, 32 px controls, nothing overlapping, the
+ * island inside the bar, the pressed view segment painted differently, at
+ * 2540 and 1280 px in en and uk, light and dark, and the phone's 52 px bar.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -1021,4 +1026,204 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+/* ------------------------------------------------------------------------- */
+/* The project board's one header bar (#1801, docs/design/board-header.md)     */
+/* ------------------------------------------------------------------------- */
+
+/** A conversation parked on an AskUserQuestion, so the attention island is not at zero. */
+function writeWaitingConversation(): void {
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  const id = `${"99".padStart(8, "0")}-1801-4000-8000-${"0".repeat(12)}`;
+  const stamp = "2100-01-02T13:00:05.000Z";
+  const lines = [
+    { type: "user", uuid: `${id}-u1`, timestamp: stamp, cwd: REPO_DIR, sessionId: id, message: { role: "user", content: "Pick the release channel." } },
+    { type: "assistant", uuid: `${id}-a1`, timestamp: stamp, cwd: REPO_DIR, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "tool_use", id: "toolu_1801_question", name: "AskUserQuestion", input: { questions: [{ question: "Which channel ships first?", header: "Channel", multiSelect: false, options: [{ label: "Stable", description: "Ship to stable" }, { label: "Beta", description: "Ship to beta" }] }] } }] } },
+  ];
+  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+}
+
+interface HeaderReading {
+  bars: number;
+  bar: Rect | null;
+  controls: { name: string; rect: Rect }[];
+  island: Rect | null;
+  islandText: string;
+  pressedFill: string | null;
+  otherFill: string | null;
+  hit: Record<string, boolean>;
+  texts: string;
+  /** How far the bar's content runs past its box; 0 when everything fits in one row. */
+  overflow: number;
+  tier: string | null;
+}
+
+/** Runs inside the page: the header bar, its visible controls and the island, in viewport pixels. */
+function readHeader(): HeaderReading {
+  const rect = (element: Element): Rect => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+  const visible = (element: Element) => { const r = element.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(element).visibility !== "hidden"; };
+  const bars = [...document.querySelectorAll("header.bar, [data-project-bar]")].filter(visible);
+  const bar = bars[0] ?? null;
+  const controls: { name: string; rect: Rect }[] = [];
+  if (bar) {
+    const named = (element: Element) => element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.textContent?.trim() || element.tagName;
+    const selector = "[data-bar-control], .btn, input[type=search], [data-account-switch-engine] > button, h1, .summary";
+    for (const element of bar.querySelectorAll(selector)) if (visible(element)) controls.push({ name: named(element)!, rect: rect(element) });
+  }
+  const islandElement = document.querySelector("[data-attention-island]");
+  const tabs = [...document.querySelectorAll("button[data-view-tab]")];
+  const pressed = tabs.find((tab) => tab.getAttribute("aria-pressed") === "true");
+  const other = tabs.find((tab) => tab.getAttribute("aria-pressed") !== "true");
+  const hit: Record<string, boolean> = {};
+  for (const selector of ["[data-new-task]", "[data-new-agent]", "[data-bar-create]", "[data-bar-more]", "[data-kanban-search]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]"]) {
+    const element = document.querySelector(selector);
+    if (!element || !visible(element)) continue;
+    const r = element.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    hit[selector] = Boolean(top && (top === element || element.contains(top)));
+  }
+  return {
+    bars: bars.length,
+    bar: bar ? rect(bar) : null,
+    controls,
+    island: islandElement ? rect(islandElement) : null,
+    islandText: islandElement?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    pressedFill: pressed ? getComputedStyle(pressed).backgroundColor : null,
+    otherFill: other ? getComputedStyle(other).backgroundColor : null,
+    hit,
+    texts: bar?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0,
+    tier: bar?.getAttribute("data-bar-tier") ?? null,
+  };
+}
+
+/** The account switches a fenced project shows; the synthetic home has no accounts, so the page is handed the view. */
+const accountsView = (project: string) => ({
+  project,
+  engines: {
+    claude: { restricted: true, allowed: [{ accountId: "acct-a", label: "Account A" }], carrying: [{ accountId: "acct-a", label: "Account A" }], outsidePool: [] },
+    codex: { restricted: true, allowed: [{ accountId: "acct-b", label: "Account B" }], carrying: [], outsidePool: [] },
+  },
+});
+
+async function headerMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  writeWaitingConversation();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = 3_000 + (process.pid % 900);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot }).stdout.toString().trim() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(4_000);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+
+    /* 1850 is the narrowest viewport whose bar (1602 px after the rail) takes the labelled tier. */
+    const cases = [2540, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    cases.push({ width: 1850, lang: "uk", colorScheme: "light" });
+    for (const { width, lang, colorScheme } of cases) {
+      {
+        {
+          const tag = `${width}-${lang}-${colorScheme}`;
+          const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
+          await context.addInitScript(seedInit);
+          await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+          await context.route("**/api/account-project-bindings**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountsView(project)) }));
+          const page = await context.newPage();
+          await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+          await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+          await page.waitForTimeout(3_000);
+          const reading = await page.evaluate(readHeader);
+          await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}.png`), clip: { x: 0, y: 0, width, height: 120 } });
+          must(reading.bars === 1, `${tag}: ${reading.bars} header bars`);
+          must(reading.bar !== null && near(reading.bar.h, 48, 0.5), `${tag}: the bar is ${reading.bar?.h}px tall`);
+          must(reading.overflow <= 0.5, `${tag}: the bar's content runs ${reading.overflow}px past its box`);
+          must(reading.tier === (width >= 1850 ? "wide" : "narrow"), `${tag}: the bar is in its ${reading.tier} tier`);
+          for (const control of reading.controls) {
+            if (control.name === "H1" || control.rect.h < 24) continue;
+            must(near(control.rect.h, 32, 0.5), `${tag}: «${control.name}» is ${control.rect.h}px tall`);
+          }
+          const boxes = [...reading.controls, ...(reading.island ? [{ name: "island", rect: reading.island }] : [])];
+          for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) {
+            if (a.rect.x <= b.rect.x && a.rect.x + a.rect.w >= b.rect.x + b.rect.w && a.rect.y <= b.rect.y && a.rect.y + a.rect.h >= b.rect.y + b.rect.h) continue;
+            if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w && b.rect.y <= a.rect.y && b.rect.y + b.rect.h >= a.rect.y + a.rect.h) continue;
+            must(!overlaps(a.rect, b.rect, 0.5), `${tag}: «${a.name}» and «${b.name}» overlap`);
+          }
+          must(reading.island !== null && reading.bar !== null && reading.island.y >= reading.bar.y && reading.island.y + reading.island.h <= reading.bar.y + reading.bar.h, `${tag}: the island is not inside the bar`);
+          must(reading.pressedFill !== null && reading.pressedFill !== reading.otherFill, `${tag}: the pressed view segment paints ${reading.pressedFill}, the other ${reading.otherFill}`);
+          for (const [selector, ok] of Object.entries(reading.hit)) must(ok, `${tag}: ${selector} is covered at its centre`);
+          const accountsInBar = reading.controls.filter((control) => /Claude|Codex/.test(control.name)).length;
+          must(width >= 1850 ? accountsInBar === 2 : accountsInBar === 0, `${tag}: ${accountsInBar} account switches in the bar`);
+
+          /* The ⋯ menu: what moved there, and the account switches when narrow. */
+          await page.click("[data-bar-more]");
+          await page.waitForSelector("[data-bar-more-menu]");
+          const menu = await page.evaluate(() => {
+            const element = document.querySelector("[data-bar-more-menu]")!;
+            const r = element.getBoundingClientRect();
+            const rows = [...element.querySelectorAll("button")].map((button) => ({ label: (button.getAttribute("aria-label") || button.textContent || "").replace(/\s+/g, " ").trim(), h: button.getBoundingClientRect().height, disabled: (button as HTMLButtonElement).disabled }));
+            return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows };
+          });
+          await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-more.png`), clip: { x: Math.max(0, menu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, menu.rect.x - 40), menu.rect.w + 80), height: menu.rect.y + menu.rect.h + 16 } });
+          must(menu.rows.length >= 6, `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
+          must(menu.rect.x + menu.rect.w <= width, `${tag}: the ⋯ menu runs off the right edge`);
+          await page.keyboard.press("Escape");
+          if (width === 1280) {
+            await page.click("[data-bar-create]");
+            const create = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].map((item) => item.textContent?.trim() ?? ""));
+            must(create.length === 2, `${tag}: the + menu offers ${create.length} rows`);
+            report[`${tag}:create`] = create;
+            await page.keyboard.press("Escape");
+          }
+          report[tag] = { ...reading, menu };
+          await context.close();
+        }
+      }
+    }
+
+    /* The phone keeps its own 52 px bar, unchanged. */
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: "reduce" });
+    await phone.addInitScript(seedInit);
+    const page = await phone.newPage();
+    await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    await page.waitForSelector("[data-mobile2-bar]", { timeout: 120_000 });
+    await page.waitForTimeout(2_500);
+    const phoneBar = await page.evaluate(() => {
+      const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+      return { h: bar.height, w: bar.width, desktopBars: document.querySelectorAll("header.bar, [data-project-bar]").length };
+    });
+    await page.screenshot({ path: path.join(OUT_DIR, "header-390-en-light.png"), clip: { x: 0, y: 0, width: 390, height: 120 } });
+    must(near(phoneBar.h, 52, 0.5), `390: the phone bar is ${phoneBar.h}px tall`);
+    must(phoneBar.desktopBars === 0, `390: ${phoneBar.desktopBars} desktop bars render on the phone`);
+    report["390-en-light"] = phoneBar;
+    await phone.close();
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "header.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`header measurements: ${path.join(OUT_DIR, "header.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`board header acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("board header acceptance passed at 2540 and 1280 (en, uk; light, dark) and 390.");
+  }
+}
+
+/* BOARD_CAPTURE_CASE=header runs the header bar's case (#1801) instead of the camera probes. */
+if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
+else await main();

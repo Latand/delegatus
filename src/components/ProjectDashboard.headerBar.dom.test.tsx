@@ -1,11 +1,13 @@
 /**
- * The desktop view switch is reachable (#1614), and offers only the Board and
- * Conversations (#1695).
+ * The project board's one header bar (#1801, docs/design/board-header.md).
  *
- * On the Board, which is the kanban, the switch sits in the board's own bar in
- * flow, so nothing floats over the board's corner; on Conversations it floats
- * as its own chip in that corner, and it is the only thing there. happy-dom lays
- * nothing out and cannot hit-test, so this file asserts those structural facts.
+ * Before it, a project showed two stacked bars that told the same facts twice
+ * («N branches running» over «N agents working», «N need you» beside the
+ * island, «N tasks on the board» beside «Tasks N»), carried two search
+ * affordances, and a view switch whose pressed segment the board's button
+ * reset painted exactly like the other. These cases hold the bar to: one bar,
+ * every fact once, one search, a switch that marks its side, and every control
+ * that existed still reachable (in the bar or behind its ⋯).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -17,6 +19,9 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { en } from "@/lib/i18n/en";
+import { uk } from "@/lib/i18n/uk";
+import { readFileSync } from "node:fs";
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
@@ -36,6 +41,13 @@ const { resetSelectionSessionsForTest } = await import("@/hooks/useBoardState");
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 
 const dom = new Window({ url: "http://localhost/" });
+/* happy-dom lays nothing out: the Board and the other leaves' bar report the width the case sets. */
+let barWidth = 2292;
+const measureRect = dom.HTMLElement.prototype.getBoundingClientRect;
+dom.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+  const rect = measureRect.call(this);
+  return this.classList?.contains("kb") || this.hasAttribute?.("data-project-bar") ? { ...rect, width: barWidth, right: barWidth } as DOMRect : rect;
+} as typeof measureRect;
 const G = globalThis as Record<string, unknown>;
 
 /* Switchable surface: the same selection has to be published by the desktop
@@ -61,6 +73,7 @@ let projectCounter = 0;
 let PROJECT = "selection-contract-0";
 let boards: Record<string, BoardProjectStateV1> = {};
 let tmuxCalls: Array<Record<string, unknown>> = [];
+let searches = 0;
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1,
   revision: 0,
@@ -118,6 +131,10 @@ const OVERRIDES: Record<string, unknown> = {
       boards[body.project] = next;
       return { ok: true, status: 200, json: async () => ({ ok: true, applied: true, board: next }), text: async () => "" };
     }
+    if (url.startsWith("/api/account-project-bindings")) {
+      const body = { project: PROJECT, engines: { claude: { restricted: true, allowed: [{ accountId: "acct-a", label: "Account A" }], carrying: [], outsidePool: [] } } };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     const body = url.startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   }) as unknown as typeof fetch,
@@ -153,9 +170,11 @@ beforeEach(() => {
   roots = [];
   mobile = false;
   projectCounter += 1;
-  PROJECT = `selection-contract-${projectCounter}`;
+  PROJECT = `header-bar-${projectCounter}`;
+  barWidth = 2292;
   boards = { [PROJECT]: seededBoard() };
   tmuxCalls = [];
+  searches = 0;
   resetSelectionSessionsForTest();
 });
 afterEach(() => {
@@ -218,6 +237,8 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
         catalogConversationCount={files.length}
         onArchive={() => {}}
         onUnarchive={() => {}}
+        onOpenSearch={() => { searches += 1; }}
+        onToggleOrchestratorPanel={() => {}}
       />,
     ),
   );
@@ -225,58 +246,144 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
   return host as unknown as HTMLElement;
 }
 
-/** The view tab an operator actually clicks. */
-function clickViewTab(host: HTMLElement, view: "kanban" | "list") {
-  const tab = host.querySelector(`button[data-view-tab="${view}"]`) as HTMLButtonElement | null;
-  expect(tab).toBeTruthy();
-  flushSync(() => tab!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
+
+const bar = (host: HTMLElement) => host.querySelector("header.bar, [data-project-bar]") as HTMLElement;
+const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ");
+function click(element: Element | null) {
+  expect(element).toBeTruthy();
+  flushSync(() => element!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 }
+const openMore = (host: HTMLElement) => {
+  click(bar(host).querySelector("[data-bar-more]"));
+  return host.querySelector("[data-bar-more-menu]") as HTMLElement;
+};
+/* A running conversation, so the old header would have said «1 branch running» over «1 agent working». */
+const running = () => ({ ...alphaOf(), activity: "live" as const, proc: "running" as const });
 
-const TOP_LEFT_CORNER = "[class*='absolute'][class*='left-3'][class*='top-3']";
-const tabsIn = (host: HTMLElement) => host.querySelector("[data-project-view-tabs]") as HTMLElement | null;
-const viewTabs = (host: HTMLElement) => Array.from(host.querySelectorAll("button[data-view-tab]")).map((button) => button.getAttribute("data-view-tab"));
-
-test("the desktop offers only the Board and Conversations, and on the Board the switch sits in the board's own bar", async () => {
-  const host = mount();
+test("the Board has one header bar, and it says each fact once", async () => {
+  const host = mount([running(), betaOf()]);
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  expect(viewTabs(host)).toEqual(["kanban", "list"]);
-  expect(host.querySelector("[data-scheme-band], [data-scheme-ui]")).toBeNull();
-  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
-  expect(board.contains(tabsIn(host))).toBe(true);
-  expect(tabsIn(host)!.className).not.toContain("absolute");
-  expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(0);
+  expect(host.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
+  /* The project's name is in that bar, once, rather than in a row of its own above it. */
+  const names = Array.from(host.querySelectorAll("h1"));
+  expect(names).toHaveLength(1);
+  expect(bar(host).contains(names[0]!)).toBe(true);
+  expect(host.querySelector(".h-10")).toBeNull();
+  /* «What is happening» is one count: the working one. */
+  expect(bar(host).querySelectorAll("[data-bar-working]")).toHaveLength(1);
+  const said = text(host);
+  expect(said).not.toMatch(/branch(es)? running/);
+  expect(said).not.toMatch(/tasks? on the board/);
+  expect(said).not.toMatch(/needs? you/);
 });
 
-test("the switch opens Conversations, sits in that view's header bar there, and comes back to the Board", async () => {
+test("the Board's bar has one search, and the message search moved into ⋯", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  clickViewTab(host, "list");
+  const searches_ = () => host.querySelectorAll('input[type="search"], [data-testid="dash-search"]');
+  expect(searches_()).toHaveLength(1);
+  expect(bar(host).querySelector("[data-kanban-search]")).not.toBeNull();
+
+  const menu = openMore(host);
+  const message = menu.querySelector('[data-testid="dash-search"]');
+  expect(text(message)).toContain(en["search.open"]);
+  click(message);
+  expect(searches).toBe(1);
+});
+
+test("Conversations shows one search too: the message search in the bar's find slot", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  click(host.querySelector('button[data-view-tab="list"]'));
   expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
   await settle();
-  expect(host.querySelector("[data-kanban-board]")).toBeNull();
-  /* One header bar on every leaf (#1801): nothing floats over the list's corner. */
-  expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(0);
-  expect(host.querySelector("[data-project-bar]")!.contains(tabsIn(host))).toBe(true);
-  expect(viewTabs(host)).toEqual(["kanban", "list"]);
-  expect(boards[PROJECT]!.prefs.viewMode).toBe("list");
 
-  clickViewTab(host, "kanban");
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
-  expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "kanban" });
+  expect(host.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
+  expect(host.querySelectorAll('[data-project-bar] input[type="search"], [data-project-bar] [data-testid="dash-search"]')).toHaveLength(1);
+  expect(openMore(host).querySelector('[data-testid="dash-search"]')).toBeNull();
 });
 
-test("a board stored on the scheme face before the kanban became the desktop board opens on the Board", async () => {
-  boards = { [PROJECT]: { ...seededBoard(), prefs: { ...seededBoard().prefs, viewMode: "scheme", desktopBoard: "scheme" } } };
+test("the view switch marks its selected side, out of reach of the board's button reset", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  expect(host.querySelector("[data-scheme-band], [data-scheme-ui]")).toBeNull();
-  /* Nothing stored is rewritten to get there. */
-  expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "scheme" });
+
+  const board = host.querySelector('button[data-view-tab="kanban"]') as HTMLElement;
+  const list = host.querySelector('button[data-view-tab="list"]') as HTMLElement;
+  expect(board.getAttribute("aria-pressed")).toBe("true");
+  expect(list.getAttribute("aria-pressed")).toBe("false");
+  expect(board.className).toContain("bg-accent/10");
+  expect(list.className).not.toContain("bg-accent/10");
+  /* The kanban stylesheet strips every button inside the board of its fill and padding except
+     inside the slots it exempts; the switch must sit in one, and the rule must exempt it. */
+  expect(board.closest(".bar-slot")).not.toBeNull();
+  const css = readFileSync(new URL("./kanban/kanbanBoard.css", import.meta.url), "utf8");
+  const reset = css.split("\n").find((line) => /^\.kb button:not\(/.test(line)) ?? "";
+  expect(reset).toContain(".bar-slot *");
+  expect(reset).toContain("background: none");
+});
+
+test("every control the two bars held is still reachable, wide", async () => {
+  const host = mount([alphaOf(), betaOf()]);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(await waitFor(() => bar(host).querySelector("[data-account-switch-engine]") !== null)).toBe(true);
+
+  const inBar = bar(host);
+  expect(inBar.getAttribute("data-bar-tier")).toBe("wide");
+  for (const selector of ["[data-kanban-search]", "[data-hidden-pill]", "[data-view-tab=kanban]", "[data-view-tab=list]", "[data-new-task]", "[data-new-agent]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-account-switch-engine]"]) {
+    expect({ selector, found: inBar.querySelector(selector) !== null }).toEqual({ selector, found: true });
+  }
+  expect(text(inBar.querySelector("[data-orchestrator-toggle]"))).toContain(en["orchPanel.title"]);
+
+  const menu = openMore(host);
+  const rows = text(menu);
+  for (const label of [en["search.open"], en["sound.mute"], en["sound.settings"], en["board.undoNothing"], en["board.redoNothing"], en["trash.toArchive"], en["trash.deleteProject"]]) {
+    expect({ label, found: rows.includes(label) }).toEqual({ label, found: true });
+  }
+  expect((menu.querySelector("[data-board-undo]") as HTMLButtonElement).disabled).toBe(true);
+  /* The account switch stays in the bar while it is wide, so ⋯ does not repeat it. */
+  expect(menu.querySelector("[data-account-switch-engine]")).toBeNull();
+  /* Sound levels open in place, inside the menu. */
+  click(menu.querySelector('[data-testid="sound-settings-trigger"]'));
+  expect(menu.querySelector('[data-testid="sound-settings"]')).not.toBeNull();
+});
+
+test("narrow, the bar keeps one row: icons, one + with both creators, and the accounts behind ⋯", async () => {
+  barWidth = 1032;
+  const host = mount([alphaOf(), betaOf()]);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+
+  const inBar = bar(host);
+  expect(inBar.getAttribute("data-bar-tier")).toBe("narrow");
+  expect(inBar.querySelector("[data-account-switch-engine]")).toBeNull();
+  expect(text(inBar.querySelector("[data-orchestrator-toggle]"))).toBe("");
+  expect(inBar.querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-label")).toBe(en["orchPanel.toggleAria"]);
+  expect(text(inBar.querySelector('[data-view-tab="list"]'))).toBe("");
+  expect(inBar.querySelector('[data-view-tab="list"]')!.getAttribute("aria-label")).toBe(en["dash.viewList"]);
+
+  expect(inBar.querySelector("[data-new-task]")).toBeNull();
+  click(inBar.querySelector("[data-bar-create]"));
+  const create = host.querySelector('.menu[role="menu"]') as HTMLElement;
+  expect(text(create)).toContain(en["dash.newTask"]);
+  expect(text(create)).toContain(en["dash.newConvo"]);
+
+  const menu = openMore(host);
+  expect(await waitFor(() => menu.querySelector("[data-account-switch-engine]") !== null)).toBe(true);
+});
+
+test("uk: the switch and the working count read in Ukrainian", () => {
+  expect(uk["kanban.viewTab"]).toBe("Дошка");
+  expect(uk["dash.viewList"]).toBe("Розмови");
+  expect(uk["dash.more"]).toBe("Більше дій");
+  expect(uk["dash.create"]).toBe("Створити");
+  expect((uk["kanban.summaryWorking"] as Record<string, string>).few).toBe("{count} працюють");
+  expect("kanban.summaryNeeds" in uk || "kanban.summaryNeeds" in en).toBe(false);
+  expect("kanban.summaryTasks" in uk || "kanban.summaryTasks" in en).toBe(false);
 });
