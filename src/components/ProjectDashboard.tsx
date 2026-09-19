@@ -8,7 +8,7 @@ import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
 import { FavoritesProvider, type FavoritesApi } from "./favorites/FavoritesContext";
 import { resolveFavoriteRows } from "./favorites/favoriteRows";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useNowSeconds } from "@/hooks/useNowSeconds";
+import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
@@ -97,9 +97,6 @@ import { SoundToggle } from "./SoundToggle";
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
 
-/** Cadence of the board's wall clocks — the idle windows they drive are
-    minutes wide, so both the millisecond and the seconds clock tick here. */
-const BOARD_CLOCK_MS = 30_000;
 const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "queued", "uncertain"]);
 /* Stable empties for the layout inputs: a fresh `[]` per render re-lays-out
    the board (#1432). */

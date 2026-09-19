@@ -267,8 +267,367 @@ export function PipelineSection({ summary, open, selected, acting, onToggle, onO
   );
 }
 
-/** The one-line summary: the pass path in order, then every loop and branch as
-    its own chip, so a cycle is never flattened. */
+/* ── A fail edge in the collapsed row (#1798) ──────────────────────────────
+   A fail edge is not a step of the chain, so it is not a chip in the row of
+   steps. It is a return arc UNDER the row, from the failing stage back to its
+   target, with the arrowhead at the target. At rest it is faint and says
+   nothing: the budget is configuration, and configuration lives in the arc's
+   tooltip and in the expanded graph. Once the edge has fired the arc warns and
+   carries its count on itself; a spent budget turns danger, and says whether
+   it stopped the lane or still has one return in flight. A row that wrapped
+   drops the arcs — an arc across two lines reads as neither — and the failing
+   stage's pill carries the same count as a compact suffix instead.
+
+   Two arcs into one pill nest: the shorter edge hangs shallower and lands on
+   the pill's centre, the longer hangs under it and lands a step further from
+   its own source. Every head ends on the same pill edge, so nested arcs always
+   converge there, and the shallow one is painted last and answers for both
+   where they do. */
+
+/** What the arc says at a glance: nothing, a count, or a spent budget. */
+export type ArcState = "rest" | "fired" | "exhausted";
+
+export interface LoopArc {
+  loop: KanbanPipeline["loops"][number];
+  /** The graph's own edge id, so the two surfaces name one edge alike. */
+  id: string;
+  state: ArcState;
+  /** The target is running right now because this edge sent the work back. */
+  live: boolean;
+  /** The lane STOPPED on this edge: the budget was gone when the source failed
+      again, so the pipeline is standing there waiting for the operator. The
+      spent arc says what happened rather than what a further failure costs. */
+  parked: boolean;
+}
+
+const RETURNED_RUNNING = new Set<StageChipState>(["running", "reviewing", "committing"]);
+
+/** Every fail edge of a pipeline with the state its arc draws, from the data
+    graph slice 5 already records (#1743) — nothing here is a new reading. */
+export function loopArcs(summary: KanbanPipeline): LoopArc[] {
+  return summary.loops.map((loop) => {
+    const attempt = latestAttempt(summary.pipeline, loop.to.id);
+    const returned = attempt?.activatedBy?.stageId === loop.from.id && attempt.activatedBy.edge === "fail";
+    /* The engine parks the lane on the failing stage and leaves the cursor
+       there, so a pipeline waiting for a decision AT the source of a spent
+       edge is a lane that stopped on this edge — which is the state a red arc
+       is most often read in. */
+    return {
+      loop,
+      id: `${loop.from.id}:fail:${loop.to.id}`,
+      state: loop.fired === 0 ? "rest" : loop.fired >= loop.max ? "exhausted" : "fired",
+      live: Boolean(returned) && RETURNED_RUNNING.has(summary.views.get(loop.to.id)?.state ?? "pending"),
+      parked: loop.fired >= loop.max
+        && summary.pipeline.state === "needs_decision"
+        && summary.pipeline.cursor?.stageId === loop.from.id,
+    };
+  });
+}
+
+/** The sentence the arc keeps: at rest what the edge WOULD do, once it has
+    fired what it did, and when the budget is gone what that costs the lane. */
+function arcTitle(t: TFunction, arc: LoopArc, from: string, to: string): string {
+  const { fired, max } = arc.loop;
+  if (arc.state === "rest") return t("kanban.loopRest", { from, to, max });
+  /* A lane that stopped here leads with that. It is the one thing the operator
+     opened the arc to find out, and last of three clauses of budget it is read
+     after everything it explains — in Ukrainian at a narrow width the note runs
+     four lines and the clause lands on the last two. */
+  const stopped = arc.state === "exhausted" && arc.parked;
+  return [
+    stopped ? t("kanban.loopParkedHere", { from }) : null,
+    t("kanban.loopTitle", { from, to, fired, max }),
+    arc.state === "exhausted" && !stopped ? t("kanban.loopParked", { from }) : null,
+    arc.live ? t("kanban.loopLive", { from, to }) : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/* The band under the row, in px: how far below the pills the shallowest arc
+   hangs, how much deeper each arc stacked under it goes, how tall the
+   arrowhead at the target is, and the room the deepest arc's counter needs so
+   nothing paints onto what follows the row. */
+const ARC_GAP = 3;
+const ARC_DIP = 11;
+const ARC_STEP = 9;
+const ARC_HEAD = 5;
+/* The counter's room is the digits plus the halo cut out around them, which is
+   3.5 px on every side — enough to keep the thickest stroke any state draws
+   2 px clear of the digits, and enough that the counter still clears the row's
+   own bottom edge. */
+const ARC_LABEL = 10;
+/* A row of arcs that all rest reserves only the ink of the deepest curve: the
+   counter's room is the counter's, and an empty band under a quiet lane is
+   just dead space. */
+const ARC_QUIET = 3;
+/* Two edges into one stage land on one pill, so their arrowheads are fanned
+   apart along it — stacked on the same point they read as one arrow. The head
+   is 7 px wide, so the step leaves 4 px of clear air between two tips. */
+const ARC_FAN = 11;
+const ARC_HEAD_HALF = 3.5;
+
+interface ArcPath { d: string; lead: string; head: string; lx: number; ly: number; rank: number }
+interface ArcBand {
+  /** Serialized geometry: one compare decides whether a measurement changed. */
+  key: string;
+  /** The row runs over more than one line, so arcs are dropped for suffixes. */
+  wrapped: boolean;
+  top: number;
+  height: number;
+  paths: ReadonlyMap<string, ArcPath>;
+}
+const EMPTY_BAND: ArcBand = { key: "", wrapped: false, top: 0, height: 0, paths: new Map() };
+const round = (value: number) => Math.round(value * 2) / 2;
+const fine = (value: number) => Math.round(value * 100) / 100;
+
+/* The live arc's dashes move, so the phase at the head is not fixed: for part
+   of every cycle a gap of the pattern sits exactly where the arrowhead is, and
+   a head standing off its own line reads as a second mark rather than the end
+   of this one. The first few px of the curve are therefore drawn a second time,
+   solid, under the dashes. 6 px covers the pattern's 5 px gap. */
+const ARC_LEAD = 6;
+
+type Point = readonly [number, number];
+const mix = (a: Point, b: Point, at: number): Point => [a[0] + (b[0] - a[0]) * at, a[1] + (b[1] - a[1]) * at];
+
+/**
+ * The head end of a cubic as a path of its own: de Casteljau at the parameter
+ * that walks `want` px along the curve from its first point. Split, not
+ * approximated — the piece IS the curve it covers, so the solid drawing and
+ * the dashed one lie on each other exactly and no seam can show between them.
+ */
+function leadOf(p0: Point, p1: Point, p2: Point, p3: Point, want: number): string {
+  const at = (t: number): Point => mix(mix(mix(p0, p1, t), mix(p1, p2, t), t), mix(mix(p1, p2, t), mix(p2, p3, t), t), t);
+  let split = 1;
+  let run = 0;
+  let previous = p0;
+  for (let step = 1; step <= 128; step += 1) {
+    const point = at(step / 128);
+    run += Math.hypot(point[0] - previous[0], point[1] - previous[1]);
+    previous = point;
+    if (run >= want) { split = step / 128; break; }
+  }
+  const a = mix(p0, p1, split);
+  const b = mix(p1, p2, split);
+  const c = mix(p2, p3, split);
+  const d = mix(a, b, split);
+  const e = mix(b, c, split);
+  const end = mix(d, e, split);
+  const xy = (point: Point) => `${fine(point[0])} ${fine(point[1])}`;
+  return `M ${xy(p0)} C ${xy(a)} ${xy(d)} ${xy(end)}`;
+}
+
+/**
+ * The arcs' geometry, from the pills' own boxes: a cubic that leaves the
+ * failing pill's bottom edge, hangs under the row and comes back up into its
+ * target. Arcs are stacked by the distance they span, so the short one never
+ * hides under the long one and neither crosses a pill — they live entirely
+ * below the line the pills sit on. A row whose pills are not all on one line
+ * is reported wrapped and gets no arcs at all.
+ */
+function measureArcs(row: HTMLElement, chips: ReadonlyMap<string, HTMLElement>, arcs: readonly LoopArc[]): ArcBand {
+  const rowRect = row.getBoundingClientRect();
+  const boxes = new Map<string, { cx: number; left: number; right: number; top: number; bottom: number }>();
+  for (const [id, element] of chips) {
+    const rect = element.getBoundingClientRect();
+    if (!rect.width && !rect.height) continue;
+    boxes.set(id, {
+      cx: rect.left - rowRect.left + rect.width / 2,
+      left: rect.left - rowRect.left,
+      right: rect.right - rowRect.left,
+      top: rect.top - rowRect.top,
+      bottom: rect.bottom - rowRect.top,
+    });
+  }
+  if (!boxes.size) return EMPTY_BAND;
+  const tops = [...boxes.values()].map((box) => box.top);
+  if (Math.max(...tops) - Math.min(...tops) > 1) return { ...EMPTY_BAND, key: "wrapped", wrapped: true };
+  const spans = arcs.flatMap((arc) => {
+    const from = boxes.get(arc.loop.from.id);
+    const to = boxes.get(arc.loop.to.id);
+    return from && to
+      ? [{ id: arc.id, target: arc.loop.to.id, from, to, fired: arc.loop.fired > 0, span: Math.abs(from.cx - to.cx) }]
+      : [];
+  });
+  if (!spans.length) return EMPTY_BAND;
+  /* Shallowest first: the short arc hangs above the long one, so neither hides
+     under the other and neither crosses a pill. */
+  const ranked = [...spans].sort((a, b) => a.span - b.span);
+  /* Heads that share a target pill are fanned along it in the order the arcs
+     hang — the shallowest on the pill's centre, each deeper one a step AWAY
+     from its own source. Fanned the other way, towards the sources, the deep
+     arc's rising leg cuts through the shallow arc a few pixels under the tips
+     and the two read as one smudged double arrow. */
+  const heads = new Map<string, number>();
+  const byTarget = new Map<string, typeof ranked>();
+  for (const entry of ranked) {
+    const group = byTarget.get(entry.target) ?? byTarget.set(entry.target, []).get(entry.target)!;
+    const toward = Math.sign(entry.from.cx - entry.to.cx) || 1;
+    heads.set(entry.id, entry.to.cx - group.length * ARC_FAN * toward);
+    group.push(entry);
+  }
+  /* A fan wider than the pill it lands on slides back onto it as one piece, so
+     the clear air between two tips survives a narrow target. */
+  for (const group of byTarget.values()) {
+    const xs = group.map((entry) => heads.get(entry.id)!);
+    const low = group[0]!.to.left + ARC_HEAD_HALF;
+    const high = group[0]!.to.right - ARC_HEAD_HALF;
+    const shift = Math.max(...xs) > high ? high - Math.max(...xs) : Math.min(...xs) < low ? low - Math.min(...xs) : 0;
+    if (shift) for (const entry of group) heads.set(entry.id, heads.get(entry.id)! + shift);
+  }
+  const paths = new Map<string, ArcPath>();
+  let deepest = 0;
+  for (const [rank, entry] of ranked.entries()) {
+    const dip = ARC_DIP + rank * ARC_STEP;
+    /* A cubic hangs three quarters of the way to its control points, so the
+       controls go deeper than the dip the arc is meant to have. */
+    const control = round((dip * 4) / 3);
+    const x1 = round(entry.from.cx);
+    const x2 = round(heads.get(entry.id)!);
+    /* Drawn from the arrowhead back to the failing pill, which is the same
+       curve and a different dash phase: a dash pattern starts painting at the
+       path's first point, so a STILL pattern always meets the head with ink
+       and ends whatever gap it is on under the pill the arc leaves. Drawn the
+       other way round the resting arcs lose their last dash and the arrowhead
+       floats free of its own line. A moving pattern has no fixed phase and
+       cannot be answered by which end it starts at: the head keeps its ink
+       from `lead`, and the motion is turned round in the stylesheet so the
+       dashes still travel towards the head. */
+    paths.set(entry.id, {
+      d: `M ${x2} ${ARC_HEAD} C ${x2} ${control} ${x1} ${control} ${x1} 0`,
+      lead: leadOf([x2, ARC_HEAD], [x2, control], [x1, control], [x1, 0], ARC_LEAD),
+      head: `${x2},0 ${x2 - ARC_HEAD_HALF},${ARC_HEAD} ${x2 + ARC_HEAD_HALF},${ARC_HEAD}`,
+      lx: round((x1 + x2) / 2),
+      ly: dip,
+      rank,
+    });
+    deepest = Math.max(deepest, dip);
+  }
+  const top = round(Math.max(...[...boxes.values()].map((box) => box.bottom)) + ARC_GAP);
+  /* Only a counter needs the label room under the deepest arc, and only some
+     rows have one: a lane whose edges all rest reserves the ink and no more. */
+  const height = deepest + (ranked.some((entry) => entry.fired) ? ARC_LABEL : ARC_QUIET);
+  return {
+    key: `${top}|${height}|${[...paths].map(([id, path]) => `${id}@${path.d}`).join(";")}`,
+    wrapped: false,
+    top,
+    height,
+    paths,
+  };
+}
+
+/** The arc layer: one group per fail edge, each carrying its own state so a
+    test and a rendered frame read the same thing off the same element.
+
+    At rest the arc is all the surface the explanation has, and 1.5 px of dashes
+    is nothing to point at: the gaps between the dashes are not the arc, and a
+    pixel off the curve is not the arc either. So every arc also carries a wide
+    transparent stroke on its own path — that is what the pointer meets, and the
+    group's title opens from it wherever along the curve the eye is.
+
+    A title has no long-press, so the same stroke answers a tap by writing the
+    sentence out under the row. Without that the arc is the one thing on a
+    tablet's card that explains nothing at all. */
+function ReturnArcs({ arcs, band, titles }: { arcs: readonly LoopArc[]; band: ArcBand; titles: ReadonlyMap<string, string> }) {
+  const [tapped, setTapped] = useState<string | null>(null);
+  /* An arc that stopped being drawn takes its own note away with it. */
+  const open = tapped && arcs.some((arc) => arc.id === tapped) ? tapped : null;
+  useEffect(() => {
+    if (!open) return;
+    const away = () => setTapped(null);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setTapped(null); };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  /* Deepest first, so the shallow arc — the one nearer the row, and the one an
+     eye follows first — is painted over the deep one and is what a pointer
+     meets where the two converge into their target. Every head ends on the
+     pill's own edge, so nested arcs always come within a few pixels of each
+     other there, and something has to be on top. Unmeasured arcs keep the
+     order they were given. */
+  const ordered = [...arcs]
+    .map((arc, index) => ({ arc, rank: band.paths.get(arc.id)?.rank ?? -index }))
+    .sort((one, two) => two.rank - one.rank);
+  return (
+    <>
+      <svg className="parcs" style={{ top: band.top, height: band.height }} width="100%" height={band.height} focusable="false" data-arc-layer="1">
+        {ordered.map(({ arc }) => {
+          const path = band.paths.get(arc.id);
+          const title = titles.get(arc.id) ?? "";
+          return (
+            <g
+              key={arc.id}
+              role="img"
+              aria-label={title}
+              data-loop-arc={arc.id}
+              data-arc-state={arc.state}
+              data-arc-live={arc.live ? "1" : "0"}
+              data-arc-fired={arc.loop.fired}
+              data-arc-max={arc.loop.max}
+            >
+              <title>{title}</title>
+              {path ? <path className="parc" d={path.d} /> : null}
+              {/* The dashes of a live arc travel towards the head; the solid
+                  piece under them is what keeps the head met by ink whatever
+                  phase the motion is in. The other states draw a solid curve
+                  already, so only the live one needs it. */}
+              {path && arc.live ? <path className="parc parc-lead" d={path.lead} /> : null}
+              {path ? <polygon className="parc-head" points={path.head} /> : null}
+              {arc.loop.fired ? <text className="parc-count" x={path?.lx ?? 0} y={path?.ly ?? 0}>{`${arc.loop.fired}/${arc.loop.max}`}</text> : null}
+              {path ? (
+                <path
+                  className="parc-hit"
+                  d={path.d}
+                  data-arc-hit={arc.id}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setTapped((current) => (current === arc.id ? null : arc.id));
+                  }}
+                />
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+      {open ? (
+        <span className="parc-note" role="note" data-arc-note={open} style={{ top: band.top + band.height + 2 }}>
+          {titles.get(open)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** The wrapped row's stand-in for an arc: the return glyph and the same count,
+    on the failing stage's own pill, and only once the edge has fired.
+
+    A row of four stages wraps in every column the board actually gives it, so
+    this — not the arc — is what most lanes draw, and it carries the same three
+    readings the arc does: the state in its colour, and a return in flight
+    marked as running rather than left to read like one that is over. */
+function ReturnSuffix({ arc, title }: { arc: LoopArc; title: string }) {
+  return (
+    <span className="pret" title={title} data-stage-return={arc.id} data-arc-state={arc.state} data-arc-live={arc.live ? "1" : "0"} data-arc-fired={arc.loop.fired} data-arc-max={arc.loop.max}>
+      <span aria-hidden="true">↺</span>
+      {`${arc.loop.fired}/${arc.loop.max}`}
+    </span>
+  );
+}
+
+/** Registers a stage pill so the arcs can be drawn from its measured box. */
+const chipRef = (boxes: React.RefObject<Map<string, HTMLElement>>, id: string) =>
+  (element: HTMLElement | null) => {
+    if (element) boxes.current.set(id, element);
+    else boxes.current.delete(id);
+  };
+
+/** The one-line summary: the pass path in order, then the branches, with every
+    fail edge drawn under the row as a return arc rather than as a chip of its
+    own (#1798), so a cycle is never flattened and never reads as a step. */
 function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
   summary: KanbanPipeline;
   nameOf: (stage: PipelineStage) => string;
@@ -279,6 +638,42 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
   const { pipeline } = summary;
   const main = summary.chips.filter((chip) => !chip.branch);
   const branches = summary.chips.filter((chip) => chip.branch);
+  const arcs = useMemo(() => loopArcs(summary), [summary]);
+  const titles = useMemo(
+    () => new Map(arcs.map((arc) => [arc.id, arcTitle(t, arc, nameOf(arc.loop.from), nameOf(arc.loop.to))] as const)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the names and the translator come from the same render
+    [arcs, t],
+  );
+  const row = useRef<HTMLDivElement | null>(null);
+  const chipBoxes = useRef(new Map<string, HTMLElement>());
+  const [band, setBand] = useState<ArcBand>(EMPTY_BAND);
+  /* The arcs are the only thing here that needs the pills' boxes, so the
+     measurement runs only while a fail edge exists, and re-runs when the row
+     or a pill changes size. A band identical to the one on screen is dropped
+     rather than set, so the padding this same measurement adds to the row
+     cannot feed itself. */
+  const arcKey = arcs.map((arc) => `${arc.id}:${arc.state}:${arc.live ? 1 : 0}`).join("|");
+  useLayoutEffect(() => {
+    const element = row.current;
+    if (!element || !arcs.length) {
+      setBand((previous) => (previous.key === EMPTY_BAND.key ? previous : EMPTY_BAND));
+      return;
+    }
+    const remeasure = () => setBand((previous) => {
+      const next = measureArcs(element, chipBoxes.current, arcs);
+      return previous.key === next.key ? previous : next;
+    });
+    remeasure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(remeasure);
+    observer.observe(element);
+    for (const box of chipBoxes.current.values()) observer.observe(box);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the arcs the row draws
+  }, [arcKey]);
+  /* On a wrapped row the arc becomes a suffix on the pill of the stage that
+     fails, and only once it has fired: at rest the row says nothing extra. */
+  const suffixes = new Map(band.wrapped ? arcs.filter((arc) => arc.state !== "rest").map((arc) => [arc.loop.from.id, arc] as const) : []);
   const chip = (entry: (typeof summary.chips)[number], index: number, branch: boolean) => {
     const label = nameOf(entry.stage);
     const state = graphStateWord(t, entry.state);
@@ -289,6 +684,7 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
     /* Who runs it and how hard it thinks, without a word of text (#1743): the
        engine mark and the effort ladder ride the chip itself. */
     const identity = stageIdentity(pipeline, entry.stage);
+    const suffix = suffixes.get(entry.stage.id) ?? null;
     const body = (
       <>
         <i className="pdot" aria-hidden="true" />
@@ -298,46 +694,57 @@ function PipelineChips({ summary, nameOf, selected, onOpenStage }: {
           name={<span className="pname">{branch ? t("kanban.branch", { stage: label }) : label}</span>}
         />
         {entry.rounds ? <CountCircle n={entry.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds })} /> : null}
+        {suffix ? <ReturnSuffix arc={suffix} title={titles.get(suffix.id) ?? ""} /> : null}
       </>
     );
     const aria = [
       entry.rounds ? t("kanban.stageAriaRounds", { stage: label, state, count: entry.rounds }) : t("kanban.stageAria", { stage: label, state }),
       identityTitle(t, identity),
-    ].join(". ");
-    const hover = `${label} · ${state} · ${identityTitle(t, identity)}`;
+      suffix ? titles.get(suffix.id) : null,
+    ].filter(Boolean).join(". ");
+    const hover = [`${label} · ${state} · ${identityTitle(t, identity)}`, suffix ? titles.get(suffix.id) : null].filter(Boolean).join(" · ");
     return openable ? (
-      <button key={entry.stage.id} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={hover} onClick={() => onOpenStage(pipeline, entry.stage)}>
+      <button key={entry.stage.id} ref={chipRef(chipBoxes, entry.stage.id)} type="button" className={className} data-stage={entry.stage.id} aria-label={aria} title={hover} onClick={() => onOpenStage(pipeline, entry.stage)}>
         {body}
       </button>
     ) : (
-      <span key={entry.stage.id} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={hover} data-index={index}>
+      <span key={entry.stage.id} ref={chipRef(chipBoxes, entry.stage.id)} className={className} data-stage={entry.stage.id} role="img" aria-label={aria} title={hover} data-index={index}>
         {body}
       </span>
     );
   };
+  /* The row grows by the arcs' depth, and only when an arc is actually drawn. */
+  const arcsDrawn = arcs.length > 0 && !band.wrapped;
   return (
-    <div className="psummary">
+    <div
+      className="psummary"
+      ref={row}
+      data-arcs={arcs.length ? (band.wrapped ? "suffix" : "arcs") : undefined}
+      style={arcsDrawn && band.height ? { paddingBottom: band.height + ARC_GAP } : undefined}
+    >
       {main.map((entry, index) => (
         <span key={entry.stage.id} className="pchip-wrap">
           {index > 0 ? <span className="parrow" aria-hidden="true">→</span> : null}
           {chip(entry, index, false)}
         </span>
       ))}
-      {summary.loops.map((loop) => (
-        <LoopChip key={`${loop.from.id}->${loop.to.id}`} loop={loop} from={nameOf(loop.from)} to={nameOf(loop.to)} />
-      ))}
       {branches.map((entry, index) => chip(entry, index, true))}
+      {arcsDrawn ? <ReturnArcs arcs={arcs} band={band} titles={titles} /> : null}
     </div>
   );
 }
 
-/** The compact strip's loop chip (#1743): the leading glyph becomes the same
+/** The Stages sheet's loop chip (#1743): the leading glyph becomes the same
     circled number the arrow draws once the edge has fired, and a spent budget
     inverts the chip so "no return left" reads without colour.
 
-    The chip is one line on a 256 px column card, so its parts are separate: the
-    stage names truncate, and the budget — the fact the chip exists for — never
-    does. */
+    The sheet's nav is the one surface this still belongs on — it lists what the
+    graph holds, where a fail edge IS one of the things listed. The card's
+    collapsed row draws the same edge as a return arc instead, because a chip
+    there sits in the row of steps and reads as one (#1798).
+
+    The chip is one line, so its parts are separate: the stage names truncate,
+    and the budget — the fact the chip exists for — never does. */
 export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
   const { t } = useLocale();
   const exhausted = loop.fired >= loop.max;

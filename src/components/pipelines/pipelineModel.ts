@@ -120,10 +120,17 @@ export function resolvePipelineMemberPaths(pipelines: Pipeline[], files: readonl
 }
 
 export function pipelinesForProject(pipelines: Pipeline[], project: string, files: FileEntry[]): Pipeline[] {
-  const paths = new Set(files.filter((file) => file.project === project).map((file) => file.path));
+  return pipelinesForProjects(pipelines, new Set([project]), files);
+}
+
+/** The same fence over several projects at once (#1820): the cross-project
+    Overview needs the union, and asking per project would walk every pipeline
+    and every file once per project. */
+export function pipelinesForProjects(pipelines: Pipeline[], projects: ReadonlySet<string>, files: FileEntry[]): Pipeline[] {
+  const paths = new Set(files.filter((file) => projects.has(file.project)).map((file) => file.path));
   return pipelines.filter((pipeline) => {
     if (pipeline.state === "closed" && !pipeline.restored) return false;
-    if (pipeline.project === project) return true;
+    if (projects.has(pipeline.project)) return true;
     return pipeline.runs.some((run) => run.attempts.some((attempt) => Boolean(attempt.agentPath && paths.has(attempt.agentPath))));
   });
 }

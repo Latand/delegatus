@@ -55,6 +55,25 @@ const MANY = SCENARIO === "issue1765";
    all five effort levels, a long uncatalogued model, a stage edited after its
    launch, and a stage that has never started. */
 const MARKS = SCENARIO === "issue1743";
+/* #1820: the Overview draws the SAME board over every project, filtered to the
+   cards a worker is working on right now. Two invented projects join `atlas`
+   so the shared columns can be read across three, each bringing one card with
+   a worker on it and one with nobody. `issue1820-empty` answers every route
+   with nothing, which is the Overview's first run. */
+/* `issue1820-quiet` is the same installation with nobody working in it: the
+   Overview's most common state, where the board is narrowed to nothing by its
+   own permanent filter and no search was ever typed. */
+const OVERVIEW_QUIET = SCENARIO === "issue1820-quiet";
+const OVERVIEW_SCOPE = SCENARIO === "issue1820" || OVERVIEW_QUIET;
+const OVERVIEW_EMPTY = SCENARIO === "issue1820-empty";
+const LEDGER = "acme-ledger";
+const MESH = "river-mesh";
+/* #1798: one task carrying the lanes a return arc has to tell apart — a fail
+   edge at rest, one that fired once and is carrying the work back right now,
+   one whose budget is spent with the last return still in flight, one where
+   the spent budget already stopped the lane, and a lane with two fail edges
+   into the same stage. */
+const ARCS = SCENARIO === "issue1798";
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -149,6 +168,13 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
 /* K5a: a helper conversation the search builder brought in, and a review that took five rounds. */
+/* #1820's two other projects. Working evidence is the one the board's «N
+   working» counter reads: a live transcript whose turn never closed. */
+const ledgerBuild = OVERVIEW_SCOPE ? add(conversation("ledger-build", "Reconciling the ledger export", { project: LEDGER, ...working({ plan: { current: "Reconciling the ledger export" } }) })) : null;
+const ledgerQuiet = OVERVIEW_SCOPE ? add(conversation("ledger-quiet", "Archived last quarter", { project: LEDGER, mtime: now - 4 * 60 * MIN, lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 } })) : null;
+const meshAsk = OVERVIEW_SCOPE ? add(conversation("mesh-ask", "Which of the two meshes keeps the old ids?", { project: MESH, engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } })) : null;
+const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the migration notes", { project: MESH, mtime: now - 6 * 60 * MIN })) : null;
+
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
 const roundsReview = PIPELINES ? add(conversation("rounds-review", "Reviewer: fifth pass on the retry banner", working({ plan: { current: "Reading the fifth revision" } }))) : null;
@@ -242,7 +268,132 @@ const marksPipelines: Pipeline[] = MARKS ? (() => {
   ];
 })() : [];
 
+/* #1798. Six lanes on one card, each with the fail edge in one state, so the
+   arcs under the rows can be read side by side at any width: at rest, fired
+   once with the returned stage running because of it, a spent budget, a lane
+   the spent budget stopped, and two edges into one target. Their stages are
+   short on purpose — the row of a real card is 220-264 px wide, and the
+   one-line row with its arcs has to be readable in the same frame. The sixth
+   is the length a real lane usually has, four stages, and wraps everywhere the
+   board is not a 1920 px screen: that is the row the suffix is drawn on, and
+   it is the common case rather than the narrow one. */
+const arcPipelines: Pipeline[] = ARCS ? (() => {
+  const conv = (id: string, title: string, over: Record<string, unknown> = {}) => add(conversation(id, title, over));
+  const restFix = conv("arc-rest-fix", "Draft the empty-state copy", { mtime: now - 70 * MIN });
+  const restCrit = conv("arc-rest-crit", "Reading the draft", working({ plan: { current: "Reading the draft" } }));
+  const firedFix = conv("arc-fired-fix", "Second pass after the review sent it back", working({ plan: { current: "Rewriting the summary row" } }));
+  const firedRev = conv("arc-fired-rev", "Sent it back: the summary row still lies", { mtime: now - 55 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const spentFix = conv("arc-spent-fix", "Last return: the limit notice again", working({ plan: { current: "Rewriting the limit notice" } }));
+  const spentRev = conv("arc-spent-rev", "Sent it back: the notice still rounds the reset", { mtime: now - 40 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const parkFix = conv("arc-park-fix", "Third pass on the reset time", { mtime: now - 50 * MIN });
+  const parkRev = conv("arc-park-rev", "Out of returns: the reset time is still wrong", { mtime: now - 15 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const twoFix = conv("arc-two-fix", "Third pass on the picker", working({ plan: { current: "Reworking the picker" } }));
+  const twoCrit = conv("arc-two-crit", "Sent it back: the picker hides the default", { mtime: now - 140 * MIN });
+  const twoRev = conv("arc-two-rev", "Sent it back: the default is still not marked", { mtime: now - 90 * MIN, engine: "codex", model: "gpt-6-astra" });
+  const longImpl = conv("arc-long-impl", "Second pass after the verifier sent it back", working({ plan: { current: "Re-reading the column widths" } }));
+  const longRev = conv("arc-long-rev", "Read the first pass", { mtime: now - 120 * MIN });
+  const longVer = conv("arc-long-ver", "Sent it back: two columns still clip", { mtime: now - 80 * MIN, engine: "codex", model: "gpt-6-astra" });
+  return [
+    /* At rest: three stages, one fail edge, nothing used. The arc is faint and
+       wordless — the budget is in its tooltip only. */
+    pipeline("p-arc-rest", "Write the empty state of the pipelines list", "t-arcs", "running", [
+      stage("fix", "builder", "critique"),
+      stage("critique", "architect", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 3 } }),
+    ], [
+      { stageId: "fix", attempts: [attempt(1, "passed", restFix, { startedAt: iso(70 * MIN) })] },
+      { stageId: "critique", attempts: [attempt(1, "running", restCrit, { startedAt: iso(20 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "critique", state: "running", input: null, activatedBy: null }),
+    /* Fired once of three, and the stage it returned to is running BECAUSE of
+       it: the arc is the live one. */
+    pipeline("p-arc-fired", "Make the summary row say what actually ran", "t-arcs", "running", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 3 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", firedFix, { startedAt: iso(120 * MIN) }),
+        attempt(2, "running", firedFix, { startedAt: iso(40 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "failed", firedRev, { startedAt: iso(60 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* Two of two used, and the lane is still alive: the last return is in
+       flight, so the arc and its counter are danger while the work runs. The
+       sentence is about what a FURTHER failure would cost. */
+    pipeline("p-arc-spent", "Show the account limit reset on the card", "t-arcs", "running", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", spentFix, { startedAt: iso(150 * MIN) }),
+        attempt(2, "passed", spentFix, { startedAt: iso(110 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(3, "running", spentFix, { startedAt: iso(30 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", spentRev, { startedAt: iso(130 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", spentRev, { startedAt: iso(80 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* The same budget, spent, with the source failed once more: the engine had
+       nothing left to return and parked the lane on the failing stage. This is
+       the state a red arc is most often read in, and the one whose sentence
+       says what happened rather than what a further failure would cost. */
+    pipeline("p-arc-parked", "Say when the account limit resets", "t-arcs", "needs_decision", [
+      stage("fix", "builder", "review"),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", parkFix, { startedAt: iso(220 * MIN) }),
+        attempt(2, "passed", parkFix, { startedAt: iso(180 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(3, "passed", parkFix, { startedAt: iso(120 * MIN), activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", parkRev, { startedAt: iso(200 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "failed", parkRev, { startedAt: iso(150 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+        attempt(3, "needs_decision", parkRev, { startedAt: iso(90 * MIN), activatedBy: { stageId: "fix", attempt: 3, edge: "pass" } }),
+      ] },
+    ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    /* Two fail edges into one target: two arcs at two depths, neither crossing
+       a pill and neither crossing the other. */
+    pipeline("p-arc-two", "Mark the default account in the picker", "t-arcs", "running", [
+      stage("fix", "builder", "critique"),
+      stage("critique", "architect", "review", { onFail: { to: "fix", maxRounds: 3 } }),
+      stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 2 } }),
+    ], [
+      { stageId: "fix", attempts: [
+        attempt(1, "passed", twoFix, { startedAt: iso(200 * MIN) }),
+        attempt(2, "passed", twoFix, { startedAt: iso(150 * MIN), activatedBy: { stageId: "critique", attempt: 1, edge: "fail" } }),
+        attempt(3, "running", twoFix, { startedAt: iso(70 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "critique", attempts: [
+        attempt(1, "failed", twoCrit, { startedAt: iso(170 * MIN), activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } }),
+        attempt(2, "passed", twoCrit, { startedAt: iso(130 * MIN), activatedBy: { stageId: "fix", attempt: 2, edge: "pass" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "failed", twoRev, { startedAt: iso(100 * MIN), activatedBy: { stageId: "critique", attempt: 2, edge: "pass" } })] },
+    ], { stageId: "fix", state: "running", input: null, activatedBy: null }),
+    /* Four stages, which is the ordinary length of a real lane. A row this long
+       wraps in every column the board actually gives it short of a 1920 px
+       screen, so the suffix on the failing pill — not the arc — is what most
+       lanes draw, and the wide frames have to show it. Its edge fired once and
+       the return is in flight, which is the reading the suffix has to keep
+       apart from a return that is over. */
+    pipeline("p-arc-long", "Keep every column legible while a lane runs", "t-arcs", "running", [
+      stage("implement", "builder", "review"),
+      stage("review", "reviewer", "verify"),
+      stage("verify", "verifier", "merge", { onFail: { to: "implement", maxRounds: 3 } }),
+      stage("merge", "cleaner", null),
+    ], [
+      { stageId: "implement", attempts: [
+        attempt(1, "passed", longImpl, { startedAt: iso(160 * MIN) }),
+        attempt(2, "running", longImpl, { startedAt: iso(35 * MIN), activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [attempt(1, "passed", longRev, { startedAt: iso(120 * MIN), activatedBy: { stageId: "implement", attempt: 1, edge: "pass" } })] },
+      { stageId: "verify", attempts: [attempt(1, "failed", longVer, { startedAt: iso(80 * MIN), activatedBy: { stageId: "review", attempt: 1, edge: "pass" } })] },
+    ], { stageId: "implement", state: "running", input: null, activatedBy: null }),
+  ];
+})() : [];
+
 const pipelines: Pipeline[] = [
+  ...arcPipelines,
   ...marksPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -430,7 +581,16 @@ const tasks: BoardTask[] = [
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
+  ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
+if (OVERVIEW_SCOPE) {
+  tasks.push(
+    task("t-ledger", "assigned", "Reconcile the ledger export against the bank file", "Two of the quarter's statements disagree by one day.", 3 * MIN, [ledgerBuild!], { project: LEDGER }),
+    task("t-ledger-quiet", "assigned", "Archive last quarter's statements", "", 4 * 60 * MIN, [ledgerQuiet!], { project: LEDGER }),
+    task("t-mesh", "blocked", "Unblock the mesh id migration", "The old ids must survive the cut-over.", 11 * MIN, [meshAsk!], { project: MESH }),
+    task("t-mesh-quiet", "done", "Write the migration notes", "", 6 * 60 * MIN, [meshQuiet!], { project: MESH }),
+  );
+}
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
   const hide = (id: string, by: "operator" | "agent", secondsAgo: number) => {
@@ -672,7 +832,36 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.pathname === "/api/files") {
-    const body = JSON.stringify({ files, projectCatalog: [{ project: PROJECT, conversations: files.length }], flows, pipelines, workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } } });
+    /* #1820's first run: an installation with nothing in it at all. */
+    /* Nothing is working in the quiet installation: every conversation has
+       an idle process and a turn that closed, nothing waits on the operator,
+       and no pipeline is in flight. The projects and their tasks are the
+       same ones. */
+    const shown = OVERVIEW_QUIET
+      ? files.map((file) => ({
+        ...file,
+        activity: "idle",
+        proc: null,
+        pid: null,
+        waitingInput: null,
+        pendingQuestion: null,
+        authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(4 * 60 * MIN) },
+        lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 },
+      } as unknown as FileEntry))
+      : files;
+    const scoped = OVERVIEW_EMPTY
+      ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
+      : {
+        files: shown,
+        projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
+          const own = shown.filter((file) => file.project === project);
+          return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
+        }),
+        flows: OVERVIEW_QUIET ? [] : flows,
+        pipelines: OVERVIEW_QUIET ? [] : pipelines,
+        tasks,
+      };
+    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" } } });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -692,7 +881,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.presence.push({ mode: body.mode, visiblePaths: body.visiblePaths, focusedPath: body.focusedPath ?? null });
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
+  if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks: OVERVIEW_EMPTY ? [] : tasks });
   if (url.pathname === "/api/tasks" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     evidence.taskCreates.push(body);
@@ -950,10 +1139,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
-localStorage.setItem("llvProject", PROJECT);
+/* #1820's scenarios ARE the Overview, which is the view with no project
+   selected; every other scenario opens on `atlas`'s own board. */
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY;
+if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
+else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so
    English is only the DEFAULT here — writing it unconditionally turned every
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
-if (!location.hash) location.hash = `#p=${PROJECT}`;
+if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
 createRoot(document.getElementById("root")!).render(<Viewer />);

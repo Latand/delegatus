@@ -106,7 +106,6 @@ function overview(): HTMLElement {
       archivedProjects={new Set()}
       now={1_000}
       onSelectProject={() => {}}
-      onSelectFile={() => {}}
       onOpenSearch={() => { opened += 1; }}
     />,
   );
@@ -175,7 +174,6 @@ test("a shell that offers no search renders no button rather than a dead one", (
       archivedProjects={new Set()}
       now={1_000}
       onSelectProject={() => {}}
-      onSelectFile={() => {}}
     />,
   );
 
