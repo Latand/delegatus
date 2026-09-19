@@ -1915,6 +1915,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "overview.firstRunBody": "Сесії з ~/.claude/projects і ~/.codex/sessions з'являються тут одразу, як тільки стартують",
   "overview.firstRunCreate": "Створити проєкт",
   "overview.firstRunElsewhere": "…або просто запусти claude чи codex у будь-якому репозиторії.",
+  "overview.workingOnly": "Тільки те, над чим працюють зараз",
+  "overview.noneWorking": "Зараз у жодному проєкті не працює агент.",
 
   "catalog.unreachable": "каталог недоступний",
   "catalog.errorTitle": "Не вдалося завантажити каталог сесій",
@@ -2778,6 +2780,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.empty.done.body": "Завершені задачі зберігають тут свою історію.",
   "kanban.noMatch": "Тут нічого не знайдено",
   "kanban.noMatchHint": "Спробуйте коротший запит.",
+  "kanban.openProjectBoard": "Відкрити {project}",
   "kanban.summaryWorking": { one: "{count} агент працює", few: "{count} агенти працюють", many: "{count} агентів працюють", other: "{count} агентів працюють" },
   "kanban.summaryNeeds": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекають на вас" },
   "kanban.summaryTasks": { one: "{count} задача на дошці", few: "{count} задачі на дошці", many: "{count} задач на дошці", other: "{count} задач на дошці" },

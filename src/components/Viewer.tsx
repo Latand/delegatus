@@ -1070,10 +1070,16 @@ export function Viewer() {
             pipelines={pipelines}
             workflows={workflows}
             archivedProjects={archivedProjects}
+            /* The Overview draws the kanban board over every project (#1820).
+               Its inputs are the ones this component already polls — one
+               tasks payload for every project, the resolved flows, the
+               pipelines — so the page adds no request and no loop. */
+            tasks={tasks}
+            flows={flows}
+            loaded={loaded}
             now={clock}
             catalogFailures={catalogFailures}
             onSelectProject={selectProject}
-            onSelectFile={openFile}
             onOpenSearch={openSearch}
             mobileShell={mobileShell}
           />

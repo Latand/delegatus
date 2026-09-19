@@ -210,6 +210,18 @@
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
+/* The project a card belongs to (#1820). Only the cross-project Overview
+   draws it: on a project's own board every card is that project's and the
+   chip would be noise on all of them. */
+.kb .card .project-chip {
+  align-self: flex-start; max-width: 100%; height: 18px; padding: 0 7px; margin-bottom: 2px;
+  display: inline-flex; align-items: center; border-radius: 999px;
+  border: 1px solid var(--border-default); background: var(--surface-well);
+  font-size: var(--text-caption); font-weight: 700; color: var(--color-secondary);
+}
+.kb .card .project-chip:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.kb .card .project-chip .clamp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ── Members, references ──────────────────────────────────────────────────── */
 .kb .members { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 .kb .tile {
