@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, Loader2, Send, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Loader2, Send, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { X } from "@/components/icons";
@@ -11,7 +11,7 @@ import { useDictation } from "@/hooks/useDictation";
 import { useTaskDraft } from "@/hooks/useTaskDraft";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import { TASK_DETAILS_LIMIT, type BoardTask, type TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { createTask, deleteTask, retryTaskSpawn, sendTask, updateTask } from "./taskApi";
@@ -145,7 +145,8 @@ function NewTaskView({
   );
 }
 
-/** Edit view: text with dictation, status chips, assignments, send, delete. */
+/** Edit view: text with dictation, the agent's collapsed details, status chips,
+    assignments, send, delete. */
 function TaskDetailView({
   task,
   files,
@@ -160,6 +161,28 @@ function TaskDetailView({
   const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
   const [sending, setSending] = useState(false);
   const [armDelete, setArmDelete] = useState(false);
+  /* The agent's context (#1834): one row, closed on every fresh opening of the
+     task, and edited in place exactly as the text above it is — the draft is
+     committed when the field is left. */
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsDraft, setDetailsDraft] = useState(task.details ?? "");
+  /* What this view last saved, until the polled task carries it: a cleared
+     field has to take its row with it now, not one poll later. Dropped as soon
+     as the task moves, so an agent's own write is what is shown again. */
+  const [detailsSaved, setDetailsSaved] = useState<string | null>(null);
+  const storedDetails = detailsSaved ?? task.details ?? "";
+  useEffect(() => {
+    setDetailsSaved(null);
+  }, [task.details]);
+  /* The stored value the draft was taken from. Until the operator changes the
+     draft it follows the task as it moves, so an agent's newer details are what
+     the field shows, and leaving an untouched field never writes the older text
+     back over them. */
+  const [detailsBase, setDetailsBase] = useState(storedDetails);
+  if (storedDetails !== detailsBase && detailsDraft === detailsBase) {
+    setDetailsBase(storedDetails);
+    setDetailsDraft(storedDetails);
+  }
 
   useEffect(() => {
     if (!armDelete) return;
@@ -192,6 +215,23 @@ function TaskDetailView({
     const error = await updateTask(task.id, { text: draft });
     if (error) pushTaskToast("err", error);
     return error;
+  };
+
+  /* Written on its own, so the text above is left exactly as stored; an empty
+     draft clears the field and the row goes with it — the save closes the
+     disclosure itself, or an emptied editor would keep standing where there is
+     no longer anything to disclose. A refused save keeps the draft and the open
+     field, which is what the operator retries from. */
+  const commitDetails = async (): Promise<void> => {
+    if (detailsDraft === detailsBase) return;
+    const error = await updateTask(task.id, { details: detailsDraft });
+    if (error) {
+      pushTaskToast("err", error);
+      return;
+    }
+    setDetailsBase(detailsDraft);
+    setDetailsSaved(detailsDraft);
+    if (!detailsDraft) setDetailsOpen(false);
   };
 
   const send = async () => {
@@ -244,6 +284,32 @@ function TaskDetailView({
           <MicButtonView {...dictation} onText={(spoken) => setDraft((prev) => (prev ? prev.trimEnd() + " " + spoken : spoken))} />
         </div>
       </div>
+
+      {storedDetails || detailsOpen ? (
+        <div className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card p-2" data-task-details={task.id}>
+          <button
+            type="button"
+            aria-expanded={detailsOpen}
+            data-task-details-toggle
+            className="inline-flex min-h-11 items-center gap-1 self-start text-[11px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            {detailsOpen ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
+            {t("tasks.details")}
+          </button>
+          {detailsOpen ? (
+            <textarea
+              value={detailsDraft}
+              onChange={(event) => setDetailsDraft(event.target.value)}
+              onBlur={() => void commitDetails()}
+              rows={8}
+              aria-label={t("tasks.detailsAria")}
+              maxLength={TASK_DETAILS_LIMIT}
+              className="max-h-[260px] w-full resize-none overflow-y-auto rounded-[8px] border border-border bg-canvas px-2.5 py-1.5 font-mono text-[11.5px] leading-[17px] text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            />
+          ) : null}
+        </div>
+      ) : null}
 
       {task.assignments.length ? (
         <div className="flex flex-col gap-1 rounded-[10px] border border-border bg-card p-2">
