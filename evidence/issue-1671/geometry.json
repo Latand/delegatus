@@ -14,7 +14,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-7",
-      "scrollTop": 392,
+      "scrollTop": 385,
       "openRows": 0
     },
     "tray": {
@@ -103,7 +103,7 @@
         "first": 0,
         "second": 0,
         "badge": 9,
-        "sinceSecondTapMs": 4466,
+        "sinceSecondTapMs": 4457,
         "sent": [
           "lane-4",
           "lane-5"
@@ -136,11 +136,11 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-19T06:00:14.109Z"
+          "dismissedAt": "2026-09-19T08:42:35.578Z"
         }
       ],
-      "answeredDismissAgeMs": 634,
-      "frames": 86,
+      "answeredDismissAgeMs": 614,
+      "frames": 85,
       "framesWithRow": 0,
       "badges": [
         "8"
@@ -221,7 +221,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-7",
-      "scrollTop": 389,
+      "scrollTop": 395,
       "openRows": 0
     },
     "tray": {
@@ -310,7 +310,7 @@
         "first": 0,
         "second": 0,
         "badge": 9,
-        "sinceSecondTapMs": 4459,
+        "sinceSecondTapMs": 4456,
         "sent": [
           "lane-4",
           "lane-5"
@@ -343,11 +343,11 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-19T06:00:43.740Z"
+          "dismissedAt": "2026-09-19T08:43:04.757Z"
         }
       ],
-      "answeredDismissAgeMs": 665,
-      "frames": 88,
+      "answeredDismissAgeMs": 612,
+      "frames": 85,
       "framesWithRow": 0,
       "badges": [
         "8"
@@ -428,7 +428,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 393,
+      "scrollTop": 383,
       "openRows": 0
     },
     "tray": {
@@ -517,7 +517,7 @@
         "first": 0,
         "second": 0,
         "badge": 9,
-        "sinceSecondTapMs": 4461,
+        "sinceSecondTapMs": 4458,
         "sent": [
           "lane-4",
           "lane-5"
@@ -550,10 +550,10 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-19T06:01:13.653Z"
+          "dismissedAt": "2026-09-19T08:43:34.010Z"
         }
       ],
-      "answeredDismissAgeMs": 644,
+      "answeredDismissAgeMs": 624,
       "frames": 86,
       "framesWithRow": 0,
       "badges": [
@@ -635,7 +635,7 @@
     },
     "vertical": {
       "startedOn": "pipeline:lane-8",
-      "scrollTop": 366,
+      "scrollTop": 395,
       "openRows": 0
     },
     "tray": {
@@ -757,11 +757,11 @@
         {
           "id": "lane-parked-again",
           "action": "dismiss",
-          "dismissedAt": "2026-09-19T06:01:43.283Z"
+          "dismissedAt": "2026-09-19T08:44:03.338Z"
         }
       ],
-      "answeredDismissAgeMs": 630,
-      "frames": 86,
+      "answeredDismissAgeMs": 621,
+      "frames": 85,
       "framesWithRow": 0,
       "badges": [
         "8"

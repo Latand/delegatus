@@ -673,13 +673,15 @@ async function sheetSurface(
   });
   /* The feed behind it: rows the sheet has to cover, and the down button that
      floated over the sheet in the operator's screenshot. */
-  const behind = await page.evaluate(() => ({
-    feedRows: document.querySelectorAll("[data-log-feed-scroller] [data-feed-row], [data-log-feed-scroller] li, [data-log-feed-scroller] article").length,
-    feedScrollable: (() => {
-      const feed = document.querySelector("[data-log-feed-scroller]");
-      return feed ? feed.scrollHeight > feed.clientHeight + 1 : false;
-    })(),
-  }));
+  const behind = await page.evaluate(() => {
+    const feed = document.querySelector("[data-log-feed-scroller]");
+    return {
+      /* The scroller's own count of transcript lines it holds. */
+      feedLines: Number(feed?.getAttribute("data-tail-line-count") ?? "0"),
+      feedScrollable: feed ? feed.scrollHeight > feed.clientHeight + 1 : false,
+      downButton: document.querySelectorAll("[data-feed-jump], [data-log-feed-down]").length,
+    };
+  });
   const title = await reachable(page, "[data-runtime-sheet] h2", "[data-runtime-sheet]");
   const close = await reachable(page, "[data-runtime-sheet-close]", "[data-runtime-sheet]");
   const accounts = await reachable(page, "[data-runtime-sheet-accounts]", "[data-runtime-sheet]");
@@ -704,6 +706,9 @@ async function sheetSurface(
   check("its close control is on screen and hittable", Boolean(close?.inside && close.hitOwn));
   check("the account group is on screen", Boolean(accounts?.inside && accounts.hitOwn));
   check("the first model row is on screen", Boolean(firstModelRow?.inside && firstModelRow.hitOwn));
+  /* The feed behind the sheet is a real one, so the hit tests above are taken
+     over transcript rows rather than an empty pane. */
+  check("the transcript behind the sheet has content", behind.feedLines > 0);
   /* Scroll the sheet's own groups to the bottom: the title and the way out are
      a sticky row, so neither leaves with them. */
   await page.evaluate(() => {

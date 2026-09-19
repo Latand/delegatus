@@ -43,7 +43,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:41·opus · high·@ spare"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:41",
@@ -51,15 +51,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -84,7 +94,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -92,7 +102,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -135,7 +161,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -197,7 +223,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:43·opus · high·@ spare"
+        "text": "working 6:43·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:43",
@@ -205,15 +231,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Review · A long finished conversation title that has to stay inside…",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -238,7 +274,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -246,7 +282,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -289,7 +341,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -337,23 +389,33 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:40·opus · high·@ spare"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
-        "text": "working 6:40",
+        "text": "working 6:41",
         "width": 62.3,
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -378,7 +440,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -386,7 +448,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -429,7 +507,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -477,7 +555,7 @@
     "header": {
       "line": {
         "width": 237.2,
-        "text": "working 6:41·opus · high·@ spare"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:41",
@@ -485,15 +563,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
         "width": 39.8,
         "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 191.3,
+        "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -518,7 +606,7 @@
     },
     "title": {
       "x": 12,
-      "y": 254.5,
+      "y": 266.5,
       "width": 358,
       "height": 18.75,
       "inside": true,
@@ -526,7 +614,23 @@
     },
     "close": {
       "x": 378,
-      "y": 254.5,
+      "y": 266.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 266.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 378,
+      "y": 266.5,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -569,7 +673,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -631,7 +735,7 @@
     "header": {
       "line": {
         "width": 237.2,
-        "text": "working 6:43·opus · high·@ spare"
+        "text": "working 6:43·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:43",
@@ -639,15 +743,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
         "width": 39.8,
         "cut": false
+      },
+      "title": {
+        "text": "Review · A long finished conversation title that has to stay inside…",
+        "width": 191.3,
+        "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -672,7 +786,7 @@
     },
     "title": {
       "x": 12,
-      "y": 254.5,
+      "y": 266.5,
       "width": 358,
       "height": 18.75,
       "inside": true,
@@ -680,7 +794,23 @@
     },
     "close": {
       "x": 378,
-      "y": 254.5,
+      "y": 266.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 266.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 378,
+      "y": 266.5,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -723,7 +853,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -771,7 +901,7 @@
     "header": {
       "line": {
         "width": 237.2,
-        "text": "working 6:41·opus · high·@ spare"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:41",
@@ -779,15 +909,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
         "width": 39.8,
         "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 191.3,
+        "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -812,7 +952,7 @@
     },
     "title": {
       "x": 12,
-      "y": 254.5,
+      "y": 266.5,
       "width": 358,
       "height": 18.75,
       "inside": true,
@@ -820,7 +960,23 @@
     },
     "close": {
       "x": 378,
-      "y": 254.5,
+      "y": 266.5,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 266.5,
+      "width": 358,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 378,
+      "y": 266.5,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -863,7 +1019,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -911,7 +1067,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:41·opus · high·@ spare"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:41",
@@ -919,15 +1075,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -952,7 +1118,7 @@
     },
     "title": {
       "x": 12,
-      "y": 144,
+      "y": 156,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -960,7 +1126,23 @@
     },
     "close": {
       "x": 338,
-      "y": 144,
+      "y": 156,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 156,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 156,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1003,7 +1185,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1065,7 +1247,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:43·opus · high·@ spare"
+        "text": "working 6:43·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:43",
@@ -1073,15 +1255,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Review · A long finished conversation title that has to stay inside…",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -1106,7 +1298,7 @@
     },
     "title": {
       "x": 12,
-      "y": 144,
+      "y": 156,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -1114,7 +1306,23 @@
     },
     "close": {
       "x": 338,
-      "y": 144,
+      "y": 156,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 156,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 156,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1157,7 +1365,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1205,7 +1413,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:40·opus · high·@ spare"
+        "text": "working 6:40·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:40",
@@ -1213,15 +1421,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ spare",
-        "width": 32.3,
+        "width": 39.8,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 151.3,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -1246,7 +1464,7 @@
     },
     "title": {
       "x": 12,
-      "y": 144,
+      "y": 156,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -1254,7 +1472,23 @@
     },
     "close": {
       "x": 338,
-      "y": 144,
+      "y": 156,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 156,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 156,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1297,7 +1531,7 @@
       }
     ],
     "namesAccount": "runs on spare",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1345,7 +1579,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:41·opus · high·@ review-relief-2"
+        "text": "working 6:41·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:41",
@@ -1353,15 +1587,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ review-relief-2",
-        "width": 32.3,
+        "width": 83.6,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 107.6,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -1386,7 +1630,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -1394,7 +1638,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1437,7 +1697,7 @@
       }
     ],
     "namesAccount": "runs on review-relief-2",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1499,7 +1759,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:43·opus · high·@ review-relief-2"
+        "text": "working 6:43·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:43",
@@ -1507,15 +1767,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ review-relief-2",
-        "width": 32.3,
+        "width": 83.6,
+        "cut": false
+      },
+      "title": {
+        "text": "Review · A long finished conversation title that has to stay inside…",
+        "width": 107.6,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -1540,7 +1810,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -1548,7 +1818,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1591,7 +1877,7 @@
       }
     ],
     "namesAccount": "runs on review-relief-2",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1639,7 +1925,7 @@
     "header": {
       "line": {
         "width": 197.2,
-        "text": "working 6:40·opus · high·@ review-relief-2"
+        "text": "working 6:40·fable-5-1 · high"
       },
       "state": {
         "text": "working 6:40",
@@ -1647,15 +1933,25 @@
         "cut": false
       },
       "model": {
-        "text": "opus · high",
-        "width": 53.8,
+        "text": "fable-5-1 · high",
+        "width": 74.6,
         "cut": false
       },
       "account": {
         "text": "@ review-relief-2",
-        "width": 32.3,
+        "width": 83.6,
+        "cut": false
+      },
+      "title": {
+        "text": "Rebuild the board status projection",
+        "width": 107.6,
         "cut": true
       }
+    },
+    "behind": {
+      "feedLines": 24,
+      "feedScrollable": true,
+      "downButton": 0
     },
     "geometry": {
       "portalledToBody": true,
@@ -1680,7 +1976,7 @@
     },
     "title": {
       "x": 12,
-      "y": 192.8125,
+      "y": 204.8125,
       "width": 318,
       "height": 18.75,
       "inside": true,
@@ -1688,7 +1984,23 @@
     },
     "close": {
       "x": 338,
-      "y": 192.8125,
+      "y": 204.8125,
+      "width": 44,
+      "height": 44,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledTitle": {
+      "x": 12,
+      "y": 204.8125,
+      "width": 318,
+      "height": 18.75,
+      "inside": true,
+      "hitOwn": true
+    },
+    "scrolledClose": {
+      "x": 338,
+      "y": 204.8125,
       "width": 44,
       "height": 44,
       "inside": true,
@@ -1731,7 +2043,7 @@
       }
     ],
     "namesAccount": "runs on review-relief-2",
-    "changedTo": "Fable",
+    "changedTo": "Opus 5",
     "pageErrors": [],
     "failures": []
   },
@@ -1776,7 +2088,7 @@
     ],
     "popover": {
       "x": 298,
-      "y": 312.515625,
+      "y": 569.765625,
       "width": 240,
       "height": 244,
       "inside": true,

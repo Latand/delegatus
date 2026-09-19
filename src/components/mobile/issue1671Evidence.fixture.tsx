@@ -143,8 +143,19 @@ const evidence = {
 };
 Object.assign(window, { evidence });
 
-/* No runtime stream in the fixture: the phone runs on the file poll. */
-class QuietEventSource { addEventListener() {} removeEventListener() {} close() {} }
+/* No log stream in the fixture: the source fails at once, the way a Viewer
+   behind a proxy that drops SSE does, and the bus falls back to the file poll
+   the fixture answers below. Without the failure it waits on a stream that
+   never opens and the feed behind the sheet stays empty. */
+class QuietEventSource {
+  onerror: ((event: unknown) => void) | null = null;
+  constructor() {
+    setTimeout(() => this.onerror?.(new Event("error")), 0);
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+}
 Object.assign(window, { EventSource: QuietEventSource });
 
 /** The account future launches use; a select moves it, as on the server. */
