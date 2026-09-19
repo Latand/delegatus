@@ -248,6 +248,18 @@
         "h": 32
       },
       "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search your messages (/)",
+        "findTruncated": false,
+        "status": "22 branches running · 22 trees",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -603,6 +615,18 @@
         "h": 32
       },
       "texts": "harbor-ledger-serviceClaudeMainCodexMain22 branches running · 22 treesSearch your messages (/)BoardConversationsTaskAgentOrchestratorTasks7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search your messages (/)",
+        "findTruncated": false,
+        "status": "22 branches running · 22 trees",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -958,6 +982,18 @@
         "h": 32
       },
       "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук моїх повідомлень (/)",
+        "findTruncated": false,
+        "status": "22 гілки працюють · 22 дерева",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
@@ -1313,6 +1349,18 @@
         "h": 32
       },
       "texts": "harbor-ledger-serviceClaudeMainCodexMain22 гілки працюють · 22 дереваПошук моїх повідомлень (/)ДошкаРозмовиЗадачаАгентОркестраторЗадачі7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук моїх повідомлень (/)",
+        "findTruncated": false,
+        "status": "22 гілки працюють · 22 дерева",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
@@ -1454,7 +1502,7 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 790.265625,
+          "x": 836.0625,
           "y": 7.5,
           "w": 420,
           "h": 32
@@ -1463,9 +1511,9 @@
       {
         "name": "2 hidden tasks and conversations",
         "rect": {
-          "x": 1226.265625,
+          "x": 1272.0625,
           "y": 7.5,
-          "w": 99.265625,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -1544,7 +1592,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 workingHidden 27",
+    "texts": "harbor-ledger-service5 working27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1554,7 +1602,7 @@
         "textColor": "rgb(28, 28, 34)"
       }
     ],
-    "hidden": "Hidden 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
@@ -1564,7 +1612,7 @@
     "wrap": false,
     "gaps": [
       16,
-      308,
+      353.5,
       16,
       8,
       16,
@@ -1648,7 +1696,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search",
+        "findTruncated": false,
+        "status": "22 branches running",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -1790,7 +1850,7 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 790.265625,
+          "x": 836.0625,
           "y": 7.5,
           "w": 420,
           "h": 32
@@ -1799,9 +1859,9 @@
       {
         "name": "2 hidden tasks and conversations",
         "rect": {
-          "x": 1226.265625,
+          "x": 1272.0625,
           "y": 7.5,
-          "w": 99.265625,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -1880,7 +1940,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 workingHidden 27",
+    "texts": "harbor-ledger-service5 working27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -1890,7 +1950,7 @@
         "textColor": "rgb(232, 232, 236)"
       }
     ],
-    "hidden": "Hidden 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
@@ -1900,7 +1960,7 @@
     "wrap": false,
     "gaps": [
       16,
-      308,
+      353.5,
       16,
       8,
       16,
@@ -1984,7 +2044,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search",
+        "findTruncated": false,
+        "status": "22 branches running",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -2126,7 +2198,7 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 770.546875,
+          "x": 836.0625,
           "y": 7.5,
           "w": 420,
           "h": 32
@@ -2135,9 +2207,9 @@
       {
         "name": "2 приховані задачі чи розмови",
         "rect": {
-          "x": 1206.546875,
+          "x": 1272.0625,
           "y": 7.5,
-          "w": 118.984375,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -2216,7 +2288,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюють27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2226,7 +2298,7 @@
         "textColor": "rgb(28, 28, 34)"
       }
     ],
-    "hidden": "Приховані 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
@@ -2236,7 +2308,7 @@
     "wrap": false,
     "gaps": [
       16,
-      273,
+      338.5,
       16,
       8,
       16,
@@ -2320,7 +2392,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук",
+        "findTruncated": false,
+        "status": "22 гілки працюють",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
@@ -2462,7 +2546,7 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 770.546875,
+          "x": 836.0625,
           "y": 7.5,
           "w": 420,
           "h": 32
@@ -2471,9 +2555,9 @@
       {
         "name": "2 приховані задачі чи розмови",
         "rect": {
-          "x": 1206.546875,
+          "x": 1272.0625,
           "y": 7.5,
-          "w": 118.984375,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -2552,7 +2636,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюють27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2562,7 +2646,7 @@
         "textColor": "rgb(232, 232, 236)"
       }
     ],
-    "hidden": "Приховані 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
@@ -2572,7 +2656,7 @@
     "wrap": false,
     "gaps": [
       16,
-      273,
+      338.5,
       16,
       8,
       16,
@@ -2656,7 +2740,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 136.96875,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук",
+        "findTruncated": false,
+        "status": "22 гілки працюють",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
@@ -2782,14 +2878,14 @@
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 102.90625,
+          "w": 132.421875,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 382.90625,
+          "x": 412.421875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -2798,18 +2894,18 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 480.265625,
+          "x": 509.78125,
           "y": 7.5,
-          "w": 160,
+          "w": 176.28125,
           "h": 32
         }
       },
       {
         "name": "2 hidden tasks and conversations",
         "rect": {
-          "x": 656.265625,
+          "x": 702.0625,
           "y": 7.5,
-          "w": 99.265625,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -2888,7 +2984,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 workingHidden 27",
+    "texts": "harbor-ledger-service5 working27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -2898,11 +2994,11 @@
         "textColor": "rgb(28, 28, 34)"
       }
     ],
-    "hidden": "Hidden 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 102.90625,
+      "w": 132.421875,
       "h": 19.5625
     },
     "wrap": false,
@@ -2992,7 +3088,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 133.328125,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search",
+        "findTruncated": false,
+        "status": "22 branches running",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -3118,14 +3226,14 @@
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 102.90625,
+          "w": 132.421875,
           "h": 19.5625
         }
       },
       {
         "name": "5 working",
         "rect": {
-          "x": 382.90625,
+          "x": 412.421875,
           "y": 14.796875,
           "w": 65.359375,
           "h": 17.390625
@@ -3134,18 +3242,18 @@
       {
         "name": "Find a task",
         "rect": {
-          "x": 480.265625,
+          "x": 509.78125,
           "y": 7.5,
-          "w": 160,
+          "w": 176.28125,
           "h": 32
         }
       },
       {
         "name": "2 hidden tasks and conversations",
         "rect": {
-          "x": 656.265625,
+          "x": 702.0625,
           "y": 7.5,
-          "w": 99.265625,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -3224,7 +3332,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 workingHidden 27",
+    "texts": "harbor-ledger-service5 working27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3234,11 +3342,11 @@
         "textColor": "rgb(232, 232, 236)"
       }
     ],
-    "hidden": "Hidden 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 102.90625,
+      "w": 132.421875,
       "h": 19.5625
     },
     "wrap": false,
@@ -3328,7 +3436,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 branches running · 22 treesSearch your messages (/)7",
+      "texts": "harbor-ledger-service22 branches runningSearch7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 133.328125,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Search",
+        "findTruncated": false,
+        "status": "22 branches running",
+        "statusTruncated": false
+      },
       "islandClearance": 19.953125
     },
     "tasksOpen": {
@@ -3454,14 +3574,14 @@
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 68.015625,
+          "w": 131.40625,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 348.015625,
+          "x": 411.40625,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -3470,18 +3590,18 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 460.546875,
+          "x": 523.9375,
           "y": 7.5,
-          "w": 160,
+          "w": 162.125,
           "h": 32
         }
       },
       {
         "name": "2 приховані задачі чи розмови",
         "rect": {
-          "x": 636.546875,
+          "x": 702.0625,
           "y": 7.5,
-          "w": 118.984375,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -3560,7 +3680,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюють27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3570,11 +3690,11 @@
         "textColor": "rgb(28, 28, 34)"
       }
     ],
-    "hidden": "Приховані 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 68.015625,
+      "w": 131.40625,
       "h": 19.5625
     },
     "wrap": false,
@@ -3664,7 +3784,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 133.65625,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук",
+        "findTruncated": false,
+        "status": "22 гілки працюють",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
@@ -3790,14 +3922,14 @@
         "rect": {
           "x": 264,
           "y": 13.71875,
-          "w": 68.015625,
+          "w": 131.40625,
           "h": 19.5625
         }
       },
       {
         "name": "5 працюють",
         "rect": {
-          "x": 348.015625,
+          "x": 411.40625,
           "y": 14.796875,
           "w": 80.53125,
           "h": 17.390625
@@ -3806,18 +3938,18 @@
       {
         "name": "Знайти задачу",
         "rect": {
-          "x": 460.546875,
+          "x": 523.9375,
           "y": 7.5,
-          "w": 160,
+          "w": 162.125,
           "h": 32
         }
       },
       {
         "name": "2 приховані задачі чи розмови",
         "rect": {
-          "x": 636.546875,
+          "x": 702.0625,
           "y": 7.5,
-          "w": 118.984375,
+          "w": 53.46875,
           "h": 32
         }
       },
@@ -3896,7 +4028,7 @@
       "[data-task-panel-toggle]": true,
       "[data-hidden-pill]": true
     },
-    "texts": "harbor-ledger-service5 працюютьПриховані 27",
+    "texts": "harbor-ledger-service5 працюють27",
     "overflow": 0,
     "tier": "narrow",
     "plus": [
@@ -3906,11 +4038,11 @@
         "textColor": "rgb(232, 232, 236)"
       }
     ],
-    "hidden": "Приховані 2",
+    "hidden": "2",
     "name": {
       "x": 264,
       "y": 13.71875,
-      "w": 68.015625,
+      "w": 131.40625,
       "h": 19.5625
     },
     "wrap": false,
@@ -4000,7 +4132,19 @@
         "w": 66,
         "h": 32
       },
-      "texts": "harbor-ledger-service22 гілки працюють · 22 дереваПошук моїх повідомлень (/)7",
+      "texts": "harbor-ledger-service22 гілки працюютьПошук7",
+      "name": {
+        "x": 264,
+        "y": 13.375,
+        "w": 133.65625,
+        "h": 20.25
+      },
+      "find": {
+        "find": "Пошук",
+        "findTruncated": false,
+        "status": "22 гілки працюють",
+        "statusTruncated": false
+      },
       "islandClearance": 30.484375
     },
     "tasksOpen": {
