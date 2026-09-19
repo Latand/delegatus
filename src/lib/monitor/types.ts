@@ -243,6 +243,22 @@ export interface SeatTickItem {
   kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning";
   id: string;
   label: string;
+  /** A settled child's readable transcript (#1881): the controller attaches
+      the child's final message from its tail to a wake that is going out. The
+      pre-check itself never opens it. */
+  finalMessageFrom?: { path: string; engine: string | null };
+  /** That final message, bounded and redacted, once the controller read it. */
+  finalMessage?: string;
+}
+
+/** A spawned child a wake names as unreadable, and why (#1881). */
+export interface SeatTickUnreadableChild {
+  conversationId: string;
+  title: string;
+  reason: string;
+  /** What a landing records, so the same child under the same reason is not
+      named again. */
+  stateToken: string;
 }
 
 /**
@@ -259,9 +275,10 @@ export interface SeatTickSkippedChildren {
   /** Outcomes recorded before this seat's designation, or taken by an earlier
       seat epoch. */
   stale: number;
-  /** Children whose transcript the Viewer cannot resolve — outside every
-      scanner root, or gone from disk — so their outcome can never be read or
-      harvested, whoever is seated. */
+  /** Running or stalled children whose transcript the Viewer cannot resolve
+      and that this wake could not also name (#1881): past the per-wake bound
+      on named ones. A settled child is never here — it is listed with its
+      reason — and a child already named under its reason is `unchanged`. */
   unreadable: number;
   /** Children in exactly the state a landed wake already showed this seat
       (#1783 round two). Nothing about them has moved since — no later record
@@ -289,6 +306,10 @@ export type SeatTickVerdict =
         Counted rather than named — the wake says how many it skipped, why,
         and nothing else about them. */
     skippedChildren: SeatTickSkippedChildren;
+    /** Children skipped because their transcript cannot be read, named with
+        the reason (#1881) — each once, up to a bound; the rest stay in the
+        count above until a later wake names them. */
+    unreadableChildren?: SeatTickUnreadableChild[];
     /** Evidence this check could not read (#1298). The reasons above stand
         without it; this is what the wake says it could not see. */
     gaps: SeatTickEvidenceGap[];
@@ -604,6 +625,16 @@ export const SEAT_TICK_CHILDREN_GAPS: readonly SeatTickChildrenGap[] = [
  * never observed with no host behind it — and it is neither open work nor
  * harvestable: an unknown is kept unknown, never counted as completed.
  */
+/**
+ * Why the Viewer cannot read a spawned child's transcript (#1881).
+ *
+ * - `no-transcript`: the registry holds no transcript generation for it;
+ * - `outside-roots`: the recorded path is outside every scanner root, as
+ *   written and as it resolves on disk;
+ * - `missing`: the path is inside a root and no file is there any more.
+ */
+export type SeatTickTranscriptGap = "no-transcript" | "outside-roots" | "missing";
+
 export interface SeatTickChildInput {
   conversationId: string;
   /** Immutable completed-turn identity, independent of conversation reuse. */
@@ -642,6 +673,19 @@ export interface SeatTickChildInput {
       disk. Such a child can never be read or harvested by any seat, so it is
       never listed as harvestable and only counted. Absent is readable. */
   transcript?: "readable" | "unresolvable";
+  /** Why an `unresolvable` transcript cannot be read (#1881), so the wake can
+      name it per child instead of counting it. Absent on a readable one. */
+  transcriptReason?: SeatTickTranscriptGap;
+  /** Where a readable transcript lives and which engine wrote it (#1881). The
+      pre-check never opens it; the controller reads the child's final message
+      from its tail for a wake that is already going out. */
+  transcriptPath?: string;
+  engine?: string;
+  /** When the seat's spawn of this child was recorded — the lineage edge's own
+      instant, written once (#1881). The last fallback of the child's clock for
+      a child with no terminal instant and no readable transcript, so its age
+      against the designation can still be told. */
+  spawnedAt?: string;
   /** The seat epoch whose landed wake last harvested an outcome of this child
       (#1749). An earlier epoch's harvest is what makes an outcome that predates
       this seat history rather than work, however the identity was re-minted:
