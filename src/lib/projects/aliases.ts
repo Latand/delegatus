@@ -122,7 +122,7 @@ function storedWorktreeRepositories(): ReadonlyMap<string, string> {
 }
 
 function projectPathPairs(filename: string, collection: string, pathField: string): Array<[string, string]> {
-  const sqlite = ["flows", "pipelines", "workflows"].includes(collection)
+  const sqlite = ["flows", "pipelines", "workflows", "tasks"].includes(collection)
     ? readStateCollectionRows(statePath("state.sqlite"), collection)
     : null;
   const stored = sqlite ?? readObject(filename)?.[collection];
@@ -140,7 +140,7 @@ function projectPathPairs(filename: string, collection: string, pathField: strin
 }
 
 function collectionRecords(filename: string, collection: string): Record<string, unknown>[] {
-  const sqlite = ["flows", "pipelines", "workflows"].includes(collection)
+  const sqlite = ["flows", "pipelines", "workflows", "tasks"].includes(collection)
     ? readStateCollectionRows(statePath("state.sqlite"), collection)
     : null;
   const stored = sqlite ?? readObject(filename)?.[collection];

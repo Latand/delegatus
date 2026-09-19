@@ -493,10 +493,9 @@ test("the lapse ends the setting that expired and keeps the monitor prompt it ne
 test("the board card for a quiet tick is written, kept in step, and closed when the tick comes back (#1275)", async () => {
   const project = `card-lifecycle-${crypto.randomUUID().slice(0, 8)}`;
   const tasksFile = path.join(SANDBOX, "state", "tasks.json");
-  const readCards = (): { text: string; status: string }[] => {
-    const raw = fs.existsSync(tasksFile) ? JSON.parse(fs.readFileSync(tasksFile, "utf8")) as { tasks?: { project: string; text: string; status: string }[] } : {};
-    return (raw.tasks ?? []).filter((task) => task.project === project).map((task) => ({ text: task.text, status: task.status }));
-  };
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const readCards = (): { text: string; status: string }[] => loadTasks(tasksFile)
+    .filter((task) => task.project === project).map((task) => ({ text: task.text, status: task.status }));
 
   const off = harness({ pipelines: OPEN_LANE, settings: { ...offSettings(), project } });
   /* The real card writer, not the harness stub: this is the board surface the
@@ -551,8 +550,8 @@ test("a card is written to the state dir the tick is pointed at now, not the one
     else process.env.LLV_STATE_DIR = previous;
   }
 
-  const written = JSON.parse(fs.readFileSync(path.join(moved, "tasks.json"), "utf8")) as { tasks: { project: string; text: string }[] };
-  const cards = written.tasks.filter((task) => task.project === project);
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const cards = loadTasks(path.join(moved, "tasks.json")).filter((task) => task.project === project);
   expect(cards).toHaveLength(1);
   expect(cards[0]!.text).toContain("This project's seat tick is not on its default settings");
 });
@@ -1338,10 +1337,9 @@ test("a card write that fails leaves the outage unreported, and the next check r
 test("a second outage of the same source is carded again after the first card was completed", async () => {
   const project = `source-outage-${crypto.randomUUID().slice(0, 8)}`;
   const tasksFile = path.join(SANDBOX, "state", "tasks.json");
-  const readCards = (): { text: string; status: string }[] => {
-    const raw = fs.existsSync(tasksFile) ? JSON.parse(fs.readFileSync(tasksFile, "utf8")) as { tasks?: { project: string; text: string; status: string }[] } : {};
-    return (raw.tasks ?? []).filter((task) => task.project === project).map((task) => ({ text: task.text, status: task.status }));
-  };
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const readCards = (): { text: string; status: string }[] => loadTasks(tasksFile)
+    .filter((task) => task.project === project).map((task) => ({ text: task.text, status: task.status }));
   const lanes = [...OPEN_LANE, ...FINISHED_LANE].map((lane) => ({ ...lane, project }));
   const outage = (gap: ReturnType<typeof standingGap>) => harness({
     pipelines: lanes,
@@ -1357,9 +1355,11 @@ test("a second outage of the same source is carded again after the first card wa
   expect(first.written.at(-1)!.pullRequestGap).toMatchObject({ reported: true });
 
   /* The operator reads it and closes it. */
-  const board = JSON.parse(fs.readFileSync(tasksFile, "utf8")) as { tasks: { project: string; status: string }[] };
-  for (const task of board.tasks) if (task.project === project) task.status = "done";
-  fs.writeFileSync(tasksFile, JSON.stringify(board));
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  mutateTasks((tasks) => ({
+    tasks: tasks.map((task) => task.project === project ? { ...task, status: "done" as const } : task),
+    result: undefined,
+  }), tasksFile);
 
   /* An interval later the standing source is asked again and answers, which is
      what ends the run — and leaves the next outage a run of its own. */
@@ -3757,10 +3757,9 @@ test("a seat re-designated onto a conversation a retired attempt still names is 
 test("a retired and an outstanding attempt each carry their own board card (#1594)", async () => {
   const project = `wake-cards-${crypto.randomUUID().slice(0, 8)}`;
   const board = path.join(process.env.LLV_STATE_DIR!, "tasks.json");
-  const cardsOn = (): { id: string; text: string; status: string }[] => {
-    const file = JSON.parse(fs.readFileSync(board, "utf8")) as { tasks: { id: string; project: string; text: string; status: string }[] };
-    return file.tasks.filter((task) => task.project === project && task.status !== "done");
-  };
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const cardsOn = (): { id: string; text: string; status: string }[] => loadTasks(board)
+    .filter((task) => task.project === project && task.status !== "done");
   const stranded = outstandingWake({ seatEpoch: 140, conversationId: CONVERSATION, operationId: null,
     text: "the predecessor's wake", preparedAt: new Date(NOW - 70 * MINUTE).toISOString() });
   const lane = [{ ...OPEN_LANE[0]!, project }];
@@ -3814,9 +3813,11 @@ test("a retired and an outstanding attempt each carry their own board card (#159
     .toEqual(standing.map((task) => `${task.id}:${task.text}`).sort());
 
   /* And closing one attempt's card leaves the other's standing. */
-  const file = JSON.parse(fs.readFileSync(board, "utf8")) as { tasks: { id: string; status: string }[] };
-  fs.writeFileSync(board, JSON.stringify({ ...file,
-    tasks: file.tasks.map((task) => task.id === retiredCard.id ? { ...task, status: "done" } : task) }));
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  mutateTasks((tasks) => ({
+    tasks: tasks.map((task) => task.id === retiredCard.id ? { ...task, status: "done" as const } : task),
+    result: undefined,
+  }), board);
   expect(cardsOn().map((task) => task.id)).toEqual([outstandingCard.id]);
 });
 
