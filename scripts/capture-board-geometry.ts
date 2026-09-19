@@ -2511,7 +2511,8 @@ function readSeatPopover() {
       current: row.dataset.seatCurrent === "1",
       title: row.querySelector(".t1 .title")?.textContent?.trim() ?? "",
       span: row.querySelector(".t2")?.textContent?.trim() ?? "",
-      href: row.querySelector("a")?.getAttribute("href") ?? "",
+      /* Whether the row opens its own conversation; the id itself stays out of the record. */
+      opensItself: row.querySelector("a")?.getAttribute("href") === `#c=${encodeURIComponent(row.dataset.seatRow ?? "")}`,
       height: row.querySelector(".line")?.getBoundingClientRect().height ?? 0,
       notes: row.querySelector("[data-seat-notes]")?.textContent ?? null,
     })),
@@ -2602,7 +2603,7 @@ async function seatsMain(which: SeatCase): Promise<void> {
           must(popover.rows[0]?.current === true && popover.rows.slice(1).every((row) => !row.current), `${tag}: the live seat is not first under Current`);
           must(popover.rows.every((row) => row.height >= 52), `${tag}: a row is under 52 px`);
           must(popover.openNotes === 1 && popover.rows[1]?.notes === seats.retired[0]!.notes, `${tag}: the Notes row reads ${popover.rows[1]?.notes}`);
-          must(popover.rows.every((row) => row.href.startsWith("#c=")), `${tag}: a row does not open its conversation`);
+          must(popover.rows.every((row) => row.opensItself), `${tag}: a row does not open its conversation`);
           must(popover.rows.slice(1).every((row) => / · /.test(row.span)), `${tag}: a previous row has no span (${popover.rows.map((row) => row.span).join(" | ")})`);
         }
         const controls = head.headControls;
