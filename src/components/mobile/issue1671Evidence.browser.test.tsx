@@ -583,6 +583,7 @@ const headerReading = (page: Page) => page.evaluate(() => {
     state: cell("[data-mobile2-chat-state]"),
     model: cell("[data-mobile2-chat-model]"),
     account: cell("[data-mobile2-chat-account]"),
+    title: cell("[data-mobile2-title-text]"),
   };
 });
 
@@ -645,6 +646,12 @@ async function sheetSurface(
   check("the state phrase is whole", header.state?.cut === false);
   check("the model and its tier are whole", header.model?.cut === false);
   check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
+  /* An ordinary account id has to be READABLE, not merely present in the DOM:
+     `@ spare` rendered as `@ s…` and the first evidence pass called that a pass
+     because it read textContent (#1795, second critique). */
+  if (account.length <= 8) check("the account is shown whole, not cut to a letter", header.account?.cut === false);
+  /* A long one yields, and still shows more than an ellipsis. */
+  else check("a long account id still shows its head", (header.account?.width ?? 0) >= 60);
   await tap(page, cdp, "[data-runtime-pill]");
   await pause(page, 400);
   await shot("sheet");
@@ -664,6 +671,15 @@ async function sheetSurface(
       scrollsInsideItself: sheet.scrollHeight <= sheet.clientHeight || getComputedStyle(sheet).overflowY === "auto",
     };
   });
+  /* The feed behind it: rows the sheet has to cover, and the down button that
+     floated over the sheet in the operator's screenshot. */
+  const behind = await page.evaluate(() => ({
+    feedRows: document.querySelectorAll("[data-log-feed-scroller] [data-feed-row], [data-log-feed-scroller] li, [data-log-feed-scroller] article").length,
+    feedScrollable: (() => {
+      const feed = document.querySelector("[data-log-feed-scroller]");
+      return feed ? feed.scrollHeight > feed.clientHeight + 1 : false;
+    })(),
+  }));
   const title = await reachable(page, "[data-runtime-sheet] h2", "[data-runtime-sheet]");
   const close = await reachable(page, "[data-runtime-sheet-close]", "[data-runtime-sheet]");
   const accounts = await reachable(page, "[data-runtime-sheet-accounts]", "[data-runtime-sheet]");
@@ -688,6 +704,18 @@ async function sheetSurface(
   check("its close control is on screen and hittable", Boolean(close?.inside && close.hitOwn));
   check("the account group is on screen", Boolean(accounts?.inside && accounts.hitOwn));
   check("the first model row is on screen", Boolean(firstModelRow?.inside && firstModelRow.hitOwn));
+  /* Scroll the sheet's own groups to the bottom: the title and the way out are
+     a sticky row, so neither leaves with them. */
+  await page.evaluate(() => {
+    const sheet = document.querySelector("[data-runtime-sheet]");
+    if (sheet) sheet.scrollTop = sheet.scrollHeight;
+  });
+  await pause(page, 300);
+  const scrolledTitle = await reachable(page, "[data-runtime-sheet] h2", "[data-runtime-sheet]");
+  const scrolledClose = await reachable(page, "[data-runtime-sheet-close]", "[data-runtime-sheet]");
+  await shot("scrolled");
+  check("the title stays in the sheet after its groups are scrolled", Boolean(scrolledTitle?.inside && scrolledTitle.hitOwn));
+  check("the close control stays in the sheet after its groups are scrolled", Boolean(scrolledClose?.inside && scrolledClose.hitOwn));
   check("the account the conversation runs on is named", namesAccount.includes(account));
   check("the account it runs on is the marked row, and holds the next message until another is picked",
     accountRows.some((row) => row.id === account && row.state === "current" && row.next === "true" && row.disabled));
@@ -750,7 +778,7 @@ async function sheetSurface(
   await page.close();
   return {
     surface, account, viewportAccountPick: { pickedId, ...picked, selects: afterPick.accountSelects },
-    ancestors, header, geometry, title, close, accounts, firstModelRow, accountRows, namesAccount,
+    ancestors, header, behind, geometry, title, close, scrolledTitle, scrolledClose, accounts, firstModelRow, accountRows, namesAccount,
     changedTo: changed, pageErrors, failures,
   };
 }

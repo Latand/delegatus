@@ -955,30 +955,34 @@ function RuntimeSheet({
         data-mobile2-sheet="model"
         className="max-h-[80vh] w-full max-w-[440px] overflow-y-auto rounded-t-[16px] bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2 focus-visible:outline-none"
       >
-        <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
-        <div className="mb-2 flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            {/* The sheet names itself (§4.4) — it is not «settings», it is what
-                the NEXT message will be sent with. */}
-            <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t("mobile2.composer.sheetTitle")}</h2>
-            {/* What the sheet is FOR, in one line (§4.4): every row below
-                changes the next message, never the turn that is already
-                running. */}
-            <p className="px-1 text-label leading-snug text-secondary" data-mobile2-next-message>
-              {t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
-            </p>
+        {/* The grab bar and the header stay put while the groups scroll under
+            them: a Codex sheet (Model, Reasoning, Speed) or a fourth account
+            pushed the title and the way out off the top of the scroller. */}
+        <div className="sticky top-0 z-[1] -mx-3 -mt-3 bg-card px-3 pt-3" data-runtime-sheet-header>
+          <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-border" aria-hidden />
+          <div className="mb-2 flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              {/* The sheet names itself (§4.4) — it is not «settings», it is
+                  what the NEXT message will be sent with. */}
+              <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t("mobile2.composer.sheetTitle")}</h2>
+              {/* What the sheet is FOR, in one line (§4.4): every row below
+                  changes the next message, never the turn already running. */}
+              <p className="px-1 text-label leading-snug text-secondary" data-mobile2-next-message>
+                {t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
+              </p>
+            </div>
+            {/* A phone has no Escape and the backdrop is a guess, so the way out
+                is a control the operator can see (#1795). */}
+            <button
+              type="button"
+              data-runtime-sheet-close
+              aria-label={t("common.close")}
+              onClick={onClose}
+              className="-mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
           </div>
-          {/* A phone has no Escape and the backdrop is a guess, so the way out
-              is a control the operator can see (#1795). */}
-          <button
-            type="button"
-            data-runtime-sheet-close
-            aria-label={t("common.close")}
-            onClick={onClose}
-            className="-mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-control text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <X className="h-5 w-5" aria-hidden />
-          </button>
         </div>
 
         <AccountSection t={t} engine={engine} account={account} limit={limit} />

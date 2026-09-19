@@ -90,7 +90,9 @@ const reviewerLineage = deckRequested
 const files: FileEntry[] = [
   conversation(RUNNING_PATH, "Rebuild the board status projection", {
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
-    effort: "high",
+    /* A real launch model, not a one-word one: the bar line has to hold
+       `fable-5-1 · high` beside the state phrase and the account (#1795). */
+    model: "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
   }),
@@ -148,6 +150,22 @@ Object.assign(window, { EventSource: QuietEventSource });
 /** The account future launches use; a select moves it, as on the server. */
 let activeAccount = ACCOUNT;
 
+/* A transcript with something in it, so the feed behind the sheet is a real
+   scrolled feed — its rows, and its own down button, are what floated over the
+   sheet in the operator's screenshot. All invented. */
+const FEED = `${Array.from({ length: 24 }, (_, i) => (i % 2 === 0
+  ? JSON.stringify({
+    type: "user", uuid: `evidence-u-${i}`, timestamp: iso(2_400 - i * 60), sessionId: "conversation_running",
+    message: { role: "user", content: `Replay band ${i + 1} and say what moved.` },
+  })
+  : JSON.stringify({
+    type: "assistant", uuid: `evidence-a-${i}`, timestamp: iso(2_400 - i * 60), sessionId: "conversation_running",
+    message: {
+      role: "assistant", model: "claude-fable-5-1",
+      content: [{ type: "text", text: `Band ${i} replayed from the snapshot: the projection matches, and nothing outside it moved.` }],
+    },
+  }))).join("\n")}\n`;
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -180,6 +198,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ items: catalog.slice(offset, offset + limit), total: 4_595, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
   if (url.pathname === "/api/orchestrator/seat") return json({ seat: null, pending: null, exists: true });
+  /* The feed's poll transport (the fixture has no log stream). */
+  if (url.pathname === "/api/logs" && method === "POST") {
+    const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
+    const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
+    (asked.reqs ?? []).forEach((request, index) => {
+      const body = request.path === RUNNING_PATH ? FEED : "";
+      const from = Math.min(Math.max(request.offset, 0), body.length);
+      chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
+    });
+    return json({ chunks });
+  }
   /* Three invented Claude accounts: the one the running conversation is on,
      one ready to take the next message, one signed out. */
   if (url.pathname === "/api/accounts") {

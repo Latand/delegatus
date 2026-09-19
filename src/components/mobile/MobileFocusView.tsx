@@ -741,17 +741,13 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 }
 
 /**
- * The identity half of a bar meta line: the engine mark, the model with its
- * reasoning tier, and the account the conversation runs on.
+ * The identity half of a bar meta line: the engine mark and the model with its
+ * reasoning tier. One cell for both title cells — a conversation's own and a
+ * review round's — because a round opened from the board said only
+ * «working 6:44» while the sheet it opens changes exactly these things (#1795).
  *
- * One cell for both title cells — a conversation's own and a review round's —
- * because a round opened from the board said only «working 6:44» while the
- * sheet it opens changes exactly these three things (#1795).
- *
- * The model and its tier are ONE reading and do not yield: sharing the line's
- * slack with the account cut both halves («opus · hi… · @ sp…»). The account is
- * the elastic cell, so a long account id loses its tail and the model never
- * does; the state phrase before them still outranks everything.
+ * The model and its tier are ONE reading and do not yield; the state phrase
+ * before them still outranks everything.
  */
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
@@ -759,18 +755,41 @@ function ChatIdentity({ file }: { file: FileEntry }) {
   const model = file.model
     ? file.effort ? t("mobile2.chat.identity", { model: file.model, effort: file.effort }) : file.model
     : badge.label;
-  /* Read off the live transcript path, as every other account surface reads it.
-     The legacy home is named too — «default» is the answer to «which account is
-     this», and the runtime sheet answers it with the same word. */
-  const account = accountIdFromPath(file.path);
   return (
     <>
       <span aria-hidden className="shrink-0 text-muted">·</span>
       <ChatEngineMark file={file} />
       <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
-      <span aria-hidden className="shrink-0 text-muted">·</span>
-      <span data-mobile2-chat-account className="min-w-0 truncate" title={account}>@ {account}</span>
     </>
+  );
+}
+
+/**
+ * The account the conversation runs on, at the end of the TITLE line.
+ *
+ * It was on the meta line under it, and at 390 px that line has no room left:
+ * the state phrase with its timer and the model with its tier need 116 px of
+ * the 197 px the line has, and what was left could not hold «@ spare» — the
+ * cell rendered «@ s…» on every phone surface (#1795, second critique). The
+ * title line is one long sentence that already truncates, so a few pixels there
+ * cost a word of a title instead of the whole answer to «which account is
+ * this». A long account id still yields, at the cap below, before the title is
+ * left with nothing.
+ *
+ * Read off the live transcript path, as every other account surface reads it.
+ * The legacy home is named too — «default» is the answer to that question, and
+ * the runtime sheet answers it with the same word.
+ */
+function ChatAccountTag({ file }: { file: FileEntry }) {
+  const account = accountIdFromPath(file.path);
+  return (
+    <span
+      data-mobile2-chat-account
+      className="max-w-[45%] shrink-0 truncate text-label font-medium leading-tight text-muted"
+      title={account}
+    >
+      @ {account}
+    </span>
   );
 }
 
@@ -795,8 +814,11 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {cleanTitle(renamed ?? file.title, 90)}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {cleanTitle(renamed ?? file.title, 90)}
+        </span>
+        <ChatAccountTag file={file} />
       </span>
       <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
@@ -850,8 +872,11 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         bump === "right" ? "-translate-x-3" : bump === "left" ? "translate-x-3" : ""
       }`}
     >
-      <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-        {entry.label}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
+          {entry.label}
+        </span>
+        {entry.file ? <ChatAccountTag file={entry.file} /> : null}
       </span>
       <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />

@@ -238,16 +238,19 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(state.className).toContain("shrink-0");
   expect(state.className).toContain("whitespace-nowrap");
   expect(state.className).toContain("text-success");
-  /* The model and its reasoning tier are ONE reading and are not cut to make
-     room for the account beside them (#1795): the account is the cell that
-     gives way. */
+  /* The model and its reasoning tier are ONE reading and are not cut (#1795).
+     The account is not on this line at all: at 390 px the state phrase and the
+     model leave it nothing, so it rides the title line above. */
   const model = state.parentElement!.querySelector("[data-mobile2-chat-model]") as unknown as HTMLElement;
   expect(model.textContent).toContain("Opus");
   expect(model.textContent).toContain("high");
   expect(model.className).toContain("shrink-0");
   expect(model.className).toContain("whitespace-nowrap");
-  const accountCell = state.parentElement!.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
-  expect(accountCell.className).toContain("min-w-0");
+  expect(state.parentElement!.querySelector("[data-mobile2-chat-account]")).toBeNull();
+  const accountCell = dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
+  /* Beside the title, which is the elastic cell there. */
+  expect(accountCell.previousElementSibling?.hasAttribute("data-mobile2-title-text")).toBe(true);
+  expect(accountCell.className).toContain("shrink-0");
   expect(accountCell.className).toContain("truncate");
   expect(dom.document.querySelector("[data-mobile2-chat-stage]")?.textContent).toBe("stage 2/2");
   /* The engine rides the line as a MARK, never as a word (§3.2): spelling it
@@ -278,8 +281,10 @@ test("the meta line names the account the conversation runs on, managed or the l
   await settle();
   const account = dom.document.querySelector("[data-mobile2-chat-account]");
   expect(account?.textContent).toBe("@ spare");
-  /* It yields before the state phrase does, like the model beside it. */
-  expect((account as unknown as HTMLElement).className).toContain("min-w-0");
+  /* It does not yield to the state phrase or the model: it is beside the title,
+     which is the cell that gives way. A very long id yields at its own cap. */
+  expect((account as unknown as HTMLElement).className).toContain("shrink-0");
+  expect((account as unknown as HTMLElement).className).toContain("max-w-[45%]");
 
   /* The legacy home is an answer too, and the sheet gives the same one. */
   dom.document.body.replaceChildren();
