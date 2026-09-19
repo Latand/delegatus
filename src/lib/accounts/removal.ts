@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 
+import { stateDir } from "@/lib/configDir";
 import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
 
 export type { ManagedAccountEngine };
 export type AccountRemovalBlocker = "live_sessions" | "current_conversations";
@@ -376,161 +376,6 @@ export function scrubAccountHomeToRetainedHistory(
   return removal;
 }
 
-export interface StagedAccountHomeCleanup {
-  home: string;
-  stagingHome: string;
-  moved: string[];
-  descriptor: number;
-  stagingDescriptor: number;
-  history: AccountHistoryInventoryReport;
-}
-
-function sameHistoryInventory(left: AccountHistoryInventoryReport, right: AccountHistoryInventoryReport): boolean {
-  const leftArtifacts = left.artifacts.filter((artifact) => artifact.history).map((artifact) => `${artifact.path}:${artifact.classification}`).sort();
-  const rightArtifacts = right.artifacts.filter((artifact) => artifact.history).map((artifact) => `${artifact.path}:${artifact.classification}`).sort();
-  return leftArtifacts.length === rightArtifacts.length
-    && leftArtifacts.every((value, index) => value === rightArtifacts[index]);
-}
-
-export function rollbackStagedAccountHome(cleanup: StagedAccountHomeCleanup): void {
-  try {
-    const anchor = `/proc/self/fd/${cleanup.descriptor}`;
-    const stagingAnchor = `/proc/self/fd/${cleanup.stagingDescriptor}`;
-    for (const name of fs.readdirSync(stagingAnchor).reverse()) {
-      const source = path.join(stagingAnchor, name);
-      try { fs.lstatSync(source); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; else throw error; }
-      let destination = path.join(anchor, name);
-      try {
-        fs.lstatSync(destination);
-        destination = path.join(anchor, `.${name}.recovered-${crypto.randomUUID()}`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      fs.renameSync(source, destination);
-    }
-    fs.rmdirSync(cleanup.stagingHome);
-  } finally {
-    fs.closeSync(cleanup.descriptor);
-    fs.closeSync(cleanup.stagingDescriptor);
-  }
-}
-
-export function releaseStagedAccountHome(cleanup: StagedAccountHomeCleanup): void {
-  fs.closeSync(cleanup.descriptor);
-  fs.closeSync(cleanup.stagingDescriptor);
-}
-
-export function verifyStagedAccountHome(engine: ManagedAccountEngine, accountId: string, cleanup: StagedAccountHomeCleanup): void {
-  let pathname: fs.Stats;
-  let opened: fs.Stats;
-  try {
-    pathname = fs.lstatSync(cleanup.home);
-    opened = fs.fstatSync(cleanup.descriptor);
-  } catch (error) {
-    throw blockedInventory(cleanup.history, ".", errorMessage(error));
-  }
-  if (pathname.dev !== opened.dev || pathname.ino !== opened.ino) {
-    throw blockedInventory(cleanup.history, ".", "account-home identity changed during account-registry commit");
-  }
-  try {
-    pathname = fs.lstatSync(cleanup.stagingHome);
-    opened = fs.fstatSync(cleanup.stagingDescriptor);
-  } catch (error) {
-    throw blockedInventory(cleanup.history, ".", errorMessage(error));
-  }
-  if (pathname.dev !== opened.dev || pathname.ino !== opened.ino) {
-    throw blockedInventory(cleanup.history, ".", "staging-home identity changed during account-registry commit");
-  }
-  const current = accountHistoryInventory(engine, accountId, cleanup.home);
-  if (!sameHistoryInventory(cleanup.history, current)) {
-    throw blockedInventory(current, ".", "history changed during account-registry commit");
-  }
-  const staged = accountHistoryInventory(engine, accountId, cleanup.stagingHome);
-  if (staged.artifacts.some((artifact) => artifact.history)) {
-    throw blockedInventory(staged, ".", "history appeared in staged account data during account-registry commit");
-  }
-}
-
-/**
- * Reversibly stages every non-retained top-level entry before the durable
- * account-registry commit. A safety refusal or commit failure can restore the
- * exact entries without reconstructing credentials or provider state.
- */
-export function stageAccountHomeCleanup(
-  engine: ManagedAccountEngine,
-  accountId: string,
-  home: string,
-  retainedName: string | null,
-): StagedAccountHomeCleanup {
-  const initial = accountHistoryInventory(engine, accountId, home);
-  let context: ReturnType<typeof validatedHomeRemovalContext>;
-  let stagingHome: string;
-  try {
-    context = validatedHomeRemovalContext(engine, accountId, home);
-    stagingHome = path.join(path.dirname(context.root), `.${path.basename(context.root)}.removal-${process.pid}-${crypto.randomUUID()}`);
-    fs.mkdirSync(stagingHome, { mode: 0o700 });
-  } catch (error) {
-    throw blockedInventory(initial, ".", errorMessage(error));
-  }
-  let cleanup: StagedAccountHomeCleanup | null = null;
-  let descriptor: number | null = null;
-  let stagingDescriptor: number | null = null;
-  let keepDescriptor = false;
-  try {
-    if (process.platform !== "linux") throw new Error("stable account-home staging is unavailable on this platform");
-    descriptor = fs.openSync(context.root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
-    stagingDescriptor = fs.openSync(stagingHome, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
-    const opened = fs.fstatSync(descriptor);
-    if (opened.dev !== context.stat.dev || opened.ino !== context.stat.ino || !entryPassesRemovalChecks(context, opened, context.root)) {
-      throw new Error("account-home identity changed before staging");
-    }
-    const openedStaging = fs.fstatSync(stagingDescriptor);
-    const stagingPathStat = fs.lstatSync(stagingHome);
-    if (openedStaging.dev !== stagingPathStat.dev || openedStaging.ino !== stagingPathStat.ino) throw new Error("staging-home identity changed before staging");
-    cleanup = { home: context.root, stagingHome, moved: [], descriptor, stagingDescriptor, history: initial };
-    const anchor = `/proc/self/fd/${descriptor}`;
-    const stagingAnchor = `/proc/self/fd/${stagingDescriptor}`;
-    for (const entry of fs.readdirSync(anchor, { withFileTypes: true })) {
-      if (retainedName === entry.name) continue;
-      fs.renameSync(path.join(anchor, entry.name), path.join(stagingAnchor, entry.name));
-      cleanup.moved.push(entry.name);
-    }
-    const current = accountHistoryInventory(engine, accountId, context.root);
-    if (!sameHistoryInventory(initial, current)) throw blockedInventory(current, retainedName ?? ".", "history changed while account-home cleanup was staged");
-    keepDescriptor = true;
-    return cleanup;
-  } catch (error) {
-    try {
-      if (cleanup) {
-        try { rollbackStagedAccountHome(cleanup); }
-        finally { descriptor = null; stagingDescriptor = null; }
-      }
-      else fs.rmdirSync(stagingHome);
-    }
-    catch (rollbackError) {
-      throw new Error("account-home staging rollback failed", { cause: rollbackError });
-    }
-    if (error instanceof AccountHistoryInventoryBlockedError) throw error;
-    throw blockedInventory(initial, ".", errorMessage(error));
-  } finally {
-    if (!keepDescriptor && descriptor !== null) fs.closeSync(descriptor);
-    if (!keepDescriptor && stagingDescriptor !== null) fs.closeSync(stagingDescriptor);
-  }
-}
-
-/** Discards staged non-history only after the durable account record commits. */
-export function discardStagedAccountHome(engine: ManagedAccountEngine, accountId: string, cleanup: StagedAccountHomeCleanup): boolean {
-  let pathname: fs.Stats;
-  let opened: fs.Stats;
-  try { pathname = fs.lstatSync(cleanup.stagingHome); opened = fs.fstatSync(cleanup.stagingDescriptor); }
-  catch (error) { throw blockedInventory(cleanup.history, ".", errorMessage(error)); }
-  if (pathname.dev !== opened.dev || pathname.ino !== opened.ino) {
-    throw blockedInventory(cleanup.history, ".", "staging-home identity changed before discard");
-  }
-  return removeHistoryFreeAccountHome(engine, accountId, cleanup.stagingHome);
-}
-
 function sidecarTreeIsSafe(
   pathname: string,
   absolutePath: string,
@@ -628,13 +473,11 @@ export function cleanupAccountProviderSidecars(
 }
 
 /** Registry-liveness half of account-removal safety. Genuinely live ownership
- *  blocks here (issue #643): a registered host whose
- *  process answers a probe, an in-flight launch receipt, an unsettled
- *  migration, or an undelivered held delivery. Terminal, unhosted history and
- *  `starting` entries/receipts whose process is provably gone are registry rot
- *  and are ignored by this helper. The removal and orphan-cleanup modules also
- *  run {@link accountHistoryInventory}; its filesystem blockers have no force
- *  bypass and every owned transcript remains in a retained archive. */
+ *  blocks here (issue #643): a registered host whose process answers a probe,
+ *  an in-flight launch receipt, a queued account pin, or a migration still in
+ *  flight. Terminal, unhosted history, `starting` entries/receipts whose
+ *  process is provably gone, parked `failed-recoverable` migrations and owed
+ *  deliveries no host can take are not (issue #1857): removal settles them. */
 export function accountRemovalBlockers(
   engine: ManagedAccountEngine,
   accountId: string,
@@ -645,4 +488,362 @@ export function accountRemovalBlockers(
     ...(accountHasLiveSessions(snapshot, engine, accountId, options) ? ["live_sessions" as const] : []),
     ...(liveAccountConversationIds(snapshot, engine, accountId, options).length > 0 ? ["current_conversations" as const] : []),
   ];
+}
+
+/* ---- Removal into the shared archive (issue #1857) ----
+ *
+ * A used home always holds something the #314 inventory refuses: prompt
+ * history, shell snapshots, provider SQLite, stray rollouts. Removal therefore
+ * judges nothing entry by entry. It moves the whole home with one rename(2)
+ * into `shared/<engine>/retired/<id>/`, moves the registry paths with it, and
+ * deletes only credentials and the Viewer's own links, by exact name. Every
+ * step is journaled in the accounts registry so a crash at any point is either
+ * undone (home renamed back) or finished at startup.
+ */
+
+export type AccountRemovalCheckpoint = "journaled" | "renamed" | "registry-retired" | "accounts-committed";
+export type AccountRemovalJournalPhase = "archiving" | "scrubbing";
+export interface AccountRemovalJournalEntry { id: string; phase: AccountRemovalJournalPhase; startedAt: number }
+
+export interface AccountArchiveRemovalReport extends AccountRetirementReport {
+  /** Where the leftovers now live; null when the account had no home on disk. */
+  archive: string | null;
+  /** Regular files and their bytes kept in the archive (credentials excluded). */
+  files: number;
+  bytes: number;
+  /** A credential or Viewer link is still in the archive; recovery retries it. */
+  cleanupPending: boolean;
+}
+
+/** The accounts-registry half of a removal, supplied by each engine. */
+export interface AccountRemovalRegistryPort {
+  /** Writes or clears (null) this account's journal record. */
+  journal(phase: AccountRemovalJournalPhase | null): void;
+  /** One write: the account leaves, a retired record points at its archive,
+      and the journal moves to `scrubbing`. */
+  commitRetired(): void;
+  /** Rewrites the registry as it stood before the removal began. */
+  restore(): void;
+}
+
+export interface ManagedAccountArchiveRemoval {
+  engine: ManagedAccountEngine;
+  accountId: string;
+  home: string;
+  homeIsSafe(): boolean;
+  unsafeHome(): Error;
+  /** Registry path moves for this home, read before the home moves. */
+  rewrites(home: string, archive: string): AccountPathRewrite[];
+  registry: AccountRemovalRegistryPort;
+}
+
+export class AccountArchiveUnavailableError extends Error {
+  constructor(readonly archive: string, message: string) {
+    super(message);
+    this.name = "AccountArchiveUnavailableError";
+  }
+}
+
+export class AccountRemovalBlockedError extends Error {
+  constructor(readonly blockers: AccountRemovalBlocker[]) {
+    super("account has active sessions or conversations");
+    this.name = "AccountRemovalBlockedError";
+  }
+}
+
+const ARCHIVE_CREDENTIALS: Record<ManagedAccountEngine, readonly string[]> = {
+  claude: [".credentials.json"],
+  codex: ["auth.json"],
+};
+/* Links the Viewer placed in the home. `projects` is the shared-store link
+   (#891); a real `projects` directory is history and stays. */
+const ARCHIVE_LINKS: Record<ManagedAccountEngine, readonly string[]> = {
+  claude: [...OWNED_SYMLINKS.claude, "projects"],
+  codex: [...OWNED_SYMLINKS.codex],
+};
+
+let checkpointHook: ((checkpoint: AccountRemovalCheckpoint) => void) | null = null;
+/** Test seam: observe (or crash at) each durable step of a removal. */
+export function setAccountRemovalCheckpointForTests(hook: ((checkpoint: AccountRemovalCheckpoint) => void) | null): void {
+  checkpointHook = hook;
+}
+function reach(checkpoint: AccountRemovalCheckpoint): void { checkpointHook?.(checkpoint); }
+
+/* Removals running in this process, shared across bundled copies of this
+   module, so startup recovery never undoes a removal that is still running. */
+const inFlight: Set<string> = ((globalThis as unknown as { __llvAccountRemovalsInFlight?: Set<string> }).__llvAccountRemovalsInFlight ??= new Set());
+export function accountRemovalInFlight(engine: ManagedAccountEngine, accountId: string): boolean {
+  return inFlight.has(`${engine}:${accountId}`);
+}
+
+export function retiredAccountArchive(engine: ManagedAccountEngine, accountId: string): string {
+  return path.join(path.dirname(stateDir()), "shared", engine, "retired", accountId);
+}
+
+function lstatOrNull(pathname: string): fs.Stats | null {
+  try { return fs.lstatSync(pathname); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function nearestExistingAncestor(pathname: string): string {
+  let current = path.resolve(pathname);
+  for (;;) {
+    if (lstatOrNull(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+}
+
+function openDirectoryNoFollow(pathname: string): number {
+  const descriptor = fs.openSync(pathname, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  if (!fs.fstatSync(descriptor).isDirectory()) { fs.closeSync(descriptor); throw new Error("not a directory"); }
+  return descriptor;
+}
+
+/** Unlinks one exact entry below `root` through directory descriptors, never
+    following a link on the way. `remove` decides from the entry's own lstat. */
+function unlinkExact(root: string, relative: string, remove: (stat: fs.Stats) => boolean): boolean {
+  const parts = relative.split(path.sep);
+  const descriptors: number[] = [];
+  try {
+    descriptors.push(openDirectoryNoFollow(root));
+    for (const part of parts.slice(0, -1)) {
+      const next = path.join(`/proc/self/fd/${descriptors.at(-1)}`, part);
+      try { descriptors.push(openDirectoryNoFollow(next)); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+      }
+    }
+    const target = path.join(`/proc/self/fd/${descriptors.at(-1)}`, parts.at(-1)!);
+    const stat = lstatOrNull(target);
+    if (!stat || !remove(stat)) return true;
+    try { fs.unlinkSync(target); } catch { return false; }
+    return lstatOrNull(target) === null;
+  } catch {
+    return false;
+  } finally {
+    for (const descriptor of descriptors.reverse()) fs.closeSync(descriptor);
+  }
+}
+
+/** Step 6: credentials and the Viewer's links leave the archive by exact name. */
+function scrubAccountArchive(engine: ManagedAccountEngine, archive: string): boolean {
+  if (!lstatOrNull(archive)) return true;
+  if (process.platform !== "linux") return false;
+  let complete = true;
+  for (const name of ARCHIVE_CREDENTIALS[engine]) {
+    if (!unlinkExact(archive, name, (stat) => stat.isFile() || stat.isSymbolicLink())) complete = false;
+  }
+  for (const name of ARCHIVE_LINKS[engine]) {
+    if (!unlinkExact(archive, name, (stat) => stat.isSymbolicLink())) complete = false;
+  }
+  return complete;
+}
+
+function measureArchive(archive: string): { files: number; bytes: number } {
+  let files = 0;
+  let bytes = 0;
+  const visit = (directory: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const pathname = path.join(directory, entry.name);
+      const stat = lstatOrNull(pathname);
+      if (!stat) continue;
+      if (stat.isDirectory()) visit(pathname);
+      else if (stat.isFile()) { files += 1; bytes += stat.size; }
+    }
+  };
+  if (lstatOrNull(archive)?.isDirectory()) visit(archive);
+  return { files, bytes };
+}
+
+/** Removes directories left empty (rmdir never deletes content). */
+function pruneEmptyDirectories(directory: string): void {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const pathname = path.join(directory, entry.name);
+    if (lstatOrNull(pathname)?.isDirectory()) pruneEmptyDirectories(pathname);
+  }
+  try { fs.rmdirSync(directory); } catch { /* not empty */ }
+}
+
+function finishArchive(engine: ManagedAccountEngine, archive: string): { complete: boolean; files: number; bytes: number } {
+  const complete = scrubAccountArchive(engine, archive);
+  const measured = measureArchive(archive);
+  pruneEmptyDirectories(archive);
+  return { complete, ...measured };
+}
+
+/**
+ * Removes a managed account by moving its home into the shared archive
+ * (issue #1857, section 6 of docs/investigations/1857-account-removal.md).
+ * The caller holds the account mutation lock and its engine registry lock.
+ */
+export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemoval): AccountArchiveRemovalReport {
+  const { engine, accountId } = spec;
+  const home = path.resolve(spec.home);
+  const archive = retiredAccountArchive(engine, accountId);
+
+  /* 1. Preflight, no writes. */
+  const blockers = accountRemovalBlockers(engine, accountId);
+  if (blockers.length > 0) throw new AccountRemovalBlockedError(blockers);
+  let homeStat: fs.Stats | null;
+  try { homeStat = lstatOrNull(home); } catch { throw spec.unsafeHome(); }
+  if (homeStat) {
+    if (!spec.homeIsSafe()) throw spec.unsafeHome();
+    let mounts: ReadonlySet<string>;
+    try { mounts = mountedPaths(); } catch { throw spec.unsafeHome(); }
+    if (mounts.has(home)) throw spec.unsafeHome();
+    if (lstatOrNull(archive)) throw new AccountArchiveUnavailableError(archive, "archive destination already exists");
+    if (fs.statSync(nearestExistingAncestor(path.dirname(archive))).dev !== homeStat.dev) {
+      throw new AccountArchiveUnavailableError(archive, "archive is on another filesystem than the account home");
+    }
+  }
+  const rewrites = homeStat ? spec.rewrites(home, archive) : [];
+  const key = `${engine}:${accountId}`;
+  inFlight.add(key);
+  try {
+    /* 2. Journal the intent. */
+    spec.registry.journal("archiving");
+    reach("journaled");
+
+    /* 3. One rename moves the home, credentials included. */
+    const putHomeBack = (): void => { if (homeStat) fs.renameSync(archive, home); };
+    if (homeStat) {
+      try {
+        fs.mkdirSync(path.dirname(archive), { recursive: true, mode: 0o700 });
+        fs.renameSync(home, archive);
+      } catch (error) {
+        spec.registry.journal(null);
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") throw new AccountArchiveUnavailableError(archive, "archive is on another filesystem than the account home");
+        throw error;
+      }
+      reach("renamed");
+    }
+
+    /* 4. One agent-registry mutation; it re-checks liveness inside. */
+    const registry = agentRegistry();
+    const beforeRetirement = registry.readOnlySnapshot();
+    let retirement: AccountRetirementReport;
+    try {
+      retirement = registry.retireAccount(engine, accountId, "default", {}, { rewrite: rewrites });
+    } catch (error) {
+      putHomeBack();
+      spec.registry.journal(null);
+      if (error instanceof Error && error.message === "account has live sessions") throw new AccountRemovalBlockedError(["live_sessions"]);
+      if (error instanceof Error && error.message === "account has current conversations") throw new AccountRemovalBlockedError(["current_conversations"]);
+      throw error;
+    }
+    reach("registry-retired");
+
+    /* 5. Commit the accounts registry. */
+    const retired = registry.readOnlySnapshot();
+    try {
+      spec.registry.commitRetired();
+    } catch (error) {
+      registry.restoreSnapshot(retired, beforeRetirement);
+      putHomeBack();
+      /* If this write fails too, the journal still says `archiving` with the
+         home in place, which recovery clears. */
+      try { spec.registry.restore(); } catch { /* recovered at startup */ }
+      throw error;
+    }
+    reach("accounts-committed");
+
+    /* 6. Credentials and links leave by exact name. */
+    const finished = homeStat ? finishArchive(engine, archive) : { complete: true, files: 0, bytes: 0 };
+    let cleanupPending = !finished.complete;
+    if (!cleanupPending) {
+      try { spec.registry.journal(null); } catch { cleanupPending = true; }
+    }
+
+    /* 7. What moved. */
+    return { archive: homeStat ? archive : null, files: finished.files, bytes: finished.bytes, ...retirement, cleanupPending };
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
+ * Settles one journaled removal after a crash or a failed step. `archiving`
+ * is undone: the home is renamed back and any registry path already moved
+ * follows it. `scrubbing` (the account already left the registry) is finished.
+ * Returns false while the record needs a person: both the home and the
+ * archive exist, or the journal disagrees with the accounts registry.
+ */
+export function recoverManagedAccountRemoval(input: {
+  engine: ManagedAccountEngine;
+  accountId: string;
+  home: string;
+  phase: AccountRemovalJournalPhase;
+  listed: boolean;
+  clearJournal(): void;
+}): boolean {
+  const home = path.resolve(input.home);
+  const archive = retiredAccountArchive(input.engine, input.accountId);
+  if (input.phase === "scrubbing") {
+    if (!finishArchive(input.engine, archive).complete) return false;
+    input.clearJournal();
+    return true;
+  }
+  const homeExists = lstatOrNull(home) !== null;
+  const archiveExists = lstatOrNull(archive) !== null;
+  if (homeExists && archiveExists) return false;
+  if (!homeExists && archiveExists) {
+    if (!input.listed) return false;
+    fs.renameSync(archive, home);
+    agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
+  }
+  input.clearJournal();
+  return true;
+}
+
+export function normalizeAccountRemovalJournal(value: unknown, validId: (id: string) => boolean): AccountRemovalJournalEntry[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const entries: AccountRemovalJournalEntry[] = [];
+  for (const item of value) {
+    const entry = item as Partial<AccountRemovalJournalEntry> | null;
+    if (!entry || typeof entry.id !== "string" || !validId(entry.id) || (entry.phase !== "archiving" && entry.phase !== "scrubbing") || typeof entry.startedAt !== "number") return null;
+    if (entries.some((existing) => existing.id === entry.id)) return null;
+    entries.push({ id: entry.id, phase: entry.phase, startedAt: entry.startedAt });
+  }
+  return entries;
+}
+
+export function withAccountRemovalJournal(
+  entries: readonly AccountRemovalJournalEntry[],
+  accountId: string,
+  phase: AccountRemovalJournalPhase | null,
+): AccountRemovalJournalEntry[] {
+  const others = entries.filter((entry) => entry.id !== accountId);
+  if (!phase) return others;
+  const startedAt = entries.find((entry) => entry.id === accountId)?.startedAt ?? Date.now();
+  return [...others, { id: accountId, phase, startedAt }];
+}
+
+/** The DELETE answer: what moved, so the dialog can say it (issue #1857). */
+export function removalResponse(accountId: string, removal: AccountArchiveRemovalReport) {
+  return {
+    removed: { id: accountId },
+    cleanupPending: removal.cleanupPending,
+    moved: { archive: removal.archive, files: removal.files, bytes: removal.bytes },
+    conversationsRewritten: removal.conversationsRewritten,
+    pinsCleared: removal.pinsCleared,
+    deliveriesDropped: removal.deliveriesDropped,
+    migrationsSettled: removal.migrationsSettled,
+  };
+}
+
+/** The errno of a failed filesystem step, for a 500 that says what failed. */
+export function removalErrno(error: unknown): { errno?: string } {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" ? { errno: code } : {};
 }

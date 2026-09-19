@@ -10,7 +10,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
 const mod = await import("./claude");
-const { AccountHistoryInventoryBlockedError } = await import("./removal");
+const { AccountArchiveUnavailableError, AccountRemovalBlockedError, retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("./removal");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 
@@ -18,6 +18,7 @@ beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(process.env.LLV_CLAUDE_HOME!, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
+  fs.rmSync(path.join(SANDBOX, "shared"), { recursive: true, force: true });
 });
 afterAll(() => {
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = OLD_STATE;
@@ -100,103 +101,6 @@ test("durable account retirement rejects every later spawn admission", () => {
   })).toThrow("claude account is retired");
 });
 
-test("a fully-owned home deletes cleanly while retaining its transcripts and removing provider sidecars", () => {
-  const account = mod.createManagedClaudeAccount("Retire me");
-  const transcript = path.join(account.projectsDir, "-repo", "12345678-1234-1234-1234-123456789abc.jsonl");
-  fs.mkdirSync(path.dirname(transcript), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(transcript, "{\"cwd\":\"/repo\"}\n", { mode: 0o600 });
-  agentRegistry().ensureConversation("claude", transcript, account.id);
-  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
-  fs.writeFileSync(path.join(account.home, ".claude.json"), "{}", { mode: 0o600 });
-  const sidecar = `${account.home}.lock`;
-  fs.mkdirSync(sidecar, { mode: 0o700 });
-
-  const removal = mod.removeManagedClaudeAccount(account.id);
-
-  expect(removal).toEqual({ cleanupPending: false });
-  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(account.id);
-  // The transcript stays at the exact path the registry and the board already know.
-  expect(fs.readFileSync(transcript, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
-  expect(mod.claudeProjectRoots()).toContain(account.projectsDir);
-  expect(fs.readdirSync(account.home)).toEqual(["projects"]);
-  expect(mod.claudeHomeOwningTranscript(transcript)).toBeNull();
-  expect(fs.existsSync(sidecar)).toBe(false);
-  // A retired archive is not an orphan, and its id is never reissued.
-  expect(mod.cleanupOrphanedClaudeHomes()).toEqual({ removed: [], unresolved: [] });
-  expect(fs.existsSync(transcript)).toBe(true);
-  expect(mod.createManagedClaudeAccount("Retire me").id).not.toBe(account.id);
-});
-
-test("Claude per-session debug logs block account deletion and name the exact history path", () => {
-  const account = mod.createManagedClaudeAccount("Debug history");
-  const relative = path.join("debug", "12345678-90ab-cdef-1234-567890abcdef.txt");
-  const artifact = path.join(account.home, relative);
-  fs.mkdirSync(path.dirname(artifact), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(artifact, "session activity\n", { mode: 0o600 });
-
-  let caught: unknown;
-  try { mod.removeManagedClaudeAccount(account.id); }
-  catch (error) { caught = error; }
-
-  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
-  expect((caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report.artifacts).toContainEqual({
-    path: relative,
-    classification: "history",
-    history: true,
-  });
-  expect(fs.readFileSync(artifact, "utf8")).toBe("session activity\n");
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-for (const [label, relative, contents] of [
-  ["paste cache", path.join("paste-cache", "12345678-90ab-cdef-1234-567890abcdef.txt"), "pasted user text\n"],
-  ["config backup", path.join("backups", ".claude.json.backup.1234567890"), "{\"projects\":{\"/repo\":{}}}\n"],
-] as const) {
-  test(`Claude ${label} artifacts block account deletion as history`, () => {
-    const account = mod.createManagedClaudeAccount(`History ${label}`);
-    const artifact = path.join(account.home, relative);
-    fs.mkdirSync(path.dirname(artifact), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(artifact, contents, { mode: 0o600 });
-
-    let caught: unknown;
-    try { mod.removeManagedClaudeAccount(account.id); }
-    catch (error) { caught = error; }
-
-    expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
-    expect((caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report.artifacts).toContainEqual({
-      path: relative,
-      classification: "history",
-      history: true,
-    });
-    expect(fs.readFileSync(artifact, "utf8")).toBe(contents);
-    expect(fs.existsSync(account.home)).toBe(true);
-    expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-  });
-}
-
-test("Claude persistent plugin data blocks account deletion as unknown", () => {
-  const account = mod.createManagedClaudeAccount("Plugin data");
-  const relative = path.join("plugins", "data", "example-plugin", "session-notes.txt");
-  const artifact = path.join(account.home, relative);
-  fs.mkdirSync(path.dirname(artifact), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(artifact, "plugin-owned session notes\n", { mode: 0o600 });
-
-  let caught: unknown;
-  try { mod.removeManagedClaudeAccount(account.id); }
-  catch (error) { caught = error; }
-
-  expect(caught).toBeInstanceOf(AccountHistoryInventoryBlockedError);
-  expect((caught as InstanceType<typeof AccountHistoryInventoryBlockedError>).report.artifacts).toContainEqual({
-    path: relative,
-    classification: "unknown",
-    history: false,
-  });
-  expect(fs.readFileSync(artifact, "utf8")).toBe("plugin-owned session notes\n");
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
 test("sidecar cleanup does not follow a symlink outside the accounts root", () => {
   const account = mod.createManagedClaudeAccount("Linked sidecar");
   const sidecar = `${account.home}.lock`;
@@ -209,7 +113,7 @@ test("sidecar cleanup does not follow a symlink outside the accounts root", () =
 
   const removal = mod.removeManagedClaudeAccount(account.id);
 
-  expect(removal).toEqual({ cleanupPending: true });
+  expect(removal).toMatchObject({ cleanupPending: true });
   expect(fs.readFileSync(marker, "utf8")).toBe("keep");
   expect(fs.lstatSync(path.join(sidecar, "external")).isSymbolicLink()).toBe(true);
 });
@@ -229,258 +133,8 @@ test("a provider sidecar recreated during cleanup leaves cleanup pending", () =>
   try { removal = mod.removeManagedClaudeAccount(account.id); }
   finally { fs.rmSync = originalRm; }
 
-  expect(removal).toEqual({ cleanupPending: true });
+  expect(removal).toMatchObject({ cleanupPending: true });
   expect(fs.existsSync(sidecar)).toBe(true);
-});
-
-test("history created during home cleanup blocks logical deletion and survives", () => {
-  const account = mod.createManagedClaudeAccount("Concurrent history");
-  const transcript = path.join(account.home, "history.jsonl");
-  const credentials = path.join(account.home, ".credentials.json");
-  fs.writeFileSync(credentials, "{}", { mode: 0o600 });
-  const originalRename = fs.renameSync;
-  let injected = false;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (!injected && String(source).startsWith("/proc/self/fd/") && path.basename(String(source)) === "projects") {
-      injected = true;
-      fs.writeFileSync(transcript, "{}\n", { mode: 0o600 });
-    }
-    return result;
-  }) as typeof fs.renameSync;
-
-  try {
-    expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal");
-  } finally {
-    fs.renameSync = originalRename;
-  }
-
-  expect(fs.readFileSync(transcript, "utf8")).toBe("{}\n");
-  expect(fs.readFileSync(credentials, "utf8")).toBe("{}");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("a directory swapped to an outside symlink cannot redirect home cleanup", () => {
-  const account = mod.createManagedClaudeAccount("Raced directory");
-  const cache = path.join(account.home, "cache");
-  const outside = path.join(SANDBOX, "outside-raced-directory");
-  const marker = path.join(outside, "keep.txt");
-  fs.mkdirSync(cache, { mode: 0o700 });
-  fs.writeFileSync(path.join(cache, "local.txt"), "local", { mode: 0o600 });
-  fs.mkdirSync(outside, { mode: 0o700 });
-  fs.writeFileSync(marker, "keep", { mode: 0o600 });
-  const originalOpen = fs.openSync;
-  let swapped = false;
-  fs.openSync = ((target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-    if (!swapped && String(target).startsWith("/proc/self/fd/") && path.basename(String(target)) === "cache") {
-      swapped = true;
-      const racedDirectory = fs.realpathSync(String(target));
-      fs.renameSync(racedDirectory, `${racedDirectory}-saved`);
-      fs.symlinkSync(outside, racedDirectory);
-    }
-    return originalOpen(target, flags, mode);
-  }) as typeof fs.openSync;
-
-  try {
-    expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal");
-  } finally {
-    fs.openSync = originalOpen;
-  }
-
-  expect(fs.readFileSync(marker, "utf8")).toBe("keep");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("an account-registry write failure leaves the registered home untouched", () => {
-  const account = mod.createManagedClaudeAccount("Registry failure");
-  const originalRename = fs.renameSync;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    if (path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("registry write denied"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("registry rollback stays anchored when the home path becomes an outside symlink", () => {
-  const account = mod.createManagedClaudeAccount("Anchored rollback");
-  const movedHome = `${account.home}-moved`;
-  const outside = path.join(SANDBOX, "outside-rollback-target");
-  const marker = path.join(outside, "keep.txt");
-  fs.mkdirSync(outside, { mode: 0o700 });
-  fs.writeFileSync(marker, "keep", { mode: 0o600 });
-  const originalRename = fs.renameSync;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    if (path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      originalRename(account.home, movedHome);
-      fs.symlinkSync(outside, account.home);
-      throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
-    }
-    return originalRename(source, destination);
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("registry write denied"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(fs.readFileSync(marker, "utf8")).toBe("keep");
-  expect(fs.existsSync(path.join(movedHome, "projects"))).toBe(true);
-});
-
-test("history added to the retained tree during registry commit rolls deletion back", () => {
-  const account = mod.createManagedClaudeAccount("Retained commit race");
-  const owned = path.join(account.projectsDir, "-repo", "owned.jsonl");
-  const late = path.join(account.projectsDir, "-repo", "late-unowned.jsonl");
-  const credentials = path.join(account.home, ".credentials.json");
-  fs.mkdirSync(path.dirname(owned), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(owned, "{}\n", { mode: 0o600 });
-  fs.writeFileSync(credentials, "{}", { mode: 0o600 });
-  agentRegistry().ensureConversation("claude", owned, account.id);
-  const originalRename = fs.renameSync;
-  let injected = false;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (!injected && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      injected = true;
-      fs.writeFileSync(late, "{}\n", { mode: 0o600 });
-    }
-    return result;
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(fs.readFileSync(late, "utf8")).toBe("{}\n");
-  expect(fs.readFileSync(credentials, "utf8")).toBe("{}");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("history added to staged data during registry commit rolls deletion back", () => {
-  const account = mod.createManagedClaudeAccount("Staged commit race");
-  const originalRename = fs.renameSync;
-  let stagedProjects: string | null = null;
-  let late: string | null = null;
-  let injected = false;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (String(source).startsWith("/proc/self/fd/") && path.basename(String(source)) === "projects") stagedProjects = String(destination);
-    if (!injected && stagedProjects && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      injected = true;
-      late = path.join(stagedProjects, "-repo", "late-unowned.jsonl");
-      fs.mkdirSync(path.dirname(late), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(late, "{}\n", { mode: 0o600 });
-    }
-    return result;
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(late).not.toBeNull();
-  expect(fs.readFileSync(path.join(account.projectsDir, "-repo", "late-unowned.jsonl"), "utf8")).toBe("{}\n");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("home replacement during registry commit is refused by held inode identity", () => {
-  const account = mod.createManagedClaudeAccount("Replaced home");
-  const movedHome = `${account.home}-original`;
-  const originalRename = fs.renameSync;
-  let replaced = false;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (!replaced && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      replaced = true;
-      originalRename(account.home, movedHome);
-      fs.mkdirSync(account.home, { mode: 0o700 });
-    }
-    return result;
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(fs.existsSync(path.join(movedHome, "projects"))).toBe(true);
-});
-
-test("staging replacement during registry commit is refused by held inode identity", () => {
-  const account = mod.createManagedClaudeAccount("Replaced staging");
-  const credentials = path.join(account.home, ".credentials.json");
-  fs.writeFileSync(credentials, "{}", { mode: 0o600 });
-  const originalRename = fs.renameSync;
-  let movedStaging: string | null = null;
-  let replaced = false;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (!replaced && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      const staging = fs.readdirSync(mod.claudeAccountsRoot())
-        .map((name) => path.join(mod.claudeAccountsRoot(), name))
-        .find((candidate) => path.basename(candidate).startsWith(`.${account.id}.removal-`));
-      if (!staging) throw new Error("expected staging home");
-      replaced = true;
-      movedStaging = `${staging}-original`;
-      originalRename(staging, movedStaging);
-      fs.mkdirSync(staging, { mode: 0o700 });
-    }
-    return result;
-  }) as typeof fs.renameSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.renameSync = originalRename; }
-
-  expect(movedStaging).not.toBeNull();
-  expect(fs.readFileSync(credentials, "utf8")).toBe("{}");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("history appearing immediately before staged discard restores the account and report", () => {
-  const account = mod.createManagedClaudeAccount("Discard history race");
-  const credentials = path.join(account.home, ".credentials.json");
-  fs.writeFileSync(credentials, "{}", { mode: 0o600 });
-  const originalRename = fs.renameSync;
-  const originalLstat = fs.lstatSync;
-  let stagingHome: string | null = null;
-  let stagingReads = 0;
-  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
-    const result = originalRename(source, destination);
-    if (path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
-      stagingHome = fs.readdirSync(mod.claudeAccountsRoot())
-        .map((name) => path.join(mod.claudeAccountsRoot(), name))
-        .find((candidate) => path.basename(candidate).startsWith(`.${account.id}.removal-`)) ?? null;
-    }
-    return result;
-  }) as typeof fs.renameSync;
-  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
-    if (stagingHome && path.resolve(String(target)) === path.resolve(stagingHome)) {
-      stagingReads += 1;
-      if (stagingReads === 3) fs.writeFileSync(path.join(stagingHome, "history.jsonl"), "{}\n", { mode: 0o600 });
-    }
-    return originalLstat(target, options as never);
-  }) as typeof fs.lstatSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.renameSync = originalRename; fs.lstatSync = originalLstat; }
-
-  expect(fs.readFileSync(credentials, "utf8")).toBe("{}");
-  expect(fs.readFileSync(path.join(account.home, "history.jsonl"), "utf8")).toBe("{}\n");
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
-});
-
-test("an unreadable home presence check blocks logical deletion", () => {
-  const account = mod.createManagedClaudeAccount("Unreadable presence");
-  const originalLstat = fs.lstatSync;
-  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
-    if (path.resolve(String(target)) === path.resolve(account.home)) throw Object.assign(new Error("presence unreadable"), { code: "EACCES" });
-    return originalLstat(target, options as never);
-  }) as typeof fs.lstatSync;
-
-  try { expect(() => mod.removeManagedClaudeAccount(account.id)).toThrow("account history inventory blocked removal"); }
-  finally { fs.lstatSync = originalLstat; }
-
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(mod.listClaudeAccounts().map((candidate) => candidate.id)).toContain(account.id);
 });
 
 test("a sidecar appearing after root enumeration is still cleaned", () => {
@@ -502,52 +156,8 @@ test("a sidecar appearing after root enumeration is still cleaned", () => {
   try { removal = mod.removeManagedClaudeAccount(account.id); }
   finally { fs.readdirSync = originalRead; }
 
-  expect(removal).toEqual({ cleanupPending: false });
+  expect(removal).toMatchObject({ cleanupPending: false });
   expect(fs.existsSync(sidecar)).toBe(false);
-});
-
-test("orphan cleanup finishes a retired home whose strip was interrupted (issue #643)", () => {
-  const account = mod.createManagedClaudeAccount("Interrupted strip");
-  const transcript = path.join(account.projectsDir, "-repo", "abcdef12-1234-1234-1234-123456789abc.jsonl");
-  fs.mkdirSync(path.dirname(transcript), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(transcript, "{}", { mode: 0o600 });
-  agentRegistry().ensureConversation("claude", transcript, account.id);
-  const credentials = path.join(account.home, ".credentials.json");
-  fs.writeFileSync(credentials, "{}", { mode: 0o600 });
-  const originalRm = fs.rmSync;
-  fs.rmSync = ((target: fs.PathLike, options?: fs.RmDirOptions) => {
-    if (path.basename(String(target)) === ".credentials.json") throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return originalRm(target, options);
-  }) as typeof fs.rmSync;
-  let removal: { cleanupPending: boolean } | undefined;
-  try { removal = mod.removeManagedClaudeAccount(account.id); } finally { fs.rmSync = originalRm; }
-
-  expect(removal).toEqual({ cleanupPending: true });
-  expect(fs.existsSync(credentials)).toBe(true);
-  expect(mod.cleanupOrphanedClaudeHomes()).toEqual({ removed: [account.id], unresolved: [] });
-  expect(fs.existsSync(credentials)).toBe(false);
-  expect(fs.existsSync(transcript)).toBe(true);
-});
-
-test("a home deletion failure leaves a removable Claude orphan after logical removal", () => {
-  const account = mod.createManagedClaudeAccount("Retry removal");
-  const originalRmdir = fs.rmdirSync;
-  fs.rmdirSync = ((target: fs.PathLike) => {
-    if (path.resolve(String(target)) === path.resolve(account.home)) throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return originalRmdir(target);
-  }) as typeof fs.rmdirSync;
-  let removal: { cleanupPending: boolean } | undefined;
-  try {
-    removal = mod.removeManagedClaudeAccount(account.id);
-  } finally {
-    fs.rmdirSync = originalRmdir;
-  }
-
-  expect(removal).toEqual({ cleanupPending: true });
-  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(account.id);
-  expect(fs.existsSync(account.home)).toBe(true);
-  expect(mod.cleanupOrphanedClaudeHomes().removed).toContain(account.id);
-  expect(fs.existsSync(account.home)).toBe(false);
 });
 
 test("orphan cleanup reports unsafe Claude children for manual recovery", () => {
@@ -735,4 +345,256 @@ test("new account creation refuses a pre-existing or unknown platform store", as
       expect(mod.listClaudeAccounts().some((account) => account.id === "reused")).toBe(false);
     }
   } finally { read.mockRestore(); }
+});
+
+/* ---- #1857: removal moves the leftovers into the shared archive ---- */
+
+const SESSION_ID = ["12345678", "1234", "1234", "1234", "123456789abc"].join("-");
+const LEFTOVERS: Record<string, string> = {
+  "history.jsonl": "{\"display\":\"prompt history\"}\n",
+  [path.join("shell-snapshots", "snapshot-zsh.sh")]: "export PATH=/usr/bin\n",
+  [path.join("backups", ".claude.json.backup.1")]: "{\"projects\":{}}\n",
+  [path.join("paste-cache", "pasted.txt")]: "pasted text\n",
+  [path.join(".llv", "state.json")]: "{}\n",
+  [path.join("statsig", "statsig.cached.json")]: "{}\n",
+  [path.join("sessions", "4242.json")]: "{}\n",
+  ".claude.json": "{\"numStartups\":3}\n",
+};
+
+function readRegistryJson(): { accounts: Array<{ id: string }>; retired: Array<{ id: string; archived?: boolean }>; removals?: unknown[] } {
+  return JSON.parse(fs.readFileSync(mod.claudeRegistryPath(), "utf8"));
+}
+
+/** A home shaped like the operator's Claude B: `projects` links into the
+    shared store and holds no transcript; everything else is CLI runtime state. */
+function usedClaudeHome(label: string) {
+  const account = mod.createManagedClaudeAccount(label);
+  const shared = mod.sharedClaudeProjectsRoot();
+  fs.mkdirSync(path.join(shared, "-repo"), { recursive: true, mode: 0o700 });
+  fs.rmSync(path.join(account.home, "projects"), { recursive: true });
+  fs.symlinkSync(shared, path.join(account.home, "projects"));
+  const sharedTranscript = path.join(shared, "-repo", `${SESSION_ID}.jsonl`);
+  fs.writeFileSync(sharedTranscript, "{\"cwd\":\"/repo\"}\n", { mode: 0o600 });
+  const homeAddressed = path.join(account.home, "projects", "-repo", `${SESSION_ID}.jsonl`);
+  for (const [relative, contents] of Object.entries(LEFTOVERS)) {
+    fs.mkdirSync(path.dirname(path.join(account.home, relative)), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(account.home, relative), contents, { mode: 0o600 });
+  }
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  const conversation = agentRegistry().ensureConversation("claude", homeAddressed, account.id);
+  return { account, shared, sharedTranscript, homeAddressed, conversation, archive: retiredAccountArchive("claude", account.id) };
+}
+
+function expectHomeUntouched(fixture: ReturnType<typeof usedClaudeHome>): void {
+  for (const [relative, contents] of Object.entries(LEFTOVERS)) {
+    expect(fs.readFileSync(path.join(fixture.account.home, relative), "utf8")).toBe(contents);
+  }
+  expect(fs.readFileSync(path.join(fixture.account.home, ".credentials.json"), "utf8")).toBe("{}");
+  expect(fs.lstatSync(path.join(fixture.account.home, "projects")).isSymbolicLink()).toBe(true);
+  expect(fs.existsSync(fixture.archive)).toBe(false);
+  expect(mod.listClaudeAccounts().map((item) => item.id)).toContain(fixture.account.id);
+  expect(readRegistryJson().removals ?? []).toEqual([]);
+}
+
+test("a used Claude home is removed and every leftover moves into the shared archive (#1857)", () => {
+  const fixture = usedClaudeHome("Invented Bravo");
+  agentRegistry().setConversationMigration(fixture.conversation.id, {
+    intentId: "intent-parked",
+    phase: "failed-recoverable",
+    targetId: "default",
+    revision: 1,
+    error: "successor never verified",
+    updatedAt: new Date().toISOString(),
+  });
+  const delivery = agentRegistry().holdDelivery(fixture.conversation.id, "owed for weeks");
+
+  const removal = mod.removeManagedClaudeAccount(fixture.account.id);
+
+  const leftoverBytes = Object.values(LEFTOVERS).reduce((sum, contents) => sum + Buffer.byteLength(contents), 0);
+  expect(removal).toEqual({
+    archive: fixture.archive,
+    files: Object.keys(LEFTOVERS).length,
+    bytes: leftoverBytes,
+    conversationsRewritten: 1,
+    pinsCleared: 0,
+    deliveriesDropped: 1,
+    migrationsSettled: 1,
+    cleanupPending: false,
+  });
+  expect(fs.existsSync(fixture.account.home)).toBe(false);
+  for (const [relative, contents] of Object.entries(LEFTOVERS)) {
+    expect(fs.readFileSync(path.join(fixture.archive, relative), "utf8")).toBe(contents);
+  }
+  for (const name of [".credentials.json", "projects", "skills", "commands", "agents"]) {
+    expect(() => fs.lstatSync(path.join(fixture.archive, name))).toThrow();
+  }
+  // The shared store is untouched and the conversation addresses it directly.
+  expect(fs.readFileSync(fixture.sharedTranscript, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
+  const conversation = agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!;
+  expect(conversation.generations.map((generation) => generation.path)).toEqual([fixture.sharedTranscript]);
+  expect(conversation.migration).toBeNull();
+  expect(agentRegistry().readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("failed");
+  expect(mod.claudeTranscriptOwnership(fixture.sharedTranscript, fixture.account.id)).toMatchObject({ kind: "owned", source: "shared-store" });
+  // The account left the dialog; its id is retired and never reissued.
+  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(readRegistryJson().retired).toContainEqual(expect.objectContaining({ id: fixture.account.id, archived: true }));
+  expect(readRegistryJson().removals ?? []).toEqual([]);
+  expect(mod.createManagedClaudeAccount("Invented Bravo").id).not.toBe(fixture.account.id);
+});
+
+test("a Claude home with its own projects directory keeps its transcripts readable from the archive", () => {
+  const account = mod.createManagedClaudeAccount("Invented Local");
+  const transcript = path.join(account.projectsDir, "-repo", `${SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(transcript, "{\"cwd\":\"/repo\"}\n", { mode: 0o600 });
+  const conversation = agentRegistry().ensureConversation("claude", transcript, account.id);
+  const archive = retiredAccountArchive("claude", account.id);
+
+  mod.removeManagedClaudeAccount(account.id);
+
+  const moved = path.join(archive, "projects", "-repo", `${SESSION_ID}.jsonl`);
+  expect(fs.readFileSync(moved, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
+  expect(mod.claudeProjectRoots()).toContain(path.join(archive, "projects"));
+  expect(agentRegistry().readOnlySnapshot().conversations[conversation.id]!.generations[0]!.path).toBe(moved);
+});
+
+test("an existing archive destination refuses removal and leaves the home untouched", () => {
+  const fixture = usedClaudeHome("Invented Taken");
+  fs.mkdirSync(fixture.archive, { recursive: true, mode: 0o700 });
+
+  expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow(AccountArchiveUnavailableError);
+
+  fs.rmdirSync(fixture.archive);
+  expectHomeUntouched(fixture);
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.homeAddressed);
+});
+
+test("a home on another filesystem than the archive is refused before anything moves", () => {
+  const fixture = usedClaudeHome("Invented Device");
+  const originalLstat = fs.lstatSync;
+  fs.lstatSync = ((target: fs.PathLike, options?: unknown) => {
+    const stat = originalLstat(target, options as never) as fs.Stats;
+    if (path.resolve(String(target)) !== path.resolve(fixture.account.home)) return stat;
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev: stat.dev + 1 });
+  }) as typeof fs.lstatSync;
+  try { expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow(AccountArchiveUnavailableError); }
+  finally { fs.lstatSync = originalLstat; }
+
+  expectHomeUntouched(fixture);
+});
+
+for (const code of ["EACCES", "EXDEV"] as const) {
+  test(`a failed home rename (${code}) changes nothing and clears the journal`, () => {
+    const fixture = usedClaudeHome(`Invented Rename ${code}`);
+    const originalRename = fs.renameSync;
+    fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
+      if (path.resolve(String(source)) === path.resolve(fixture.account.home)) throw Object.assign(new Error("rename refused"), { code });
+      return originalRename(source, destination);
+    }) as typeof fs.renameSync;
+    try {
+      expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow(code === "EXDEV" ? AccountArchiveUnavailableError : Error);
+    } finally { fs.renameSync = originalRename; }
+
+    expectHomeUntouched(fixture);
+  });
+}
+
+test("a conversation that turns live inside the registry mutation puts the home back", () => {
+  const fixture = usedClaudeHome("Invented Late");
+  setAccountRemovalCheckpointForTests((reached) => {
+    if (reached === "renamed") beginLegacySpawnFixture(agentRegistry(), { engine: "claude", cwd: "/repo", accountId: fixture.account.id });
+  });
+  try { expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow(AccountRemovalBlockedError); }
+  finally { setAccountRemovalCheckpointForTests(null); }
+
+  expectHomeUntouched(fixture);
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.homeAddressed);
+});
+
+test("an accounts-registry write failure restores the agent registry and the home", () => {
+  const fixture = usedClaudeHome("Invented Commit");
+  const originalRename = fs.renameSync;
+  let retired = false;
+  setAccountRemovalCheckpointForTests((reached) => { if (reached === "registry-retired") retired = true; });
+  fs.renameSync = ((source: fs.PathLike, destination: fs.PathLike) => {
+    if (retired && path.resolve(String(destination)) === path.resolve(mod.claudeRegistryPath())) {
+      retired = false;
+      throw Object.assign(new Error("registry write denied"), { code: "EACCES" });
+    }
+    return originalRename(source, destination);
+  }) as typeof fs.renameSync;
+  try { expect(() => mod.removeManagedClaudeAccount(fixture.account.id)).toThrow("registry write denied"); }
+  finally { fs.renameSync = originalRename; setAccountRemovalCheckpointForTests(null); }
+
+  expectHomeUntouched(fixture);
+  expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.homeAddressed);
+});
+
+test("a credential that cannot be unlinked leaves cleanup pending, and recovery finishes it", () => {
+  const fixture = usedClaudeHome("Invented Credential");
+  const originalUnlink = fs.unlinkSync;
+  fs.unlinkSync = ((target: fs.PathLike) => {
+    if (path.basename(String(target)) === ".credentials.json") throw Object.assign(new Error("denied"), { code: "EACCES" });
+    return originalUnlink(target);
+  }) as typeof fs.unlinkSync;
+  let removal: ReturnType<typeof mod.removeManagedClaudeAccount>;
+  try { removal = mod.removeManagedClaudeAccount(fixture.account.id); }
+  finally { fs.unlinkSync = originalUnlink; }
+
+  expect(removal.cleanupPending).toBe(true);
+  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(true);
+  expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+  expect(readRegistryJson().removals ?? []).toEqual([]);
+});
+
+test("creating an account keeps the shared transcript store and the removed-account archive (#1859)", () => {
+  const fixture = usedClaudeHome("Invented Keeper");
+  mod.removeManagedClaudeAccount(fixture.account.id);
+
+  mod.createManagedClaudeAccount("Invented Newcomer");
+
+  expect(fs.readFileSync(fixture.sharedTranscript, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
+  expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
+});
+
+async function crashRemovalAt(accountId: string, checkpoint: string): Promise<void> {
+  const child = Bun.spawn({
+    cmd: [process.execPath, path.join(import.meta.dir, "fixtures", "accountRemovalCrash.ts"), "claude", accountId, checkpoint],
+    env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME! },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  await child.exited;
+  expect(child.signalCode).toBe("SIGKILL");
+}
+
+for (const checkpoint of ["journaled", "renamed", "registry-retired"] as const) {
+  test(`a Viewer killed after the removal step "${checkpoint}" gets its home back on recovery`, async () => {
+    const fixture = usedClaudeHome(`Invented Crash ${checkpoint}`);
+    await crashRemovalAt(fixture.account.id, checkpoint);
+    expect(readRegistryJson().removals).toHaveLength(1);
+
+    expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+    expectHomeUntouched(fixture);
+    // A retry after recovery completes the removal.
+    expect(mod.removeManagedClaudeAccount(fixture.account.id).archive).toBe(fixture.archive);
+    expect(fs.existsSync(fixture.account.home)).toBe(false);
+  });
+}
+
+test("a Viewer killed after the accounts registry committed finishes the removal on recovery", async () => {
+  const fixture = usedClaudeHome("Invented Crash committed");
+  await crashRemovalAt(fixture.account.id, "accounts-committed");
+  expect(mod.listClaudeAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(true);
+
+  expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+
+  expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
+  expect(() => fs.lstatSync(path.join(fixture.archive, "projects"))).toThrow();
+  expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
+  expect(readRegistryJson().removals ?? []).toEqual([]);
 });
