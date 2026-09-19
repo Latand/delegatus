@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 
+import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { runFocusTransaction } from "@/components/attention/navigate";
 import { Viewer } from "@/components/Viewer";
@@ -656,7 +657,10 @@ const evidence = {
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
      arrival without a server behind the offer. */
-  focus: { bus: focusHandoffBus, runFocusTransaction },
+  /* `startArrivalPulse` is here for the same reason: a driver that set the
+     attribute itself would photograph the stylesheet and prove nothing about
+     the code that decides WHAT to mark and how (#1836 item 4). */
+  focus: { bus: focusHandoffBus, runFocusTransaction, startArrivalPulse, cancelArrivalPulse },
   /* Transcript reads for this path fail, as a broken route would. */
   failLogsFor: null as string | null,
   /* A write another client made to a task, arriving on the next task read:

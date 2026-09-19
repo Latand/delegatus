@@ -76,6 +76,12 @@ function view(state: AttentionRequestV1["state"]): DeviceAttentionView {
   return { rootId: "root_fixed", offer: state === "pending" ? null : entry, live: [entry], expired: [], records: null };
 }
 
+/** A read with no request live at all: the lane is pushed because the server
+    admitted it, which is what puts it on the board with nothing asking. */
+function quietView(records: DeviceAttentionView["records"]): DeviceAttentionView {
+  return { rootId: "root_fixed", offer: null, live: [], expired: [], records };
+}
+
 /* The lane the server has admitted and the board has not drawn (#1836). */
 const pushedPipeline = {
   id: "pl-fresh",
@@ -382,5 +388,65 @@ test("the rows a read carries are layered into the board's data layer, once (#18
   async function handleRefresh() {
     await settle();
   }
+  resetFilesClientCacheForTests();
+});
+
+test("a lane the server admitted is drawn with nothing asking for it, and is taken back with a reason (#1836)", async () => {
+  resetFilesClientCacheForTests();
+  /* No attention request exists at any point in this test. The read is the one
+     the device already makes, and item 1 is what it carries. */
+  let held = true;
+  const urls: string[] = [];
+  const fetchFn = (async (url: string) => {
+    if (String(url).startsWith("/api/files")) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ files: [] }), headers: new Headers() } as unknown as Response;
+    }
+    urls.push(String(url));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => (held
+        ? quietView({ pipelines: [pushedPipeline], tasks: [pushedTask], withdrawn: [] })
+        : quietView({ pipelines: [], tasks: [], withdrawn: [{ id: "pl-fresh", reason: "never-materialized" }] })),
+    };
+  }) as unknown as typeof fetch;
+
+  const seen: string[][] = [];
+  const handle: { current: AttentionOffersHandle | null } = { current: null };
+  function Board() {
+    seen.push(useFiles().pipelines.map((row) => row.id));
+    return null;
+  }
+  function Harness() {
+    handle.current = useAttentionOffers({ deviceId: DEVICE, captureViewport: () => viewport, fetchFn, pollMs: 100_000 });
+    return <Board />;
+  }
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Harness />));
+  roots.push(root);
+  await settle();
+
+  expect(seen.at(-1)).toEqual(["pl-fresh"]);
+  expect(handle.current!.view?.live).toEqual([]);
+  expect(handle.current!.withdrawals).toEqual([]);
+
+  /* The next read names what this device is holding, so the server can answer
+     for it. */
+  await handle.current!.refresh();
+  await settle();
+  expect(urls.at(-1)).toContain("echoes=pl-fresh");
+
+  /* Refused, or never materialized: the lane leaves the board, and the reason
+     is there to be said. */
+  held = false;
+  await handle.current!.refresh();
+  await settle();
+
+  expect(seen.at(-1)).toEqual([]);
+  expect(handle.current!.withdrawals).toEqual([
+    { pipelineId: "pl-fresh", title: "A lane just created", reason: "never-materialized" },
+  ]);
   resetFilesClientCacheForTests();
 });

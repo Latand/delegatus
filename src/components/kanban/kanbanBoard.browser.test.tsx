@@ -5405,92 +5405,201 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
 
 describe("#1836 where the view was just taken", () => {
   /*
-   * Rendered evidence for the arrival pulse (#1836 item 4): the mark an
-   * attention handoff leaves on the card it landed on, in the real Viewer over
+   * Rendered evidence for the arrival (#1836), in the real Viewer over
    * `issue1695Evidence.fixture.tsx`, against the production stylesheet, in
-   * Chromium — desktop and 390x844, light and dark, and once more with
-   * `prefers-reduced-motion: reduce`.
+   * Chromium — desktop and 390x844, light and dark, both motion preferences.
+   *
+   * The arrival is DRIVEN, not imitated: the page runs the real focus
+   * transaction, asks the board's own index what it drew the anchor as, and
+   * hands that to the real `startArrivalPulse` — the same three calls
+   * `AttentionHost` makes. A driver that set the attribute itself would
+   * photograph the stylesheet and prove nothing about what gets marked.
    *
    * What only a browser settles, and is gated here:
    *   - the mark paints a ring the card does not otherwise carry, so the
    *     landed card is findable at a glance beside its neighbours;
    *   - it is a blink (a running animation) by default and a STEADY highlight
    *     of the same strength under reduced motion, never nothing;
-   *   - it takes itself off, leaving the card exactly as it was.
+   *   - it moves NOTHING: the landed element and its neighbour occupy exactly
+   *     the same boxes while it plays;
+   *   - it takes itself off, leaving the card exactly as it was;
+   *   - a conversation no card holds is landed in its own reader pane, and
+   *     that pane is what lights up.
    *
-   * The page sets the same attribute `startArrivalPulse` sets, which is the
-   * whole of that module's contract with the stylesheet — its timing and its
-   * target resolution are settled in `arrivalPulse.dom.test.tsx`.
+   * 390x844 is the phone, and the phone is recorded rather than gated for the
+   * handoff itself: mobile is chat-only by design — it withholds its device id
+   * and never follows a handoff (`src/lib/attention/service.ts`) — so what is
+   * measured there is the decoration the operator would see, on the surface
+   * that width actually draws.
+   *
+   * The scheme's own surfaces (an absolutely positioned node and task band)
+   * are not drawn by this fixture; their geometry is settled in the board
+   * geometry driver, `scripts/capture-board-geometry.ts`, and their positioning
+   * contract in `arrivalPulse.dom.test.tsx`.
    *
    * Geometry goes to `evidence/issue-1836/arrival-pulse.json`; frames to
    * `.artifacts/issue-1836/`, which is not committed.
    */
-  browserTest("the landed card blinks, holds steady under reduced motion, and leaves nothing behind", async () => {
+  type PulseEvidence = {
+    focus: {
+      bus: { board(): { index: { pulseSelectorFor?(key: string): string | null } } | null };
+      runFocusTransaction(request: unknown, bus: unknown, options: unknown): Promise<{ resolution: string; moved: boolean }>;
+      startArrivalPulse(selectors: Array<string | null>, options?: { durationMs?: number }): { cancel(): void };
+      cancelArrivalPulse(): void;
+    };
+  };
+
+  /** One arrival, exactly as the host performs it: the transaction, the board's
+      own answer for what it drew, and the mark. Returns what the page can only
+      say from inside itself — the boxes and the paint, before, during, after. */
+  const arrive = (page: Page, path: string, intent: "show" | "open", neighbour: string | null) => page.evaluate(async ([target, wanted, near]) => {
+    const { bus, runFocusTransaction, startArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const paint = (element: Element | null) => {
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      return { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position };
+    };
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const result = await runFocusTransaction({
+      id: `attention_pulse_${wanted}`,
+      target: { kind: "conversation", path: target },
+      frameAtCreation: { project: "atlas", rect: { x: 0, y: 0, w: 0, h: 0 }, boardRevision: null },
+      intent: wanted,
+      zoom: "inspect",
+    }, bus, { timeoutMs: 8_000 });
+    await wait(400);
+
+    const selector = bus.board()?.index.pulseSelectorFor?.(target) ?? null;
+    const landed = selector ? document.querySelector(selector) : null;
+    const other = near ? document.querySelector(near) : null;
+    const before = { landed: box(landed), neighbour: box(other), paint: paint(landed) };
+    startArrivalPulse([selector]);
+    /* Past the card's own box-shadow transition, so what is measured and
+       photographed is the pulse rather than the way into it. */
+    await wait(300);
+    const during = { landed: box(landed), neighbour: box(other), paint: paint(landed), mark: landed?.getAttribute("data-attention-pulse") ?? null };
+    return { resolution: result.resolution, selector, before, during };
+  }, [path, intent, neighbour] as const);
+
+  /** The mark comes off, and the page says what it left behind. */
+  const settlePulse = (page: Page, selector: string | null, neighbour: string | null) => page.evaluate(async ([sel, near]) => {
+    const { cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+    cancelArrivalPulse();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const landed = sel ? document.querySelector(sel) : null;
+    const other = near ? document.querySelector(near) : null;
+    const box = (element: Element | null) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const style = landed ? getComputedStyle(landed) : null;
+    return {
+      landed: box(landed),
+      neighbour: box(other),
+      paint: style ? { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow, position: style.position } : null,
+      mark: landed?.getAttribute("data-attention-pulse") ?? null,
+    };
+  }, [selector, neighbour] as const);
+
+  browserTest("the landed card blinks, holds steady under reduced motion, moves nothing, and leaves nothing behind", async () => {
     const out = path.resolve(".artifacts/issue-1836");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
+    const IMPLEMENTER = "/repo/export-impl.jsonl";
+    const REVIEWER = "/repo/export-review.jsonl";
     const evidence: Record<string, unknown> = {
       driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
       fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
       values: "invented",
-      phoneWidth: "the phone shell is chat-only (it withholds its device id), so 390x844 draws no handoff and no pulse; the narrow board is the phone-width surface one can land on",
     };
-    /* The attribute the arrival pulse marks its target with, and what the
-       stylesheet then paints: the animation, and the ring itself. */
-    const paint = (target: ReturnType<Page["locator"]>) => target.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow };
-    });
+    const failures: string[] = [];
     try {
-      /* Desktop, and the narrowest width this board mounts at. 390x844 is not
-         a third case: at that width the Viewer is the phone shell, which is
-         chat-only — it withholds its device id, never follows a handoff, and
-         so has no arrival to mark. The narrow board is the phone-width
-         surface a handoff can actually land on. */
-      for (const [surface, viewport] of [["desktop", VIEWPORT], ["narrow", { width: 700, height: 844 }]] as const) {
+      for (const [surface, viewport] of [["desktop", VIEWPORT], ["phone", { width: 390, height: 844 }]] as const) {
         for (const scheme of ["light", "dark"] as const) {
           for (const motion of ["no-preference", "reduce"] as const) {
-            const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, scheme, "en", motion);
+            const label = `${surface}-${scheme}-${motion}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose`, viewport, scheme, "en", motion);
             try {
-              /* Whichever card the operator can actually see: the desktop
-                 board shows every column, and below 768 px the board is one
-                 tabbed column, so naming a card by id would photograph a
-                 hidden one. */
-              const landed = page.locator("[data-kanban-board] .card:visible").first();
-              await landed.waitFor();
-              const landedId = await landed.getAttribute("data-id");
-              const before = await paint(landed);
-              await landed.evaluate((element) => element.setAttribute("data-attention-pulse", "on"));
-              /* Past the card's own box-shadow transition, so what is measured
-                 and photographed is the pulse rather than the way into it. */
-              await page.waitForTimeout(250);
-              const during = await paint(landed);
-              await page.screenshot({ path: path.join(out, `${surface}-${scheme}-${motion}.png`) });
-              await landed.evaluate((element) => element.removeAttribute("data-attention-pulse"));
-              await page.waitForTimeout(250);
-              const after = await paint(landed);
+              const kanban = await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 }).then(() => true).catch(() => false);
+              const board = await page.evaluate(() => (document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none"));
+              if (!kanban) {
+                /* The phone. Mobile is chat-only for a handoff, so there is no
+                   arrival to gate — what is recorded is the surface that width
+                   draws, and the decoration on it, which is what the operator
+                   would have to see at a glance. */
+                const rows = await page.$$eval("[data-mobile2-row], .card[data-id]", (nodes) => nodes.length);
+                const mark = await page.evaluate(async () => {
+                  const { startArrivalPulse, cancelArrivalPulse } = (window as unknown as { evidence: PulseEvidence }).evidence.focus;
+                  const row = document.querySelector("[data-mobile2-row], .card[data-id]");
+                  if (!row) return null;
+                  const rect = () => { const box = row.getBoundingClientRect(); return { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) }; };
+                  const shadow = () => getComputedStyle(row).boxShadow;
+                  const before = { box: rect(), shadow: shadow() };
+                  startArrivalPulse(["[data-mobile2-row], .card[data-id]"]);
+                  await new Promise((resolve) => setTimeout(resolve, 300));
+                  const during = { box: rect(), shadow: shadow(), animation: getComputedStyle(row).animationName, mark: row.getAttribute("data-attention-pulse") };
+                  cancelArrivalPulse();
+                  await new Promise((resolve) => setTimeout(resolve, 200));
+                  return { before, during, after: { box: rect(), shadow: shadow() } };
+                });
+                await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
+                if (mark) {
+                  if (mark.during.shadow === mark.before.shadow) failures.push(`${label}: the mark painted no ring at 390x844`);
+                  if (JSON.stringify(mark.during.box) !== JSON.stringify(mark.before.box)) failures.push(`${label}: the mark moved the row it lit`);
+                  if (motion === "no-preference" && mark.during.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${mark.during.animation})`);
+                  if (motion === "reduce" && mark.during.animation !== "none") failures.push(`${label}: reduced motion still animates (${mark.during.animation})`);
+                  if (mark.after.shadow !== mark.before.shadow) failures.push(`${label}: the mark left something behind`);
+                }
+                evidence[label] = { viewport, board, rows, handoff: "the phone withholds its device id and never follows a handoff", mark };
+                if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+                continue;
+              }
 
-              /* A ring the card does not wear on its own, either way. The
-                 blink breathes it between 3 and 6 px, so the assertion is the
-                 ring rather than one frame of it. */
-              expect(during.shadow).not.toBe(before.shadow);
-              expect(during.shadow).toMatch(/0px 0px 0px [\d.]+px/);
-              /* A blink by default; the same loudness held steady when motion
-                 is refused, which is the one thing that must not become
-                 "nothing at all". */
-              if (motion === "no-preference") expect(during.animation).toBe("attention-arrival-pulse");
-              else expect(during.animation).toBe("none");
-              /* And it leaves the card as it found it. */
-              expect(after.shadow).toBe(before.shadow);
-              expect(pageErrors).toEqual([]);
-              evidence[`${surface}-${scheme}-${motion}`] = { viewport, card: landedId, before, during, after };
+              /* A conversation a card holds: the card is what lights up, and
+                 its neighbour must not stir. */
+              const neighbour = "[data-kanban-board] .card[data-id] ~ .card[data-id]";
+              const card = await arrive(page, IMPLEMENTER, "show", neighbour);
+              await page.screenshot({ path: path.join(out, `${label}-card.png`) });
+              const cleared = await settlePulse(page, card.selector, neighbour);
+              if (card.resolution === "lost") failures.push(`${label}: the handoff found nowhere to land`);
+              if (!card.selector) failures.push(`${label}: the board answered no selector for the landed card`);
+              if (!card.during.paint || card.during.paint.shadow === card.before.paint?.shadow) failures.push(`${label}: the mark painted no ring`);
+              if (JSON.stringify(card.during.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the mark moved the card it lit`);
+              if (JSON.stringify(card.during.neighbour) !== JSON.stringify(card.before.neighbour)) failures.push(`${label}: the mark moved the neighbouring card`);
+              if (motion === "no-preference" && card.during.paint?.animation !== "attention-arrival-pulse") failures.push(`${label}: no blink (${card.during.paint?.animation})`);
+              if (motion === "reduce" && card.during.paint?.animation !== "none") failures.push(`${label}: reduced motion still animates (${card.during.paint?.animation})`);
+              if (motion === "reduce" && !/0px 0px 0px [\d.]+px/.test(card.during.paint?.shadow ?? "")) failures.push(`${label}: reduced motion left no ring`);
+              if (cleared.mark !== null) failures.push(`${label}: the mark outlived the pulse`);
+              if (cleared.paint?.shadow !== card.before.paint?.shadow) failures.push(`${label}: the card did not go back to what it was`);
+              if (JSON.stringify(cleared.landed) !== JSON.stringify(card.before.landed)) failures.push(`${label}: the card ended somewhere else`);
+
+              /* A conversation NO card holds: it is opened in its own reader,
+                 and that pane is the thing the operator is being pointed at. */
+              const pane = await arrive(page, REVIEWER, "open", null);
+              await page.screenshot({ path: path.join(out, `${label}-reader.png`) });
+              const paneCleared = await settlePulse(page, pane.selector, null);
+              if (!pane.selector?.includes("data-reader-path")) failures.push(`${label}: the board answered ${pane.selector} for a conversation no card holds`);
+              if (pane.during.paint?.shadow === pane.before.paint?.shadow) failures.push(`${label}: the reader pane was not lit`);
+              if (JSON.stringify(pane.during.landed) !== JSON.stringify(pane.before.landed)) failures.push(`${label}: the mark moved the reader pane`);
+              if (paneCleared.mark !== null) failures.push(`${label}: the reader pane stayed lit`);
+
+              evidence[label] = { viewport, board, card, cleared, pane, paneCleared };
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
             } finally { await context.close(); }
           }
         }
       }
       fs.mkdirSync("evidence/issue-1836", { recursive: true });
-      fs.writeFileSync("evidence/issue-1836/arrival-pulse.json", JSON.stringify(evidence, null, 2) + "\n");
+      fs.writeFileSync("evidence/issue-1836/arrival-pulse.json", JSON.stringify({ ...evidence, failures }, null, 2) + "\n");
+      if (failures.length) throw new Error(failures.join("\n"));
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 600_000);
 });

@@ -31,6 +31,24 @@ export const ARRIVAL_PULSE_MS = 4_000;
     here, so both behave the same everywhere. */
 export const ARRIVAL_PULSE_ATTRIBUTE = "data-attention-pulse";
 
+/**
+ * The two values the mark takes, and the reason it has two.
+ *
+ * A pulse must not move the thing it is pointing at. The stylesheet would like
+ * the marked element to establish a stacking context so a neighbour's shadow
+ * cannot cover the ring, and `position: relative` is how that is bought — but
+ * the scheme's nodes and task bands are `position: absolute`, placed by
+ * `left`/`top` and by transforms, and relative drops them into normal flow.
+ * The element the camera just landed on would slide away under the ring.
+ *
+ * So the question is asked here, where the element is in hand: an element that
+ * is already positioned is marked `on` and keeps every bit of its geometry; a
+ * statically positioned one (a kanban card) is marked `lift`, for which
+ * relative changes nothing and the paint order is worth having.
+ */
+export const ARRIVAL_PULSE_ON = "on";
+export const ARRIVAL_PULSE_LIFT = "lift";
+
 export interface ArrivalPulseOptions {
   /** Defaults to {@link ARRIVAL_PULSE_MS}. */
   durationMs?: number;
@@ -66,6 +84,28 @@ export function cancelArrivalPulse(): void {
  * draw), which is not an error — a pulse with nothing to mark is simply no
  * pulse at all.
  */
+/**
+ * Whether this element is in normal flow, and can therefore be lifted without
+ * moving. Anything the engine cannot answer for — a document with no view, a
+ * test DOM with no computed styles — is treated as positioned, because the
+ * cost of guessing wrong that way is a ring that a neighbour may overlap, and
+ * the cost of guessing wrong the other way is the card moving.
+ */
+function staticallyPositioned(element: Element): boolean {
+  const view = element.ownerDocument?.defaultView;
+  if (!view || typeof view.getComputedStyle !== "function") return false;
+  let position: string | undefined;
+  try {
+    position = view.getComputedStyle(element).position;
+  } catch {
+    return false;
+  }
+  /* An engine that declares nothing for this element has told us it is in
+     normal flow: `position` is `static` by initial value, and a DOM with no
+     UA stylesheet answers the same thing as an empty string. */
+  return position === "static" || position === "" || position === undefined;
+}
+
 export function startArrivalPulse(selectors: readonly (string | null | undefined)[], options: ArrivalPulseOptions = {}): ArrivalPulse {
   cancelArrivalPulse();
   const root = options.root ?? (typeof document === "undefined" ? null : document);
@@ -84,7 +124,7 @@ export function startArrivalPulse(selectors: readonly (string | null | undefined
     }
     for (const element of Array.from(found)) {
       if (marked.includes(element)) continue;
-      element.setAttribute(ARRIVAL_PULSE_ATTRIBUTE, "on");
+      element.setAttribute(ARRIVAL_PULSE_ATTRIBUTE, staticallyPositioned(element) ? ARRIVAL_PULSE_LIFT : ARRIVAL_PULSE_ON);
       marked.push(element);
     }
   }

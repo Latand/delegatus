@@ -108,13 +108,16 @@ export function kanbanFocusIndex(model: KanbanModel, anchors: ReadonlyMap<string
     boardRevision: null,
     rectFor: rectOf,
     concreteAnchorKey: (key) => (rectOf(key) ? key : null),
-    /* The card is the whole of what this board draws for an anchor — a task
-       band, a lane and a stage slot all land on the same one — so the arrival
-       pulse plays on it. A conversation no card holds opens as its own reader
-       and has no card to mark. */
+    /* What this board DREW for the anchor, which is what the arrival marks.
+       A task band, a lane and a stage slot all land on the same card, so the
+       card is the answer for every anchor a card holds. A conversation no card
+       holds lands somewhere else entirely — its own reader, opened in the
+       window — and that pane answers for its own path (#1836 item 4): without
+       this the operator was taken to a reader with nothing lit at all. */
     pulseSelectorFor: (key) => {
       const cardId = anchors.get(key);
-      return cardId ? `.card[data-id="${cssEscape(cardId)}"]` : null;
+      if (cardId) return `.card[data-id="${cssEscape(cardId)}"]`;
+      return loose.has(key) ? `[data-kanban-reader][data-reader-path="${cssEscape(key)}"]` : null;
     },
   };
 }

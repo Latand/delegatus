@@ -56,14 +56,15 @@ export interface DeviceAttentionView {
       sides can see. */
   expired: string[];
   /**
-   * The board rows the live targets name, as the server holds them right now
-   * (#1836). Null when nothing live names a row, which is the ordinary case
-   * and reads no store at all.
+   * The board rows this device is owed, as the server holds them right now
+   * (#1836): every lane admitted in the last few minutes, plus the rows a live
+   * target names, plus the ids this device holds that the registry does not.
+   * Null when there are none.
    *
    * This is the answer to a lane the server has admitted and the browser has
    * not drawn: the client layers these into the board's data layer, so the
-   * card exists before the handoff looks for it instead of minutes later when
-   * the corpus scan catches up. See {@link attentionTargetRecords}.
+   * lane is there from the moment it was created rather than minutes later
+   * when the corpus scan catches up. See {@link attentionTargetRecords}.
    */
   records: AttentionTargetRecords | null;
 }
@@ -83,7 +84,14 @@ const productionRecordSources: AttentionRecordSources = {
 
 export function attentionForDevice(
   deviceId: string,
-  options: { filePath?: string; now?: Date; records?: AttentionRecordSources } = {},
+  options: {
+    filePath?: string;
+    now?: Date;
+    records?: AttentionRecordSources;
+    /** Pipeline ids this device is holding from an earlier push, so the read
+        can tell it which of them the registry does not hold (#1836). */
+    echoedPipelineIds?: readonly string[];
+  } = {},
 ): DeviceAttentionView {
   const now = options.now ?? new Date();
   /* Sweeping on read is what makes expiry hold without a daemon: the clock is
@@ -116,13 +124,14 @@ export function attentionForDevice(
     offer,
     live,
     expired,
-    /* Only for a request still looking for somewhere to land. A follow stays
-       live for ten minutes after it arrived, and re-reading the registry for
-       it on every four-second poll would buy nothing: the board has been
-       drawing that lane since the move. */
+    /* Every freshly admitted lane, unasked (that is item 1), and on top of it
+       the rows a request still looking for somewhere to land names. A follow
+       is left out of the second half: it stays live for ten minutes after it
+       arrived, and the board has been drawing that lane since the move. */
     records: attentionTargetRecords(
       live.filter((entry) => entry.request.state !== "following").map((entry) => entry.request.target),
       options.records ?? productionRecordSources,
+      { now, ...(options.echoedPipelineIds ? { echoedPipelineIds: options.echoedPipelineIds } : {}) },
     ),
   };
 }

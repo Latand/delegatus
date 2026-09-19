@@ -11,7 +11,7 @@ import { useLocale } from "@/lib/i18n";
 import { useAttentionOffers, type PostOutcome, type ViewportCapture } from "@/components/overlay/useAttentionOffers";
 
 import { cancelArrivalPulse, startArrivalPulse } from "./arrivalPulse";
-import { FocusReturnChip } from "./FocusReturnChip";
+import { FocusReturnChip, LaneWithdrawnNote } from "./FocusReturnChip";
 import { focusHandoffBus, type FocusHandoffBus } from "./focusHandoffBus";
 import { claimHandoff, clearHandoffClaim, readHandoffClaim } from "./handoffClaim";
 import { restoreFocusPoint, runFocusTransaction, type FocusObservation, type HandoffTiming } from "./navigate";
@@ -488,13 +488,24 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
     return () => clearTimeout(timer);
   }, [arrivalId]);
 
-  if (!following) return null;
+  /* A lane this board drew from a pushed row that the server turned out not to
+     hold (#1836 item 1). It is already off the board — this is the "says why",
+     and it takes itself off after the same bounded moment a refusal stands. */
+  const withdrawn = offers.withdrawals[offers.withdrawals.length - 1] ?? null;
+  if (!following && !withdrawn) return null;
   return (
-    <FocusReturnChip
-      onReturn={onReturnClick}
-      precise={following.returnAvailable}
-      arrival={arrival?.id === arrivalId ? t("attention.arrival", { reason: following.request.reason }) : undefined}
-      t={t}
-    />
+    <>
+      {withdrawn ? (
+        <LaneWithdrawnNote text={t("attention.laneWithdrawn", { title: withdrawn.title })} />
+      ) : null}
+      {following ? (
+        <FocusReturnChip
+          onReturn={onReturnClick}
+          precise={following.returnAvailable}
+          arrival={arrival?.id === arrivalId ? t("attention.arrival", { reason: following.request.reason }) : undefined}
+          t={t}
+        />
+      ) : null}
+    </>
   );
 }

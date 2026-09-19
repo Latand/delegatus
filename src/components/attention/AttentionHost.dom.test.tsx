@@ -16,6 +16,9 @@ import { validateAttentionEvent } from "@/lib/attention/validation";
 import { buildFocusFrameIndex, type FocusLayoutSlice } from "@/components/scheme/focusFrames";
 import type { MiniStack, SchemeRect } from "@/components/scheme/layout";
 
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { resetFilesClientCacheForTests } from "@/hooks/useFiles";
+
 import { AttentionHost, resetHandoffTransactionsForTest } from "./AttentionHost";
 import { ARRIVAL_PULSE_ATTRIBUTE, cancelArrivalPulse } from "./arrivalPulse";
 import { createFocusHandoffBus, type BoardFocusController } from "./focusHandoffBus";
@@ -132,7 +135,11 @@ function transport(): typeof fetch {
       throw new TypeError("Failed to fetch");
     }
     if (!init?.body) {
-      return { ok: true, status: 200, json: async () => ({ ok: true, ...attentionForDevice(DEVICE, { now }) }) };
+      /* The route reads the lanes this device says it is holding off the query
+         string; the read answers for them (#1836). */
+      const echoedPipelineIds = (new URL(url, "http://localhost/").searchParams.get("echoes") ?? "")
+        .split(",").map((id) => id.trim()).filter((id) => id.length > 0);
+      return { ok: true, status: 200, json: async () => ({ ok: true, ...attentionForDevice(DEVICE, { now, echoedPipelineIds }) }) };
     }
     const id = decodeURIComponent(url.split("/").pop()!);
     const outcome = answerAttentionRequest(id, validateAttentionEvent(JSON.parse(init.body)), { now });
@@ -1206,7 +1213,9 @@ test("an arrival marks the card it landed on, and the mark takes itself off", as
   /* The handoff landed, so the operator is looking somewhere new — and the
      card says which one it is. */
   expect(record().state).toBe("following");
-  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("on");
+  /* `lift` rather than `on`: this card is in normal flow, so the mark may give
+     it the paint order without moving it. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
 
   await new Promise((resolve) => setTimeout(resolve, 80));
 
@@ -1238,10 +1247,44 @@ test("Return takes the mark off with it", async () => {
   raise();
   mount(bus, { pulseMs: 100_000 });
   await settle();
-  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("on");
+  /* `lift` rather than `on`: this card is in normal flow, so the mark may give
+     it the paint order without moving it. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("lift");
 
   click(one("[data-testid='attention-return']")!);
   await settle();
 
   expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("a lane the read pushed and the server then dropped leaves the board and says why", async () => {
+  /* Item 1's other half: the board draws a lane the moment the server admits
+     it, and if that creation is refused or never materializes the placeholder
+     goes away — saying which lane, so the operator is not left wondering what
+     they saw. */
+  resetFilesClientCacheForTests();
+  savePipelines([buildPipeline({
+    id: "pl-fresh",
+    task: "A lane just created\nWhat the lane is for",
+    taskIds: [],
+    project: "demo",
+    repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null,
+    srcConversationId: null,
+    now: now.toISOString(),
+  })]);
+  const { bus } = board({});
+  mount(bus);
+  await settle();
+
+  /* Nothing is being said yet: the lane exists. */
+  expect(one('[data-testid="attention-lane-withdrawn"]')).toBeNull();
+
+  savePipelines([]);
+  await poll();
+
+  const note = one('[data-testid="attention-lane-withdrawn"]');
+  expect(note?.textContent).toContain("A lane just created");
+  resetFilesClientCacheForTests();
 });

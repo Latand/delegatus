@@ -567,12 +567,29 @@ body {
    a kanban card's own shadow is `.kb .card`, which outweighs a single
    attribute — and under reduced motion, where the ring is a plain declaration
    rather than an animation, losing that contest would leave the arrival
-   saying nothing at all. */
+   saying nothing at all.
+
+   The ring is declared here as well as animated, and that is deliberate: the
+   scheme's task scene suppresses every node animation with
+   `animation: none !important` while the camera is a layout, so a pulse that
+   existed only inside the keyframes would land there and show NOTHING. The
+   animation breathes the same ring; whatever stops it leaves it standing. */
 [data-attention-pulse][data-attention-pulse] {
   animation: attention-arrival-pulse 0.85s ease-in-out infinite;
   border-radius: inherit;
-  /* Above its siblings for the moment it plays, so a neighbouring card's own
-     shadow cannot cover the ring the operator is looking for. */
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    0 0 18px 4px color-mix(in srgb, var(--color-accent) 42%, transparent);
+}
+
+/* Positioning is the one thing this decoration may not touch. A scheme node
+   and a task band are `position: absolute` and are placed by `left/top` or a
+   transform; forcing `position: relative` on them drops them into normal flow
+   and moves the very card the camera just landed on. So the lift is asked for
+   BY the marking code, and only for an element that was statically positioned
+   to begin with (a kanban card), where relative changes nothing and buys the
+   ring its paint order over a neighbour's own shadow. */
+[data-attention-pulse="lift"][data-attention-pulse="lift"] {
   position: relative;
   z-index: 3;
 }

@@ -6,7 +6,7 @@ import { playCue } from "@/lib/audio/app";
 import type { AttentionEvent } from "@/lib/attention/machine";
 import type { DeviceAttentionView } from "@/lib/attention/service";
 import type { AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
-import { applyPipelineSnapshot, applyTaskSnapshot } from "@/hooks/useFiles";
+import { applyPipelineSnapshot, applyTaskSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
 
 /**
  * The client half of #688's ask-accept-decline-return loop.
@@ -50,6 +50,21 @@ export const REFUSAL_TTL_MS = 12_000;
     says about it. */
 export const LOST_TARGET_REFUSAL = "lost-target";
 
+/**
+ * A lane this device drew out of a pushed row that the server turned out not
+ * to hold (#1836 item 1: "if creation is later refused or the pipeline never
+ * materializes, the placeholder goes away and says why").
+ *
+ * The title is kept from the row itself when it was applied, because by the
+ * time the withdrawal arrives there is no record left to read it from — and a
+ * line that cannot name the lane it is about explains nothing.
+ */
+export interface LaneWithdrawal {
+  pipelineId: string;
+  title: string;
+  reason: string;
+}
+
 /** The server refused this device's own answer. Transport failures are NOT
     refusals: those retry silently, because nothing was decided. */
 export interface AttentionRefusal {
@@ -73,6 +88,10 @@ export interface AttentionOffersHandle {
   /** Set when this device's last answer was refused; cleared by the next one
       that lands, by the operator, or by its own expiry. */
   refusal: AttentionRefusal | null;
+  /** Lanes drawn from a pushed row the server turned out not to hold, newest
+      last. Each takes itself off after the same bounded moment a refusal
+      does. */
+  withdrawals: LaneWithdrawal[];
   /** Take the refusal band off screen. */
   dismissRefusal: () => void;
   accept: (request: AttentionRequestV1, via?: "operator" | "auto-follow") => Promise<PostOutcome>;
@@ -115,24 +134,61 @@ const JSON_HEADERS = { "content-type": "application/json" };
  * row on every tick; a row that genuinely moved on carries a new stamp and is
  * applied again.
  */
-function applyPushedRecords(records: DeviceAttentionView["records"], applied: Set<string>): void {
-  if (!records) return;
+function applyPushedRecords(records: DeviceAttentionView["records"], held: EchoedRecords): LaneWithdrawal[] {
+  if (!records) return [];
   /* One stamp per row version, and a handful of rows per handoff: a tab open
      for a day would otherwise hold every version it ever saw. */
-  if (applied.size > 64) applied.clear();
+  if (held.stamps.size > 64) held.stamps.clear();
   for (const pipeline of records.pipelines) {
     const attempts = pipeline.runs.reduce((count, run) => count + run.attempts.length, 0);
     const stamp = `pipeline:${pipeline.id}:${pipeline.state}:${pipeline.cursor?.stageId ?? ""}:${pipeline.cursor?.state ?? ""}:${attempts}`;
-    if (applied.has(stamp)) continue;
-    applied.add(stamp);
+    /* Named on every poll while it is fresh, so the id is (re)registered even
+       when the row itself has not moved: this is the list the next read sends
+       back, and dropping it would make an unchanged lane unanswerable. */
+    held.titles.set(pipeline.id, laneTitle(pipeline.task) || pipeline.id);
+    if (held.stamps.has(stamp)) continue;
+    held.stamps.add(stamp);
     applyPipelineSnapshot(pipeline, true);
   }
   for (const task of records.tasks) {
     const stamp = `task:${task.id}:${task.updatedAt}:${task.status}`;
-    if (applied.has(stamp)) continue;
-    applied.add(stamp);
+    if (held.stamps.has(stamp)) continue;
+    held.stamps.add(stamp);
     applyTaskSnapshot(task);
   }
+  /* The server looked and does not hold it: the lane was refused, or never
+     materialized. Nothing else can decide this — an echo retires in the
+     ordinary way when a complete scan carries the row, and a row no scan will
+     ever carry would otherwise stand on the board forever. The task rows are
+     left alone: a board task outlives the pipeline filed under it. */
+  const withdrawals: LaneWithdrawal[] = [];
+  for (const entry of records.withdrawn ?? []) {
+    const title = held.titles.get(entry.id);
+    if (title === undefined) continue;
+    held.titles.delete(entry.id);
+    for (const stamp of [...held.stamps]) {
+      if (stamp.startsWith(`pipeline:${entry.id}:`)) held.stamps.delete(stamp);
+    }
+    revertPipelineSnapshot(entry.id);
+    withdrawals.push({ pipelineId: entry.id, title, reason: entry.reason });
+  }
+  return withdrawals;
+}
+
+/** What a withdrawn lane is called in the line that says it is gone: the first
+    line of its prompt, which is what its card was titled with, bounded so a
+    prompt cannot become a paragraph in a notice. */
+function laneTitle(task: string | undefined): string {
+  const first = (task ?? "").split("\n", 1)[0]!.trim();
+  return first.length > 80 ? `${first.slice(0, 79)}…` : first;
+}
+
+/** What this device is holding out of pushed rows: the version stamps it has
+    already applied, and the title of each lane, which is the only thing left
+    to name it by once the server says it does not exist. */
+interface EchoedRecords {
+  stamps: Set<string>;
+  titles: Map<string, string>;
 }
 
 /** Whether a POST decided anything: `null` means the server never answered. */
@@ -163,20 +219,37 @@ export function useAttentionOffers({
   const [view, setView] = useState<DeviceAttentionView | null>(null);
   const [pollGeneration, setPollGeneration] = useState(0);
   const [refusal, setRefusal] = useState<AttentionRefusal | null>(null);
+  const [withdrawals, setWithdrawals] = useState<LaneWithdrawal[]>([]);
   const call = fetchFn ?? (typeof fetch === "function" ? fetch : null);
 
-  /** Rows already layered into the data layer, by content stamp. */
-  const appliedRecords = useRef(new Set<string>());
+  /** Rows already layered into the data layer, and the lanes among them. */
+  const appliedRecords = useRef<EchoedRecords>({ stamps: new Set(), titles: new Map() });
 
   /* Held in a ref so a caller passing an inline predicate does not restart the
      poll on every render. */
   const visible = useRef<() => boolean>(documentIsVisible);
   useEffect(() => { visible.current = surfaceVisible ?? documentIsVisible; }, [surfaceVisible]);
 
+  /* A withdrawal is said once per lane: the row is off the board already, and
+     a line repeated on every four-second poll would be a status rather than a
+     piece of news. */
+  const noteWithdrawals = useCallback((taken: LaneWithdrawal[]) => {
+    if (taken.length === 0) return;
+    setWithdrawals((current) => [
+      ...current.filter((held) => !taken.some((entry) => entry.pipelineId === held.pipelineId)),
+      ...taken,
+    ]);
+  }, []);
+
   const read = useCallback(async (): Promise<DeviceAttentionView | null> => {
     if (!deviceId || !call) return null;
     try {
-      const response = await call(`/api/attention?deviceId=${encodeURIComponent(deviceId)}`);
+      /* The lanes this device is holding out of earlier pushes travel with the
+         read, so the server can answer which of them it does not hold (#1836).
+         Empty on the ordinary poll, which is the ordinary case. */
+      const holding = [...appliedRecords.current.titles.keys()];
+      const echoes = holding.length ? `&echoes=${encodeURIComponent(holding.join(","))}` : "";
+      const response = await call(`/api/attention?deviceId=${encodeURIComponent(deviceId)}${echoes}`);
       if (!response.ok) return null;
       return await response.json() as DeviceAttentionView;
     } catch {
@@ -236,7 +309,7 @@ export function useAttentionOffers({
     /* Before anything is rendered or answered: a request whose target the
        board cannot draw yet is exactly the case this read carries the cure
        for, and the cure has to land before the handoff looks for the anchor. */
-    applyPushedRecords(first.records, appliedRecords.current);
+    noteWithdrawals(applyPushedRecords(first.records, appliedRecords.current));
     const pending = first.live.find((entry) => entry.request.state === "pending");
     /* A surface nobody is looking at reads, but never claims the offer was
        shown: `pending` and `offered` are the difference between "no active
@@ -253,9 +326,9 @@ export function useAttentionOffers({
     playCue({ cue: "attention", eventId: `attention:${pending.request.id}` });
     await post(pending.request.id, { kind: "offer", deviceId });
     const second = await read();
-    if (second) applyPushedRecords(second.records, appliedRecords.current);
+    if (second) noteWithdrawals(applyPushedRecords(second.records, appliedRecords.current));
     setView(second ?? first);
-  }, [read, post, deviceId]);
+  }, [read, post, deviceId, noteWithdrawals]);
 
   const answer = useCallback(async (id: string, event: AttentionEvent): Promise<PostOutcome> => {
     const outcome = await post(id, event);
@@ -325,11 +398,22 @@ export function useAttentionOffers({
     return () => clearTimeout(timer);
   }, [refusal, refusalTtlMs]);
 
+  /* A withdrawal says a lane is gone and why, once, for the same bounded
+     moment a refusal stands. Left on screen it would become a warning band
+     about something that stopped being news minutes ago. */
+  useEffect(() => {
+    if (withdrawals.length === 0) return;
+    const oldest = withdrawals[0]!;
+    const timer = setTimeout(() => setWithdrawals((current) => current.filter((entry) => entry !== oldest)), refusalTtlMs);
+    return () => clearTimeout(timer);
+  }, [withdrawals, refusalTtlMs]);
+
   return {
     view,
     offer: view?.offer ?? null,
     pollGeneration,
     refusal,
+    withdrawals,
     dismissRefusal: useCallback(() => setRefusal(null), []),
     accept,
     preview: useCallback(async (request) => {
