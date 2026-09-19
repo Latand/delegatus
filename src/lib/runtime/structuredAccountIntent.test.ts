@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 
+import { AgentRegistry, type ViewerConversationId } from "@/lib/agent/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { HostState } from "./engineHost";
@@ -96,8 +97,14 @@ function endTurn(state: HostState): void {
  * claimed, as the registry's claim does, and `fail` makes the move fail the
  * way a signed-out target or a refused migration does.
  */
-function queueOver(journal: RuntimeJournal, state: HostState, options: { fail?: string; cancelled?: Set<string> } = {}) {
+function queueOver(
+  journal: RuntimeJournal,
+  state: HostState,
+  options: { fail?: string; cancelled?: Set<string>; registry?: { store: AgentRegistry; id: ViewerConversationId } } = {},
+) {
   const holds = new Map<string, { accountId: string; reason: string }>();
+  /* With a registry, the hold and the claim are the registry's own, as in production. */
+  const registry = options.registry;
   const port: StructuredDeliveryQueuePort = {
     effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
     transition: async (operationId, status, details) => {
@@ -105,9 +112,10 @@ function queueOver(journal: RuntimeJournal, state: HostState, options: { fail?: 
     },
     status: async (operationId) => journal.operationResult(operationId)?.receipt ?? null,
     reconfigureCancelled: (effect) => options.cancelled?.has(effect.operationId) ?? false,
-    switchHold: (conversationId) => holds.get(conversationId) ?? null,
+    switchHold: (conversationId) => registry ? registry.store.switchHold(registry.id) : holds.get(conversationId) ?? null,
     holdForFailedSwitch: (effect, reason) => {
-      holds.set(effect.conversationId, { accountId: effect.accountId!, reason });
+      if (registry) registry.store.holdForFailedSwitch(registry.id, { operationId: effect.operationId, accountId: effect.accountId!, reason });
+      else holds.set(effect.conversationId, { accountId: effect.accountId!, reason });
     },
   };
   const ledger = createFakeDeliveryLedger();
@@ -121,7 +129,17 @@ function queueOver(journal: RuntimeJournal, state: HostState, options: { fail?: 
     undefined,
     undefined,
     async (effect: StructuredReconfigureEffect) => {
-      holds.delete(effect.conversationId);
+      if (registry) {
+        const claim = registry.store.claimConversationReconfigure(registry.id, {
+          operationId: effect.operationId,
+          revision: effect.eventSeq,
+          profile: { model: effect.model, effort: effect.effort, fast: effect.fast },
+          ...(effect.accountId ? { accountId: effect.accountId } : {}),
+        });
+        if (claim.kind !== "claimed") throw new Error(`reconfigure claim was ${claim.kind}`);
+      } else {
+        holds.delete(effect.conversationId);
+      }
       moves.push(`${effect.operationId}→${effect.accountId ?? "profile"}`);
       order.push(`move:${effect.accountId}`);
       if (options.fail) throw new Error(options.fail);
@@ -283,4 +301,41 @@ test("after a failed move, picking another account moves there and delivers the 
   expect(retry.moves).toEqual(["pick-c→account-c"]);
   expect(retry.writes()).toEqual(["held-message"]);
   journal.close();
+});
+
+test("a settings change after a failed move leaves the held message held, never sent on the old account", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "held-settings-state");
+  const store = new AgentRegistry(path.join(sandbox, "held-settings-registry.json"), () => false);
+  const id = store.ensureConversation("claude", "/sessions/account-intent.jsonl", "account-a").id;
+  try {
+    const journal = journalWithSwitch("failed-then-settings", "idle");
+    const failing = queueOver(journal, hostState(false), { fail: "claude account requires authentication", registry: { store, id } });
+    send(journal, "held-message");
+    await failing.queue.drain();
+    expect(failing.writes()).toEqual([]);
+    expect(store.switchHold(id)).toMatchObject({ accountId: "account-b" });
+
+    /* A model-only change names no account: it is applied, and the hold stands. */
+    const later = queueOver(journal, hostState(false), { registry: { store, id } });
+    journal.executeOperation({
+      kind: "reconfigure", operationId: "model-only", idempotencyKey: "model-only", conversationId: CONVERSATION,
+      model: "claude-sonnet-5", effort: "high", fast: false,
+    });
+    await later.queue.drain();
+    await later.queue.drain();
+    expect(later.moves).toEqual(["model-only→profile"]);
+    expect(later.writes()).toEqual([]);
+    expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "queued" });
+    expect(store.switchHold(id)).toMatchObject({ accountId: "account-b" });
+
+    /* «Send on the current account» is still the explicit release. */
+    store.releaseSwitchHold(id);
+    await later.queue.drain();
+    expect(later.writes()).toEqual(["held-message"]);
+    journal.close();
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });

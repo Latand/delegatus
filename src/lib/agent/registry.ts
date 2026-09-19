@@ -6497,8 +6497,10 @@ export class AgentRegistry {
       };
       writeConversationLaunchProfile(file, conversation, generation, state.profile);
       conversation.reconfigure = state;
-      /* #1846: a new choice is what a failed switch's hold was waiting for. */
-      conversation.switchHold = null;
+      /* #1846: a new account choice is what a failed switch's hold was waiting for. A settings change, or a
+         claim that names the account it already runs on, is not one: the held messages keep waiting until the
+         operator picks another account or sends them here explicitly (`releaseSwitchHold`). */
+      if (claim.accountId !== undefined && claim.accountId !== generation.accountId) conversation.switchHold = null;
       return { kind: "claimed" as const, state: clone(state), conversation: clone(conversation) };
     });
   }
