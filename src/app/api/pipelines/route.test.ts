@@ -14,6 +14,9 @@ process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
 const creatorPath = path.join(process.env.LLV_CODEX_HOME, "sessions", "creator.jsonl");
 fs.mkdirSync(path.dirname(creatorPath), { recursive: true });
 fs.writeFileSync(creatorPath, "{}\n");
+/* The sandbox's Codex account is signed in: a stage on an engine with nobody
+   signed in is refused at start (#1876), and these cases start pipelines. */
+fs.writeFileSync(path.join(process.env.LLV_CODEX_HOME, "auth.json"), "{}\n");
 const { GET, POST } = await import("./route");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
