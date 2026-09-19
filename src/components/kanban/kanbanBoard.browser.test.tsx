@@ -4119,3 +4119,128 @@ describe("#1743 engine marks, effort scale and how often an edge fired", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+describe("#1802 folding the rail footer and the orchestrator seat", () => {
+  /*
+   * Rendered evidence for the two folds the operator asked for before a stream
+   * (#1802), in the real Viewer over `issue1695Evidence.fixture.tsx`, in
+   * Chromium at a desktop viewport, light and dark:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx
+   *
+   * Gated here, because only a laid-out page settles it:
+   *   - open, the rail's footer paints machine figures and a limit window; one
+   *     click folds it to a row of its own height with a label on it and NO
+   *     digit, no percent and no plan word anywhere in the rail, the footer
+   *     subtree is gone from the document rather than hidden, and the project
+   *     list is taller by what the footer gave back;
+   *   - the seat's fold control is a real target with a word on it, not a bare
+   *     glyph: at least 64 px wide and 24 px tall, and its text is the
+   *     locale's own Fold / Unfold word;
+   *   - folded, the seat is a slim bar — under 72 px — that still carries the
+   *     seat's state word, and the conversation it holds is still mounted, so
+   *     a draft typed before the fold is still in the field after it.
+   *
+   * Measurements go to `evidence/issue-1802/fold.json`; no frame is committed.
+   */
+
+  const EVIDENCE = path.resolve("evidence/issue-1802");
+
+  const railFooter = (page: Page) => page.evaluate(() => {
+    const rail = document.querySelector<HTMLElement>("aside")!;
+    const footer = rail.querySelector<HTMLElement>("[data-rail-footer]")!;
+    const toggle = footer.querySelector<HTMLElement>("[data-rail-footer-toggle]")!;
+    const list = rail.querySelector<HTMLElement>("nav")!;
+    const toggleBox = toggle.getBoundingClientRect();
+    return {
+      state: footer.dataset.railFooter!,
+      footerHeight: Math.round(footer.getBoundingClientRect().height),
+      toggle: { width: Math.round(toggleBox.width), height: Math.round(toggleBox.height), text: (toggle.textContent ?? "").trim() },
+      /* Everything below the project list, as the operator reads it. */
+      railText: (footer.textContent ?? "").replace(/\s+/g, " ").trim(),
+      subtrees: footer.querySelectorAll(":scope > div").length,
+      listHeight: Math.round(list.getBoundingClientRect().height),
+    };
+  });
+
+  const seatBar = (page: Page) => page.evaluate(() => {
+    const seat = document.querySelector<HTMLElement>("[data-kanban-seat]")!;
+    const fold = seat.querySelector<HTMLElement>("[data-seat-collapse]")!;
+    const box = fold.getBoundingClientRect();
+    const badge = seat.querySelector<HTMLElement>("[data-orchestrator-badge]");
+    const field = seat.querySelector<HTMLTextAreaElement>("[data-orchestrator-conversation] textarea");
+    return {
+      collapsed: seat.dataset.collapsed === "1",
+      height: Math.round(seat.getBoundingClientRect().height),
+      fold: { width: Math.round(box.width), height: Math.round(box.height), text: (fold.textContent ?? "").trim(), expanded: fold.getAttribute("aria-expanded") },
+      stateWord: (badge?.textContent ?? "").trim(),
+      conversations: seat.querySelectorAll("[data-orchestrator-conversation]").length,
+      draft: field?.value ?? null,
+    };
+  });
+
+  browserTest("the rail footer and the seat both fold to a slim, numberless row", async () => {
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "llv-1802-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base, VIEWPORT, scheme, "en");
+        try {
+          await page.waitForSelector("[data-kanban-seat]");
+          await page.waitForSelector("[data-rail-footer]");
+          /* The rail's resources probe starts 1.5 s after mount by design: wait
+             for its figures, so the fold is asked to hide a painted footer. */
+          await page.waitForFunction(() => /\d/.test(document.querySelector<HTMLElement>("[data-rail-footer]")?.textContent ?? ""), null, { timeout: 20_000 });
+
+          const railOpen = await railFooter(page);
+          if (!/\d/.test(railOpen.railText)) failures.push(`${scheme}: the open rail footer printed no figure to hide`);
+          if (railOpen.state !== "open") failures.push(`${scheme}: the rail footer did not start open`);
+
+          await page.click("[data-rail-footer-toggle]");
+          const railFolded = await railFooter(page);
+          if (railFolded.state !== "folded") failures.push(`${scheme}: the rail footer did not fold`);
+          if (/\d/.test(railFolded.railText)) failures.push(`${scheme}: the folded rail footer still prints ${JSON.stringify(railFolded.railText)}`);
+          if (/%/.test(railFolded.railText)) failures.push(`${scheme}: the folded rail footer still prints a percentage`);
+          if (/GiB|MiB/.test(railFolded.railText)) failures.push(`${scheme}: the folded rail footer still prints a memory figure`);
+          if (railFolded.subtrees !== 0) failures.push(`${scheme}: the folded rail footer left ${railFolded.subtrees} subtree(s) mounted`);
+          if (railFolded.footerHeight >= railOpen.footerHeight) failures.push(`${scheme}: folding did not shrink the footer (${railOpen.footerHeight} → ${railFolded.footerHeight})`);
+          if (railFolded.listHeight <= railOpen.listHeight) failures.push(`${scheme}: the project list did not take the freed height`);
+
+          const seatOpen = await seatBar(page);
+          if (seatOpen.collapsed) failures.push(`${scheme}: the seat did not start open at ${VIEWPORT.height}px`);
+          if (seatOpen.fold.width < 64 || seatOpen.fold.height < 24) failures.push(`${scheme}: the seat's fold control is ${seatOpen.fold.width}×${seatOpen.fold.height}, too small to find`);
+          if (!seatOpen.fold.text) failures.push(`${scheme}: the seat's fold control carries no word`);
+
+          /* A half-typed message, so the fold is asked to keep it. */
+          await page.fill("[data-kanban-seat] [data-orchestrator-conversation] textarea", "half a thought");
+          await page.click("[data-kanban-seat] [data-seat-collapse]");
+          const seatFolded = await seatBar(page);
+          if (!seatFolded.collapsed) failures.push(`${scheme}: the seat did not fold`);
+          if (seatFolded.height > 72) failures.push(`${scheme}: the folded seat is ${seatFolded.height}px, not a slim bar`);
+          if (!seatFolded.stateWord) failures.push(`${scheme}: the folded seat bar says nothing about the seat's state`);
+          if (seatFolded.conversations !== 1) failures.push(`${scheme}: folding unmounted the seat's conversation`);
+
+          await page.click("[data-kanban-seat] [data-seat-collapse]");
+          const seatBack = await seatBar(page);
+          if (seatBack.collapsed) failures.push(`${scheme}: the seat did not unfold`);
+          if (seatBack.draft !== "half a thought") failures.push(`${scheme}: the draft did not survive the fold (${JSON.stringify(seatBack.draft)})`);
+
+          frames[scheme] = { railOpen, railFolded, seatOpen, seatFolded, seatBack };
+          if (pageErrors.length) failures.push(`${scheme}: ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    fs.writeFileSync(path.join(EVIDENCE, "fold.json"), `${JSON.stringify({ viewport: VIEWPORT, frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+});

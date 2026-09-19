@@ -497,6 +497,18 @@
 .kb .seat .lock { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); background: var(--surface-well); white-space: nowrap; }
 .kb .seat .lock svg { width: 11px; height: 11px; }
 .kb .seat .grow { flex: 1; }
+/* The fold control (#1802): the operator must find it without hunting, so it
+   reads as a button with a word on it rather than a bare chevron, and it keeps
+   the same place and the same word-pair folded and open. */
+.kb .seat-head .icon-btn.seat-fold {
+  width: auto; height: 28px; gap: 6px; padding: 0 12px; font-size: var(--text-label); font-weight: 600;
+  border: 1px solid var(--border-default); background: var(--surface-well); color: var(--color-secondary);
+}
+.kb .seat-head .icon-btn.seat-fold:hover { background: var(--surface-card); color: var(--color-primary); border-color: var(--border-strong); }
+.kb .seat-head .icon-btn.seat-fold svg { width: 14px; height: 14px; }
+/* A reply that landed while the seat was folded, as a marker and a word. */
+.kb .seat .seat-unread { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-accent); background: var(--surface-well); white-space: nowrap; }
+.kb .seat .seat-unread i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .kb .seat-grip { position: absolute; left: 0; right: 0; bottom: -7px; height: 14px; z-index: 4; cursor: ns-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
 .kb .seat-grip::before { content: ""; width: 44px; height: 4px; border-radius: 2px; background: var(--border-strong); }
 .kb .seat-grip:hover::before, .kb .seat-grip:focus-visible::before { background: var(--color-accent); }
@@ -504,7 +516,7 @@
 @media (max-width: 767px) {
   .kb .seat { width: calc(100% - 24px); margin-top: 8px; }
   .kb .seat-head { flex-wrap: wrap; row-gap: 2px; }
-  .kb .seat-title .proj, .kb .seat .lock span { display: none; }
+  .kb .seat-title .proj, .kb .seat .lock span, .kb .seat .seat-unread span { display: none; }
 }
 
 /* ── Readers: conversations open inside cards (K3) ───────────────────────── */

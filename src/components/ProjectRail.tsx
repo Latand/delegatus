@@ -334,9 +334,67 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           )
         ) : null}
       </nav>
-      <ResourcesFooter />
-      <LimitsFooter />
+      <RailFooter />
     </aside>
+  );
+}
+
+/** Where this browser remembers whether the rail's footer is folded away. */
+export const RAIL_FOOTER_STORAGE_KEY = "llv:rail-footer:v1";
+
+/**
+ * The rail's footer — resources, the limit bars and the Telegram row — behind
+ * one control on its top edge (issue #1802).
+ *
+ * Folded, the row carries a short label and nothing else: no percentage, no
+ * plan and no account name, because the reason to put it away is a stream
+ * watching the screen. The footers are UNMOUNTED rather than hidden, so their
+ * polls stop with them, and the project list above takes the freed height by
+ * itself. The choice is one screen's, so it lives in this browser's storage,
+ * read in an effect to keep the server's first paint and hydration identical.
+ */
+function RailFooter() {
+  const { t } = useLocale();
+  const [folded, setFolded] = useState(false);
+  useEffect(() => {
+    try {
+      setFolded(window.localStorage.getItem(RAIL_FOOTER_STORAGE_KEY) === "folded");
+    } catch {
+      /* private mode: the footer stays open for this page */
+    }
+  }, []);
+  const toggle = () => {
+    setFolded((value) => {
+      const next = !value;
+      try {
+        window.localStorage.setItem(RAIL_FOOTER_STORAGE_KEY, next ? "folded" : "open");
+      } catch {
+        /* private mode: the choice holds for this page only */
+      }
+      return next;
+    });
+  };
+  return (
+    <div className="shrink-0" data-rail-footer={folded ? "folded" : "open"}>
+      <button
+        type="button"
+        data-rail-footer-toggle=""
+        aria-expanded={!folded}
+        aria-label={t(folded ? "rail.footerShow" : "rail.footerHide")}
+        title={t(folded ? "rail.footerShow" : "rail.footerHide")}
+        onClick={toggle}
+        className="flex w-full items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[11px] font-bold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${folded ? "" : "rotate-90"}`} aria-hidden />
+        {t("rail.footerLabel")}
+      </button>
+      {folded ? null : (
+        <>
+          <ResourcesFooter />
+          <LimitsFooter />
+        </>
+      )}
+    </div>
   );
 }
 

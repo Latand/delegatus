@@ -1,0 +1,139 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "frames": {
+    "light": {
+      "railOpen": {
+        "state": "open",
+        "footerHeight": 293,
+        "toggle": {
+          "width": 247,
+          "height": 30,
+          "text": "System"
+        },
+        "railText": "SystemRAM9.0 GiB freeSwap1.0 GiB usedcaptured 32s agoClaudeAccountsno data yetCodexAccountsLoading account limits…TelegramNot connected",
+        "subtrees": 2,
+        "listHeight": 521
+      },
+      "railFolded": {
+        "state": "folded",
+        "footerHeight": 30,
+        "toggle": {
+          "width": 247,
+          "height": 30,
+          "text": "System"
+        },
+        "railText": "System",
+        "subtrees": 0,
+        "listHeight": 785
+      },
+      "seatOpen": {
+        "collapsed": false,
+        "height": 270,
+        "fold": {
+          "width": 68,
+          "height": 28,
+          "text": "Fold",
+          "expanded": "true"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": ""
+      },
+      "seatFolded": {
+        "collapsed": true,
+        "height": 48,
+        "fold": {
+          "width": 80,
+          "height": 28,
+          "text": "Unfold",
+          "expanded": "false"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": "half a thought"
+      },
+      "seatBack": {
+        "collapsed": false,
+        "height": 270,
+        "fold": {
+          "width": 68,
+          "height": 28,
+          "text": "Fold",
+          "expanded": "true"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": "half a thought"
+      }
+    },
+    "dark": {
+      "railOpen": {
+        "state": "open",
+        "footerHeight": 293,
+        "toggle": {
+          "width": 247,
+          "height": 30,
+          "text": "System"
+        },
+        "railText": "SystemRAM9.0 GiB freeSwap1.0 GiB usedcaptured 32s agoClaudeAccountsno data yetCodexAccountsLoading account limits…TelegramNot connected",
+        "subtrees": 2,
+        "listHeight": 521
+      },
+      "railFolded": {
+        "state": "folded",
+        "footerHeight": 30,
+        "toggle": {
+          "width": 247,
+          "height": 30,
+          "text": "System"
+        },
+        "railText": "System",
+        "subtrees": 0,
+        "listHeight": 785
+      },
+      "seatOpen": {
+        "collapsed": false,
+        "height": 270,
+        "fold": {
+          "width": 68,
+          "height": 28,
+          "text": "Fold",
+          "expanded": "true"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": ""
+      },
+      "seatFolded": {
+        "collapsed": true,
+        "height": 48,
+        "fold": {
+          "width": 80,
+          "height": 28,
+          "text": "Unfold",
+          "expanded": "false"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": "half a thought"
+      },
+      "seatBack": {
+        "collapsed": false,
+        "height": 270,
+        "fold": {
+          "width": 68,
+          "height": 28,
+          "text": "Fold",
+          "expanded": "true"
+        },
+        "stateWord": "live",
+        "conversations": 1,
+        "draft": "half a thought"
+      }
+    }
+  },
+  "failures": []
+}
