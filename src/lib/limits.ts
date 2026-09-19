@@ -472,32 +472,41 @@ function tierOfBucketKey(key: string): string {
   return key.startsWith(OAUTH_TIER_PREFIX) ? key.slice(OAUTH_TIER_PREFIX.length) : key;
 }
 
-/** One entry of the payload's `limits` array, read defensively.
+/** One model-scoped entry of the payload's `limits` array (issue #1839).
  *
- * The live payload carries `limits` as an array of three entries (issue #1839),
- * but its element shape was never captured: the read that would have captured
- * it was rate limited, and so were both reads this issue was allowed to make.
- * So this reads by content rather than by field name — an entry contributes
- * only through strings it carries that the rest of the payload already
- * corroborates: a bucket key the payload actually sent, or a Claude model
- * family the Viewer launches. Anything else in the entry is ignored, so the
- * array can name and attribute a window the bucket scan already found, and can
- * never invent one.
+ * Captured live on two accounts (key names and label strings only), every
+ * entry has the shape
+ * `{ kind, group, percent, severity, resets_at, scope, is_active }`: `kind` is
+ * `session`, `weekly_all` or `weekly_scoped`, and only a scoped entry carries
+ * `scope: { model: { id, display_name }, surface }`. The Fable window is the
+ * `weekly_scoped` entry whose `scope.model.display_name` is "Fable" and whose
+ * `id` is null. The codenamed `nimbus_quill` bucket matched neither that
+ * entry's percent nor its reset on either account, so it is a separate pool
+ * and never the source of Fable's line while this list names one.
+ *
+ * The reader stays tolerant of other spellings the provider may send
+ * (`utilization` for `percent`, a top-level `model`, a `name` label, an entry
+ * naming the bucket its window lives in), because nothing pins this shape.
  */
-interface OauthLimitsEntry {
+interface OauthScopedLimit {
   /** Bucket keys this entry names, matched against the payload's own keys. */
   buckets: string[];
   /** The model family this entry attributes the window to, when it names one. */
   family: string | null;
   /** The provider's human label for the window, when the entry carries one. */
   label: string | null;
-  /** The entry's own window, when it carries the window shape inline. */
+  /** The entry's own window, when it carries one inline. */
   window: LimitWindow | null;
 }
 
-/** Field names a human label plausibly arrives under. An entry that carries
-    none of them contributes no label and the bucket key stands. */
-const OAUTH_LABEL_FIELDS: readonly string[] = ["label", "name", "title", "display_name", "displayName", "description"];
+/** Fields a human label arrives under, most explicit first: `display_name` is
+    what the provider fills for the operator, while `name` can carry a machine
+    identifier (issue #1839 review). */
+const OAUTH_LABEL_FIELDS: readonly string[] = ["display_name", "displayName", "label", "title", "name"];
+
+/** A string spelled as a machine identifier (`weekly_scoped`, `nimbus_quill`,
+    `claude-fable-5-1`, `fable`) rather than as words for a person to read. */
+const MACHINE_IDENTIFIER = /^[a-z0-9_.:-]+$/;
 
 function stringValues(value: unknown, depth = 0): string[] {
   if (typeof value === "string") return [value];
@@ -506,51 +515,80 @@ function stringValues(value: unknown, depth = 0): string[] {
   return entries.flatMap((item) => stringValues(item, depth + 1));
 }
 
-function readLimitsEntry(entry: unknown, bucketKeys: ReadonlySet<string>): OauthLimitsEntry | null {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-  const record = entry as Record<string, unknown>;
-  const strings = stringValues(record);
-  /* An entry for one of the two general windows is not a tier however it is
-     labelled: adopting it would file the 5-hour window under whatever model its
-     label happens to name and gate that model's spawns on the wrong horizon. */
-  if (strings.some((value) => OAUTH_GENERAL_WINDOWS.has(value))) return null;
-  const buckets = [...new Set(strings.filter((value) => bucketKeys.has(value)))];
-  /* A family is named either as a bare model id or as one word of a human
-     label ("Fable", "Fable weekly limit"), so each string is tried whole and
-     word by word. Nothing else in the entry can name a family. */
-  const family = strings
-    .flatMap((value) => [value, ...value.split(/[\s,/|()\[\]]+/)])
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/** The first human label among `records`' label fields; codenames and bucket
+    keys are skipped so a machine `name` never outranks a `display_name`. */
+function humanLabel(records: readonly (Record<string, unknown> | null)[], bucketKeys: ReadonlySet<string>): string | null {
+  for (const record of records) {
+    if (!record) continue;
+    for (const field of OAUTH_LABEL_FIELDS) {
+      const value = record[field];
+      if (typeof value !== "string") continue;
+      const text = value.trim();
+      if (text && !bucketKeys.has(text) && !MACHINE_IDENTIFIER.test(text)) return text;
+    }
+  }
+  return null;
+}
+
+function scopedWindow(record: Record<string, unknown>): LimitWindow | null {
+  const used = typeof record.percent === "number" ? record.percent : typeof record.utilization === "number" ? record.utilization : null;
+  if (used === null || !Number.isFinite(used)) return null;
+  const resets = typeof record.resets_at === "string" ? Date.parse(record.resets_at) : NaN;
+  const session = [record.group, record.kind].some((value) => typeof value === "string" && value.startsWith("session"));
+  return {
+    usedPercent: used,
+    resetsAt: Number.isFinite(resets) ? Math.round(resets / 1000) : null,
+    windowMinutes: session ? SESSION_WINDOW_MINUTES : WEEKLY_WINDOW_MINUTES,
+  };
+}
+
+function readScopedLimit(entry: unknown, bucketKeys: ReadonlySet<string>): OauthScopedLimit | null {
+  const record = asRecord(entry);
+  if (!record) return null;
+  const identifiers = stringValues(record).map((value) => value.trim()).filter((value) => MACHINE_IDENTIFIER.test(value));
+  /* An entry that spells a general window or an accounting pool anywhere in
+     its identifiers is neither a model tier nor a pointer to one: adopting it
+     would file the 5-hour window, or the OAuth-app pool, under whatever model
+     it names and gate that model's spawns on it. Checked before the entry can
+     contribute an inline window or a bucket attribution. */
+  if (identifiers.some((value) => OAUTH_GENERAL_WINDOWS.has(value) || isAccountingPool(value))) return null;
+  const buckets = [...new Set(identifiers.filter((value) => bucketKeys.has(value)))];
+  const scope = asRecord(record.scope);
+  const scopeModel = asRecord(scope?.model);
+  const label = humanLabel([scopeModel, record], bucketKeys);
+  /* The family comes from the model the entry is scoped to, and only then
+     from the words of its human label ("Fable", "Fable weekly limit"). */
+  const modelNames = [scopeModel?.id, scopeModel?.display_name, scope?.model, record.model, record.model_id]
+    .filter((value): value is string => typeof value === "string");
+  const family = [...modelNames, ...(label ? label.split(/[\s,/|()\[\]]+/) : [])]
     .map((value) => normalizeClaudeLaunchModel(value))
     .find((value) => value !== null) ?? null;
-  const labelField = OAUTH_LABEL_FIELDS.map((field) => record[field]).find((value) => typeof value === "string" && value.trim());
-  const label = typeof labelField === "string" ? labelField.trim() : null;
-  const window = oauthWindow(record as OauthWindow, WEEKLY_WINDOW_MINUTES);
   if (!buckets.length && !family) return null;
-  return { buckets, family, label, window };
+  return { buckets, family, label, window: scopedWindow(record) };
 }
 
 /** Every model-tier window the provider meters beside `five_hour`/`seven_day`
  * (issues #1358, #1796, #1839).
  *
- * The provider does NOT send a `seven_day_<tier>` key for every tier it meters:
- * the account whose third meter this issue is about has no `seven_day_fable`
- * key at all, `seven_day_opus` and `seven_day_sonnet` arrive null, and the
- * window that is actually metered arrives under a codenamed top-level bucket of
- * the same shape. So the source is the payload's own shape, not a key prefix:
- * every non-null top-level bucket carrying a window that is not one of the two
- * general windows and not an accounting pool is a metered tier and earns a row.
- *
- * `limits[]` is then read over the top: it is the provider's own labelled list,
- * so a label it carries is the name the operator reads, and a model family it
- * names re-keys the window to that family, which is what lets a Fable spawn
- * consult the window the provider attributes to Fable even when the bucket the
- * window arrived in is codenamed.
+ * The provider sends no `seven_day_<tier>` key for the tier it meters:
+ * `seven_day_opus` and `seven_day_sonnet` arrive null and there is no
+ * `seven_day_fable` at all. It names the window in `limits[]` instead, as a
+ * `weekly_scoped` entry scoped to a model. So `limits[]` is the source whenever
+ * one of its entries names a model window: its label is the name the operator
+ * reads, and the model it names is the tier key a spawn of that model is gated
+ * on. Only when it names none does the bucket scan stand in: every non-null
+ * top-level bucket carrying a window that is not one of the two general windows
+ * and not an accounting pool.
  *
  * Rows are ordered by the name they display, so they never reshuffle between
  * reads.
  */
 function oauthTierWindows(json: Record<string, unknown>): TierLimitWindow[] {
-  const byTier = new Map<string, TierLimitWindow>();
+  const byBucket = new Map<string, TierLimitWindow>();
   const tierOfBucket = new Map<string, string>();
   for (const key of Object.keys(json)) {
     if (OAUTH_GENERAL_WINDOWS.has(key) || isAccountingPool(key)) continue;
@@ -559,27 +597,32 @@ function oauthTierWindows(json: Record<string, unknown>): TierLimitWindow[] {
     if (!window) continue;
     const tier = tierOfBucketKey(key);
     if (!tier) continue;
-    byTier.set(tier, { ...window, tier });
+    byBucket.set(tier, { ...window, tier });
     tierOfBucket.set(key, tier);
   }
   const bucketKeys = new Set([...tierOfBucket.keys(), ...tierOfBucket.values()]);
+  const listed = new Map<string, TierLimitWindow>();
   const entries = Array.isArray(json.limits) ? json.limits : [];
   for (const raw of entries) {
-    const entry = readLimitsEntry(raw, bucketKeys);
+    const entry = readScopedLimit(raw, bucketKeys);
     if (!entry) continue;
-    const named = entry.buckets.map((key) => tierOfBucket.get(key) ?? key).find((tier) => byTier.has(tier)) ?? null;
-    const existing = named ? byTier.get(named)! : null;
-    const window = existing ?? (entry.window ? { ...entry.window, tier: entry.family ?? "" } : null);
-    if (!window) continue;
-    // The family the provider attributes the window to is the tier key the
-    // spawn gate matches on, so a codenamed bucket answers for its model.
-    const tier = entry.family ?? window.tier;
-    if (!tier) continue;
-    if (named && tier !== named) byTier.delete(named);
-    byTier.set(tier, { ...window, tier, ...(entry.label ? { label: entry.label } : {}) });
+    const bucketTier = entry.buckets.map((key) => tierOfBucket.get(key) ?? key).find((tier) => byBucket.has(tier)) ?? null;
+    const source = entry.window ?? (bucketTier ? byBucket.get(bucketTier)! : null);
+    const tier = entry.family ?? bucketTier;
+    if (!source || !tier) continue;
+    const window: TierLimitWindow = {
+      usedPercent: source.usedPercent,
+      resetsAt: source.resetsAt,
+      windowMinutes: source.windowMinutes,
+      tier,
+      ...(entry.label ? { label: entry.label } : {}),
+    };
+    // Two entries for one model: the more exhausted one is what binds a spawn.
+    const prior = listed.get(tier);
+    if (!prior || window.usedPercent > prior.usedPercent) listed.set(tier, window);
   }
-  return [...byTier.values()]
-    .sort((left, right) => claudeTierDisplayName(left.tier, left.label).localeCompare(claudeTierDisplayName(right.tier, right.label)));
+  const tiers = listed.size ? [...listed.values()] : [...byBucket.values()];
+  return tiers.sort((left, right) => claudeTierDisplayName(left.tier, left.label).localeCompare(claudeTierDisplayName(right.tier, right.label)));
 }
 
 /* -------------------------------- Codex -------------------------------- */

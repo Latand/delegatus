@@ -1569,11 +1569,11 @@ test("pre-tier-list cached limits keep their bucket, and an older parser's entry
    reads tiers out of `seven_day_<tier>` keys finds nothing here, which is why
    production answered `claude.tiers: []` for every account.
 
-   The element shapes of `limits[]` and `seven_day_breakdown.rows[]` were not
-   captured: the read that would have captured them was rate limited, and so
-   were both reads this issue was allowed to make. The entries below stand in
-   for them, and the second half of this test covers the case where the real
-   shape is nothing like them. */
+   The element shapes of `limits[]` and `seven_day_breakdown.rows[]` were
+   captured by one masked read per account on two accounts (key names and label
+   strings only): see `providerLimits` below. On both, the codenamed
+   `nimbus_quill` window matched neither the Fable entry's percent nor its
+   reset, so it is a separate pool. */
 function usagePayloadWithCodenamedTier(limits?: unknown[]): Record<string, unknown> {
   const resets = "2026-09-26T08:00:00.000Z";
   const window = (utilization: number) => ({
@@ -1613,7 +1613,12 @@ function usagePayloadWithCodenamedTier(limits?: unknown[]): Record<string, unkno
       // A window-shaped object nested here must never become a row: the scan
       // is over top-level buckets, and per-model usage inside the week is not
       // a window of its own.
-      rows: [{ model: "claude-fable", utilization: 44, resets_at: resets }],
+      rows: [
+        { key: "claude_code", display_name: "Claude Code", percent: 21 },
+        { key: "chat", display_name: "Chats", percent: 5 },
+        { key: "cowork", display_name: "Cowork", percent: 0 },
+        { key: "other", display_name: "Other", percent: 4 },
+      ],
       window_started_at: "2026-09-19T08:00:00.000Z",
     },
     extra_usage: null,
@@ -1621,6 +1626,107 @@ function usagePayloadWithCodenamedTier(limits?: unknown[]): Record<string, unkno
     member_dashboard_available: false,
   };
 }
+
+/** `limits[]` as the provider sends it, captured live with every number masked:
+    the general session and week, then one `weekly_scoped` entry per metered
+    model, naming the model only by `display_name`. Values here are invented. */
+function providerLimits(fablePercent: number): unknown[] {
+  const week = "2026-09-26T08:00:00.000000+00:00";
+  return [
+    { kind: "session", group: "session", percent: 12, severity: "normal", resets_at: "2026-09-19T14:00:00.000000+00:00", scope: null, is_active: true },
+    { kind: "weekly_all", group: "weekly", percent: 30, severity: "normal", resets_at: week, scope: null, is_active: false },
+    { kind: "weekly_scoped", group: "weekly", percent: fablePercent, severity: "normal", resets_at: week, scope: { model: { id: null, display_name: "Fable" }, surface: null }, is_active: false },
+  ];
+}
+
+async function readUsage(payload: Record<string, unknown>) {
+  const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
+  try { return await fetchClaudeLimits(credentials); } finally { globalThis.fetch = realFetch; }
+}
+
+type UsageData = Awaited<ReturnType<typeof fetchClaudeLimits>>["data"];
+
+async function usageRowLabels(data: UsageData): Promise<string[]> {
+  const { limitRows } = await import("@/components/AccountsPanel");
+  const { reconcileQuotaReadings } = await import("./rateLimit");
+  const { translate } = await import("./i18n");
+  const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+  return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
+}
+
+function usageGate(data: UsageData, model: string) {
+  const now = Date.now();
+  return effectiveRemaining({
+    engine: "claude" as const,
+    accountId: "default",
+    authenticated: true,
+    limits: data,
+    provenance: { source: "live" as const, reason: null, staleSince: null },
+    observedAt: now,
+    authCheckedAt: now,
+  }, now, { model });
+}
+
+test("Fable's line is read from the provider's model-scoped limits entry, and a Fable spawn is gated on it (#1839)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const live = await readUsage(usagePayloadWithCodenamedTier(providerLimits(64)));
+  expect(live.source).toBe("live");
+  /* The Fable window is the scoped entry's; the codenamed bucket beside it is
+     another pool and does not become a row while the list names a model. */
+  expect(live.data?.tiers).toEqual([
+    { usedPercent: 64, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
+  ]);
+  expect(await usageRowLabels(live.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(usageGate(live.data, "fable")).toEqual({ percent: 36, window: "tier:fable" });
+  expect(usageGate(live.data, "opus")).toEqual({ percent: 70, window: "weekly" });
+});
+
+test("an accounting pool in limits[] never becomes a model tier or gates Fable, inline or through a bucket (#1839 review)", async () => {
+  const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
+  const legitimate = { kind: "weekly_scoped", group: "weekly", percent: 40, resets_at: "2026-09-26T08:00:00Z", scope: { model: { id: null, display_name: "Fable" }, surface: null } };
+  const cases: unknown[][] = [
+    // Inline: the pool carries its own exhausted window and names Fable.
+    [{ limit_type: "seven_day_oauth_apps", name: "Fable OAuth apps", model: "claude-fable", utilization: 100 }],
+    // Scoped to a pool surface rather than a model tier.
+    [{ kind: "weekly_scoped", group: "weekly", percent: 100, resets_at: "2026-09-26T08:00:00Z", scope: { model: { id: null, display_name: "Fable" }, surface: "oauth_apps" } }],
+    // Bucket-referencing: the pool points at the codenamed bucket's window.
+    [{ limit_type: "seven_day_oauth_apps", bucket: "nimbus_quill", model: "claude-fable" }],
+    [{ kind: "extra_usage", bucket: "nimbus_quill", scope: { model: { id: "claude-fable", display_name: "Fable" } } }],
+  ];
+  for (const limits of cases) {
+    const alone = await readUsage(usagePayloadWithCodenamedTier(limits));
+    expect(alone.data?.tiers?.map((tier) => tier.tier)).toEqual(["nimbus_quill"]);
+    expect(usageGate(alone.data, "fable")).toEqual({ percent: 70, window: "weekly" });
+    // Beside a legitimate Fable entry, the pool changes nothing about it.
+    const beside = await readUsage(usagePayloadWithCodenamedTier([...limits, legitimate]));
+    expect(beside.data?.tiers).toEqual([{ usedPercent: 40, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" }]);
+    expect(usageGate(beside.data, "fable")).toEqual({ percent: 60, window: "tier:fable" });
+  }
+});
+
+test("a human display name outranks a machine name, and a codename never reaches the row (#1839 review)", async () => {
+  const labelled = await readUsage(usagePayloadWithCodenamedTier([
+    { limit_type: "nimbus_quill", name: "nimbus_quill", display_name: "Fable", model: "claude-fable" },
+  ]));
+  expect(labelled.data?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+  expect(await usageRowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(usageGate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
+  const { claudeTierDisplayName } = await import("./agent/models");
+  expect(claudeTierDisplayName(labelled.data!.tiers![0].tier, labelled.data!.tiers![0].label)).toBe("Fable");
+
+  // A machine name alone is no label: the model's own name stands.
+  const machineOnly = await readUsage(usagePayloadWithCodenamedTier([
+    { limit_type: "nimbus_quill", name: "nimbus_quill", model: "claude-fable" },
+  ]));
+  expect(machineOnly.data?.tiers?.map((tier) => [tier.tier, tier.label ?? null])).toEqual([["fable", null]]);
+  expect(await usageRowLabels(machineOnly.data)).toEqual(["5h", "Week", "Fable · Week"]);
+
+  // `name: "Fable"` is a human label and is kept.
+  const named = await readUsage(usagePayloadWithCodenamedTier([{ limit_type: "nimbus_quill", name: "Fable" }]));
+  expect(named.data?.tiers?.map((tier) => [tier.tier, tier.label])).toEqual([["fable", "Fable"]]);
+});
 
 test("a tier the provider meters under a codename becomes its own window, labelled and gated by the model it names (#1839)", async () => {
   const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
@@ -1719,9 +1825,7 @@ test("a cached snapshot an older parser wrote never holds back a tier the live p
       codex: {},
     },
   }));
-  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier([
-    { limit_type: "nimbus_quill", name: "Fable" },
-  ]))) as unknown as typeof fetch);
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usagePayloadWithCodenamedTier(providerLimits(64)))) as unknown as typeof fetch);
   try {
     const payload = await readLimits({ codexLiveReader, now: () => now });
     expect(request).toHaveBeenCalledTimes(1);
