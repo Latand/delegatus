@@ -666,6 +666,8 @@ function measureOnboarding(phone: boolean) {
       /* Everything the failure block paints, for stray markdown marks. */
       failureAll: dialog.querySelector("[data-health-failure]")?.textContent ?? null,
       actionLabel: dialog.querySelector("[data-health-action]")?.textContent ?? null,
+      /* Filled accent buttons on screen, the footer's included: one at a time. */
+      filledAccents: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent")).map((el) => el.dataset.onboardingPrimary !== undefined ? "footer" : el.dataset.healthStart !== undefined ? "start" : el.textContent ?? ""),
       startFilled: (() => {
         const start = dialog.querySelector<HTMLElement>("[data-health-start]");
         return start ? getComputedStyle(start).backgroundColor === getComputedStyle(dialog.querySelector<HTMLElement>("[data-onboarding-primary]") ?? start).backgroundColor : null;
@@ -990,18 +992,20 @@ async function captureOnboarding(): Promise<void> {
               must(r.health !== null && r.health.rows.length === 5, `${tag} ${name}: the check shows ${r.health?.rows.length ?? 0} rows`);
               must((r.health?.failureOverflow ?? 0) <= 0, `${tag} ${name}: the failure block overflows by ${r.health?.failureOverflow}px`);
               must((r.health?.rowLabelsClipped.length ?? 0) === 0, `${tag} ${name}: clipped row labels ${r.health?.rowLabelsClipped.join(", ")}`);
+              must(r.health?.filledAccents.length === 1, `${tag} ${name}: ${r.health?.filledAccents.length} filled accent buttons (${r.health?.filledAccents.join(", ")})`);
               check(r);
             });
           };
           await checkFrame("check-idle", healthAnswer("idle"), "idle", (r) => {
             must(Boolean(r.health?.lead?.includes("Haiku")), `${tag}: the check's lead does not name the model: ${r.health?.lead}`);
+            must(r.health?.filledAccents[0] === "start", `${tag}: before a run the accent is on ${r.health?.filledAccents[0]}`);
           });
           await checkFrame("check-running", healthAnswer("running"), "running", (r) => {
             must(r.health?.rows.join(" ") === "spawn=passed delivery=passed report=running wake=waiting filing=waiting", `${tag}: running rows ${r.health?.rows.join(" ")}`);
           });
           await checkFrame("check-passed", healthAnswer("passed"), "passed", (r) => {
             must(r.health?.summary === "passed", `${tag}: a passed run shows summary ${r.health?.summary}`);
-            must(r.health?.startFilled === false, `${tag}: after a pass, Run it again is a second filled accent button beside Open the board`);
+            must(r.health?.filledAccents[0] === "footer", `${tag}: after a pass the accent is on ${r.health?.filledAccents[0]}, not Open the board`);
           });
           await checkFrame("check-stopped", healthAnswer("stopped"), "stopped", (r) => {
             must(r.health?.summary === "stopped", `${tag}: a stopped run shows summary ${r.health?.summary}`);
@@ -1016,6 +1020,7 @@ async function captureOnboarding(): Promise<void> {
               const index = HEALTH_ROW_IDS.indexOf(failed.row);
               must(r.health!.rows.slice(index + 1).every((entry) => entry.endsWith("=waiting")), `${tag} ${code}: rows after the failure are not waiting: ${r.health?.rows.join(" ")}`);
               must(r.health?.summary === "failed", `${tag} ${code}: no failed footer line`);
+              must(r.health?.filledAccents[0] === "start", `${tag} ${code}: after a failure the accent is on ${r.health?.filledAccents[0]}, not Run it again`);
               /* At rest, the failure leaves the button that runs the check again in view. */
               must(r.health?.inView.start === true && r.health?.inView.summary === true, `${tag} ${code}: Run it again ${r.health?.inView.start ? "in view" : "below the fold"}, footer line ${r.health?.inView.summary ? "in view" : "below the fold"}`);
               /* "Open the agent" sentences only beside the button that opens it. */
