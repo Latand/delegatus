@@ -3619,7 +3619,9 @@ test("verdict recovery normalizes object findings and still rejects a missing co
     verdict: null,
     verdictRecovery: {
       state: "pending",
-      reason: "canonical completed assistant turn is missing a valid status, findings, or confidence field",
+      /* #1756: the reason names the block it was read from, so a park detail
+         can be told apart from a reader that was looking at the wrong text. */
+      reason: "canonical completed assistant turn is missing a valid status, findings, or confidence field, at the fenced block on line 1",
     },
   });
 });
@@ -6098,21 +6100,34 @@ test("retry and skip leave verdict-recovery exhaustion only when reset preserves
     const publishedAheadPipeline = await exhaust(publishedAhead);
     const publishedAheadHead = "a".repeat(40);
     const publishedAheadExec = publishedAhead.ports.exec;
-    publishedAhead.ports.exec = (command, args, cwd) => {
-      if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
+    publishedAhead.ports.exec = (command, rawArgs, cwd) => {
+      /* The bounded remote read runs `git` under `timeout`, so the probe has to
+         look past that wrapper exactly as the harness's own exec does. */
+      const args = command === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "rev-parse" && args[1] === "HEAD") {
         return { code: 0, stdout: `${publishedAheadHead}\n`, stderr: "" };
       }
-      if (command === "git" && args[0] === "ls-remote") {
+      if (args[0] === "ls-remote") {
         return { code: 0, stdout: `${publishedAheadHead}\trefs/heads/${publishedAheadPipeline.branch}\n`, stderr: "" };
       }
-      return publishedAheadExec(command, args, cwd);
+      return publishedAheadExec(command, rawArgs, cwd);
     };
 
-    const refusedAhead = await patchPipeline(publishedAheadPipeline.id, { action }, publishedAhead.ports);
+    const ahead = await patchPipeline(publishedAheadPipeline.id, { action }, publishedAhead.ports);
 
-    expect(refusedAhead.status).toBe(409);
-    expect(refusedAhead.error).toContain("close");
-    expect(publishedAhead.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
+    if (action === "retry-stage") {
+      expect(ahead.status).toBe(409);
+      expect(ahead.error).toContain("close");
+      expect(publishedAhead.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
+    } else {
+      /* #1756: everything the stage produced is on the remote at exactly this
+         HEAD, so the reset preserves all of it. The skip adopts that commit as
+         the stage's result and the lane moves on to its next stage instead of
+         needing a successor pipeline. */
+      expect(ahead.error).toBeUndefined();
+      expect(loadPipelines()[0]!.lastPassedCommit).toBe(publishedAheadHead);
+      expect(publishedAhead.calls.some((call) => call.includes(`reset --hard ${publishedAheadHead}`))).toBe(true);
+    }
   }
 });
 

@@ -144,33 +144,123 @@ function completionVerdictFrom(value: unknown): StageVerdict | null {
   });
 }
 
+/** One fenced block, as a Markdown reader sees it: where it opened, which line
+    that was, and the exact bounds of its payload. */
+export type FencedBlock = {
+  /** Offset of the opening fence line. */
+  index: number;
+  /** 1-based line of the opening fence — the position a park detail names. */
+  line: number;
+  payload: string;
+  /** Offsets of the payload inside the original text, for a caller that
+      rewrites it in place. */
+  payloadStart: number;
+  payloadEnd: number;
+};
+
+/** A fence opens at the start of a line (up to three spaces of indent), and a
+    backtick fence's info string may not itself contain a backtick.
+
+    Three is CommonMark's bound and it is kept deliberately: at four spaces the
+    block is an indented code block, which is how an agent quotes a verdict it
+    is talking ABOUT rather than reporting. Reading those as fences would put a
+    quoted example back in the running to decide the stage — the same class of
+    mistake #1756 is about, from the other side. A verdict the agent did indent
+    that far is not lost silently: the turn reads as carrying no fenced verdict,
+    which is what the controller's one verdict request exists for. */
+const FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Every fenced block in `text`, read line by line.
+ *
+ * Line-anchored on purpose (#1756). The production message that parked lane
+ * 42490aea quoted a fence inside an inline code span — ```` ``` ```` in the
+ * middle of a sentence — and a scan for three backticks ANYWHERE paired those
+ * stray ticks with the opening fence of the real verdict. The verdict block
+ * was consumed as somebody else's closing delimiter, never became a candidate,
+ * and the lane parked reporting malformed JSON over a perfectly valid verdict.
+ * Mid-line backticks are prose; only a line that begins with the fence can open
+ * or close a block.
+ *
+ * A block left open at the end of the text closes there, as CommonMark has it,
+ * so a final verdict whose closing fence the agent forgot is still readable.
+ */
+export function fencedBlocks(text: string): FencedBlock[] {
+  const blocks: FencedBlock[] = [];
+  let open: { marker: string; length: number; index: number; line: number; payloadStart: number } | null = null;
+  let offset = 0;
+  let lineNumber = 0;
+  for (const rawLine of text.split("\n")) {
+    lineNumber += 1;
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const match = FENCE_LINE_RE.exec(line);
+    const token = match?.[1] ?? "";
+    const info = match?.[2] ?? "";
+    if (open) {
+      if (match && token.startsWith(open.marker) && token.length >= open.length && !info.trim()) {
+        /* The payload ends before the newline that carries the closing fence. */
+        const payloadEnd = offset > open.payloadStart ? offset - 1 : open.payloadStart;
+        blocks.push({
+          index: open.index,
+          line: open.line,
+          payload: text.slice(open.payloadStart, payloadEnd),
+          payloadStart: open.payloadStart,
+          payloadEnd,
+        });
+        open = null;
+      }
+    } else if (match && !(token.startsWith("`") && info.includes("`"))) {
+      const payloadStart = Math.min(offset + rawLine.length + 1, text.length);
+      open = { marker: token[0]!, length: token.length, index: offset, line: lineNumber, payloadStart };
+    }
+    offset += rawLine.length + 1;
+  }
+  if (open) {
+    blocks.push({
+      index: open.index,
+      line: open.line,
+      payload: text.slice(open.payloadStart),
+      payloadStart: open.payloadStart,
+      payloadEnd: text.length,
+    });
+  }
+  return blocks;
+}
+
 type FinalVerdictCandidate = {
   index: number;
   verdict: StageVerdict;
 };
 
+function malformedReason(what: string, line: number): string {
+  return `canonical completed assistant turn ${what}, at the fenced block on line ${line}`;
+}
+
 function finalVerdictCandidate(text: string): FinalVerdictCandidate | { failureReason: string } {
-  const matches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
-  if (!matches.length) {
+  const blocks = fencedBlocks(text);
+  if (!blocks.length) {
     return { failureReason: "canonical completed assistant turn is missing a fenced JSON verdict" };
   }
 
   const candidates: FinalVerdictCandidate[] = [];
-  let lastFailureReason = "canonical completed assistant turn is missing a valid status, findings, or confidence field";
-  for (const match of matches) {
+  /* The reason names the block it was read from (#1756 expectation 3): a park
+     detail that says only "malformed" cannot be told apart from a reader that
+     was looking at the wrong text, which is exactly what happened. */
+  let lastFailureReason = malformedReason("is missing a valid status, findings, or confidence field", blocks.at(-1)!.line);
+  for (const block of blocks) {
     let raw: unknown;
     try {
-      raw = JSON.parse(match[1] ?? "");
+      raw = JSON.parse(block.payload);
     } catch {
-      lastFailureReason = "canonical completed assistant turn has malformed JSON in the final fenced verdict";
+      lastFailureReason = malformedReason("has malformed JSON in the fenced verdict", block.line);
       continue;
     }
     const verdict = completionVerdictFrom(raw);
     if (!verdict) {
-      lastFailureReason = "canonical completed assistant turn is missing a valid status, findings, or confidence field";
+      lastFailureReason = malformedReason("is missing a valid status, findings, or confidence field", block.line);
       continue;
     }
-    candidates.push({ index: match.index, verdict });
+    candidates.push({ index: block.index, verdict });
   }
   if (!candidates.length) return { failureReason: lastFailureReason };
   if (new Set(candidates.map(({ verdict }) => verdict.status)).size > 1) {

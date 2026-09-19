@@ -905,6 +905,24 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       viewerMcpRegistered: true,
     });
   }
+  /* The rail's footer, so the frames that fold it away (#1802) have something
+     to fold: invented machine figures and one invented limit window. */
+  if (url.pathname.startsWith("/api/resources")) {
+    return json({
+      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
+      sessions: [],
+    });
+  }
+  if (url.pathname === "/api/limits") {
+    return json({
+      claude: null,
+      codex: { session: { usedPercent: 40, resetsAt: now + 3_600, windowMinutes: 300 }, weekly: { usedPercent: 10, resetsAt: now + 172_800, windowMinutes: 10_080 }, plan: "pro", capturedAt: now },
+      claudeAccountId: null,
+      codexAccountId: null,
+      provenance: { claude: { source: "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
+      staleSince: null,
+    });
+  }
   return json({}, 404);
 }) as typeof fetch;
 
