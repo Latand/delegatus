@@ -5,10 +5,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { HOT_STATE_RELEASE_REVISION_ENV, publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { stateImportIncidents } from "@/lib/state/legacyImport";
 import { readStateCollectionRevision, readStateImport, StateImportVerificationError, stateRowDigest } from "@/lib/state/sqliteStateStore";
 
-import { createTask } from "./commands";
+import { createTask, patchTask } from "./commands";
 import {
   checkpointTaskRollbackMirrorForDemotion,
   importLegacyTasks,
@@ -424,6 +425,107 @@ describe("(f) rollback mirror and roll-forward", () => {
     expect(byId.get("c")).toBe("sqlite wins");
     expect(byId.get("d")).toBe("task d");
     expect(fs.statSync(file).isDirectory()).toBe(true);
+  });
+
+  test("a presentation-only SQLite edit survives roll-forward while the rollback release edits another row", () => {
+    const { file } = sandbox();
+    writeLegacy(file, { tasks: [task("a"), task("b")] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    // A new-code MCP process colours "a" in SQLite; a colour leaves updatedAt unchanged.
+    mutateTasks((tasks) => {
+      const colored = patchTask(tasks, "a", { color: "coral" });
+      if (!colored.ok) throw new Error("colour refused");
+      return { tasks: colored.tasks, result: undefined };
+    }, file);
+    expect(loadTasks(file).find((row) => row.id === "a")?.color).toBe("coral");
+    // The rollback release edits only "b" in its JSON.
+    mirror.tasks = mirror.tasks.map((row) => row.id === "b" ? { ...row, text: "rollback edit", updatedAt: "2026-09-19T10:00:00.000Z" } : row);
+    writeLegacy(file, mirror);
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    const byId = new Map(loadTasks(file).map((row) => [row.id, row]));
+    expect(byId.get("a")?.color).toBe("coral");
+    expect(byId.get("b")?.text).toBe("rollback edit");
+    expect(outcome.incident?.kind).toBe("legacy-reconciled");
+    expect(outcome.incident?.summary).toMatchObject({ replaced: 1, keys: ["t:b"] });
+    expect(outcome.incident?.summary?.conflicts).toEqual(["t:a"]);
+  });
+
+  test("a task the rollback release deleted stays deleted, and one SQLite changed since the mirror stays", () => {
+    const { file } = sandbox();
+    writeLegacy(file, { tasks: [task("a"), task("b"), task("c")] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    mutateTasks((tasks) => ({
+      tasks: tasks.map((row) => row.id === "c" ? { ...row, text: "sqlite edit", updatedAt: "2026-09-19T12:00:00.000Z" } : row),
+      result: undefined,
+    }), file);
+    // The rollback release deletes "b" and "c" from its JSON.
+    mirror.tasks = mirror.tasks.filter((row) => row.id === "a");
+    writeLegacy(file, mirror);
+
+    const outcome = importLegacyTasks(file, { reconcile: true });
+
+    expect(outcome.incident?.summary).toMatchObject({ removed: 1, keys: ["t:b"], conflicts: ["t:c"] });
+    expect(loadTasks(file).map((row) => row.id)).toEqual(["a", "c"]);
+  });
+
+  test("a mirror an old writer changed is reconciled, kept aside and reported before the next checkpoint replaces it", () => {
+    const { dir, file, db } = sandbox();
+    writeLegacy(file, { tasks: [task("a")] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    // An old-code MCP process writes a task into the file while it is writable.
+    const changed = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    changed.tasks.push(task("old-writer"));
+    writeLegacy(file, changed);
+    const incidentsBefore = stateImportIncidents().length;
+
+    checkpointTaskRollbackMirrorForDemotion(file);
+
+    expect(loadTasks(file).map((row) => row.id)).toEqual(["a", "old-writer"]);
+    const mirrored = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    expect(mirrored.tasks.map((row) => row.id)).toEqual(["a", "old-writer"]);
+    const raised = stateImportIncidents().slice(incidentsBefore);
+    expect(raised.map((incident) => incident.kind)).toEqual(["legacy-reconciled"]);
+    expect(raised[0]!.summary).toMatchObject({ added: 1, keys: ["t:old-writer"] });
+    expect(raised[0]!.preservedAs && fs.existsSync(raised[0]!.preservedAs)).toBe(true);
+    expect(siblings(dir, "tasks.json.imported-")).toHaveLength(2);
+    // The recorded mirror is the new file, so roll-forward drops it quietly.
+    expect(readStateImport(db, "tasks")?.mirrorSha256)
+      .toBe(crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
+    expect(importLegacyTasks(file, { reconcile: true }).incident).toBeNull();
+  });
+
+  test("the fence owner's checkpoint reconciles an old writer while ordinary writes stay fenced", () => {
+    const { dir, file } = sandbox();
+    writeLegacy(file, { tasks: [task("a")] });
+    loadTasks(file);
+    checkpointTaskRollbackMirrorForDemotion(file);
+    const changed = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    changed.tasks.push(task("old-writer"));
+    writeLegacy(file, changed);
+    const revision = "c".repeat(40);
+    fs.writeFileSync(path.join(dir, "viewer-release.json"), JSON.stringify({ revision, endpoint: "http://127.0.0.1:19005", hotStateBackend: "sqlite-v1" }));
+    publishHotStateAuthority(dir, "fencing", revision);
+    const previous = process.env[HOT_STATE_RELEASE_REVISION_ENV];
+    process.env[HOT_STATE_RELEASE_REVISION_ENV] = revision;
+    try {
+      expect(() => mutateTasks((tasks) => ({ tasks: [...tasks, task("late")], result: undefined }), file)).toThrow("fenced");
+
+      checkpointTaskRollbackMirrorForDemotion(file);
+
+      expect(loadTasks(file).map((row) => row.id)).toEqual(["a", "old-writer"]);
+      const mirrored = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+      expect(mirrored.tasks.map((row) => row.id)).toEqual(["a", "old-writer"]);
+    } finally {
+      if (previous === undefined) delete process.env[HOT_STATE_RELEASE_REVISION_ENV];
+      else process.env[HOT_STATE_RELEASE_REVISION_ENV] = previous;
+    }
   });
 
   test("a lazy open never reconciles while a release target exists", () => {

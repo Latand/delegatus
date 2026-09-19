@@ -28,8 +28,11 @@ export interface LegacyCollectionSpec<P> {
   parse(raw: unknown): P;
   toRows(parsed: P): StateImportRow[];
   /** Fold a legacy file that changed after the import back into the collection.
-      Runs under the legacy file lock; writes through the store's collection. */
-  reconcile(parsed: P): LegacyReconcileSummary;
+      Runs under the legacy file lock; writes through the store's collection.
+      `baseline` names the revision the file was last written from, so a row
+      SQLite has not rewritten since is the file's to change or delete.
+      `fenceOwner` admits the write during this release's own rollback fence. */
+  reconcile(parsed: P, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary;
   /** The whole collection as the legacy file body, for a rollback mirror. */
   mirrorBody(): { body: unknown; revision: number };
 }
@@ -37,8 +40,13 @@ export interface LegacyCollectionSpec<P> {
 export interface LegacyReconcileSummary {
   added: number;
   replaced: number;
+  removed: number;
   kept: number;
+  /** Rows the file added, replaced or removed. */
   keys: string[];
+  /** Rows SQLite changed after the mirror that the file holds differently or
+      dropped: SQLite kept them unless the file's row is strictly newer. */
+  conflicts: string[];
 }
 
 export interface StateIncident {
@@ -282,29 +290,48 @@ function finishImported<P>(
     retire(spec, "keep", hooks);
     return { state: "already-imported", record, incident: null };
   }
-  const parsed = parseJsonBytes(legacy.bytes);
+  const incident = reconcileChangedLegacy(spec, record, legacy.bytes, { fenceOwner: false }, hooks);
+  writeTombstone(spec);
+  return { state: "already-imported", record, incident };
+}
+
+/** The baseline revision a legacy file was last written from: its mirror, or
+    the import itself when no mirror was ever written. */
+export function legacyBaselineRevision(record: StateImportRecord): number {
+  return record.mirrorRevision ?? (record.rowCount > 0 ? 1 : 0);
+}
+
+/** Merge a legacy file that differs from both the import source and the last
+    mirror, keep it aside, and raise the incident. Leaves the path empty or
+    holding the tombstone. */
+function reconcileChangedLegacy<P>(
+  spec: LegacyCollectionSpec<P>,
+  record: StateImportRecord,
+  bytes: Buffer,
+  options: { fenceOwner: boolean },
+  hooks: LegacyImportHooks,
+): StateIncident {
+  const parsed = parseJsonBytes(bytes);
   if (!parsed.ok) {
     const preservedAs = preserveUnreadable(spec);
-    writeTombstone(spec);
-    const incident = raise({
+    return raise({
       kind: "legacy-unreadable",
       collection: spec.collection,
       preservedAs,
       message: `${path.basename(spec.legacyPath)} reappeared unreadable after the import; kept as ${path.basename(preservedAs)}, SQLite unchanged`,
     });
-    return { state: "already-imported", record, incident };
   }
-  const summary = spec.reconcile(spec.parse(parsed.value));
+  const summary = spec.reconcile(spec.parse(parsed.value), record, options);
   const preservedAs = retire(spec, "keep", hooks);
-  const incident = raise({
+  return raise({
     kind: "legacy-reconciled",
     collection: spec.collection,
     summary,
     ...(preservedAs ? { preservedAs } : {}),
-    message: `${path.basename(spec.legacyPath)} changed after the import (a rollback release or a racing writer); `
-      + `merged ${summary.added} added and ${summary.replaced} replaced rows, kept ${summary.kept} SQLite rows`,
+    message: `${path.basename(spec.legacyPath)} changed after the import (a rollback release or an older writer); `
+      + `merged ${summary.added} added, ${summary.replaced} replaced and ${summary.removed} removed rows, `
+      + `kept ${summary.kept} SQLite rows changed since the mirror`,
   });
-  return { state: "already-imported", record, incident };
 }
 
 /**
@@ -317,6 +344,17 @@ export function writeLegacyRollbackMirror<P>(spec: LegacyCollectionSpec<P>): voi
   const database = legacyDatabasePath(spec.legacyPath);
   if (!readStateImport(database, spec.collection)) return;
   withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
+    /* A writable legacy file outlives a fence that was withdrawn, and an older
+       release's MCP process may have written it since. Fold those writes in
+       before the new mirror replaces the file. */
+    const record = readStateImport(database, spec.collection)!;
+    const legacy = readLegacy(spec.legacyPath);
+    if (legacy.kind === "file") {
+      const digest = sha256(legacy.bytes);
+      if (digest !== record.mirrorSha256 && digest !== record.sourceSha256) {
+        reconcileChangedLegacy(spec, record, legacy.bytes, { fenceOwner: true }, {});
+      }
+    }
     const { body, revision } = spec.mirrorBody();
     const text = `${JSON.stringify(body, null, 2)}\n`;
     const directory = path.dirname(spec.legacyPath);

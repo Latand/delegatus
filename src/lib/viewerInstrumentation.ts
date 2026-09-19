@@ -65,6 +65,8 @@ interface ViewerReleaseActivationOptions {
   log?: (...args: unknown[]) => void;
   fenceRequest?: () => HotStateAuthority | null;
   onFenceRequested?: (request: HotStateAuthority) => void | Promise<void>;
+  /** A fence this release acknowledged was withdrawn while it stayed current. */
+  onFenceWithdrawn?: () => void | Promise<void>;
   onDemoted?: (context: { fenced: boolean }) => void | Promise<void>;
 }
 
@@ -237,7 +239,12 @@ export async function activateViewerRuntimeWhenCurrent(
     }
     const fence = started ? options.fenceRequest?.() ?? null : null;
     if (!fence || fence.mode !== "fencing") {
-      if (!fenceInProgress) fencedEpoch = null;
+      if (!fenceInProgress && fencedEpoch !== null) {
+        fencedEpoch = null;
+        void Promise.resolve(options.onFenceWithdrawn?.()).catch((error) => {
+          log("[viewer release] withdrawn fence recovery failed", error);
+        });
+      }
     } else if (fencedEpoch !== fence.epoch && !fenceInProgress) {
       fenceInProgress = true;
       void Promise.resolve(options.onFenceRequested?.(fence)).then(() => {
@@ -812,6 +819,17 @@ export async function registerViewerRuntime(): Promise<void> {
       const { agentRegistry } = await import("@/lib/agent/registry");
       agentRegistry().checkpointRollbackMirrorForDemotion();
       acknowledgeHotStateFence(hotStateDirectory, request, revisions);
+    },
+    /* A cancelled deployment restores this release's authority but leaves the
+       rollback mirrors writable, so an older release's MCP process could write
+       one nothing reads. Re-running the import folds such writes in and puts
+       the tombstones back. */
+    onFenceWithdrawn: async () => {
+      const revision = releaseRevision();
+      const authority = readHotStateAuthority(hotStateDirectory);
+      if (!isCurrent() || revision === null || authority?.mode !== "sqlite" || authority.releaseRevision !== revision) return;
+      const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+      await ensureLegacyCollectionsImported();
     },
     onDemoted: async ({ fenced }) => {
       await quiesceStartup();

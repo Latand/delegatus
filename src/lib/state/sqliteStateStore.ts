@@ -985,15 +985,30 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  patchSync(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[] }): void {
-    assertSqliteWriteAuthority(this.filename);
+  /** `fenceOwner` also admits the release that owns an active rollback fence,
+      for the legacy reconcile its own demotion checkpoint runs (#1870). */
+  patchSync(
+    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[] },
+    options: { fenceOwner?: boolean } = {},
+  ): void {
+    const authorize = options.fenceOwner
+      ? () => assertSqliteInitializationAuthority(this.filename, true)
+      : () => assertSqliteWriteAuthority(this.filename);
+    authorize();
     const lease = this.acquireLeaseSync();
     try {
       const patch = prepare();
-      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? []);
+      this.persistReplacement(lease, patch.records, true, patch.deleteKeys ?? [], authorize);
     } finally {
       this.releaseLeaseSync(lease);
     }
+  }
+
+  /** Each row's last-written collection revision, by row key. */
+  rowRevisions(): Map<string, number> {
+    return new Map(this.readDb.query<Pick<CollectionRow, "row_key" | "row_revision">, [string]>(
+      "SELECT row_key, row_revision FROM state_rows WHERE collection = ?",
+    ).all(this.options.collection).map((row) => [row.row_key, row.row_revision] as const));
   }
 
   withSnapshotSync<R>(read: (records: readonly T[]) => R): R {
@@ -1308,6 +1323,7 @@ export class SqliteStateCollection<T> {
     records: readonly T[],
     mergeOmitted: boolean,
     deleteKeys: readonly string[] = [],
+    authorize: () => void = () => assertSqliteWriteAuthority(this.filename),
   ): void {
     for (const record of records) this.validate(record);
     const seen = new Set<string>();
@@ -1323,7 +1339,7 @@ export class SqliteStateCollection<T> {
     const db = connectDatabase(this.filename);
     try {
       const revision = withImmediateTransaction(db, this.options.busyMessage, () => {
-        assertSqliteWriteAuthority(this.filename);
+        authorize();
         this.assertLease(db, ownerToken);
         const meta = this.collectionMeta(db)!;
         const current = new Map(db.query<CollectionRow, [string]>(`

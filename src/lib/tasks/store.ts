@@ -6,6 +6,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import {
   importLegacyCollection,
   lazyReconcileAllowed,
+  legacyBaselineRevision,
   legacyDatabasePath,
   legacyImportAllowed,
   writeLegacyRollbackMirror,
@@ -14,7 +15,7 @@ import {
   type LegacyImportOutcome,
   type LegacyReconcileSummary,
 } from "@/lib/state/legacyImport";
-import { readStateImport, SqliteStateCollection, type StateImportRow } from "@/lib/state/sqliteStateStore";
+import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
 import { snapshotTasks, stampTaskRevisions, taskRevision } from "./revision";
 import { isTaskAttachment } from "./attachments";
@@ -289,16 +290,21 @@ function parseLegacyBody(raw: unknown): TasksFile {
 }
 
 /** Merge a `tasks.json` that changed after the import (a rollback release wrote
-    it, or a writer raced a crash). A task the file holds and SQLite lacks is
-    added; where both hold a task with different revisions the later
-    `updatedAt` wins, the file on a tie. SQLite-only rows stay. Receipts and
-    migration markers are unioned. */
-function mergeLegacyTasks(filePath: string, body: TasksFile): LegacyReconcileSummary {
+    it, or an older writer raced a fence). Who changed a row is read from row
+    revisions: a SQLite row not rewritten since `baseline` is the one the file
+    was written from, so the file's version wins, and its absence from the file
+    deletes it. A row SQLite rewrote since then stays unless the file holds a
+    task strictly newer by `updatedAt`; either way it is listed as a conflict.
+    A row only the file holds is added. */
+function mergeLegacyTasks(filePath: string, body: TasksFile, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
   const collection = openTaskCollection(legacyDatabasePath(filePath));
-  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, kept: 0, keys: [] };
+  const since = legacyBaselineRevision(baseline);
+  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [] };
   collection.patchSync(() => {
     const current = new Map(collection.snapshot().map((row) => [taskRowKey(row), row] as const));
+    const revisions = collection.rowRevisions();
     const incoming = stateRows(body.tasks as unknown[], (body.recentCreates ?? []) as RecentCreate[], (body.migrations ?? {}) as TaskMigrations);
+    const incomingKeys = new Set(incoming.map(taskRowKey));
     const records: TaskStateRow[] = [];
     for (const row of incoming) {
       const key = taskRowKey(row);
@@ -309,20 +315,34 @@ function mergeLegacyTasks(filePath: string, body: TasksFile): LegacyReconcileSum
         summary.keys.push(key);
         continue;
       }
-      if (!key.startsWith("t:") || JSON.stringify(held) === JSON.stringify(row)) continue;
-      const legacyTask = coerceTask(row)!;
-      const heldTask = coerceTask(held);
-      if (heldTask && taskRevision(heldTask) === taskRevision(legacyTask)) continue;
-      if (heldTask && heldTask.updatedAt > legacyTask.updatedAt) {
-        summary.kept += 1;
-        continue;
+      if (JSON.stringify(held) === JSON.stringify(row)) continue;
+      if ((revisions.get(key) ?? 0) > since) {
+        summary.conflicts.push(key);
+        const legacyTask = key.startsWith("t:") ? coerceTask(row) : null;
+        const heldTask = key.startsWith("t:") ? coerceTask(held) : null;
+        if (!legacyTask || !heldTask || legacyTask.updatedAt <= heldTask.updatedAt) {
+          summary.kept += 1;
+          continue;
+        }
       }
       records.push(row);
       summary.replaced += 1;
       summary.keys.push(key);
     }
-    return { records };
-  });
+    const deleteKeys: string[] = [];
+    for (const key of current.keys()) {
+      if (incomingKeys.has(key)) continue;
+      if ((revisions.get(key) ?? 0) > since) {
+        summary.conflicts.push(key);
+        summary.kept += 1;
+        continue;
+      }
+      deleteKeys.push(key);
+      summary.removed += 1;
+      summary.keys.push(key);
+    }
+    return { records, deleteKeys };
+  }, { fenceOwner: options.fenceOwner });
   return summary;
 }
 
@@ -339,7 +359,7 @@ export function taskLegacyCollection(filePath = TASKS_FILE): LegacyCollectionSpe
       (body.recentCreates ?? []) as RecentCreate[],
       (body.migrations ?? {}) as TaskMigrations,
     ).map((row) => ({ key: taskRowKey(row), value: row, controllerActive: row.status !== "done" })),
-    reconcile: (body) => mergeLegacyTasks(filePath, body),
+    reconcile: (body, baseline, options) => mergeLegacyTasks(filePath, body, baseline, options),
     mirrorBody: () => {
       const collection = openTaskCollection(legacyDatabasePath(filePath));
       let mirror: { body: unknown; revision: number } | null = null;
