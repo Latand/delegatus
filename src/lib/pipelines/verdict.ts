@@ -159,7 +159,15 @@ export type FencedBlock = {
 };
 
 /** A fence opens at the start of a line (up to three spaces of indent), and a
-    backtick fence's info string may not itself contain a backtick. */
+    backtick fence's info string may not itself contain a backtick.
+
+    Three is CommonMark's bound and it is kept deliberately: at four spaces the
+    block is an indented code block, which is how an agent quotes a verdict it
+    is talking ABOUT rather than reporting. Reading those as fences would put a
+    quoted example back in the running to decide the stage — the same class of
+    mistake #1756 is about, from the other side. A verdict the agent did indent
+    that far is not lost silently: the turn reads as carrying no fenced verdict,
+    which is what the controller's one verdict request exists for. */
 const FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**

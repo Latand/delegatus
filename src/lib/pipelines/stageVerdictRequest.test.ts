@@ -252,9 +252,17 @@ test("a second completed turn still without a verdict parks the stage (#1756)", 
   expect(h.requests).toHaveLength(1);
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("stage verdict recovery exhausted");
+  /* The operator's obvious next move on the old wording was to message the
+     agent for its verdict — the move the controller had already made. The park
+     says so, on both surfaces, and still says which reading failed. */
+  expect(parked.stateDetail).toContain("the controller asked the stage once for its verdict");
+  expect(parked.stateDetail).toContain("missing a fenced JSON verdict");
+  const recovery = parked.runs[0]!.attempts[0]!.verdictRecovery!;
+  expect(recovery.state).toBe("exhausted");
+  expect(recovery.reason).toContain("the controller asked the stage once for its verdict");
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
-    verdictRecovery: { state: "exhausted" },
+    error: parked.stateDetail,
   });
 });
 

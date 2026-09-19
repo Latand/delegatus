@@ -140,6 +140,24 @@ test("a rejection names the fenced block it was read from (#1756)", () => {
   );
 });
 
+test("indent decides what a fence is, at CommonMark's own bound (#1756)", () => {
+  const verdict = '{"status":"pass","confidence":0.6}';
+  /* Three spaces: still a fence, still the verdict. */
+  expect(parseStageVerdict(["Done.", "", "   ```json", `   ${verdict}`, "   ```"].join("\n"))).toEqual({
+    verdict: { status: "pass", confidence: 0.6 },
+    output: "Done.",
+  });
+  /* Four: an indented code block, which is how a quoted example is written.
+     Deliberate, so a verdict an agent is talking about cannot decide a stage —
+     and the turn then reads as carrying no verdict, which is what the
+     controller's one verdict request is for. */
+  const indented = ["Done.", "", "    ```json", `    ${verdict}`, "    ```"].join("\n");
+  expect(parseStageVerdict(indented)).toBeNull();
+  expect(stageVerdictRejectionReason(indented)).toBe(
+    "canonical completed assistant turn is missing a fenced JSON verdict",
+  );
+});
+
 test("a final fenced verdict whose closing fence is missing still decides (#1756)", () => {
   expect(parseStageVerdict([
     "Done.",

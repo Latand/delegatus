@@ -1294,6 +1294,27 @@ function pipelineStageVerdictRejectionReason(text: string): string {
   return stageVerdictRejectionReason(normalizeVerdictFindingObjects(text));
 }
 
+/**
+ * Why a completed turn yielded no verdict, in the words that go on the record —
+ * and, once the controller has spent its one request, the fact that it asked
+ * (#1756).
+ *
+ * The exhaustion park is the last thing the operator reads, and it used to read
+ * exactly as it did before there was a request at all: "recovery exhausted,
+ * missing a fenced JSON verdict". The obvious next move on that sentence is to
+ * message the agent for its verdict, which is the move the controller already
+ * made and got nothing for. The reader's own words stay inside this one, so the
+ * malformed-versus-missing distinction and its line number survive on both
+ * surfaces — `attempt.error` through {@link park}, and `verdictRecovery.reason`,
+ * which is what the task card falls back to.
+ */
+function stageVerdictMissReason(attempt: PipelineStageAttempt, text: string): string {
+  const reason = pipelineStageVerdictRejectionReason(text);
+  return attempt.verdictRequest?.requestedAt
+    ? `the controller asked the stage once for its verdict and no readable answer followed: ${reason}`
+    : reason;
+}
+
 function recoveryCheckAt(now: string): string {
   return new Date(unixMs(now) + VERDICT_RECOVERY_INTERVAL_MS).toISOString();
 }
@@ -2993,7 +3014,7 @@ async function tickRunStage(
         pipeline,
         attempt,
         ports,
-        pipelineStageVerdictRejectionReason(durable.message!.text),
+        stageVerdictMissReason(attempt, durable.message!.text),
         durable.message!.ts,
       );
       return;
@@ -3093,7 +3114,7 @@ async function tickRunStage(
       pipeline,
       attempt,
       ports,
-      pipelineStageVerdictRejectionReason(message.text),
+      stageVerdictMissReason(attempt, message.text),
       message.ts,
     );
     return;
