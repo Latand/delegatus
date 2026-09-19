@@ -1,5 +1,7 @@
 import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { rootIdentity } from "@/lib/root/store";
+import { loadTasks } from "@/lib/tasks/store";
 import { freshness, listPresence } from "@/lib/view/presenceStore";
 import type { StoredViewSession } from "@/lib/view/types";
 
@@ -13,6 +15,7 @@ import {
   type AttentionEvent,
   type DeviceOfferStatus,
 } from "./machine";
+import { attentionTargetRecords, type AttentionRecordSources, type AttentionTargetRecords } from "./targetRecords";
 import {
   createAttentionRequest,
   liveAttentionRequests,
@@ -52,6 +55,17 @@ export interface DeviceAttentionView {
       conversation and one journal event, so an unseen request is a fact both
       sides can see. */
   expired: string[];
+  /**
+   * The board rows the live targets name, as the server holds them right now
+   * (#1836). Null when nothing live names a row, which is the ordinary case
+   * and reads no store at all.
+   *
+   * This is the answer to a lane the server has admitted and the browser has
+   * not drawn: the client layers these into the board's data layer, so the
+   * card exists before the handoff looks for it instead of minutes later when
+   * the corpus scan catches up. See {@link attentionTargetRecords}.
+   */
+  records: AttentionTargetRecords | null;
 }
 
 /** Requests are answered oldest-first, so a queued one surfaces in the order it
@@ -60,9 +74,16 @@ function byAge(left: AttentionRequestV1, right: AttentionRequestV1): number {
   return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+/** The stores the pushed rows are read from. Production reads the registry and
+    the task file; a test passes its own rows. */
+const productionRecordSources: AttentionRecordSources = {
+  pipelines: () => loadPipelinesForList(),
+  tasks: () => loadTasks(),
+};
+
 export function attentionForDevice(
   deviceId: string,
-  options: { filePath?: string; now?: Date } = {},
+  options: { filePath?: string; now?: Date; records?: AttentionRecordSources } = {},
 ): DeviceAttentionView {
   const now = options.now ?? new Date();
   /* Sweeping on read is what makes expiry hold without a daemon: the clock is
@@ -95,6 +116,14 @@ export function attentionForDevice(
     offer,
     live,
     expired,
+    /* Only for a request still looking for somewhere to land. A follow stays
+       live for ten minutes after it arrived, and re-reading the registry for
+       it on every four-second poll would buy nothing: the board has been
+       drawing that lane since the move. */
+    records: attentionTargetRecords(
+      live.filter((entry) => entry.request.state !== "following").map((entry) => entry.request.target),
+      options.records ?? productionRecordSources,
+    ),
   };
 }
 

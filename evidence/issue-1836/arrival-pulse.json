@@ -1,0 +1,182 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx",
+  "values": "invented",
+  "phoneWidth": "the phone shell is chat-only (it withholds its device id), so 390x844 draws no handoff and no pulse; the narrow board is the phone-width surface one can land on",
+  "desktop-light-no-preference": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "card": "task:t-longtitle",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "attention-arrival-pulse",
+      "duration": "0.85s",
+      "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.440488) 0px 0px 0px 4.94634px, oklab(0.530663 0.0339187 -0.206729 / 0.251317) 0px 0px 23.1902px 6.59512px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    }
+  },
+  "desktop-light-reduce": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "card": "task:t-longtitle",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    }
+  },
+  "desktop-dark-no-preference": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "card": "task:t-longtitle",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "attention-arrival-pulse",
+      "duration": "0.85s",
+      "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.466453) 0px 0px 0px 4.75161px, oklab(0.686886 0.0401993 -0.166043 / 0.268194) 0px 0px 22.6709px 6.33547px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    }
+  },
+  "desktop-dark-reduce": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "card": "task:t-longtitle",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    }
+  },
+  "narrow-light-no-preference": {
+    "viewport": {
+      "width": 700,
+      "height": 844
+    },
+    "card": "task:t-disk",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "attention-arrival-pulse",
+      "duration": "0.85s",
+      "shadow": "oklab(0.530663 0.0339187 -0.206729 / 0.440335) 0px 0px 0px 4.94749px, oklab(0.530663 0.0339187 -0.206729 / 0.251218) 0px 0px 23.1933px 6.59665px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    }
+  },
+  "narrow-light-reduce": {
+    "viewport": {
+      "width": 700,
+      "height": 844
+    },
+    "card": "task:t-disk",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "color(srgb 0.352941 0.317647 0.878431 / 0.7) 0px 0px 0px 3px, color(srgb 0.352941 0.317647 0.878431 / 0.42) 0px 0px 18px 4px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(20, 20, 30, 0.05) 0px 1px 2px 0px"
+    }
+  },
+  "narrow-dark-no-preference": {
+    "viewport": {
+      "width": 700,
+      "height": 844
+    },
+    "card": "task:t-disk",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "attention-arrival-pulse",
+      "duration": "0.85s",
+      "shadow": "oklab(0.686886 0.0401993 -0.166043 / 0.466293) 0px 0px 0px 4.7528px, oklab(0.686886 0.0401993 -0.166043 / 0.268091) 0px 0px 22.6741px 6.33707px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    }
+  },
+  "narrow-dark-reduce": {
+    "viewport": {
+      "width": 700,
+      "height": 844
+    },
+    "card": "task:t-disk",
+    "before": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    },
+    "during": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "color(srgb 0.560784 0.533333 1 / 0.7) 0px 0px 0px 3px, color(srgb 0.560784 0.533333 1 / 0.42) 0px 0px 18px 4px"
+    },
+    "after": {
+      "animation": "none",
+      "duration": "0s",
+      "shadow": "rgba(0, 0, 0, 0.4) 0px 1px 2px 0px"
+    }
+  }
+}

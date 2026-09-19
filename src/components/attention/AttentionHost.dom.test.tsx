@@ -17,6 +17,7 @@ import { buildFocusFrameIndex, type FocusLayoutSlice } from "@/components/scheme
 import type { MiniStack, SchemeRect } from "@/components/scheme/layout";
 
 import { AttentionHost, resetHandoffTransactionsForTest } from "./AttentionHost";
+import { ARRIVAL_PULSE_ATTRIBUTE, cancelArrivalPulse } from "./arrivalPulse";
 import { createFocusHandoffBus, type BoardFocusController } from "./focusHandoffBus";
 import { claimHandoff, readHandoffClaim } from "./handoffClaim";
 import { setLeftShellInset } from "../shellLayout";
@@ -89,6 +90,7 @@ beforeEach(() => {
   viewBus.reportSlice(WHERE_I_WAS);
 });
 afterEach(async () => {
+  cancelArrivalPulse();
   for (const root of roots) flushSync(() => root.unmount());
   roots = [];
   setLeftShellInset(0);
@@ -166,7 +168,7 @@ function memoryStorage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
 }
 let tabClaims = memoryStorage();
 
-function board(rects: Record<string, FocusRect>, project = "demo") {
+function board(rects: Record<string, FocusRect>, project = "demo", pulseSelectors?: Record<string, string>) {
   const bus = createFocusHandoffBus();
   const log: BoardLog = { moved: [], restored: [] };
   const opened: string[] = [];
@@ -186,6 +188,9 @@ function board(rects: Record<string, FocusRect>, project = "demo") {
       boardRevision: 9,
       rectFor: (key) => rects[key] ?? null,
       named: [{ key: ANCHOR, label: "Reviewer — login fix", rect: LIVE_RECT }],
+      /* What this board says it DREW the anchor as — the arrival pulse's
+         target. A board that answers none marks nothing. */
+      ...(pulseSelectors ? { pulseSelectorFor: (key: string) => pulseSelectors[key] ?? null } : {}),
     },
     moveTo: ({ rect }) => {
       log.moved.push(rect);
@@ -1176,4 +1181,67 @@ test("a desktop landing awaiting confirmation cannot announce after a mobile rou
   expect(record().state).toBe("following");
   expect(strip() === null).toBe(true);
   expect(clock.callbacks).toHaveLength(0);
+});
+
+/* ── Where the view was taken (#1836 item 4) ──────────────────────────────── */
+
+/** The card the board draws for the request's anchor, in the page. */
+function landedCard(): HTMLElement {
+  const card = dom.document.createElement("div");
+  card.className = "card";
+  card.setAttribute("data-id", "task:landed");
+  dom.document.body.appendChild(card);
+  return card as unknown as HTMLElement;
+}
+
+const CARD_SELECTOR = '.card[data-id="task:landed"]';
+
+test("an arrival marks the card it landed on, and the mark takes itself off", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raise();
+  mount(bus, { pulseMs: 30 });
+  await settle();
+
+  /* The handoff landed, so the operator is looking somewhere new — and the
+     card says which one it is. */
+  expect(record().state).toBe("following");
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("on");
+
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  /* Temporarily, the operator said: nothing was clicked and it is gone. */
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("a move the operator made themselves marks nothing", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raiseAttentionRequest({
+    origin: "operator",
+    target: { kind: "conversation", path: ANCHOR },
+    frameAtCreation: { project: "demo", rect: RAISED_RECT, boardRevision: 4 },
+    intent: "show",
+    reason: "Take me to the reviewer.",
+    offeredTo: [DEVICE],
+  }, { now, id: "attention_1" });
+  mount(bus, { pulseMs: 30 });
+  await settle();
+
+  expect(record().state).toBe("following");
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
+});
+
+test("Return takes the mark off with it", async () => {
+  const card = landedCard();
+  const { bus } = board({ [ANCHOR]: LIVE_RECT }, "demo", { [ANCHOR]: CARD_SELECTOR });
+  raise();
+  mount(bus, { pulseMs: 100_000 });
+  await settle();
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBe("on");
+
+  click(one("[data-testid='attention-return']")!);
+  await settle();
+
+  expect(card.getAttribute(ARRIVAL_PULSE_ATTRIBUTE)).toBeNull();
 });

@@ -5402,3 +5402,95 @@ describe("#1798 a fail edge is a return arc under the collapsed row", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+describe("#1836 where the view was just taken", () => {
+  /*
+   * Rendered evidence for the arrival pulse (#1836 item 4): the mark an
+   * attention handoff leaves on the card it landed on, in the real Viewer over
+   * `issue1695Evidence.fixture.tsx`, against the production stylesheet, in
+   * Chromium — desktop and 390x844, light and dark, and once more with
+   * `prefers-reduced-motion: reduce`.
+   *
+   * What only a browser settles, and is gated here:
+   *   - the mark paints a ring the card does not otherwise carry, so the
+   *     landed card is findable at a glance beside its neighbours;
+   *   - it is a blink (a running animation) by default and a STEADY highlight
+   *     of the same strength under reduced motion, never nothing;
+   *   - it takes itself off, leaving the card exactly as it was.
+   *
+   * The page sets the same attribute `startArrivalPulse` sets, which is the
+   * whole of that module's contract with the stylesheet — its timing and its
+   * target resolution are settled in `arrivalPulse.dom.test.tsx`.
+   *
+   * Geometry goes to `evidence/issue-1836/arrival-pulse.json`; frames to
+   * `.artifacts/issue-1836/`, which is not committed.
+   */
+  browserTest("the landed card blinks, holds steady under reduced motion, and leaves nothing behind", async () => {
+    const out = path.resolve(".artifacts/issue-1836");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      fixture: "src/components/kanban/issue1695Evidence.fixture.tsx",
+      values: "invented",
+      phoneWidth: "the phone shell is chat-only (it withholds its device id), so 390x844 draws no handoff and no pulse; the narrow board is the phone-width surface one can land on",
+    };
+    /* The attribute the arrival pulse marks its target with, and what the
+       stylesheet then paints: the animation, and the ring itself. */
+    const paint = (target: ReturnType<Page["locator"]>) => target.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { animation: style.animationName, duration: style.animationDuration, shadow: style.boxShadow };
+    });
+    try {
+      /* Desktop, and the narrowest width this board mounts at. 390x844 is not
+         a third case: at that width the Viewer is the phone shell, which is
+         chat-only — it withholds its device id, never follows a handoff, and
+         so has no arrival to mark. The narrow board is the phone-width
+         surface a handoff can actually land on. */
+      for (const [surface, viewport] of [["desktop", VIEWPORT], ["narrow", { width: 700, height: 844 }]] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const motion of ["no-preference", "reduce"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, scheme, "en", motion);
+            try {
+              /* Whichever card the operator can actually see: the desktop
+                 board shows every column, and below 768 px the board is one
+                 tabbed column, so naming a card by id would photograph a
+                 hidden one. */
+              const landed = page.locator("[data-kanban-board] .card:visible").first();
+              await landed.waitFor();
+              const landedId = await landed.getAttribute("data-id");
+              const before = await paint(landed);
+              await landed.evaluate((element) => element.setAttribute("data-attention-pulse", "on"));
+              /* Past the card's own box-shadow transition, so what is measured
+                 and photographed is the pulse rather than the way into it. */
+              await page.waitForTimeout(250);
+              const during = await paint(landed);
+              await page.screenshot({ path: path.join(out, `${surface}-${scheme}-${motion}.png`) });
+              await landed.evaluate((element) => element.removeAttribute("data-attention-pulse"));
+              await page.waitForTimeout(250);
+              const after = await paint(landed);
+
+              /* A ring the card does not wear on its own, either way. The
+                 blink breathes it between 3 and 6 px, so the assertion is the
+                 ring rather than one frame of it. */
+              expect(during.shadow).not.toBe(before.shadow);
+              expect(during.shadow).toMatch(/0px 0px 0px [\d.]+px/);
+              /* A blink by default; the same loudness held steady when motion
+                 is refused, which is the one thing that must not become
+                 "nothing at all". */
+              if (motion === "no-preference") expect(during.animation).toBe("attention-arrival-pulse");
+              else expect(during.animation).toBe("none");
+              /* And it leaves the card as it found it. */
+              expect(after.shadow).toBe(before.shadow);
+              expect(pageErrors).toEqual([]);
+              evidence[`${surface}-${scheme}-${motion}`] = { viewport, card: landedId, before, during, after };
+            } finally { await context.close(); }
+          }
+        }
+      }
+      fs.mkdirSync("evidence/issue-1836", { recursive: true });
+      fs.writeFileSync("evidence/issue-1836/arrival-pulse.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

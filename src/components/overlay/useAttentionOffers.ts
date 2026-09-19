@@ -6,6 +6,7 @@ import { playCue } from "@/lib/audio/app";
 import type { AttentionEvent } from "@/lib/attention/machine";
 import type { DeviceAttentionView } from "@/lib/attention/service";
 import type { AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
+import { applyPipelineSnapshot, applyTaskSnapshot } from "@/hooks/useFiles";
 
 /**
  * The client half of #688's ask-accept-decline-return loop.
@@ -95,6 +96,45 @@ export interface AttentionOffersHandle {
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
+/**
+ * Layer the rows the server pushed with the read into the board's data layer
+ * (#1836).
+ *
+ * This is where a lane the operator has never seen becomes a card. The poll
+ * that delivers the request delivers the pipeline and the task behind it, and
+ * the ordinary board projection draws them — title, task band, one pending
+ * slot per stage — so the handoff that follows a few milliseconds later has an
+ * anchor to resolve instead of a board that will not know about the lane until
+ * the next corpus scan completes.
+ *
+ * Applied as an echo, not as an optimistic guess: the server HOLDS these rows,
+ * so the first complete scan that carries them is authoritative and retires
+ * the overlay in place — no duplicate band, and nothing to roll back.
+ *
+ * `applied` is what keeps a four-second poll from re-publishing an unchanged
+ * row on every tick; a row that genuinely moved on carries a new stamp and is
+ * applied again.
+ */
+function applyPushedRecords(records: DeviceAttentionView["records"], applied: Set<string>): void {
+  if (!records) return;
+  /* One stamp per row version, and a handful of rows per handoff: a tab open
+     for a day would otherwise hold every version it ever saw. */
+  if (applied.size > 64) applied.clear();
+  for (const pipeline of records.pipelines) {
+    const attempts = pipeline.runs.reduce((count, run) => count + run.attempts.length, 0);
+    const stamp = `pipeline:${pipeline.id}:${pipeline.state}:${pipeline.cursor?.stageId ?? ""}:${pipeline.cursor?.state ?? ""}:${attempts}`;
+    if (applied.has(stamp)) continue;
+    applied.add(stamp);
+    applyPipelineSnapshot(pipeline, true);
+  }
+  for (const task of records.tasks) {
+    const stamp = `task:${task.id}:${task.updatedAt}:${task.status}`;
+    if (applied.has(stamp)) continue;
+    applied.add(stamp);
+    applyTaskSnapshot(task);
+  }
+}
+
 /** Whether a POST decided anything: `null` means the server never answered. */
 export type PostOutcome = { ok: true } | { ok: false; refusal: AttentionRefusal | null };
 
@@ -124,6 +164,9 @@ export function useAttentionOffers({
   const [pollGeneration, setPollGeneration] = useState(0);
   const [refusal, setRefusal] = useState<AttentionRefusal | null>(null);
   const call = fetchFn ?? (typeof fetch === "function" ? fetch : null);
+
+  /** Rows already layered into the data layer, by content stamp. */
+  const appliedRecords = useRef(new Set<string>());
 
   /* Held in a ref so a caller passing an inline predicate does not restart the
      poll on every render. */
@@ -190,6 +233,10 @@ export function useAttentionOffers({
   const refresh = useCallback(async () => {
     const first = await read();
     if (!first) return;
+    /* Before anything is rendered or answered: a request whose target the
+       board cannot draw yet is exactly the case this read carries the cure
+       for, and the cure has to land before the handoff looks for the anchor. */
+    applyPushedRecords(first.records, appliedRecords.current);
     const pending = first.live.find((entry) => entry.request.state === "pending");
     /* A surface nobody is looking at reads, but never claims the offer was
        shown: `pending` and `offered` are the difference between "no active
@@ -205,7 +252,9 @@ export function useAttentionOffers({
        stays in the record until it is answered. */
     playCue({ cue: "attention", eventId: `attention:${pending.request.id}` });
     await post(pending.request.id, { kind: "offer", deviceId });
-    setView(await read() ?? first);
+    const second = await read();
+    if (second) applyPushedRecords(second.records, appliedRecords.current);
+    setView(second ?? first);
   }, [read, post, deviceId]);
 
   const answer = useCallback(async (id: string, event: AttentionEvent): Promise<PostOutcome> => {

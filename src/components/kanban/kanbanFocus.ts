@@ -108,6 +108,14 @@ export function kanbanFocusIndex(model: KanbanModel, anchors: ReadonlyMap<string
     boardRevision: null,
     rectFor: rectOf,
     concreteAnchorKey: (key) => (rectOf(key) ? key : null),
+    /* The card is the whole of what this board draws for an anchor — a task
+       band, a lane and a stage slot all land on the same one — so the arrival
+       pulse plays on it. A conversation no card holds opens as its own reader
+       and has no card to mark. */
+    pulseSelectorFor: (key) => {
+      const cardId = anchors.get(key);
+      return cardId ? `.card[data-id="${cssEscape(cardId)}"]` : null;
+    },
   };
 }
 

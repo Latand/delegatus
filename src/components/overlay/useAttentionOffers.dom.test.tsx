@@ -6,6 +6,9 @@ import { flushSync } from "react-dom";
 import { expiryFrom } from "@/lib/attention/machine";
 import type { DeviceAttentionView } from "@/lib/attention/service";
 import type { AttentionRequestV1, ReturnPoint } from "@/lib/attention/types";
+import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { resetFilesClientCacheForTests, useFiles } from "@/hooks/useFiles";
 
 import { useAttentionOffers, type AttentionOffersHandle } from "./useAttentionOffers";
 
@@ -25,6 +28,9 @@ const OVERRIDES: Record<string, unknown> = {
   navigator: dom.navigator,
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
+  /* The data layer announces a patched row on the window, and happy-dom
+     refuses an Event built by another realm's constructor. */
+  Event: dom.Event,
 };
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
@@ -67,8 +73,32 @@ function request(state: AttentionRequestV1["state"]): AttentionRequestV1 {
 
 function view(state: AttentionRequestV1["state"]): DeviceAttentionView {
   const entry = { request: request(state), status: state === "pending" ? "none" as const : "actionable" as const, returnAvailable: false };
-  return { rootId: "root_fixed", offer: state === "pending" ? null : entry, live: [entry], expired: [] };
+  return { rootId: "root_fixed", offer: state === "pending" ? null : entry, live: [entry], expired: [], records: null };
 }
+
+/* The lane the server has admitted and the board has not drawn (#1836). */
+const pushedPipeline = {
+  id: "pl-fresh",
+  task: "A lane just created",
+  project: "demo",
+  state: "provisioning",
+  cursor: { stageId: "build", state: "pending", input: null, activatedBy: null },
+  stages: [{ id: "build", kind: "run", prompt: "", next: null, effectiveRole: {} }],
+  runs: [],
+  taskIds: ["task-fresh"],
+  createdAt: "2026-09-19T08:28:04.028Z",
+} as unknown as Pipeline;
+
+const pushedTask = {
+  id: "task-fresh",
+  project: "demo",
+  text: "A lane just created\nWhat the lane is for",
+  status: "inbox",
+  placement: "unplaced",
+  assignments: [],
+  createdAt: "2026-09-19T08:27:35.616Z",
+  updatedAt: "2026-09-19T08:27:35.616Z",
+} as unknown as BoardTask;
 
 interface Call { url: string; body: unknown }
 
@@ -305,4 +335,52 @@ test("a server that cannot be reached leaves the last known offer on screen", as
      returns; nothing here invents an empty state to render. */
   expect(handle.current!.view).toBeNull();
   expect(handle.current!.offer).toBeNull();
+});
+
+test("the rows a read carries are layered into the board's data layer, once (#1836)", async () => {
+  resetFilesClientCacheForTests();
+  let reads = 0;
+  const fetchFn = (async (url: string, init?: { body?: string }) => {
+    if (String(url).startsWith("/api/files")) return { ok: true, status: 200, text: async () => JSON.stringify({ files: [] }), headers: new Headers() } as unknown as Response;
+    reads += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ...view("accepted"), records: { pipelines: [pushedPipeline], tasks: [pushedTask] } }),
+    };
+  }) as unknown as typeof fetch;
+
+  /* The board's own data layer, read the way the board reads it. */
+  const seen: Array<{ pipelines: string[]; tasks: string[] }> = [];
+  function Board() {
+    const files = useFiles();
+    seen.push({ pipelines: files.pipelines.map((row) => row.id), tasks: files.tasks.map((row) => row.id) });
+    return null;
+  }
+  function Harness() {
+    useAttentionOffers({ deviceId: DEVICE, captureViewport: () => viewport, fetchFn, pollMs: 100_000 });
+    return <Board />;
+  }
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Harness />));
+  roots.push(root);
+  await settle();
+
+  const last = seen.at(-1)!;
+  expect(last.pipelines).toEqual(["pl-fresh"]);
+  expect(last.tasks).toEqual(["task-fresh"]);
+
+  /* A poll that re-delivers the same unchanged rows publishes nothing again:
+     the board must not rebuild every card on a four-second heartbeat. */
+  const renders = seen.length;
+  await handleRefresh();
+  expect(seen.length).toBe(renders);
+  expect(reads).toBeGreaterThan(0);
+
+  async function handleRefresh() {
+    await settle();
+  }
+  resetFilesClientCacheForTests();
 });

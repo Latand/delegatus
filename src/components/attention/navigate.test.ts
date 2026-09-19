@@ -1009,3 +1009,58 @@ test("Return on a measuring board names the request it returns from, so only tha
 
   expect(board.returned()).toEqual(["attention_b"]);
 });
+
+/* ── A lane the board has not drawn yet (#1836) ───────────────────────────── */
+
+test("a pipeline anchor the board draws a moment later is waited for, not reported lost", async () => {
+  const { bus, log, board } = harness("demo", {});
+  /* The record behind the lane reaches the client with the request; the board
+     republishes its index once React has drawn the new card. */
+  setTimeout(() => {
+    bus.setBoard({ ...board, index: index("demo", { "group::pipeline::pl-fresh": RECT }) });
+  }, 30);
+
+  const outcome = await runFocusHandoff(
+    request({ target: { kind: "pipeline", pipelineId: "pl-fresh" }, frameAtCreation: { project: "demo", rect: UNREAD_FRAME_RECT, boardRevision: null } }),
+    bus,
+    { timeoutMs: 400, pollMs: 5 },
+  );
+
+  expect(outcome.resolution).toBe("exact");
+  expect(outcome.moved).toBe(true);
+  expect(log.moved[0]!.anchorKeys).toEqual(["group::pipeline::pl-fresh"]);
+});
+
+test("a stage slot and a task band are waited for the same way", async () => {
+  for (const [target, key] of [
+    [{ kind: "stage" as const, pipelineId: "pl-fresh", stageId: "build" }, "slot::pl-fresh::build"],
+    [{ kind: "task" as const, taskId: "task-fresh" }, "task::task-fresh"],
+  ] as const) {
+    const { bus, board } = harness("demo", {});
+    setTimeout(() => { bus.setBoard({ ...board, index: index("demo", { [key]: RECT }) }); }, 20);
+    const outcome = await runFocusHandoff(
+      request({ target, frameAtCreation: { project: "demo", rect: UNREAD_FRAME_RECT, boardRevision: null } }),
+      bus,
+      { timeoutMs: 400, pollMs: 5 },
+    );
+    expect(outcome.resolution).toBe("exact");
+  }
+});
+
+test("an anchor that never appears is still lost, inside the wait", async () => {
+  const { bus, log } = harness("demo", {});
+  const started = Date.now();
+
+  const outcome = await runFocusHandoff(
+    request({ target: { kind: "pipeline", pipelineId: "pl-does-not-exist" }, frameAtCreation: { project: "demo", rect: UNREAD_FRAME_RECT, boardRevision: null } }),
+    bus,
+    { timeoutMs: 60, pollMs: 5 },
+  );
+
+  expect(outcome.resolution).toBe("lost");
+  expect(outcome.moved).toBe(false);
+  expect(log.moved).toHaveLength(0);
+  /* The wait is bounded by the handoff's own timeout, so the bounded failure
+     still reaches the caller well inside the landing grace. */
+  expect(Date.now() - started).toBeLessThan(1_000);
+});
