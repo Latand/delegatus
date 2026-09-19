@@ -71,3 +71,25 @@ test("skips windows with no numeric usage", () => {
   expect(historySamples("claude", "acct", "session", t0 / 1000)).toEqual([]);
   expect(historySamples("claude", "acct", "weekly", t0 / 1000)).toEqual([{ t: t0 / 1000, remaining: 75 }]);
 });
+
+test("replaces the history file whole so a reader in another process never sees a torn write", () => {
+  // The Viewer and the account-controller sidecar both record samples. A reader
+  // that opened the file before the other process wrote must keep reading the
+  // complete history it opened; a truncate-in-place write would hand it an
+  // empty or half-written file, which readHistory treats as no history at all.
+  const t0 = 1_700_000_000_000;
+  recordLimitSample("claude", "acct", limits(20, 40), t0);
+  const file = path.join(dir, "limits-history.json");
+  const reader = fs.openSync(file, "r");
+  try {
+    const opened = fs.fstatSync(reader).ino;
+    recordLimitSample("claude", "other", limits(30, 30), t0 + 6 * 60_000);
+    expect(fs.statSync(file).ino).not.toBe(opened);
+    const seenByReader = JSON.parse(fs.readFileSync(reader, "utf8"));
+    expect(Object.keys(seenByReader.series).sort()).toEqual(["claude|acct|session", "claude|acct|weekly"]);
+  } finally {
+    fs.closeSync(reader);
+  }
+  expect(Object.keys(readHistory().series)).toHaveLength(4);
+  expect(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+});
