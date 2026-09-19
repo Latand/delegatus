@@ -1,3 +1,4 @@
+import { claudeTierDisplayName } from "@/lib/agent/models";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { effectiveRemaining, gatingWindows } from "@/lib/accounts/migration/quotaPolicy";
 import type { Flow, FlowBlock } from "@/lib/flows/types";
@@ -148,7 +149,11 @@ export function reconcileQuotaReadings(left: QuotaReading | null, right: QuotaRe
     };
     const winner = newerWindow(pick(left), pick(right), "weekly", now) as ReconciledTierWindow | null;
     return winner && typeof winner.value.tier === "string" ? [winner] : [];
-  });
+  })
+    /* Ordered by the name the row displays, which is the provider's label when
+       it sent one (#1839) — so the rows read in the order the operator sees
+       them and never reshuffle between reads. */
+    .sort((left, right) => claudeTierDisplayName(left.value.tier, left.value.label).localeCompare(claudeTierDisplayName(right.value.tier, right.value.label)));
   const readings = [left, right]
     .filter((reading): reading is QuotaReading => Boolean(reading?.limits?.plan))
     .sort((a, b) => (b.observedAt ?? Number.NEGATIVE_INFINITY) - (a.observedAt ?? Number.NEGATIVE_INFINITY));

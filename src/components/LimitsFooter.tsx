@@ -363,7 +363,7 @@ function EngineLimitsBlock({
             {quota.tiers.map((tier) => (
               <LimitRow
                 key={tier.value.tier}
-                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier) })}
+                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })}
                 window={tier.value}
                 engineColor={tint.color}
                 now={now}
