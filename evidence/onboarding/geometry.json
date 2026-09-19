@@ -1,5 +1,5 @@
 {
-  "commit": "b2ae76b29c3ee1126657cf15c26a10ac583c51f9",
+  "commit": "e521b8c43c4d5ebce6fdc37be47bad540995fdbe",
   "case": "onboarding",
   "firstRunMarker": null,
   "desktop-1440-light-en": {
@@ -1299,7 +1299,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -1374,6 +1377,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -1449,6 +1455,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -1524,7 +1533,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1599,7 +1611,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1674,7 +1689,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1749,7 +1767,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1824,7 +1845,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1899,7 +1923,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -1974,7 +2001,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2049,7 +2079,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2124,7 +2157,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2197,9 +2233,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2274,7 +2313,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2349,7 +2391,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2424,7 +2469,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -2499,7 +2547,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -3805,7 +3856,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -3880,6 +3934,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -3955,6 +4012,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -4030,7 +4090,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4105,7 +4168,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4180,7 +4246,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4255,7 +4324,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4330,7 +4402,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4405,7 +4480,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4480,7 +4558,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4555,7 +4636,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4630,7 +4714,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4703,9 +4790,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4780,7 +4870,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4855,7 +4948,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -4930,7 +5026,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -5005,7 +5104,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -6311,7 +6413,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -6386,6 +6491,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -6461,6 +6569,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -6536,7 +6647,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6611,7 +6725,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6686,7 +6803,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6761,7 +6881,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6836,7 +6959,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6911,7 +7037,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -6986,7 +7115,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7061,7 +7193,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7136,7 +7271,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7209,9 +7347,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7286,7 +7427,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7361,7 +7505,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7436,7 +7583,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -7511,7 +7661,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -8817,7 +8970,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -8892,6 +9048,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -8967,6 +9126,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -9042,7 +9204,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9117,7 +9282,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9192,7 +9360,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9267,7 +9438,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9342,7 +9516,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9417,7 +9594,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9492,7 +9672,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9567,7 +9750,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9642,7 +9828,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9715,9 +9904,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9792,7 +9984,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9867,7 +10062,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -9942,7 +10140,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -10017,7 +10218,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -11323,7 +11527,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -11398,6 +11605,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -11473,6 +11683,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -11548,7 +11761,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11623,7 +11839,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11698,7 +11917,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11773,7 +11995,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11848,7 +12073,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11923,7 +12151,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -11998,7 +12229,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12073,7 +12307,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12148,7 +12385,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12221,9 +12461,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12298,7 +12541,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12373,7 +12619,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12448,7 +12697,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -12523,7 +12775,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -13829,7 +14084,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -13904,6 +14162,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -13979,6 +14240,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -14054,7 +14318,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14129,7 +14396,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14204,7 +14474,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14279,7 +14552,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14354,7 +14630,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14429,7 +14708,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14504,7 +14786,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14579,7 +14864,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14654,7 +14942,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14727,9 +15018,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14804,7 +15098,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14879,7 +15176,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -14954,7 +15254,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -15029,7 +15332,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -16335,7 +16641,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -16410,6 +16719,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -16485,6 +16797,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -16560,7 +16875,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -16635,7 +16953,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -16710,7 +17031,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -16785,7 +17109,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -16860,7 +17187,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -16935,7 +17265,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17010,7 +17343,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17085,7 +17421,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17160,7 +17499,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17233,9 +17575,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17310,7 +17655,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17385,7 +17733,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17460,7 +17811,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -17535,7 +17889,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -18841,7 +19198,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -18916,6 +19276,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -18991,6 +19354,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -19066,7 +19432,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19141,7 +19510,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19216,7 +19588,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19291,7 +19666,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19366,7 +19744,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19441,7 +19822,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19516,7 +19900,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19591,7 +19978,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19666,7 +20056,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19739,9 +20132,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19816,7 +20212,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19891,7 +20290,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -19966,7 +20368,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -20041,7 +20446,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": true,
@@ -21247,7 +21655,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -21322,6 +21733,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -21397,6 +21811,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -21472,7 +21889,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21547,7 +21967,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21622,7 +22045,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21697,7 +22123,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21772,7 +22201,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21847,7 +22279,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21922,7 +22357,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -21997,7 +22435,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22072,7 +22513,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22145,9 +22589,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22222,7 +22669,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22297,7 +22747,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22372,7 +22825,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -22447,7 +22903,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": false,
@@ -23653,7 +24112,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -23728,6 +24190,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -23803,6 +24268,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -23878,7 +24346,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -23953,7 +24424,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24028,7 +24502,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24103,7 +24580,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24178,7 +24658,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24253,7 +24736,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24328,7 +24814,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24403,7 +24892,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24478,7 +24970,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24551,9 +25046,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24628,7 +25126,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24703,7 +25204,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24778,7 +25282,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -24853,7 +25360,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": false,
@@ -26059,7 +26569,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -26134,6 +26647,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -26209,6 +26725,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -26284,7 +26803,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26359,7 +26881,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude command was not found on this machine.What to do: Install it, or make sure the Viewer is started from a shell where claude runs.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26434,7 +26959,10 @@
         "rowLabelsClipped": [],
         "failureAll": "No Claude account is signed in.What to do: Sign in, then run the check again.Go to EnginesShow details",
         "actionLabel": "Go to Engines",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26509,7 +27037,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The Claude account has no capacity left until Jan 2, 2100, 5:00 PM.What to do: Wait for the reset, or connect the other engine.Open AccountsShow details",
         "actionLabel": "Open Accounts",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26584,7 +27115,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26659,7 +27193,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent did not start within 60 seconds.What to do: Run claude --version in a terminal. If it answers, open the agent's card to see where it stopped.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26734,7 +27271,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent started, and the first message did not reach it.What to do: This is a Viewer fault on this machine. Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26809,7 +27349,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent ran and could not reach the Viewer's tools, so it could not report.What to do: The agent's session has no viewer MCP server. Restart the Viewer; if it repeats, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26884,7 +27427,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The agent finished its turn without reporting the stage.What to do: Open the agent to read what it said. A model that ignores the instruction is rare on this prompt; running again usually passes.Open the agentShow details",
         "actionLabel": "Open the agent",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -26957,9 +27503,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart. With it, an orchestrator sleeps until you message it.Show details",
+        "failureAll": "The seat tick is turned off on this machine (LLV_SEAT_TICK_CHECK_MINUTES=0).What to do: Remove that setting and restart the Viewer. With it, an orchestrator sleeps until you message it.Show details",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -27034,7 +27583,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The stage finished, and the wake check found nothing to tell the orchestrator that launched it. The finished lane and the orchestrator are filed under different projects.What to do: This is the fault that leaves an orchestrator waiting for ever. Copy the details into a bug report; until it is fixed, message your orchestrator after each stage.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -27109,7 +27661,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The wake was sent and did not reach the orchestrator.What to do: Copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -27184,7 +27739,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsShow details",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -27259,7 +27817,10 @@
         "rowLabelsClipped": [],
         "failureAll": "The orchestrator of “harbor” is filed under another key than its pipelines, so it will not be woken.What to do: The Viewer re-files orchestrators on its next check, within 5 minutes. If this row still fails after that, copy the details into a bug report.Copy detailsHide detailsViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Copy details",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": false,
@@ -28465,7 +29026,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": null,
@@ -28540,6 +29104,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": null,
         "inView": {
           "start": null,
@@ -28615,6 +29182,9 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
+        "filledAccents": [
+          "footer"
+        ],
         "startFilled": false,
         "inView": {
           "start": true,
@@ -28690,7 +29260,10 @@
         "rowLabelsClipped": [],
         "failureAll": null,
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -28765,7 +29338,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Команду Claude не знайдено на цьому комп'ютері.Що зробити: Встановіть її або запускайте Viewer з оболонки, де працює claude.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -28840,7 +29416,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Немає акаунта Claude з виконаним входом.Що зробити: Увійдіть і запустіть перевірку знову.До рушіївПоказати подробиці",
         "actionLabel": "До рушіїв",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -28915,7 +29494,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Акаунт Claude вичерпав ліміт до 2 січ. 2100 р., 17:00.Що зробити: Дочекайтесь оновлення ліміту або підключіть інший рушій.Відкрити акаунтиПоказати подробиці",
         "actionLabel": "Відкрити акаунти",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -28990,7 +29572,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29065,7 +29650,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент не запустився за 60 секунд.Що зробити: Виконайте claude --version у терміналі. Якщо відповідає, відкрийте картку агента й подивіться, де він зупинився.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29140,7 +29728,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент запустився, але перше повідомлення до нього не дійшло.Що зробити: Це несправність Viewer на цьому комп'ютері. Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29215,7 +29806,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент працював, але не зміг звернутися до інструментів Viewer і тому не звітував.Що зробити: У сесії агента немає MCP-сервера viewer. Перезапустіть Viewer; якщо повториться, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29290,7 +29884,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Агент завершив хід і не відзвітував про етап.Що зробити: Відкрийте агента й прочитайте його відповідь. Модель рідко ігнорує цю інструкцію; повторний запуск зазвичай проходить.Відкрити агентаПоказати подробиці",
         "actionLabel": "Відкрити агента",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29363,9 +29960,12 @@
         "detailsOpen": false,
         "failureOverflow": 0,
         "rowLabelsClipped": [],
-        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
+        "failureAll": "Пробудження оркестратора вимкнено на цьому комп'ютері (LLV_SEAT_TICK_CHECK_MINUTES=0).Що зробити: Приберіть це налаштування й перезапустіть Viewer. З ним оркестратор спить, доки ви йому не напишете.Показати подробиці",
         "actionLabel": null,
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29440,7 +30040,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Етап завершився, але перевірка не знайшла, про що повідомити оркестратора, який його запустив. Завершений конвеєр і оркестратор записані в різних проєктах.Що зробити: Саме через цю несправність оркестратор чекає без кінця. Скопіюйте подробиці в повідомлення про помилку; поки її не виправлено, пишіть оркестратору після кожного етапу.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29515,7 +30118,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Пробудження надіслано, але воно не дійшло до оркестратора.Що зробити: Скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29590,7 +30196,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціПоказати подробиці",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": true,
           "summary": true,
@@ -29665,7 +30274,10 @@
         "rowLabelsClipped": [],
         "failureAll": "Оркестратор проєкту «harbor» записаний під іншим ключем, ніж його конвеєри, тому його не будитимуть.Що зробити: Viewer перезаписує оркестраторів під час наступної перевірки, протягом 5 хвилин. Якщо рядок і далі з помилкою, скопіюйте подробиці в повідомлення про помилку.Скопіювати подробиціСховати подробиціViewer health check: SEAT_MISFILED\nrow: filing\ndetail: seat_misfiled: the recorded machine detail for this row, as the server redacted it, long enough to wrap on a phone\nruntime: claude haiku low\nviewer: 0.0.0",
         "actionLabel": "Скопіювати подробиці",
-        "startFilled": true,
+        "filledAccents": [
+          "start"
+        ],
+        "startFilled": false,
         "inView": {
           "start": false,
           "summary": false,
