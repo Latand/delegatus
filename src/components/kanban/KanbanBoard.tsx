@@ -26,7 +26,7 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
-import { BAR_WIDE_MIN, BarCreateGroup } from "@/components/ProjectBar";
+import { BAR_WIDE_MIN, BarCreateGroup, BarIslandSlot } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
 import type { CardEditField } from "./CardInlineText";
@@ -2245,6 +2245,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
             />
           </div>
           {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barWide)}</div> : null}
+          <BarIslandSlot />
         </header>
       )}
 

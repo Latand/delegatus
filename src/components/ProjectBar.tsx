@@ -1,7 +1,8 @@
 "use client";
 
 import { Bot, ListTodo, MoreHorizontal, Plus } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 import { useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
@@ -18,6 +19,33 @@ import { handleOverlayEscape } from "@/lib/overlay";
  * the middle; the leaves without a board draw the same bar here, with the same
  * two ends.
  */
+
+const BarIslandSlotContext = createContext<((slot: HTMLElement | null) => void) | null>(null);
+
+/**
+ * Where the Viewer's attention island sits in the document. It is drawn fixed
+ * over the bar's right reserve, after ⋯, so on a project leaf it is also placed
+ * in the DOM after ⋯: the bar's last child is a slot, and the island is portaled
+ * into it, which keeps keyboard focus in the order the bar is read. With no
+ * slot mounted (the Overview, the phone) the island stays ahead of `children`,
+ * where it always was.
+ */
+export function BarIslandProvider({ island, children }: { island: ReactNode; children: ReactNode }) {
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  return (
+    <BarIslandSlotContext.Provider value={setSlot}>
+      {slot ? null : island}
+      {children}
+      {slot ? createPortal(island, slot) : null}
+    </BarIslandSlotContext.Provider>
+  );
+}
+
+/** The bar's last child: the island's place in the tab order. It draws no box, so the row does not move. */
+export function BarIslandSlot() {
+  const setSlot = useContext(BarIslandSlotContext);
+  return setSlot ? <div ref={setSlot} className="bar-slot" data-bar-island-slot="" style={{ display: "contents" }} /> : null;
+}
 
 /** At or above this bar width the controls carry their labels and the account switches sit in
     the bar; below it they are icons and the accounts move into ⋯. Measured on a seeded home, the
@@ -257,6 +285,7 @@ export function DashboardBar({ lead, status, find, view, create, trail }: {
       <div className="flex shrink-0 items-center gap-2 empty:hidden" data-bar-group="view">{view(wide)}</div>
       {create(wide)}
       <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(wide)}</div>
+      <BarIslandSlot />
     </div>
   );
 }
