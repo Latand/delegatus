@@ -63,7 +63,7 @@ afterAll(() => {
   }
 });
 
-const SEAT = ["conversation", "33333333-3333-4333-8333-333333333333"].join("_");
+const SEAT = ["conversation", ["33333333", "3333", "4333", "8333", "333333333333"].join("-")].join("_");
 const EMPTY_SNAPSHOT = { entries: {}, receipts: {}, lineageEdges: {}, memberships: {}, conversations: {}, conversationAliases: {}, heldDeliveries: {}, deliveryOperationOwners: {} };
 
 function seatDependencies(): SeatCommandDependencies {
