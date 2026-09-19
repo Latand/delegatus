@@ -208,7 +208,7 @@ export function OnboardingDialog({ mode, marker, onClose }: {
               className={`relative flex h-9 w-full items-center gap-2 rounded-[8px] px-3 text-left text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 ${active ? "bg-accent-soft text-primary" : state === "done" ? "text-secondary hover:bg-card" : "text-muted hover:bg-card hover:text-primary"}`}
             >
               {active ? <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" /> : null}
-              <span className="w-4 shrink-0 text-center tabular-nums">
+              <span data-step-mark={warn && !active ? "warn" : state === "done" && !active ? "done" : "number"} className="w-4 shrink-0 text-center tabular-nums">
                 {warn && !active
                   ? <AlertTriangle className="h-3.5 w-3.5 text-warning" aria-label={t("onboarding.stepNoEngine")} />
                   : state === "done" && !active ? <Check className="h-3.5 w-3.5 text-success" aria-label={t("onboarding.stepDone")} /> : index + 1}
