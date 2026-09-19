@@ -182,7 +182,7 @@ test("the findings of the round that parked the chain lead, under a heading in t
   const block = q(host, '[data-testid="mobile-pipeline-findings"]')!;
   expect(block).not.toBeNull();
   expect(q(block, "[data-pipeline-findings-heading]")!.textContent).toBe(translate("en", "mobile2.pipeline.findingsHeading", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.reviewer.name"), stage: "review" }),
+    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Review" }),
     round: 3,
     findings: translate("en", "pipelineVerdict.findings", { count: 2 }),
   }));
@@ -230,9 +230,12 @@ test("every reviewed stage opens its own conversation; a stage with none is a st
   /* Three of the five stages are Builder stages: the role alone names none of
      them, so the row carries the product's own identity for the stage. */
   expect(stages.map((el) => el.textContent!.split("\n")[0])).not.toEqual(expect.arrayContaining([translate("en", "roleCopy.builder.name")]));
-  expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.reviewer.name"), stage: "review" }));
-  expect(stages[3]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "fix" }));
-  expect(stages[4]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "merge" }));
+  expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Review" }));
+  expect(stages[3]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }));
+  expect(stages[4]!.textContent).toContain(translate("en", "mobile2.pipeline.stageTitle", { stage: "Merge" }));
+  /* The role preset the title gave up leads the meta line (#1865). */
+  expect(stages[3]!.querySelector("[data-mobile2-stage-role]")!.textContent).toBe(translate("en", "roleCopy.builder.name"));
+  expect(stages[3]!.querySelector("[data-mobile2-stage-meta]")!.textContent).toBe(`${translate("en", "roleCopy.builder.name")} · ${translate("en", "pipelineChipState.pending")}`);
   expect(stages[2]!.textContent).toContain(translate("en", "mobile2.pipeline.reviewRound", { round: 3 }));
   expect(stages[2]!.textContent).toContain(translate("en", "pipelineChipState.failed"));
   expect(stages[2]!.textContent).toContain(translate("en", "pipelineVerdict.findings", { count: 2 }));
@@ -245,7 +248,7 @@ test("a never-run stage's row opens its configuration in a sheet — the desktop
   /* The row names what it opens, and then who would run the stage — the marks
      beside it are never the only carrier of that (#1743). */
   expect(fix.getAttribute("aria-label")).toContain(translate("en", "mobile2.pipeline.configure", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "fix" }),
+    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }),
   }));
   expect(fix.querySelector("[data-engine-mark]")).not.toBeNull();
   expect(fix.className).toContain("min-h-[52px]");
@@ -261,7 +264,7 @@ test("a never-run stage's row opens its configuration in a sheet — the desktop
   const sheet = dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement | null;
   expect(sheet).not.toBeNull();
   expect(sheet!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", {
-    stage: translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "fix" }),
+    stage: translate("en", "mobile2.pipeline.stageTitle", { stage: "Fix" }),
   }));
   expect(sheet!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
   /* A real modal dialog, as the retired dock sheet was (PR #431): it takes
@@ -373,26 +376,38 @@ test("a stage's earlier attempts and a round's other reviewer transcript are row
   expect(orphan.getAttribute("data-mobile2-go")).toBeNull();
 });
 
-test("a stage the product already names once says it once", () => {
+test("a stage row is titled by the stage's name, the way its board tiles read (#1865)", () => {
   const locale = getLocale();
   const tt = ((key: string, params?: Record<string, unknown>) => t(locale, key as never, params as never)) as never;
-  /* No role: `stageChipLabel` falls back to the stage id, which is then the
-     whole identity — the row does not repeat it. */
-  expect(stageRowTitle(tt, { id: "merge", kind: "run" } as never)).toBe("merge");
-  expect(stageRowTitle(tt, { id: "fix", kind: "run", role: { roleId: "builder" } } as never))
-    .toBe(translate("en", "mobile2.pipeline.stageTitle", { role: translate("en", "roleCopy.builder.name"), stage: "fix" }));
+  const bare = { id: "p", stages: [], runs: [] } as never;
+  /* No role: the stage's own id is the whole identity. */
+  expect(stageRowTitle(tt, bare, { id: "merge", kind: "run" } as never)).toBe("Merge");
+  /* The role preset leaves the title; it is the meta line's first segment. */
+  expect(stageRowTitle(tt, bare, { id: "fix", kind: "run", role: { roleId: "builder" } } as never)).toBe("Fix");
+  const retried = {
+    id: "p",
+    stages: [{ id: "critique", kind: "run", role: { roleId: "architect" } }],
+    runs: [{ stageId: "critique", attempts: [{ n: 1, state: "failed" }, { n: 2, state: "running" }] }],
+  } as never;
+  expect(stageRowTitle(tt, retried, { id: "critique", kind: "run", role: { roleId: "architect" } } as never)).toBe("Critique · 2");
 });
 
 test("the stage meta line reads the kind, the round and the verdict count from the pipeline itself", () => {
   const pipeline = parkedPipeline();
   const locale = getLocale();
   const tt = ((key: string, params?: Record<string, unknown>) => t(locale, key as never, params as never)) as never;
+  const builder = translate("en", "roleCopy.builder.name");
+  /* Beside the preset a plain run needs no «run» word: its room goes to the
+     verdict and the findings count (#1865). */
   expect(stageMetaLine(tt, pipeline, pipeline.stages[1]!)).toBe(
-    `${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.passed")}`,
+    `${builder} · ${translate("en", "pipelineChipState.passed")}`,
   );
   expect(stageMetaLine(tt, pipeline, pipeline.stages[4]!)).toBe(
-    `${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.pending")}`,
+    `${builder} · ${translate("en", "pipelineChipState.pending")}`,
   );
+  /* A stage named after its role says the role once, in the title. */
+  const named = { ...pipeline.stages[4]!, id: "builder" };
+  expect(stageMetaLine(tt, pipeline, named)).toBe(`${translate("en", "mobile2.pipeline.run")} · ${translate("en", "pipelineChipState.pending")}`);
 });
 
 test("linked tasks come last and open the task they name", () => {

@@ -1057,3 +1057,143 @@ browserTest("#1846 desktop: the deck surface's account chip at 1280 px names the
   fs.writeFileSync(path.join(PICK_EVIDENCE, "desktop-deck.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
+
+/*
+ * #1865 at 390x844, in English and Ukrainian, light and dark, on the lane the
+ * fixture adds for it (`?stages=1`): design and critique share the architect
+ * preset, and the lane is parked on critique's second attempt.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "#1865"
+ *
+ * The queue row names the stage and its attempt inside its sentence, lowercased,
+ * and never the preset. The lane's screen titles each stage row by the name the
+ * stage list gives it, with the attempt once the stage ran twice, and the preset
+ * leads the row's meta line instead. Neither title is cut. The queue row's
+ * sentence is painted whole with its age after it, however many lines that
+ * takes; each stage row's meta line keeps its verdict and findings count whole
+ * (the preset truncates first), and the effort ladder ends before the meta
+ * line begins — both of which the Ukrainian row once failed.
+ *
+ * Readings go to `evidence/issue-1865/phone.json`; frames to `.artifacts/issue-1865/`.
+ */
+const LABELS_OUT = path.resolve(".artifacts/issue-1865");
+const LABELS_EVIDENCE = path.resolve("evidence/issue-1865");
+
+browserTest("#1865: the phone names a stage and its attempt in the queue row and on the lane's stage rows", async () => {
+  fs.mkdirSync(LABELS_OUT, { recursive: true });
+  fs.mkdirSync(LABELS_EVIDENCE, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const ROW = '[data-mobile2-row="pipeline"][data-mobile2-pipeline-row$="lane-labels"]';
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      for (const scheme of SCHEMES) {
+        const viewport = { width: 390, height: 844 };
+        const key = `${lang}-${scheme}`;
+        const fail = (label: string) => failures.push(`${key}: ${label}`);
+        const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${fixtureBase}/?stages=1#p=atlas`);
+          await page.waitForSelector(ROW, { timeout: 20_000 });
+          await pause(page, 600);
+          const queueRow = await page.evaluate((selector) => document.querySelector(selector)?.textContent ?? "", ROW);
+          /* The sentence and its age, each painted inside the row's text column. */
+          const queueMeta = await page.evaluate((selector) => {
+            const meta = document.querySelector<HTMLElement>(`${selector} [data-mobile2-row-meta]`);
+            const age = meta?.querySelector<HTMLElement>("[data-mobile2-row-age]");
+            const column = meta?.parentElement?.getBoundingClientRect();
+            const box = meta?.getBoundingClientRect();
+            const ageBox = age?.getBoundingClientRect();
+            const range = document.createRange();
+            if (meta) range.selectNodeContents(meta);
+            const ink = range.getBoundingClientRect();
+            return {
+              text: meta?.textContent ?? "",
+              age: age?.textContent ?? "",
+              lines: box ? Math.round(box.height / parseFloat(getComputedStyle(meta!).lineHeight || "16")) : 0,
+              columnRight: column ? Math.round(column.right * 10) / 10 : 0,
+              inkRight: Math.round(ink.right * 10) / 10,
+              ageRight: ageBox ? Math.round(ageBox.right * 10) / 10 : 0,
+              clipped: !!meta && (meta.scrollWidth > meta.clientWidth + 0.5 || (column ? ink.right > column.right + 0.5 : true)),
+            };
+          }, ROW);
+          if (queueMeta.clipped) fail(`the queue row's sentence is clipped: ${JSON.stringify(queueMeta)}`);
+          if (!queueMeta.age || queueMeta.ageRight > queueMeta.columnRight + 0.5) fail(`the queue row's age is not painted whole: ${JSON.stringify(queueMeta)}`);
+          await page.screenshot({ path: path.join(LABELS_OUT, `phone-${key}-queue.png`) });
+          const expectedQueue = translate(lang, "mobile2.board.pipelineStageFailed", { stage: 2, total: 2, name: "critique · 2" });
+          if (!queueRow.includes(expectedQueue)) fail(`the queue row reads ${JSON.stringify(queueRow)}, expected it to hold ${JSON.stringify(expectedQueue)}`);
+          const preset = translate(lang, "roleCopy.architect.name");
+          if (queueRow.toLocaleLowerCase().includes(preset.toLocaleLowerCase())) fail(`the queue row names the preset: ${JSON.stringify(queueRow)}`);
+
+          await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center" }), ROW);
+          await pause(page, 250);
+          await tap(page, cdp, ROW);
+          await page.waitForSelector('[data-mobile2-screen="pipeline"] [data-mobile2-stage="critique"]', { timeout: 10_000 });
+          await pause(page, 500);
+          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-mobile2-screen="pipeline"] [data-mobile2-stage]')].map((row) => {
+            const title = row.querySelector<HTMLElement>("[data-mobile2-stage-title]");
+            const meta = row.querySelector<HTMLElement>("[data-mobile2-stage-meta]");
+            const range = document.createRange();
+            if (title) range.selectNodeContents(title);
+            const need = title ? range.getBoundingClientRect().width : 0;
+            const box = title?.getBoundingClientRect();
+            /* The meta line: the part after the preset must be whole, and the
+               identity's ink must end before the meta line's begins. */
+            const rest = meta?.lastElementChild as HTMLElement | null | undefined;
+            const identity = meta?.previousElementSibling as HTMLElement | null | undefined;
+            const identityInk = identity ? (() => {
+              const r = document.createRange();
+              r.selectNodeContents(identity);
+              return Math.max(r.getBoundingClientRect().right, ...[...identity.querySelectorAll("*")].map((el) => el.getBoundingClientRect().right));
+            })() : 0;
+            const metaLeft = meta?.getBoundingClientRect().left ?? 0;
+            return {
+              stage: row.dataset.mobile2Stage ?? "",
+              title: title?.textContent ?? "",
+              meta: meta?.textContent ?? "",
+              metaRestWhole: !!rest && rest.scrollWidth <= rest.clientWidth + 0.5,
+              identityWidth: identity ? Math.round(identity.getBoundingClientRect().width * 10) / 10 : 0,
+              identityGap: Math.round((metaLeft - identityInk) * 10) / 10,
+              width: box ? Math.round(box.width * 10) / 10 : 0,
+              need: Math.round(need * 10) / 10,
+              cut: box ? need > box.width + 0.1 : true,
+            };
+          }));
+          await page.screenshot({ path: path.join(LABELS_OUT, `phone-${key}-stages.png`) });
+          results.push({ key, lang, scheme, viewport, queueRow, queueMeta, rows, pageErrors });
+          const byStage = new Map(rows.map((row) => [row.stage, row] as const));
+          const expected = { design: "Design · 2", critique: "Critique · 2" } as const;
+          for (const [stage, title] of Object.entries(expected)) {
+            const row = byStage.get(stage);
+            if (row?.title !== title) fail(`the ${stage} row is titled ${JSON.stringify(row?.title)}, expected ${JSON.stringify(title)}`);
+            if (row?.cut !== false) fail(`the ${stage} row's title is cut: ${JSON.stringify(row)}`);
+            if (!row?.meta.startsWith(`${preset} · `)) fail(`the ${stage} row's meta does not lead with the preset: ${JSON.stringify(row?.meta)}`);
+          }
+          for (const row of rows) {
+            if (!row.metaRestWhole) fail(`the ${row.stage} row's verdict or findings count is cut: ${JSON.stringify(row)}`);
+            if (row.identityGap < 0) fail(`the ${row.stage} row's effort ladder runs into its meta line: ${JSON.stringify(row)}`);
+          }
+          const critiqueMeta = byStage.get("critique")?.meta ?? "";
+          const findings = translate(lang, "pipelineVerdict.findings", { count: 2 });
+          if (!critiqueMeta.endsWith(findings)) fail(`the critique row's meta does not end with its findings count: ${JSON.stringify(critiqueMeta)}`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(LABELS_EVIDENCE, "phone.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
